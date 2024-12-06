@@ -1,4 +1,4 @@
-use crate::pid_file::StateFile;
+use crate::state_file::StateFile;
 use crate::supervisor::Supervisor;
 use crate::Result;
 use crate::{env, procs};
@@ -12,8 +12,8 @@ pub struct Run {
 impl Run {
     pub async fn run(&self) -> Result<()> {
         let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
-        if let Some(existing_pid) = pid_file.get("pitchfork") {
-            if !(self.kill_or_stop(*existing_pid)?) {
+        if let Some(d) = pid_file.daemons.get("pitchfork") {
+            if !(self.kill_or_stop(d.pid)?) {
                 return Ok(());
             }
         }
@@ -26,7 +26,9 @@ impl Run {
     fn kill_or_stop(&self, existing_pid: u32) -> Result<bool> {
         if let Some(process) = procs::get_process(existing_pid) {
             if self.force {
-                sysinfo::Process::kill(process);
+                if sysinfo::Process::kill_with(process, sysinfo::Signal::Term).is_none() {
+                    sysinfo::Process::kill(process);
+                }
                 Ok(true)
             } else {
                 let existing_pid = process.pid();

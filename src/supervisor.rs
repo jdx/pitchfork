@@ -1,4 +1,4 @@
-use crate::pid_file::StateFile;
+use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
 use crate::{async_watcher, env, Result};
 use duct::cmd;
 use std::path::PathBuf;
@@ -32,8 +32,8 @@ impl Supervisor {
 
     pub async fn start(mut self) -> Result<()> {
         let pid = std::process::id();
-        debug!("Starting supervisor with pid {pid}");
-        self.state_file.set("pitchfork".to_string(), pid);
+        info!("Starting supervisor with pid {pid}");
+        self.state_file.daemons.insert("pitchfork".to_string(), StateFileDaemon { pid, status: StateFileDaemonStatus::Running });
         self.state_file.write()?;
 
         let mut interval = time::interval(INTERVAL);
@@ -132,7 +132,7 @@ impl Supervisor {
     }
 
     fn restart(&mut self) -> ! {
-        self.state_file.remove("pitchfork");
+        self.state_file.daemons.remove("pitchfork");
         if let Err(err) = self.state_file.write() {
             warn!("failed to update state file: {:?}", err);
         }

@@ -5,7 +5,7 @@ mod cli;
 mod daemon;
 mod env;
 mod logger;
-mod pid_file;
+mod state_file;
 mod pitchfork_toml;
 mod procs;
 mod supervisor;
