@@ -23,4 +23,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
       - run: rm -rf .cargo
+      - uses: Swatinem/rust-cache@v2
       - run: mise run ci
