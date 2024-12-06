@@ -22,7 +22,7 @@ impl PitchforkToml {
         if !path.exists() {
             return Ok(Self::new(path.to_path_buf()));
         }
-        xx::fslock::get(path, false)?;
+        let _lock = xx::fslock::get(path, false)?;
         let raw = xx::file::read_to_string(path)?;
         let mut pt: Self = toml::from_str(&raw)?;
         pt.path = path.to_path_buf();
@@ -30,7 +30,7 @@ impl PitchforkToml {
     }
 
     pub fn write(&self) -> eyre::Result<()> {
-        xx::fslock::get(&self.path, false)?;
+        let _lock = xx::fslock::get(&self.path, false)?;
         let raw = toml::to_string(self)?;
         xx::file::write(&self.path, raw)?;
         Ok(())
