@@ -40,27 +40,7 @@ impl Supervisor {
 
         let _ = fs::remove_file(&*env::IPC_SOCK_PATH).await;
         let opts = ListenerOptions::new().name(env::IPC_SOCK_PATH.clone().to_fs_name::<GenericFilePath>()?);
-        let listener = match opts.create_tokio() {
-            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
-                // When a program that uses a file-type socket name terminates its socket server
-                // without deleting the file, a "corpse socket" remains, which can neither be
-                // connected to nor reused by a new listener. Normally, Interprocess takes care of
-                // this on affected platforms by deleting the socket file when the listener is
-                // dropped. (This is vulnerable to all sorts of races and thus can be disabled.)
-                //
-                // There are multiple ways this error can be handled, if it occurs, but when the
-                // listener only comes from Interprocess, it can be assumed that its previous instance
-                // either has crashed or simply hasn't exited yet. In this example, we leave cleanup
-                // up to the user, but in a real application, you usually don't want to do that.
-                error!(
-                    "
-Error: could not start server because the socket file is occupied. Please check if {}
-is in use by another process and try again."
-                , "pitchfork.sock");
-                return Err(e.into());
-            }
-            x => x?,
-        };
+        let listener = opts.create_tokio()?;
         
         self.state_file.daemons.insert("pitchfork".to_string(), StateFileDaemon { pid, status: StateFileDaemonStatus::Running });
         self.state_file.write()?;
