@@ -1,28 +1,26 @@
 use std::time::Duration;
 use log::{info, warn};
-use sysinfo::Pid;
 use crate::{env, procs};
 use crate::Result;
 use tokio::time;
 use crate::pid_file::PidFile;
 
 #[derive(Debug, clap::Args)]
-#[clap(hide = false)]
-pub struct Daemon {
+pub struct Run {
     #[clap(short, long)]
     force: bool,
 }
 
-impl Daemon {
+impl Run {
     pub async fn run(&self) -> Result<()> {
         let mut pid_file = PidFile::read(&*env::PITCHFORK_PID_FILE)?;
-        if let Some(existing_pid) = pid_file.pids.get("pitchfork") {
+        if let Some(existing_pid) = pid_file.get("pitchfork") {
             if self.kill_or_stop(*existing_pid)? == false {
                 return Ok(());
             }
         }
         let pid = std::process::id();
-        pid_file.pids.insert("pitchfork".to_string(), pid);
+        pid_file.set("pitchfork".to_string(), pid);
         pid_file.write(&*env::PITCHFORK_PID_FILE)?;
 
         let mut interval = time::interval(Duration::from_millis(1000));
