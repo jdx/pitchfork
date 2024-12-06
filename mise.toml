@@ -1,0 +1,5 @@
+[tasks.ci]
+run = [
+  "cargo build",
+  "cargo test",
+]
