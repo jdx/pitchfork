@@ -2,7 +2,7 @@ use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
 use crate::{async_watcher, env, Result};
 use duct::cmd;
 use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::ListenerOptions;
+use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions};
 use std::io;
 use std::path::PathBuf;
 use std::process::exit;
@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::{select, time, try_join};
+use tokio::{fs, select, time, try_join};
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -37,8 +37,9 @@ impl Supervisor {
     pub async fn start(mut self) -> Result<()> {
         let pid = std::process::id();
         info!("Starting supervisor with pid {pid}");
-        
-        let opts = ListenerOptions::new().name(env::IPC_SOCK.clone());
+
+        let _ = fs::remove_file(&*env::IPC_SOCK_PATH).await;
+        let opts = ListenerOptions::new().name(env::IPC_SOCK_PATH.clone().to_fs_name::<GenericFilePath>()?);
         let listener = match opts.create_tokio() {
             Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
                 // When a program that uses a file-type socket name terminates its socket server
