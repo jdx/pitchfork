@@ -10,17 +10,19 @@ name = "pitchfork"
 path = "src/main.rs"
 
 [dependencies]
+async-watcher = "0.3.0"
 clap = { version = "4.5.23", features = ["derive"] }
-dirs = "5.0.1"
-once_cell = "1.20.2"
-xx = {version = "2", features = ["fslock", "hash"]}
-log = "0.4.22"
-psutil = "3.3.0"
-eyre = "0.6.12"
-interprocess = { version = "2.2.2", features = ["tokio"] }
-tokio = { version = "1.42.0", features = ["full"] }
-sysinfo = "0.33.0"
-serde = { version = "1.0.215", features = ["derive"] }
-toml = { version = "0.8.19", features = ["indexmap", "preserve_order"] }
 console = "0.15.8"
+dirs = "5.0.1"
+eyre = "0.6.12"
 indexmap = { version = "2.7.0", features = ["serde"] }
+interprocess = { version = "2.2.2", features = ["tokio"] }
+log = "0.4.22"
+once_cell = "1.20.2"
+psutil = "3.3.0"
+serde = { version = "1.0.215", features = ["derive"] }
+serde_json = { version = "1.0.133", features = ["indexmap"] }
+sysinfo = "0.33.0"
+tokio = { version = "1.42.0", features = ["full"] }
+toml = { version = "0.8.19", features = ["indexmap", "preserve_order"] }
+xx = { version = "2", features = ["fslock", "hash"] }

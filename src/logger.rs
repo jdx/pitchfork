@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use crate::{env, ui};
-use log::{warn, Level, LevelFilter, Metadata, Record};
+use log::{Level, LevelFilter, Metadata, Record};
 use once_cell::sync::Lazy;
 
 #[derive(Debug)]

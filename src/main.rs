@@ -1,12 +1,16 @@
+#[macro_use]
+extern crate log;
+
 mod cli;
-mod env;
-mod pid_file;
-mod procs;
-mod logger;
-mod ui;
-mod pitchfork_toml;
 mod daemon;
+mod env;
+mod logger;
+mod pid_file;
+mod pitchfork_toml;
+mod procs;
 mod supervisor;
+mod ui;
+mod async_watcher;
 
 pub use eyre::Result;
 

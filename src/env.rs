@@ -2,7 +2,9 @@ use once_cell::sync::Lazy;
 pub use std::env::*;
 use std::path::PathBuf;
 
-pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| dirs::home_dir().unwrap_or(PathBuf::new()));
+pub static BIN_PATH: Lazy<PathBuf> = Lazy::new(|| current_exe().unwrap());
+
+pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| dirs::home_dir().unwrap_or_default());
 pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     var_path("PITCHFORK_STATE_DIR").unwrap_or(
         dirs::state_dir()
