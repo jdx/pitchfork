@@ -4,6 +4,8 @@ mod pid_file;
 mod procs;
 mod logger;
 mod ui;
+mod pitchfork_toml;
+mod daemon;
 
 pub use eyre::Result;
 
