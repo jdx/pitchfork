@@ -2,8 +2,7 @@ use crate::pid_file::PidFile;
 use crate::supervisor::Supervisor;
 use crate::Result;
 use crate::{env, procs};
-use log::{info, warn};
-use std::time::Duration;
+use log::{warn};
 
 #[derive(Debug, clap::Args)]
 pub struct Run {
@@ -13,7 +12,7 @@ pub struct Run {
 
 impl Run {
     pub async fn run(&self) -> Result<()> {
-        let mut pid_file = PidFile::read(&*env::PITCHFORK_PID_FILE)?;
+        let pid_file = PidFile::read(&*env::PITCHFORK_PID_FILE)?;
         if let Some(existing_pid) = pid_file.get("pitchfork") {
             if self.kill_or_stop(*existing_pid)? == false {
                 return Ok(());

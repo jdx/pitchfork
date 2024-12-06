@@ -17,16 +17,16 @@ Pitchfork is a CLI for launching daemons with a focus on developer experience.
 
 ## Features
 
-- automatically start services on boot
-- only starting services if they have not already been started
-- restarting services on failure
-- starting services only when working in a project directory—then automatically stopping when you leave
+- automatically start daemons on boot
+- only starting daemons if they have not already been started
+- restarting daemons on failure
+- starting daemons only when working in a project directory—then automatically stopping when you leave
 
 ## Workflows
 
 Here's some common ways to use pitchfork.
 
-### Launching a one-off service
+### Launching a one-off daemon
 
 This workflow is an alternative to something like shell jobs—`mytask &`. This just runs a process in
 the background:
@@ -35,36 +35,36 @@ the background:
 pitchfork run docs "npm start docs-dev-server"
 ```
 
-You need to label the service with a name, in this case "docs". Once it's started, "docs" will be how
-we reference it. If you run `pitchfork run docs "..."` again, it will not do anything if the service
-is still running—this way you can start one-off services without thinking if you've already done so.
+You need to label the daemon with a name, in this case "docs". Once it's started, "docs" will be how
+we reference it. If you run `pitchfork run docs "..."` again, it will not do anything if the daemon
+is still running—this way you can start one-off daemons without thinking if you've already done so.
 
 On `pitchfork run`, pitchfork will emit the output of `npm start docs-dev-server` for a few seconds.
-If it fails during that time, it will exit non-zero to help you see if the service was configured/setup
+If it fails during that time, it will exit non-zero to help you see if the daemon was configured/setup
 correctly.
 
-### Adding a service to a project
+### Adding a daemon to a project
 
-A project may have several services defined, this is configured in `pitchfork.toml` in the root of the project:
+A project may have several daemons defined, this is configured in `pitchfork.toml` in the root of the project:
 
 ```toml
-[services]
+[daemons]
 redis = "redis-server"
 api = "npm run server:api"
 docs = "npm run server:docs"
 ```
 
-You can start all the services with `pitchfork start --all` or individual ones with their name, e.g.: `pitchfork start redis`.
+You can start all the daemons with `pitchfork start --all` or individual ones with their name, e.g.: `pitchfork start redis`.
 If it's already started, nothing happens.
-You can also have pitchfork automatically start the services when entering the project in your terminal with the [shell hook](#shell_hook).
+You can also have pitchfork automatically start the daemons when entering the project in your terminal with the [shell hook](#shell_hook).
 
-### Adding a global service that runs on boot
+### Adding a global daemon that runs on boot
 
 TODO
 
 ## Shell hook
 
-Pitchfork has an optional shell hook for bash, zsh, and fish that will autostart and autostop services when entering/leaving projects.
+Pitchfork has an optional shell hook for bash, zsh, and fish that will autostart and autostop daemons when entering/leaving projects.
 
 To install it, run the command below for your shell:
 
@@ -74,13 +74,13 @@ echo '$(pitchfork activate zsh)' >> ~/.zshrc
 echo 'pitchfork activate fish | source' >> ~/.config/fish/config.fish
 ```
 
-Then when you restart your shell pitchfork will automatically start "autostart" services when entering the directory. Services with
-"autostop" will stop services when leaving the directory after a bit of a delay if no terminal sessions are still inside the directory.
+Then when you restart your shell pitchfork will automatically start "autostart" daemons when entering the directory. daemons with
+"autostop" will stop daemons when leaving the directory after a bit of a delay if no terminal sessions are still inside the directory.
 
 Here's a `pitchfork.toml` with this configured:
 
 ```toml
-[services.api]
+[daemons.api]
 run = "npm run server:api"
 autostart = true
 autostop = true
@@ -90,13 +90,13 @@ autostop = true
 
 [mise](https://mise.jdx.dev) is a project for installing/managing dev tools, managing environment variables,
 and running tasks. Unlike pitchfork, [mise tasks](https://mise.jdx.dev/tasks/) do not run in the background however
-they offer a lot of functionality you won't find in pitchfork. It's encouraged to define relatively simple services
-that just call `mise run` to launch the service as a mise task.
+they offer a lot of functionality you won't find in pitchfork. It's encouraged to define relatively simple daemons
+that just call `mise run` to launch the daemon as a mise task.
 
 To do so, put the following into `pitchfork.toml`:
 
 ```toml
-[services.docs]
+[daemons.docs]
 run = "mise run docs:dev"
 ```
 
