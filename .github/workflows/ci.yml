@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  CARGO_TERM_COLOR: always
   MISE_EXPERIMENTAL: true
 
 jobs:
