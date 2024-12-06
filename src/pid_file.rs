@@ -4,7 +4,7 @@ use crate::Result;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PidFile {
-    pids: BTreeMap<String, u32>,
+    pub pids: BTreeMap<String, u32>,
 }
 
 impl PidFile {
