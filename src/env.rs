@@ -1,3 +1,4 @@
+use interprocess::local_socket::{GenericFilePath, GenericNamespaced, NameType, ToFsName, ToNsName};
 use once_cell::sync::Lazy;
 pub use std::env::*;
 use std::path::PathBuf;
@@ -12,15 +13,12 @@ pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
             .join("pitchfork"),
     )
 });
-pub static PITCHFORK_STATE_FILE: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("state.toml"));
-pub static PITCHFORK_LOG: Lazy<log::LevelFilter> = Lazy::new(|| {
-    var_log_level("PITCHFORK_LOG")
-        .unwrap_or(log::LevelFilter::Info)
-});
-pub static PITCHFORK_LOG_FILE_LEVEL: Lazy<log::LevelFilter> = Lazy::new(|| {
-    var_log_level("PITCHFORK_LOG_FILE_LEVEL")
-        .unwrap_or(*PITCHFORK_LOG)
-});
+pub static PITCHFORK_STATE_FILE: Lazy<PathBuf> =
+    Lazy::new(|| PITCHFORK_STATE_DIR.join("state.toml"));
+pub static PITCHFORK_LOG: Lazy<log::LevelFilter> =
+    Lazy::new(|| var_log_level("PITCHFORK_LOG").unwrap_or(log::LevelFilter::Info));
+pub static PITCHFORK_LOG_FILE_LEVEL: Lazy<log::LevelFilter> =
+    Lazy::new(|| var_log_level("PITCHFORK_LOG_FILE_LEVEL").unwrap_or(*PITCHFORK_LOG));
 pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> = Lazy::new(|| {
     var_path("PITCHFORK_LOG_FILE").unwrap_or(
         PITCHFORK_STATE_DIR
@@ -29,8 +27,14 @@ pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> = Lazy::new(|| {
             .join("pitchfork.log"),
     )
 });
-pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| {
-    var_true("PITCHFORK_EXEC")
+pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| var_true("PITCHFORK_EXEC"));
+
+pub static IPC_SOCK: Lazy<interprocess::local_socket::Name> = Lazy::new(|| {
+    if GenericNamespaced::is_supported() {
+        "pitchfork.sock".to_ns_name::<GenericNamespaced>().unwrap()
+    } else {
+        PITCHFORK_STATE_DIR.join("pitchfork.sock").to_fs_name::<GenericFilePath>().unwrap()
+    }
 });
 
 fn var_path(name: &str) -> Option<PathBuf> {
@@ -38,11 +42,12 @@ fn var_path(name: &str) -> Option<PathBuf> {
 }
 
 fn var_log_level(name: &str) -> Option<log::LevelFilter> {
-    var(name)
-        .ok()
-        .and_then(|level| level.parse().ok())
+    var(name).ok().and_then(|level| level.parse().ok())
 }
 
 fn var_true(name: &str) -> bool {
-    var(name).map(|val| val.to_lowercase()).map(|val| val == "true" || val == "1").unwrap_or(false)
+    var(name)
+        .map(|val| val.to_lowercase())
+        .map(|val| val == "true" || val == "1")
+        .unwrap_or(false)
 }

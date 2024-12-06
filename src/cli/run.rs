@@ -1,6 +1,8 @@
+use crate::{env, Result};
 use eyre::bail;
-use crate::pitchfork_toml::PitchforkToml;
-use crate::Result;
+use interprocess::local_socket::traits::tokio::Stream;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::try_join;
 
 /// Runs a one-off daemon
 #[derive(Debug, clap::Args)]
@@ -21,6 +23,16 @@ impl Run {
             bail!("No command provided");
         }
         dbg!(&self);
+
+        let conn =
+            interprocess::local_socket::tokio::Stream::connect(env::IPC_SOCK.clone()).await?;
+        let (recv, mut send) = conn.split();
+        let mut read = tokio::io::BufReader::new(recv);
+        let mut buffer = String::with_capacity(1024);
+        let send = send.write_all(b"Hello from client!\n");
+        let recv = read.read_line(&mut buffer);
+        try_join!(recv, send)?;
+        println!("Received: {}", buffer.trim());
         Ok(())
     }
 }

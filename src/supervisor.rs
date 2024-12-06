@@ -1,12 +1,16 @@
 use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
 use crate::{async_watcher, env, Result};
 use duct::cmd;
+use interprocess::local_socket::tokio::prelude::*;
+use interprocess::local_socket::ListenerOptions;
+use std::io;
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::{select, time};
+use tokio::{select, time, try_join};
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -33,6 +37,30 @@ impl Supervisor {
     pub async fn start(mut self) -> Result<()> {
         let pid = std::process::id();
         info!("Starting supervisor with pid {pid}");
+        
+        let opts = ListenerOptions::new().name(env::IPC_SOCK.clone());
+        let listener = match opts.create_tokio() {
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+                // When a program that uses a file-type socket name terminates its socket server
+                // without deleting the file, a "corpse socket" remains, which can neither be
+                // connected to nor reused by a new listener. Normally, Interprocess takes care of
+                // this on affected platforms by deleting the socket file when the listener is
+                // dropped. (This is vulnerable to all sorts of races and thus can be disabled.)
+                //
+                // There are multiple ways this error can be handled, if it occurs, but when the
+                // listener only comes from Interprocess, it can be assumed that its previous instance
+                // either has crashed or simply hasn't exited yet. In this example, we leave cleanup
+                // up to the user, but in a real application, you usually don't want to do that.
+                error!(
+                    "
+Error: could not start server because the socket file is occupied. Please check if {}
+is in use by another process and try again."
+                , "pitchfork.sock");
+                return Err(e.into());
+            }
+            x => x?,
+        };
+        
         self.state_file.daemons.insert("pitchfork".to_string(), StateFileDaemon { pid, status: StateFileDaemonStatus::Running });
         self.state_file.write()?;
 
@@ -61,6 +89,24 @@ impl Supervisor {
                         error!("supervisor error: {:?}", err);
                     }
                 },
+                conn = listener.accept() => {
+                    let conn = match conn {
+                        Ok(c) => c,
+                        Err(e) => {
+                            error!("failed to accept connection: {:?}", e);
+                            continue;
+                        }
+                    };
+                    
+                    let mut recv = BufReader::new(&conn);
+                    let mut send = &conn;
+                    let mut buffer = String::with_capacity(1024);
+                    let send = send.write_all(b"Hello, world!\n");
+                    let recv = recv.read_line(&mut buffer);
+                    try_join!(send, recv)?;
+                    
+                    println!("Received: {}", buffer.trim());
+                }
                 f = file_events.recv() => {
                     match f {
                         Some(Ok(event)) => {
