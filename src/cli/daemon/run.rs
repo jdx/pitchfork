@@ -1,4 +1,4 @@
-use crate::pid_file::PidFile;
+use crate::pid_file::StateFile;
 use crate::supervisor::Supervisor;
 use crate::Result;
 use crate::{env, procs};
@@ -11,7 +11,7 @@ pub struct Run {
 
 impl Run {
     pub async fn run(&self) -> Result<()> {
-        let pid_file = PidFile::read(&*env::PITCHFORK_PID_FILE)?;
+        let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
         if let Some(existing_pid) = pid_file.get("pitchfork") {
             if !(self.kill_or_stop(*existing_pid)?) {
                 return Ok(());

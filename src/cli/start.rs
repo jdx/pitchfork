@@ -10,8 +10,8 @@ impl Start {
     pub async fn run(&self) -> Result<()> {
         // TODO: read all tomls
         let pt = PitchforkToml::read("pitchfork.toml")?;
-        dbg!(pt);
-        pt.write();
+        dbg!(&pt);
+        pt.write()?;
         Ok(())
     }
 }

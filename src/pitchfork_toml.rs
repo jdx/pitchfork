@@ -29,11 +29,10 @@ impl PitchforkToml {
         Ok(pt)
     }
 
-    pub fn write<P: AsRef<Path>>(&self, path: P) -> eyre::Result<()> {
-        let path = path.as_ref();
-        xx::fslock::get(path, false)?;
+    pub fn write(&self) -> eyre::Result<()> {
+        xx::fslock::get(&self.path, false)?;
         let raw = toml::to_string(self)?;
-        xx::file::write(path, raw)?;
+        xx::file::write(&self.path, raw)?;
         Ok(())
     }
 }

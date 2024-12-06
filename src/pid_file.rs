@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use crate::Result;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct PidFile {
+pub struct StateFile {
     pids: BTreeMap<String, u32>,
     #[serde(skip)]
     pub(crate) path: PathBuf,
 }
 
-impl PidFile {
+impl StateFile {
     pub fn new(path: PathBuf) -> Self {
         Self {
             pids: Default::default(),

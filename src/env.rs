@@ -12,7 +12,7 @@ pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
             .join("pitchfork"),
     )
 });
-pub static PITCHFORK_PID_FILE: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("pids.toml"));
+pub static PITCHFORK_STATE_FILE: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("state.toml"));
 pub static PITCHFORK_LOG: Lazy<log::LevelFilter> = Lazy::new(|| {
     var_log_level("PITCHFORK_LOG")
         .unwrap_or(log::LevelFilter::Info)
