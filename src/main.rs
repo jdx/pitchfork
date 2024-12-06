@@ -16,5 +16,6 @@ pub use eyre::Result;
 
 fn main() -> Result<()> {
     logger::init();
+    color_eyre::install()?;
     cli::run()
 }

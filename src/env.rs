@@ -34,7 +34,7 @@ pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| {
 });
 
 fn var_path(name: &str) -> Option<PathBuf> {
-    var(name).map(|path| PathBuf::from(path)).ok()
+    var(name).map(PathBuf::from).ok()
 }
 
 fn var_log_level(name: &str) -> Option<log::LevelFilter> {
