@@ -3,3 +3,6 @@ run = [
   "cargo build",
   "cargo test",
 ]
+
+[tools]
+bun = "latest"
