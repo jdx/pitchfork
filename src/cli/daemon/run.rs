@@ -1,9 +1,9 @@
-use std::time::Duration;
-use log::{info, warn};
-use crate::{env, procs};
-use crate::Result;
-use tokio::time;
 use crate::pid_file::PidFile;
+use crate::supervisor::Supervisor;
+use crate::Result;
+use crate::{env, procs};
+use log::{info, warn};
+use std::time::Duration;
 
 #[derive(Debug, clap::Args)]
 pub struct Run {
@@ -19,16 +19,8 @@ impl Run {
                 return Ok(());
             }
         }
-        let pid = std::process::id();
-        pid_file.set("pitchfork".to_string(), pid);
-        pid_file.write(&*env::PITCHFORK_PID_FILE)?;
 
-        let mut interval = time::interval(Duration::from_millis(1000));
-
-        loop {
-            interval.tick().await;
-            info!("Daemon running");
-        }
+        Supervisor::new(pid_file).start().await
     }
 
     /// if --force is passed, will kill existing process
@@ -40,7 +32,9 @@ impl Run {
                 Ok(true)
             } else {
                 let existing_pid = process.pid();
-                warn!("Pitchfork is already running with pid {existing_pid}. Kill it with `--force`");
+                warn!(
+                    "Pitchfork is already running with pid {existing_pid}. Kill it with `--force`"
+                );
                 Ok(false)
             }
         } else {

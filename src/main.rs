@@ -6,6 +6,7 @@ mod logger;
 mod ui;
 mod pitchfork_toml;
 mod daemon;
+mod supervisor;
 
 pub use eyre::Result;
 
