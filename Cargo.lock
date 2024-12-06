@@ -807,6 +807,7 @@ dependencies = [
  "clap",
  "console",
  "dirs",
+ "duct",
  "eyre",
  "indexmap",
  "interprocess",

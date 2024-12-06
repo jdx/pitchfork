@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use crate::Result;
@@ -18,7 +17,7 @@ impl PidFile {
             path,
         }
     }
-    
+
     pub fn read<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         if !path.exists() {
@@ -40,6 +39,10 @@ impl PidFile {
 
     pub fn set(&mut self, key: String, value: u32) {
         self.pids.insert(key, value);
+    }
+    
+    pub fn remove(&mut self, key: &str) -> Option<u32> {
+        self.pids.remove(key)
     }
 
     pub fn get(&self, key: &str) -> Option<&u32> {

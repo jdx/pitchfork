@@ -8,13 +8,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c60f2b34-6c87-43be-8fd6-ad112a1be207" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/cli/daemon/run.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/cli/daemon/run.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/env.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/env.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/logger.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/logger.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/main.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/pid_file.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/pid_file.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/supervisor.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/supervisor.rs" afterDir="false" />
     </list>
@@ -120,7 +115,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1733505209123</updated>
-      <workItem from="1733505210047" duration="3447000" />
+      <workItem from="1733505210047" duration="3773000" />
     </task>
     <servers />
   </component>

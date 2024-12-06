@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::process::exit;
 use std::time::Duration;
 use crate::pid_file::PidFile;
 use crate::{async_watcher, env, Result};
+use duct::cmd;
 use tokio::{select, time};
 
 pub struct Supervisor {
@@ -62,7 +64,13 @@ impl Supervisor {
     }
 
     async fn refresh(&mut self, paths: Vec<PathBuf>) -> Result<()> {
-        dbg!(paths);
+        if paths.contains(&*env::BIN_PATH) {
+            info!("pitchfork cli updated, restarting");
+            self.pid_file.remove("pitchfork");
+            self.pid_file.write()?;
+            cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start()?;
+            exit(0);
+        }
         Ok(())
     }
 }

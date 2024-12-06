@@ -14,6 +14,7 @@ async-watcher = "0.3.0"
 clap = { version = "4.5.23", features = ["derive"] }
 console = "0.15.8"
 dirs = "5.0.1"
+duct = "0.13.7"
 eyre = "0.6.12"
 indexmap = { version = "2.7.0", features = ["serde"] }
 interprocess = { version = "2.2.2", features = ["tokio"] }
