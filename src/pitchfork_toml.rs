@@ -1,23 +1,37 @@
-use std::path::Path;
-use indexmap::IndexMap;
 use crate::daemon::Daemon;
+use indexmap::IndexMap;
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PitchforkToml {
     pub daemons: IndexMap<String, Daemon>,
+    #[serde(skip)]
+    pub path: PathBuf,
 }
 
 impl PitchforkToml {
-    pub fn read<P: AsRef<Path>>(path: P) -> eyre::Result<Self> {
-        if !path.as_ref().exists() {
-            return Ok(Self::default());
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            daemons: Default::default(),
+            path,
         }
+    }
+
+    pub fn read<P: AsRef<Path>>(path: P) -> eyre::Result<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(Self::new(path.to_path_buf()));
+        }
+        xx::fslock::get(path, false)?;
         let raw = xx::file::read_to_string(path)?;
-        let pids = toml::from_str(&raw)?;
-        Ok(pids)
+        let mut pt: Self = toml::from_str(&raw)?;
+        pt.path = path.to_path_buf();
+        Ok(pt)
     }
 
     pub fn write<P: AsRef<Path>>(&self, path: P) -> eyre::Result<()> {
+        let path = path.as_ref();
+        xx::fslock::get(path, false)?;
         let raw = toml::to_string(self)?;
         xx::file::write(path, raw)?;
         Ok(())

@@ -68,7 +68,12 @@ impl Supervisor {
             info!("pitchfork cli updated, restarting");
             self.pid_file.remove("pitchfork");
             self.pid_file.write()?;
-            cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start()?;
+            if !*env::PITCHFORK_EXEC || cfg!(target_os="windows") {
+                cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start()?;
+            } else {
+                let x = exec::execvp(&*env::BIN_PATH, &["daemon", "run", "--force"]);
+                panic!("execvp returned unexpectedly: {x:?}");
+            }
             exit(0);
         }
         Ok(())

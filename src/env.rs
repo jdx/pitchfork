@@ -29,6 +29,9 @@ pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> = Lazy::new(|| {
             .join("pitchfork.log"),
     )
 });
+pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| {
+    var_true("PITCHFORK_EXEC")
+});
 
 fn var_path(name: &str) -> Option<PathBuf> {
     var(name).map(|path| PathBuf::from(path)).ok()
@@ -38,4 +41,8 @@ fn var_log_level(name: &str) -> Option<log::LevelFilter> {
     var(name)
         .ok()
         .and_then(|level| level.parse().ok())
+}
+
+fn var_true(name: &str) -> bool {
+    var(name).map(|val| val.to_lowercase()).map(|val| val == "true" || val == "1").unwrap_or(false)
 }
