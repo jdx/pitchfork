@@ -27,7 +27,7 @@ const INTERVAL: Duration = Duration::from_secs(10);
 
 enum Event {
     FileChange(Vec<PathBuf>),
-    Conn(String),
+    Run(String, String),
     Signal,
     Interval,
 }
@@ -85,8 +85,8 @@ impl Supervisor {
                 //     self.pid_file = PidFile::read(&self.pid_file.path)?;
                 // }
             }
-            Event::Conn(msg) => {
-                info!("received message: {:?}", msg);
+            Event::Run(name, cmd) => {
+                info!("received run message: {name:?} cmd: {cmd:?}");
             }
             Event::Signal => {
                 info!("received SIGTERM, stopping");
@@ -200,15 +200,15 @@ impl Supervisor {
                         continue;
                     }
                 };
-                dbg!(&msg);
-                tx.send(Event::Conn(msg.to_string()))
-                    .await
-                    .unwrap();
+                debug!("received message: {:?}", msg);
+                // tx.send(Event::Run(msg.to_string()))
+                //     .await
+                //     .unwrap();
             }
         });
         Ok(())
     }
-    
+
     fn close(&mut self) {
         self.state_file.daemons.remove("pitchfork");
         if let Err(err) = self.state_file.write() {

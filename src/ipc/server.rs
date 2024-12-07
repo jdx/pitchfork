@@ -1,11 +1,13 @@
-use std::collections::HashMap;
-use eyre::eyre;
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
 use crate::{env, Result};
+use eyre::{bail, eyre};
+use interprocess::local_socket::tokio::SendHalf;
 use interprocess::local_socket::traits::tokio::Listener;
-use interprocess::local_socket::{ListenerOptions, Name, ToFsName};
+use interprocess::local_socket::traits::tokio::Stream;
+use interprocess::local_socket::ListenerOptions;
+use std::collections::HashMap;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
 pub struct IpcServer {
@@ -23,41 +25,73 @@ impl IpcServer {
         let listener = opts.create_tokio()?;
         tokio::spawn(async move {
             loop {
-                let msg = Self::listen(&listener).await;
-                match msg {
-                    Ok(msg) => {
-                        tx.send(msg).await.unwrap();
-                    }
-                    Err(e) => {
-                        error!("IPC error: {}", e);
-                    }
+                if let Err(err) = Self::listen(&listener, tx.clone()).await {
+                    error!("ipc server {:?}", err);
+                    continue;
                 }
             }
         });
-        let server = Self { clients: Default::default(), rx };
+        let server = Self {
+            clients: Default::default(),
+            rx,
+        };
         Ok(server)
     }
-    
-    // pub async fn send(&self, msg: IpcMessage) -> Result<()> {
-    //     let mut msg = serialize(&msg)?;
-    //     if msg.contains(&0) {
-    //         panic!("IPC message contains null");
-    //     }
-    //     msg.push(0);
-    //     send.write_all(&msg).await?;
-    //     Ok(())
-    // }
-    
-    pub async fn read(&mut self) -> Result<IpcMessage> {
-        self.rx.recv().await.ok_or_else(|| eyre!("IPC channel closed"))
+
+    pub async fn send(send: &mut SendHalf, msg: IpcMessage) -> Result<()> {
+        let mut msg = serialize(&msg)?;
+        if msg.contains(&0) {
+            panic!("IPC message contains null");
+        }
+        msg.push(0);
+        send.write_all(&msg).await?;
+        Ok(())
     }
 
-    async fn listen(listener: &interprocess::local_socket::tokio::Listener) -> Result<IpcMessage> {
+    pub async fn read(&mut self) -> Result<IpcMessage> {
+        self.rx
+            .recv()
+            .await
+            .ok_or_else(|| eyre!("IPC channel closed"))
+    }
+
+    async fn listen(listener: &interprocess::local_socket::tokio::Listener, tx: tokio::sync::mpsc::Sender<IpcMessage>) -> Result<()> {
         let stream = listener.accept().await?;
-        let mut recv = BufReader::new(&stream);
+        let (recv, mut send) = stream.split();
+        let mut recv = BufReader::new(recv);
         let mut bytes = Vec::new();
         recv.read_until(0, &mut bytes).await?;
-        deserialize(&bytes)
+        match deserialize(&bytes)? {
+            IpcMessage::Connect(id) => {
+                debug!("Client connected: {}", id);
+                Self::send(&mut send, IpcMessage::Response("Hello from server!".into())).await?;
+                tokio::spawn(async move {
+                    loop {
+                        let mut bytes = Vec::new();
+                        if recv.read_until(0, &mut bytes).await.is_err() {
+                            break;
+                        }
+                        if bytes.is_empty() {
+                            break;
+                        }
+                        let msg = match deserialize(&bytes) {
+                            Ok(msg) => msg,
+                            Err(err) => {
+                                error!("Failed to deserialize message: {:?}", err);
+                                continue;
+                            }
+                        };
+                        if let Err(err) = tx.send(msg).await {
+                            warn!("Failed to send message: {:?}", err);
+                        }
+                    }
+                });
+            },
+            msg => {
+             bail!("Unexpected message: {:?}", msg);
+            },
+        };
+        Ok(())
     }
 
     pub fn close(&self) {

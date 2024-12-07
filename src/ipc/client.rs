@@ -1,8 +1,7 @@
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
-use crate::{env, ipc, Result};
+use crate::{ipc, Result};
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
-use interprocess::local_socket::{GenericFilePath, ToFsName};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -48,7 +47,7 @@ impl IpcClient {
         send.write_all(&msg).await?;
         Ok(())
     }
-    
+
     pub async fn read(&self) -> Result<IpcMessage> {
         let mut recv = self.recv.lock().await;
         let mut bytes = Vec::new();
