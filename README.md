@@ -2,12 +2,12 @@
 
 Daemons with DX
 
+> [!CAUTION]
+> This is a WIP. Most of this is not yet implemented. I will remove this message when you should try it out.
+
 ![pitchfork logo](https://pitchfork.jdx.dev/assets/logo.CjqAML_x.png)
 
 Pitchfork is a CLI for launching daemons with a focus on developer experience.
-
-> [!CAUTION]
-> This is a WIP. Most of this is not yet implemented. I will remove this message when you should try it out.
 
 ## Use-cases
 
