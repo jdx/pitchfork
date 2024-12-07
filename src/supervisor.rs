@@ -1,4 +1,4 @@
-use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
+use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
 use crate::{env, ipc, Result};
 use duct::cmd;
 use interprocess::local_socket::tokio::prelude::*;
@@ -46,7 +46,7 @@ impl Supervisor {
             "pitchfork".to_string(),
             StateFileDaemon {
                 pid,
-                status: StateFileDaemonStatus::Running,
+                status: DaemonStatus::Running,
             },
         );
         self.state_file.write()?;

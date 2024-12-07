@@ -13,12 +13,12 @@ pub struct StateFile {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StateFileDaemon {
     pub pid: u32,
-    pub status: StateFileDaemonStatus,
+    pub status: DaemonStatus,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum StateFileDaemonStatus {
+pub enum DaemonStatus {
     Waiting,
     Running,
 }
