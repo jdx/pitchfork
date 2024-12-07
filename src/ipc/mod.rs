@@ -8,7 +8,9 @@ pub(crate) mod server;
 #[derive(Debug, serde::Serialize, serde::Deserialize, strum::Display)]
 pub enum IpcMessage {
     Connect(String),
+    ConnectOK,
     Run(String, Vec<String>),
+    Started(String),
     Response(String),
 }
 

@@ -25,7 +25,7 @@ const INTERVAL: Duration = Duration::from_secs(10);
 
 enum Event {
     FileChange(Vec<PathBuf>),
-    Run(String, Vec<String>),
+    Run(String, Vec<String>, Sender<IpcMessage>),
     Signal,
     Interval,
 }
@@ -83,8 +83,9 @@ impl Supervisor {
                 //     self.pid_file = PidFile::read(&self.pid_file.path)?;
                 // }
             }
-            Event::Run(name, cmd) => {
+            Event::Run(name, cmd, send) => {
                 info!("received run message: {name:?} cmd: {cmd:?}");
+                send.send(IpcMessage::Started(name)).await?;
             }
             Event::Signal => {
                 info!("received SIGTERM, stopping");
@@ -98,6 +99,7 @@ impl Supervisor {
     }
 
     fn restart(&mut self) -> ! {
+        debug!("restarting");
         self.close();
         if !*env::PITCHFORK_EXEC || cfg!(windows) {
             if let Err(err) = cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start() {
@@ -118,11 +120,15 @@ impl Supervisor {
             SignalKind::interrupt(),
             SignalKind::quit(),
             SignalKind::hangup(),
-            SignalKind::pipe(),
             SignalKind::user_defined1(),
             SignalKind::user_defined2(),
         ];
         static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
+        let mut pipe_stream = signal::unix::signal(SignalKind::pipe()).unwrap();
+        tokio::spawn(async move {
+            pipe_stream.recv().await;
+            debug!("received SIGPIPE");
+        });
         for signal in signals {
             let tx = tx.clone();
             tokio::spawn(async move {
@@ -199,8 +205,8 @@ impl Supervisor {
                     }
                 };
                 debug!("received message: {:?}", msg);
-                if let IpcMessage::Run(name, cmd) = msg {
-                    tx.send(Event::Run(name, cmd)).await.unwrap();
+                if let (IpcMessage::Run(name, cmd), send) = msg {
+                    tx.send(Event::Run(name, cmd, send)).await.unwrap();
                 }
             }
         });

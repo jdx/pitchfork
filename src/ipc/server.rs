@@ -1,16 +1,17 @@
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
 use crate::{env, Result};
-use eyre::{bail, eyre};
+use eyre::eyre;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use interprocess::local_socket::ListenerOptions;
-use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::{fs};
 
 pub struct IpcServer {
     // clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
-    rx: tokio::sync::mpsc::Receiver<IpcMessage>,
+    rx: Receiver<(IpcMessage, Sender<IpcMessage>)>,
 }
 
 impl IpcServer {
@@ -36,7 +37,7 @@ impl IpcServer {
         Ok(server)
     }
 
-    pub async fn send(send: &mut SendHalf, msg: IpcMessage) -> Result<()> {
+    async fn send(send: &mut SendHalf, msg: IpcMessage) -> Result<()> {
         let mut msg = serialize(&msg)?;
         if msg.contains(&0) {
             panic!("IPC message contains null");
@@ -55,7 +56,56 @@ impl IpcServer {
         Ok(Some(deserialize(&bytes)?))
     }
 
-    pub async fn read(&mut self) -> Result<IpcMessage> {
+    fn read_messages_chan(recv: RecvHalf) -> Receiver<IpcMessage> {
+        let mut recv = BufReader::new(recv);
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            loop {
+                let msg = match Self::read_message(&mut recv).await {
+                    Ok(Some(msg)) => {
+                        trace!("Received message: {:?}", msg);
+                        msg
+                    }
+                    Ok(None) => {
+                        trace!("Client disconnected");
+                        break;
+                    }
+                    Err(err) => {
+                        error!("Failed to deserialize message: {:?}", err);
+                        continue;
+                    }
+                };
+                if let Err(err) = tx.send(msg).await {
+                    warn!("Failed to emit message: {:?}", err);
+                }
+            }
+        });
+        rx
+    }
+
+    fn send_messages_chan(mut send: SendHalf) -> Sender<IpcMessage> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            loop {
+                let msg = match rx.recv().await {
+                    Some(msg) => {
+                        trace!("Sending message: {:?}", msg);
+                        msg
+                    }
+                    None => {
+                        trace!("IPC channel closed");
+                        break;
+                    }
+                };
+                if let Err(err) = Self::send(&mut send, msg).await {
+                    warn!("Failed to send message: {:?}", err);
+                }
+            }
+        });
+        tx
+    }
+
+    pub async fn read(&mut self) -> Result<(IpcMessage, Sender<IpcMessage>)> {
         self.rx
             .recv()
             .await
@@ -64,45 +114,30 @@ impl IpcServer {
 
     async fn listen(
         listener: &interprocess::local_socket::tokio::Listener,
-        tx: tokio::sync::mpsc::Sender<IpcMessage>,
+        tx: Sender<(IpcMessage, Sender<IpcMessage>)>,
     ) -> Result<()> {
         let stream = listener.accept().await?;
         trace!("Client accepted");
-        let (recv, mut send) = stream.split();
-        let mut recv = BufReader::new(recv);
-        match Self::read_message(&mut recv).await? {
-            Some(IpcMessage::Connect(id)) => {
-                debug!("Client connected: {}", id);
-                Self::send(&mut send, IpcMessage::Response("Hello from server!".into())).await?;
-                tokio::spawn(async move {
-                    loop {
-                        let msg = match Self::read_message(&mut recv).await {
-                            Ok(Some(msg)) => {
-                                trace!("Received message: {:?}", msg);
-                                msg
-                            }
-                            Ok(None) => {
-                                trace!("Client disconnected: {}", id);
-                                break;
-                            }
-                            Err(err) => {
-                                error!("Failed to deserialize message: {:?}", err);
-                                continue;
-                            }
-                        };
-                        if let Err(err) = tx.send(msg).await {
-                            warn!("Failed to send message: {:?}", err);
+        let (recv, send) = stream.split();
+        let mut incoming_chan = Self::read_messages_chan(recv);
+        let outgoing_chan = Self::send_messages_chan(send);
+        tokio::spawn(async move {
+            while let Some(msg) = incoming_chan.recv().await {
+                match msg {
+                    IpcMessage::Connect(id) => {
+                        debug!("Client connected: {}", id);
+                        if let Err(err) = outgoing_chan.send(IpcMessage::ConnectOK).await {
+                            debug!("Failed to send message: {:?}", err);
                         }
                     }
-                });
+                    _ => {
+                        if let Err(err) = tx.send((msg, outgoing_chan.clone())).await {
+                            debug!("Failed to send message: {:?}", err);
+                        }
+                    }
+                }
             }
-            Some(msg) => {
-                bail!("Unexpected message: {:?}", msg);
-            }
-            None => {
-                bail!("No message");
-            }
-        };
+        });
         Ok(())
     }
 
