@@ -1,12 +1,9 @@
 use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
 use crate::{env, Result};
 use duct::cmd;
-use futures::{
-    SinkExt, StreamExt,
-};
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions};
-use notify_debouncer_mini::{new_debouncer, notify, notify::*, DebounceEventResult, Debouncer};
+use notify_debouncer_mini::{new_debouncer, notify::*, DebounceEventResult, Debouncer};
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic;

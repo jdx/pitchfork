@@ -28,7 +28,6 @@ sysinfo = "0.33"
 tokio = { version = "1", features = ["full"] }
 toml = { version = "0.8", features = ["indexmap", "preserve_order"] }
 xx = { version = "2", features = ["fslock", "hash"] }
-futures = "0.3.31"
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"
