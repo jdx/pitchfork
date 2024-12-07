@@ -1,7 +1,7 @@
-use crate::{ipc, Result};
-use eyre::bail;
-use tokio::io::AsyncWriteExt;
 use crate::ipc::client::IpcClient;
+use crate::ipc::IpcMessage;
+use crate::Result;
+use eyre::bail;
 
 /// Runs a one-off daemon
 #[derive(Debug, clap::Args)]
@@ -23,8 +23,11 @@ impl Run {
         }
         dbg!(&self);
 
-        let _ipc = IpcClient::connect().await?;
-        // ipc.send.write_all(b"Hello from client!\n").await?;
+        let ipc = IpcClient::connect().await?;
+        ipc.send(IpcMessage::Run(self.name.clone(), self.cmd.clone()))
+            .await?;
+        let response = ipc.read().await?;
+        dbg!(&response);
         Ok(())
     }
 }

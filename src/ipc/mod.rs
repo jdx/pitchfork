@@ -1,6 +1,6 @@
+use crate::env;
 use crate::Result;
 use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
-use crate::env;
 
 pub(crate) mod client;
 pub(crate) mod server;
@@ -8,6 +8,7 @@ pub(crate) mod server;
 #[derive(Debug, serde::Serialize, serde::Deserialize, strum::Display)]
 pub enum IpcMessage {
     Connect(String),
+    Run(String, Vec<String>),
     Response(String),
 }
 

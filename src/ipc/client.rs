@@ -1,5 +1,5 @@
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
-use crate::{ipc, Result};
+use crate::Result;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -20,7 +20,7 @@ impl IpcClient {
         let client = Self::connect_(&id, "main").await?;
         debug!("Connected to IPC main");
         client.send(IpcMessage::Connect(client.id.clone())).await?;
-        let msg = client.read().await?;
+        // let msg = client.read().await?;
         // let client = Self::connect_(&id, &id).await?;
         // debug!("Connected to IPC sub");
         Ok(client)

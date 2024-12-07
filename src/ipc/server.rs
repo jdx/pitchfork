@@ -5,13 +5,11 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use interprocess::local_socket::ListenerOptions;
-use std::collections::HashMap;
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Mutex;
 
 pub struct IpcServer {
-    clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
+    // clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
     rx: tokio::sync::mpsc::Receiver<IpcMessage>,
 }
 
@@ -32,7 +30,7 @@ impl IpcServer {
             }
         });
         let server = Self {
-            clients: Default::default(),
+            // clients: Default::default(),
             rx,
         };
         Ok(server)
@@ -47,7 +45,7 @@ impl IpcServer {
         send.write_all(&msg).await?;
         Ok(())
     }
-    
+
     async fn read_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<IpcMessage>> {
         let mut bytes = Vec::new();
         recv.read_until(0, &mut bytes).await?;
@@ -64,7 +62,10 @@ impl IpcServer {
             .ok_or_else(|| eyre!("IPC channel closed"))
     }
 
-    async fn listen(listener: &interprocess::local_socket::tokio::Listener, tx: tokio::sync::mpsc::Sender<IpcMessage>) -> Result<()> {
+    async fn listen(
+        listener: &interprocess::local_socket::tokio::Listener,
+        tx: tokio::sync::mpsc::Sender<IpcMessage>,
+    ) -> Result<()> {
         let stream = listener.accept().await?;
         trace!("Client accepted");
         let (recv, mut send) = stream.split();
@@ -79,7 +80,7 @@ impl IpcServer {
                             Ok(Some(msg)) => {
                                 trace!("Received message: {:?}", msg);
                                 msg
-                            },
+                            }
                             Ok(None) => {
                                 trace!("Client disconnected: {}", id);
                                 break;
@@ -94,13 +95,13 @@ impl IpcServer {
                         }
                     }
                 });
-            },
+            }
             Some(msg) => {
                 bail!("Unexpected message: {:?}", msg);
-            },
+            }
             None => {
                 bail!("No message");
-            },
+            }
         };
         Ok(())
     }

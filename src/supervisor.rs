@@ -1,21 +1,19 @@
-use std::fs;
+use crate::ipc::server::IpcServer;
+use crate::ipc::IpcMessage;
 use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
-use crate::{env, ipc, Result};
+use crate::{env, Result};
 use duct::cmd;
-use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::tokio::Listener;
 use notify_debouncer_mini::{new_debouncer, notify::*, DebounceEventResult, Debouncer};
+use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::{signal, time};
-use crate::ipc::server::IpcServer;
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -27,7 +25,7 @@ const INTERVAL: Duration = Duration::from_secs(10);
 
 enum Event {
     FileChange(Vec<PathBuf>),
-    Run(String, String),
+    Run(String, Vec<String>),
     Signal,
     Interval,
 }
@@ -201,9 +199,9 @@ impl Supervisor {
                     }
                 };
                 debug!("received message: {:?}", msg);
-                // tx.send(Event::Run(msg.to_string()))
-                //     .await
-                //     .unwrap();
+                if let IpcMessage::Run(name, cmd) = msg {
+                    tx.send(Event::Run(name, cmd)).await.unwrap();
+                }
             }
         });
         Ok(())
