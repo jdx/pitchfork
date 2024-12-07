@@ -4,5 +4,9 @@ run = [
   "cargo test",
 ]
 
+[tasks.docs]
+dir = "docs"
+run = "bun i && bun run docs:dev"
+
 [tools]
 bun = "latest"

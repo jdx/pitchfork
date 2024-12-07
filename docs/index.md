@@ -4,15 +4,15 @@ layout: home
 
 hero:
   name: "pitchfork"
-  text: "Daemons with DX"
-  tagline: My great project tagline
+  #text: "Daemons with DX"
+  tagline: Daemons with DX
   actions:
     - theme: brand
-      text: Markdown Examples
-      link: /markdown-examples
-    - theme: alt
-      text: API Examples
-      link: /api-examples
+      text: Getting Started
+      link: /getting-started
+#    - theme: alt
+#      text: API Examples
+#      link: /api-examples
 
 features:
   - title: Feature A
@@ -22,4 +22,3 @@ features:
   - title: Feature C
     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
 ---
-
