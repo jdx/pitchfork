@@ -1,5 +1,5 @@
 use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
-use crate::{env, Result};
+use crate::{env, ipc, Result};
 use duct::cmd;
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions};
@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::mpsc::{channel, Receiver};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::{fs, select, signal, time, try_join};
 
 pub struct Supervisor {
@@ -37,34 +37,22 @@ impl Supervisor {
         let pid = std::process::id();
         info!("Starting supervisor with pid {pid}");
 
-        let _ = fs::remove_file(&*env::IPC_SOCK_PATH).await;
-        let opts = ListenerOptions::new().name(env::IPC_SOCK_PATH.clone().to_fs_name::<GenericFilePath>()?);
-        let listener = opts.create_tokio()?;
+        let listener = ipc::server::listen().await?;
 
         self.state_file.daemons.insert("pitchfork".to_string(), StateFileDaemon { pid, status: StateFileDaemonStatus::Running });
         self.state_file.write()?;
 
-        let mut interval_events = time::interval(INTERVAL);
-        let (mut file_events, _file_watcher) = self.file_watch()?;
-        let mut signal_events = self.signals()?;
-
+        let (tx, mut rx) = channel(1);
+        self.interval_watch(tx.clone())?;
+        self.signals(tx.clone())?;
+        let _file_watcher = self.file_watch(tx.clone())?;
         self.refresh(Event::Interval).await?;
 
         loop {
             select! {
-                _ = signal_events.recv() => {
-                    if let Err(err) = self.refresh(Event::Signal).await {
-                        error!("supervisor error: {:?}", err);
-                    }
-                }
-                _ = interval_events.tick() => {
-                    if let Err(err) = self.refresh(Event::Interval).await {
-                        error!("supervisor error: {:?}", err);
-                    }
-                }
-                f = file_events.recv() => {
-                    if let Some(f) = f {
-                        if let Err(err) = self.refresh(f).await {
+                e = rx.recv() => {
+                    if let Some(e) = e {
+                        if let Err(err) = self.refresh(e).await {
                             error!("supervisor error: {:?}", err);
                         }
                     }
@@ -114,6 +102,7 @@ impl Supervisor {
                 exit(0);
             }
         }
+        debug!("refreshing");
         self.last_run = time::Instant::now();
         Ok(())
     }
@@ -135,7 +124,7 @@ impl Supervisor {
     }
 
     #[cfg(unix)]
-    fn signals(&self) -> Result<Receiver<Event>> {
+    fn signals(&self, tx: Sender<Event>) -> Result<()> {
         let signals = [
             SignalKind::terminate(),
             SignalKind::alarm(),
@@ -147,7 +136,6 @@ impl Supervisor {
             SignalKind::user_defined2(),
         ];
         static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
-        let (tx, rx) = channel(1);
         for signal in signals {
             let tx = tx.clone();
             tokio::spawn(async move {
@@ -162,12 +150,11 @@ impl Supervisor {
                 }
             });
         }
-        Ok(rx)
+        Ok(())
     }
 
     #[cfg(windows)]
-    fn signals(&self) -> Result<Receiver<Event>> {
-        let (tx, rx) = mpsc::channel(1);
+    fn signals(&self) -> Result<()> {
         tokio::spawn(async move {
             let mut stream = signal::ctrl_c().unwrap();
             loop {
@@ -175,12 +162,10 @@ impl Supervisor {
                 tx.send(Event::Signal).await.unwrap();
             }
         });
-        Ok(rx)
+        Ok(())
     }
 
-    fn file_watch(&self) -> Result<(Receiver<Event>, Debouncer<RecommendedWatcher>)> {
-        let (tx, rx) = channel(1);
-
+    fn file_watch(&self, tx: Sender<Event>) -> Result<Debouncer<RecommendedWatcher>> {
         let h = tokio::runtime::Handle::current();
         let mut debouncer = new_debouncer(Duration::from_secs(2), move |res: DebounceEventResult| {
             let tx = tx.clone();
@@ -195,6 +180,18 @@ impl Supervisor {
         debouncer.watcher().watch(&env::BIN_PATH, RecursiveMode::NonRecursive)?;
         debouncer.watcher().watch(&self.state_file.path, RecursiveMode::NonRecursive)?;
 
-        Ok((rx, debouncer))
+        Ok(debouncer)
+    }
+    
+    fn interval_watch(&self, tx: Sender<Event>) -> Result<()> {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let mut interval = time::interval(INTERVAL);
+            loop {
+                interval.tick().await;
+                tx.send(Event::Interval).await.unwrap();
+            }
+        });
+        Ok(())
     }
 }
