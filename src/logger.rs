@@ -26,7 +26,12 @@ impl log::Log for Logger {
         if record.level() <= self.file_level {
             if let Some(log_file) = &self.log_file {
                 let mut log_file = log_file.lock().unwrap();
-                let out = self.render(record, self.file_level);
+                let out = format!(
+                    "{now} {level} {args}",
+                    now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                    level = self.styled_level(record.level()),
+                    args = record.args()
+                );
                 let _ = writeln!(log_file, "{}", console::strip_ansi_codes(&out));
             }
         }
@@ -85,15 +90,15 @@ impl Logger {
                 args = record.args()
             ),
             _ => {
-                let mise = match record.level() {
-                    Level::Error => ui::style::ered("mise"),
-                    Level::Warn => ui::style::eyellow("mise"),
-                    _ => ui::style::edim("mise"),
+                let pitchfork = match record.level() {
+                    Level::Error => ui::style::ered("pitchfork"),
+                    Level::Warn => ui::style::eyellow("pitchfork"),
+                    _ => ui::style::edim("pitchfork"),
                 };
                 match record.level() {
-                    Level::Info => format!("{mise} {args}", args = record.args()),
+                    Level::Info => format!("{pitchfork} {args}", args = record.args()),
                     _ => format!(
-                        "{mise} {level} {args}",
+                        "{pitchfork} {level} {args}",
                         level = self.styled_level(record.level()),
                         args = record.args()
                     ),
