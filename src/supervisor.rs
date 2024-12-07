@@ -1,17 +1,21 @@
 use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
-use crate::{async_watcher, env, Result};
+use crate::{env, Result};
 use duct::cmd;
+use futures::{
+    SinkExt, StreamExt,
+};
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions};
-use std::io;
+use notify_debouncer_mini::{new_debouncer, notify, notify::*, DebounceEventResult, Debouncer};
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::atomic;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
-use tokio::signal::unix::{SignalKind};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
+use tokio::signal::unix::SignalKind;
+use tokio::sync::mpsc::{channel, Receiver};
 use tokio::{fs, select, signal, time, try_join};
 
 pub struct Supervisor {
@@ -43,36 +47,20 @@ impl Supervisor {
         self.state_file.daemons.insert("pitchfork".to_string(), StateFileDaemon { pid, status: StateFileDaemonStatus::Running });
         self.state_file.write()?;
 
-        let mut interval = time::interval(INTERVAL);
-
-        let (mut file_events, _debouncer) = async_watcher::async_debounce_watch(vec![
-            (&*env::BIN_PATH, "nonrecursive"),
-            (&self.state_file.path, "nonrecursive"),
-        ]).await?;
-
-        #[cfg(unix)]
-        let mut sigterm = signals(vec![
-            SignalKind::terminate(),
-            SignalKind::alarm(),
-            SignalKind::interrupt(),
-            SignalKind::quit(),
-            SignalKind::hangup(),
-            SignalKind::pipe(),
-            SignalKind::user_defined1(),
-            SignalKind::user_defined2(),
-        ])?;
+        let mut interval_events = time::interval(INTERVAL);
+        let (mut file_events, _file_watcher) = self.file_watch()?;
+        let mut signal_events = self.signals()?;
 
         self.refresh(Event::Interval).await?;
 
         loop {
-            #[cfg(unix)]
             select! {
-                _ = sigterm.recv() => {
+                _ = signal_events.recv() => {
                     if let Err(err) = self.refresh(Event::Signal).await {
                         error!("supervisor error: {:?}", err);
                     }
                 },
-                _ = interval.tick() => {
+                _ = interval_events.tick() => {
                     if let Err(err) = self.refresh(Event::Interval).await {
                         error!("supervisor error: {:?}", err);
                     }
@@ -96,42 +84,9 @@ impl Supervisor {
                     println!("Received: {}", buffer.trim());
                 }
                 f = file_events.recv() => {
-                    match f {
-                        Some(Ok(event)) => {
-                            let paths = event.into_iter().flat_map(|e| e.event.paths).collect();
-                            if let Err(err) = self.refresh(Event::FileChange(paths)).await {
-                                error!("supervisor error: {:?}", err);
-                            }
-                        }
-                        Some(Err(e)) => {
-                            warn!("watch error: {:?}", e);
-                        }
-                        None => {
-                            warn!("watch channel closed");
-                        }
-                    }
-                }
-            }
-            #[cfg(windows)]
-            select! {
-                _ = interval.tick() => {
-                    if let Err(err) = self.refresh(Event::Interval).await {
-                        error!("supervisor error: {:?}", err);
-                    }
-                },
-                f = file_events.recv() => {
-                    match f {
-                        Some(Ok(event)) => {
-                            let paths = event.into_iter().flat_map(|e| e.event.paths).collect();
-                            if let Err(err) = self.refresh(Event::FileChange(paths)).await {
-                                error!("supervisor error: {:?}", err);
-                            }
-                        }
-                        Some(Err(e)) => {
-                            warn!("watch error: {:?}", e);
-                        }
-                        None => {
-                            warn!("watch channel closed");
+                    if let Some(f) = f {
+                        if let Err(err) = self.refresh(f).await {
+                            error!("supervisor error: {:?}", err);
                         }
                     }
                 }
@@ -147,6 +102,7 @@ impl Supervisor {
                 }
             }
             Event::FileChange(paths) => {
+                debug!("file change: {:?}", paths);
                 if paths.contains(&*env::BIN_PATH) {
                     info!("pitchfork cli updated, restarting");
                     self.restart();
@@ -180,20 +136,68 @@ impl Supervisor {
         }
         exit(0);
     }
-}
 
+    #[cfg(unix)]
+    fn signals(&self) -> Result<Receiver<Event>> {
+        let signals = [
+            SignalKind::terminate(),
+            SignalKind::alarm(),
+            SignalKind::interrupt(),
+            SignalKind::quit(),
+            SignalKind::hangup(),
+            SignalKind::pipe(),
+            SignalKind::user_defined1(),
+            SignalKind::user_defined2(),
+        ];
+        static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
+        let (tx, rx) = channel(1);
+        for signal in signals {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut stream = signal::unix::signal(signal).unwrap();
+                loop {
+                    stream.recv().await;
+                    if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
+                        exit(1);
+                    } else {
+                        tx.send(Event::Signal).await.unwrap();
+                    }
+                }
+            });
+        }
+        Ok(rx)
+    }
 
-fn signals(signals: Vec<SignalKind>) -> io::Result<Receiver<Event>> {
-    let (tx, rx) = mpsc::channel(1);
-    for signal in signals {
-        let tx = tx.clone();
+    #[cfg(windows)]
+    fn signals(&self) -> Result<Receiver<Event>> {
+        let (tx, rx) = mpsc::channel(1);
         tokio::spawn(async move {
-            let mut stream = signal::unix::signal(signal).unwrap();
+            let mut stream = signal::ctrl_c().unwrap();
             loop {
                 stream.recv().await;
                 tx.send(Event::Signal).await.unwrap();
             }
         });
+        Ok(rx)
     }
-    Ok(rx)
+
+    fn file_watch(&self) -> Result<(Receiver<Event>, Debouncer<RecommendedWatcher>)> {
+        let (tx, rx) = channel(1);
+
+        let h = tokio::runtime::Handle::current();
+        let mut debouncer = new_debouncer(Duration::from_secs(2), move |res: DebounceEventResult| {
+            let tx = tx.clone();
+            h.spawn(async move {
+                if let Ok(ev) = res {
+                    let paths = ev.into_iter().map(|e| e.path).collect();
+                    tx.send(Event::FileChange(paths)).await.unwrap();
+                }
+            });
+        })?;
+
+        debouncer.watcher().watch(&env::BIN_PATH, RecursiveMode::NonRecursive)?;
+        debouncer.watcher().watch(&self.state_file.path, RecursiveMode::NonRecursive)?;
+
+        Ok((rx, debouncer))
+    }
 }

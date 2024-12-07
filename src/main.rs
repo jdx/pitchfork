@@ -10,7 +10,6 @@ mod pitchfork_toml;
 mod procs;
 mod supervisor;
 mod ui;
-mod async_watcher;
 
 pub use eyre::Result;
 
