@@ -4,13 +4,13 @@ extern crate log;
 mod cli;
 mod daemon;
 mod env;
+mod ipc;
 mod logger;
-mod state_file;
 mod pitchfork_toml;
 mod procs;
+mod state_file;
 mod supervisor;
 mod ui;
-mod ipc;
 
 pub use eyre::Result;
 

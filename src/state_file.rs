@@ -1,7 +1,7 @@
+use crate::Result;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-use crate::Result;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StateFile {

@@ -1,7 +1,7 @@
+use crate::{env, Result};
+use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, ToFsName};
 use std::path::Path;
 use tokio::fs;
-use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, ToFsName};
-use crate::{env, Result};
 
 pub async fn listen() -> Result<interprocess::local_socket::tokio::Listener> {
     let _ = fs::remove_file(&*env::IPC_SOCK_PATH).await;

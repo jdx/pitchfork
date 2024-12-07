@@ -1,7 +1,7 @@
 use crate::{env, Result};
 use eyre::bail;
-use interprocess::local_socket::{GenericFilePath, ToFsName};
 use interprocess::local_socket::traits::tokio::Stream;
+use interprocess::local_socket::{GenericFilePath, ToFsName};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::try_join;
 
@@ -25,8 +25,10 @@ impl Run {
         }
         dbg!(&self);
 
-        let conn =
-            interprocess::local_socket::tokio::Stream::connect(env::IPC_SOCK_PATH.clone().to_fs_name::<GenericFilePath>()?).await?;
+        let conn = interprocess::local_socket::tokio::Stream::connect(
+            env::IPC_SOCK_PATH.clone().to_fs_name::<GenericFilePath>()?,
+        )
+        .await?;
         let (recv, mut send) = conn.split();
         let mut read = tokio::io::BufReader::new(recv);
         let mut buffer = String::with_capacity(1024);

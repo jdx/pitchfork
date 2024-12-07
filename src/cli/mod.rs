@@ -1,9 +1,9 @@
-use clap::Parser;
 use crate::Result;
+use clap::Parser;
 
-mod start;
 mod daemon;
 mod run;
+mod start;
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
