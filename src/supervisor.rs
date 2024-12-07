@@ -2,15 +2,17 @@ use crate::state_file::{StateFile, StateFileDaemon, StateFileDaemonStatus};
 use crate::{async_watcher, env, Result};
 use duct::cmd;
 use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions};
+use interprocess::local_socket::{GenericFilePath, ListenerOptions};
 use std::io;
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::{fs, select, time, try_join};
+use tokio::signal::unix::{SignalKind};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
+use tokio::{fs, select, signal, time, try_join};
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -21,12 +23,8 @@ const INTERVAL: Duration = Duration::from_secs(10);
 
 enum Event {
     FileChange(Vec<PathBuf>),
-    Signal(CrossPlatformSignal),
+    Signal,
     Interval,
-}
-
-enum CrossPlatformSignal {
-    Sigterm,
 }
 
 impl Supervisor {
@@ -41,7 +39,7 @@ impl Supervisor {
         let _ = fs::remove_file(&*env::IPC_SOCK_PATH).await;
         let opts = ListenerOptions::new().name(env::IPC_SOCK_PATH.clone().to_fs_name::<GenericFilePath>()?);
         let listener = opts.create_tokio()?;
-        
+
         self.state_file.daemons.insert("pitchfork".to_string(), StateFileDaemon { pid, status: StateFileDaemonStatus::Running });
         self.state_file.write()?;
 
@@ -53,7 +51,16 @@ impl Supervisor {
         ]).await?;
 
         #[cfg(unix)]
-        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigterm = signals(vec![
+            SignalKind::terminate(),
+            SignalKind::alarm(),
+            SignalKind::interrupt(),
+            SignalKind::quit(),
+            SignalKind::hangup(),
+            SignalKind::pipe(),
+            SignalKind::user_defined1(),
+            SignalKind::user_defined2(),
+        ])?;
 
         self.refresh(Event::Interval).await?;
 
@@ -61,7 +68,7 @@ impl Supervisor {
             #[cfg(unix)]
             select! {
                 _ = sigterm.recv() => {
-                    if let Err(err) = self.refresh(Event::Signal(CrossPlatformSignal::Sigterm)).await {
+                    if let Err(err) = self.refresh(Event::Signal).await {
                         error!("supervisor error: {:?}", err);
                     }
                 },
@@ -149,7 +156,7 @@ impl Supervisor {
                 //     self.pid_file = PidFile::read(&self.pid_file.path)?;
                 // }
             }
-            Event::Signal(CrossPlatformSignal::Sigterm) => {
+            Event::Signal => {
                 info!("received SIGTERM, stopping");
                 exit(0);
             }
@@ -173,4 +180,20 @@ impl Supervisor {
         }
         exit(0);
     }
+}
+
+
+fn signals(signals: Vec<SignalKind>) -> io::Result<Receiver<Event>> {
+    let (tx, rx) = mpsc::channel(1);
+    for signal in signals {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let mut stream = signal::unix::signal(signal).unwrap();
+            loop {
+                stream.recv().await;
+                tx.send(Event::Signal).await.unwrap();
+            }
+        });
+    }
+    Ok(rx)
 }
