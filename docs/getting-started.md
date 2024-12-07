@@ -2,8 +2,6 @@
 
 Daemons with DX
 
-![pitchfork logo](/logo.png)
-
 Pitchfork is a CLI for launching daemons with a focus on developer experience.
 
 > [!CAUTION]

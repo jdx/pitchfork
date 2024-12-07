@@ -22,3 +22,5 @@ hero:
 #   - title: Feature C
 #     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
 ---
+
+![pitchfork logo](/img/logo.png)

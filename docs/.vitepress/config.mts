@@ -16,6 +16,11 @@ export default defineConfig({
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/jdx/pitchfork' }
-    ]
-  }
+    ],
+
+    logo: '/logo.png',
+  },
+  head: [
+    ['link', { rel: 'icon', href: '/img/favicon.ico' }],
+  ],
 })
