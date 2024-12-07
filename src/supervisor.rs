@@ -42,13 +42,11 @@ impl Supervisor {
 
         let listener = ipc::server::listen().await?;
 
-        self.state_file.daemons.insert(
-            "pitchfork".to_string(),
-            StateFileDaemon {
-                pid,
-                status: DaemonStatus::Running,
-            },
-        );
+        let daemon = StateFileDaemon {
+            pid,
+            status: DaemonStatus::Running,
+        };
+        self.state_file.daemons.insert("pitchfork".into(), daemon);
         self.state_file.write()?;
 
         let (tx, mut rx) = channel(1);
