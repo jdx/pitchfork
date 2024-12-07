@@ -35,9 +35,9 @@ impl IpcClient {
         } else {
             rmp_serde::to_vec(&msg)?
         };
-        // if msg.contains(&b'\n') {
-        //     panic!("IPC message contains newline");
-        // }
+        if msg.contains(&0) {
+            panic!("IPC message contains null");
+        }
         msg.push(0);
         let mut send = self.send.lock().await;
         send.write_all(&msg).await?;
