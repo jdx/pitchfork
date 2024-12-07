@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 pub use std::env::*;
 use std::path::PathBuf;
 
-pub static BIN_PATH: Lazy<PathBuf> = Lazy::new(|| current_exe().unwrap());
+pub static BIN_PATH: Lazy<PathBuf> = Lazy::new(|| current_exe().unwrap().canonicalize().unwrap());
 
 pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| dirs::home_dir().unwrap_or_default());
 pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
@@ -28,7 +28,9 @@ pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> = Lazy::new(|| {
 });
 pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| var_true("PITCHFORK_EXEC"));
 
-pub static IPC_SOCK_PATH: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("pitchfork.sock"));
+pub static IPC_SOCK_DIR: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("sock"));
+pub static IPC_SOCK_MAIN: Lazy<PathBuf> = Lazy::new(|| IPC_SOCK_DIR.join("main.sock"));
+pub static IPC_JSON: Lazy<bool> = Lazy::new(|| var_true("IPC_JSON"));
 
 fn var_path(name: &str) -> Option<PathBuf> {
     var(name).map(PathBuf::from).ok()

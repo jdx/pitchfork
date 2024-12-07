@@ -1,6 +1,6 @@
+use duct::cmd;
 use crate::cli::daemon::kill_or_stop;
 use crate::state_file::StateFile;
-use crate::supervisor::Supervisor;
 use crate::{env, Result};
 
 /// Starts the internal pitchfork daemon in the background
@@ -21,9 +21,10 @@ impl Start {
             }
         }
 
-        if let Ok(fork::Fork::Child) = fork::daemon(false, false) {
-            Supervisor::new(pid_file).start().await?;
-        }
+        cmd!(&*env::BIN_PATH, "daemon", "run")
+            .stdout_null()
+            .stderr_null()
+            .start()?;
 
         Ok(())
     }

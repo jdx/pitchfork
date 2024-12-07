@@ -29,6 +29,7 @@ impl Daemon {
 pub fn kill_or_stop(existing_pid: u32, force: bool) -> Result<bool> {
     if let Some(process) = procs::get_process(existing_pid) {
         if force {
+            debug!("Killing existing pitchfork daemon with pid {existing_pid}");
             if sysinfo::Process::kill_with(process, sysinfo::Signal::Term).is_none() {
                 sysinfo::Process::kill(process);
             }

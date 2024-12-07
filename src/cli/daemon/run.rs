@@ -21,6 +21,6 @@ impl Run {
             }
         }
 
-        Supervisor::new(pid_file).start().await
+        Supervisor::new(pid_file).await?.start().await
     }
 }

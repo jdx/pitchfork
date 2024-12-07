@@ -14,10 +14,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::{signal, time};
+use crate::ipc::server::IpcServer;
 
 pub struct Supervisor {
     state_file: StateFile,
     last_run: time::Instant,
+    ipc: IpcServer,
 }
 
 const INTERVAL: Duration = Duration::from_secs(10);
@@ -30,11 +32,12 @@ enum Event {
 }
 
 impl Supervisor {
-    pub fn new(pid_file: StateFile) -> Self {
-        Self {
+    pub async fn new(pid_file: StateFile) -> Result<Self> {
+        Ok(Self {
             state_file: pid_file,
             last_run: time::Instant::now(),
-        }
+            ipc: IpcServer::listen().await?,
+        })
     }
 
     pub async fn start(mut self) -> Result<()> {
@@ -51,8 +54,9 @@ impl Supervisor {
         let (tx, mut rx) = channel(1);
         self.interval_watch(tx.clone())?;
         self.signals(tx.clone())?;
-        self.conn_watch(ipc::server::listen().await?, tx.clone())?;
         let _file_watcher = self.file_watch(tx.clone())?;
+        let ipc = IpcServer::listen().await?;
+        self.conn_watch(ipc, tx.clone())?;
         self.handle(Event::Interval).await?;
 
         loop {
@@ -99,6 +103,7 @@ impl Supervisor {
         if let Err(err) = self.state_file.write() {
             warn!("failed to update state file: {:?}", err);
         }
+        self.ipc.close();
         if !*env::PITCHFORK_EXEC || cfg!(windows) {
             if let Err(err) = cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start() {
                 panic!("failed to restart: {err:?}");
@@ -186,29 +191,20 @@ impl Supervisor {
         Ok(())
     }
 
-    fn conn_watch(&self, listener: Listener, tx: Sender<Event>) -> Result<()> {
+    fn conn_watch(&self, ipc: IpcServer, tx: Sender<Event>) -> Result<()> {
         tokio::spawn(async move {
             loop {
-                let stream = match listener.accept().await {
-                    Ok(stream) => stream,
+                let msg = match ipc.read().await {
+                    Ok(msg) => msg,
                     Err(e) => {
                         error!("failed to accept connection: {:?}", e);
                         continue;
                     }
                 };
-                let mut recv = BufReader::new(&stream);
-                // let mut send = &stream;
-                let mut buffer = String::with_capacity(1024);
-                match recv.read_line(&mut buffer).await {
-                    Ok(_) => {
-                        tx.send(Event::Conn(buffer.trim().to_string()))
-                            .await
-                            .unwrap();
-                    }
-                    Err(e) => {
-                        error!("failed to read/write: {:?}", e);
-                    }
-                }
+                dbg!(&msg);
+                tx.send(Event::Conn(msg.to_string()))
+                    .await
+                    .unwrap();
             }
         });
         Ok(())
