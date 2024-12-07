@@ -11,6 +11,6 @@ pub async fn listen() -> Result<interprocess::local_socket::tokio::Listener> {
 }
 
 fn fs_name(path: &Path) -> Result<Name> {
-    let fs_name = path.clone().to_fs_name::<GenericFilePath>()?;
+    let fs_name = path.to_fs_name::<GenericFilePath>()?;
     Ok(fs_name)
 }

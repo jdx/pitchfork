@@ -2,19 +2,18 @@ use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
 use crate::{env, ipc, Result};
 use duct::cmd;
 use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::{GenericFilePath, ListenerOptions};
+use interprocess::local_socket::tokio::Listener;
 use notify_debouncer_mini::{new_debouncer, notify::*, DebounceEventResult, Debouncer};
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-use interprocess::local_socket::tokio::Listener;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::{fs, select, signal, time, try_join};
+use tokio::sync::mpsc::{channel, Sender};
+use tokio::{signal, time, try_join};
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -186,7 +185,7 @@ impl Supervisor {
         });
         Ok(())
     }
-    
+
     fn conn_watch(&self, listener: Listener, tx: Sender<Event>) -> Result<()> {
         tokio::spawn(async move {
             loop {
@@ -204,7 +203,9 @@ impl Supervisor {
                 let recv = recv.read_line(&mut buffer);
                 match try_join!(send, recv) {
                     Ok(_) => {
-                        tx.send(Event::Conn(buffer.trim().to_string())).await.unwrap();
+                        tx.send(Event::Conn(buffer.trim().to_string()))
+                            .await
+                            .unwrap();
                     }
                     Err(e) => {
                         error!("failed to read/write: {:?}", e);
