@@ -1,18 +1,18 @@
 use crate::cli::daemon::kill_or_stop;
-use crate::env;
 use crate::state_file::StateFile;
 use crate::supervisor::Supervisor;
-use crate::Result;
+use crate::{env, Result};
 
-/// Runs the internal pitchfork daemon in the foreground
+/// Starts the internal pitchfork daemon in the background
 #[derive(Debug, clap::Args)]
-pub struct Run {
+#[clap()]
+pub struct Start {
     /// kill existing daemon
     #[clap(short, long)]
     force: bool,
 }
 
-impl Run {
+impl Start {
     pub async fn run(&self) -> Result<()> {
         let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
         if let Some(d) = pid_file.daemons.get("pitchfork") {
@@ -21,6 +21,10 @@ impl Run {
             }
         }
 
-        Supervisor::new(pid_file).start().await
+        if let Ok(fork::Fork::Child) = fork::daemon(false, false) {
+            Supervisor::new(pid_file).start().await?;
+        }
+
+        Ok(())
     }
 }

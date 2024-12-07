@@ -9,11 +9,11 @@ use std::process::exit;
 use std::sync::atomic;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc::{channel, Sender};
-use tokio::{signal, time, try_join};
+use tokio::{signal, time};
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -197,11 +197,9 @@ impl Supervisor {
                     }
                 };
                 let mut recv = BufReader::new(&stream);
-                let mut send = &stream;
+                // let mut send = &stream;
                 let mut buffer = String::with_capacity(1024);
-                let send = send.write_all(b"Hello, world!\n");
-                let recv = recv.read_line(&mut buffer);
-                match try_join!(send, recv) {
+                match recv.read_line(&mut buffer).await {
                     Ok(_) => {
                         tx.send(Event::Conn(buffer.trim().to_string()))
                             .await

@@ -4,7 +4,10 @@ use crate::Result;
 /// Starts a daemon from a pitchfork.toml file
 #[derive(Debug, clap::Args)]
 #[clap()]
-pub struct Start {}
+pub struct Start {
+    /// Name of the daemon(s) in pitchfork.toml to start
+    name: Vec<String>,
+}
 
 impl Start {
     pub async fn run(&self) -> Result<()> {

@@ -8,5 +8,11 @@ run = [
 dir = "docs"
 run = "bun i && bun run docs:dev"
 
+[tasks.lint-fix]
+run = [
+  "cargo fmt --all",
+  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features -- -D warnings",
+]
+
 [tools]
 bun = "latest"

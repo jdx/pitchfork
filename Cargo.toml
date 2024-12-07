@@ -16,6 +16,7 @@ console = "0.15"
 dirs = "5"
 duct = "0.13"
 eyre = "0.6"
+fork = "0.2.0"
 indexmap = { version = "2", features = ["serde"] }
 interprocess = { version = "2", features = ["tokio"] }
 log = "0.4"
