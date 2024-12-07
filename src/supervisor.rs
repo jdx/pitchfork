@@ -1,3 +1,4 @@
+use std::fs;
 use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
 use crate::{env, ipc, Result};
 use duct::cmd;
@@ -19,7 +20,7 @@ use crate::ipc::server::IpcServer;
 pub struct Supervisor {
     state_file: StateFile,
     last_run: time::Instant,
-    ipc: IpcServer,
+    // ipc: IpcServer,
 }
 
 const INTERVAL: Duration = Duration::from_secs(10);
@@ -36,7 +37,7 @@ impl Supervisor {
         Ok(Self {
             state_file: pid_file,
             last_run: time::Instant::now(),
-            ipc: IpcServer::listen().await?,
+            // ipc: IpcServer::new().await?,
         })
     }
 
@@ -55,8 +56,7 @@ impl Supervisor {
         self.interval_watch(tx.clone())?;
         self.signals(tx.clone())?;
         let _file_watcher = self.file_watch(tx.clone())?;
-        let ipc = IpcServer::listen().await?;
-        self.conn_watch(ipc, tx.clone())?;
+        self.conn_watch(tx.clone()).await?;
         self.handle(Event::Interval).await?;
 
         loop {
@@ -90,6 +90,7 @@ impl Supervisor {
             }
             Event::Signal => {
                 info!("received SIGTERM, stopping");
+                self.close();
                 exit(0);
             }
         }
@@ -99,11 +100,7 @@ impl Supervisor {
     }
 
     fn restart(&mut self) -> ! {
-        self.state_file.daemons.remove("pitchfork");
-        if let Err(err) = self.state_file.write() {
-            warn!("failed to update state file: {:?}", err);
-        }
-        self.ipc.close();
+        self.close();
         if !*env::PITCHFORK_EXEC || cfg!(windows) {
             if let Err(err) = cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start() {
                 panic!("failed to restart: {err:?}");
@@ -191,7 +188,9 @@ impl Supervisor {
         Ok(())
     }
 
-    fn conn_watch(&self, ipc: IpcServer, tx: Sender<Event>) -> Result<()> {
+    async fn conn_watch(&self, tx: Sender<Event>) -> Result<()> {
+        // TODO: reuse self.ipc
+        let mut ipc = IpcServer::new().await?;
         tokio::spawn(async move {
             loop {
                 let msg = match ipc.read().await {
@@ -208,5 +207,15 @@ impl Supervisor {
             }
         });
         Ok(())
+    }
+    
+    fn close(&mut self) {
+        self.state_file.daemons.remove("pitchfork");
+        if let Err(err) = self.state_file.write() {
+            warn!("failed to update state file: {:?}", err);
+        }
+        let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);
+        // TODO: move this to self.ipc
+        // self.ipc.close();
     }
 }

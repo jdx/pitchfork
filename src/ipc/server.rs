@@ -1,35 +1,63 @@
+use std::collections::HashMap;
+use eyre::eyre;
+use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
 use crate::{env, Result};
-use interprocess::local_socket::{ListenerOptions, Name, ToFsName};
 use interprocess::local_socket::traits::tokio::Listener;
+use interprocess::local_socket::{ListenerOptions, Name, ToFsName};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use crate::ipc::{fs_name, IpcMessage};
+use tokio::sync::Mutex;
 
 pub struct IpcServer {
-    listener: interprocess::local_socket::tokio::Listener,
+    clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
+    rx: tokio::sync::mpsc::Receiver<IpcMessage>,
 }
 
 impl IpcServer {
-    pub async fn listen() -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
         let _ = fs::remove_file(&*env::IPC_SOCK_MAIN).await;
-        let opts = ListenerOptions::new().name(fs_name(&env::IPC_SOCK_MAIN)?);
+        let opts = ListenerOptions::new().name(fs_name("main")?);
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
         let listener = opts.create_tokio()?;
-        let server = Self { listener };
+        tokio::spawn(async move {
+            loop {
+                let msg = Self::listen(&listener).await;
+                match msg {
+                    Ok(msg) => {
+                        tx.send(msg).await.unwrap();
+                    }
+                    Err(e) => {
+                        error!("IPC error: {}", e);
+                    }
+                }
+            }
+        });
+        let server = Self { clients: Default::default(), rx };
         Ok(server)
     }
+    
+    // pub async fn send(&self, msg: IpcMessage) -> Result<()> {
+    //     let mut msg = serialize(&msg)?;
+    //     if msg.contains(&0) {
+    //         panic!("IPC message contains null");
+    //     }
+    //     msg.push(0);
+    //     send.write_all(&msg).await?;
+    //     Ok(())
+    // }
+    
+    pub async fn read(&mut self) -> Result<IpcMessage> {
+        self.rx.recv().await.ok_or_else(|| eyre!("IPC channel closed"))
+    }
 
-    pub async fn read(&self) -> Result<IpcMessage> {
-        let stream = self.listener.accept().await?;
+    async fn listen(listener: &interprocess::local_socket::tokio::Listener) -> Result<IpcMessage> {
+        let stream = listener.accept().await?;
         let mut recv = BufReader::new(&stream);
         let mut bytes = Vec::new();
         recv.read_until(0, &mut bytes).await?;
-        if *env::IPC_JSON {
-            Ok(serde_json::from_slice(&bytes)?)
-        } else {
-            Ok(rmp_serde::from_slice(&bytes)?)
-        }
+        deserialize(&bytes)
     }
 
     pub fn close(&self) {
