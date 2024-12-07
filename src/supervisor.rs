@@ -56,12 +56,19 @@ impl Supervisor {
                     if let Err(err) = self.refresh(Event::Signal).await {
                         error!("supervisor error: {:?}", err);
                     }
-                },
+                }
                 _ = interval_events.tick() => {
                     if let Err(err) = self.refresh(Event::Interval).await {
                         error!("supervisor error: {:?}", err);
                     }
-                },
+                }
+                f = file_events.recv() => {
+                    if let Some(f) = f {
+                        if let Err(err) = self.refresh(f).await {
+                            error!("supervisor error: {:?}", err);
+                        }
+                    }
+                }
                 conn = listener.accept() => {
                     let conn = match conn {
                         Ok(c) => c,
@@ -79,13 +86,6 @@ impl Supervisor {
                     try_join!(send, recv)?;
                     
                     println!("Received: {}", buffer.trim());
-                }
-                f = file_events.recv() => {
-                    if let Some(f) = f {
-                        if let Err(err) = self.refresh(f).await {
-                            error!("supervisor error: {:?}", err);
-                        }
-                    }
                 }
             }
         }
