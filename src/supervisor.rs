@@ -54,17 +54,17 @@ impl Supervisor {
         self.signals(tx.clone())?;
         self.conn_watch(ipc::server::listen().await?, tx.clone())?;
         let _file_watcher = self.file_watch(tx.clone())?;
-        self.refresh(Event::Interval).await?;
+        self.handle(Event::Interval).await?;
 
         loop {
             let e = rx.recv().await.unwrap();
-            if let Err(err) = self.refresh(e).await {
+            if let Err(err) = self.handle(e).await {
                 error!("supervisor error: {:?}", err);
             }
         }
     }
 
-    async fn refresh(&mut self, event: Event) -> Result<()> {
+    async fn handle(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Interval => {
                 if self.last_run.elapsed() < INTERVAL {
