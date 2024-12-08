@@ -25,7 +25,7 @@ const INTERVAL: Duration = Duration::from_secs(10);
 
 enum Event {
     FileChange(Vec<PathBuf>),
-    Run(String, Vec<String>, Sender<IpcMessage>),
+    Ipc(IpcMessage, Sender<IpcMessage>),
     Signal,
     Interval,
 }
@@ -83,9 +83,9 @@ impl Supervisor {
                 //     self.pid_file = PidFile::read(&self.pid_file.path)?;
                 // }
             }
-            Event::Run(name, cmd, send) => {
-                info!("received run message: {name:?} cmd: {cmd:?}");
-                send.send(IpcMessage::Started(name)).await?;
+            Event::Ipc(msg, send) => {
+                info!("received ipc message: {msg}");
+                self.handle_ipc(msg, send).await?;
             }
             Event::Signal => {
                 info!("received SIGTERM, stopping");
@@ -95,6 +95,19 @@ impl Supervisor {
         }
         debug!("refreshing");
         self.last_run = time::Instant::now();
+        Ok(())
+    }
+
+    async fn handle_ipc(&mut self, msg: IpcMessage, send: Sender<IpcMessage>) -> Result<()> {
+        match msg {
+            IpcMessage::Run(name, cmd) => {
+                info!("received run message: {name:?} cmd: {cmd:?}");
+                send.send(IpcMessage::Started(name)).await?;
+            }
+            _ => {
+                debug!("received unknown message: {msg}");
+            }
+        }
         Ok(())
     }
 
@@ -197,7 +210,7 @@ impl Supervisor {
         let mut ipc = IpcServer::new().await?;
         tokio::spawn(async move {
             loop {
-                let msg = match ipc.read().await {
+                let (msg, send) = match ipc.read().await {
                     Ok(msg) => msg,
                     Err(e) => {
                         error!("failed to accept connection: {:?}", e);
@@ -205,9 +218,7 @@ impl Supervisor {
                     }
                 };
                 debug!("received message: {:?}", msg);
-                if let (IpcMessage::Run(name, cmd), send) = msg {
-                    tx.send(Event::Run(name, cmd, send)).await.unwrap();
-                }
+                tx.send(Event::Ipc(msg, send)).await.unwrap();
             }
         });
         Ok(())

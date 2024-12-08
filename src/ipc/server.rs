@@ -5,9 +5,9 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use interprocess::local_socket::ListenerOptions;
+use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::{fs};
 
 pub struct IpcServer {
     // clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
@@ -43,7 +43,9 @@ impl IpcServer {
             panic!("IPC message contains null");
         }
         msg.push(0);
-        send.write_all(&msg).await?;
+        if let Err(err) = send.write_all(&msg).await {
+            trace!("Failed to send message: {:?}", err);
+        }
         Ok(())
     }
 

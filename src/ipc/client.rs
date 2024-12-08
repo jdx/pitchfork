@@ -18,11 +18,11 @@ impl IpcClient {
         // // ensure nobody else can connect to the IPC main sock at the same time
         // let _fslock = xx::fslock::get(&env::IPC_SOCK_MAIN, false)?;
         let client = Self::connect_(&id, "main").await?;
-        debug!("Connected to IPC main");
+        trace!("Connected to IPC socket");
         client.send(IpcMessage::Connect(client.id.clone())).await?;
-        // let msg = client.read().await?;
-        // let client = Self::connect_(&id, &id).await?;
-        // debug!("Connected to IPC sub");
+        let msg = client.read().await?;
+        assert!(msg.is_connect_ok());
+        debug!("Connected to IPC main");
         Ok(client)
     }
 

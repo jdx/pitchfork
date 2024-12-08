@@ -5,7 +5,7 @@ use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
 pub(crate) mod client;
 pub(crate) mod server;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, strum::Display)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
 pub enum IpcMessage {
     Connect(String),
     ConnectOK,
