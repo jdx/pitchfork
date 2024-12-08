@@ -16,3 +16,9 @@ run = [
 
 [tools]
 bun = "latest"
+
+[tasks.pre-commit]
+run = [
+  "cargo fmt -- $(git diff --name-only --cached | grep '\\.rs$')",
+  "git -c advice.addEmptyPathspec=false add $(git diff --name-only --cached | grep '\\.rs$')",
+]

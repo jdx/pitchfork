@@ -30,6 +30,7 @@ impl IpcClient {
         let conn = interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await?;
         let (recv, send) = conn.split();
         let recv = BufReader::new(recv);
+
         Ok(Self {
             id: id.to_string(),
             recv: Mutex::new(recv),
