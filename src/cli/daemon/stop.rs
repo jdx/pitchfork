@@ -12,11 +12,11 @@ impl Stop {
     pub async fn run(&self) -> Result<()> {
         let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
         if let Some(d) = pid_file.daemons.get("pitchfork") {
-            if !(kill_or_stop(d.pid, true)?) {
-                return Ok(());
-            }
+            info!("Stopping pitchfork daemon with pid {}", d.pid);
+            kill_or_stop(d.pid, true)?;
+        } else {
+            warn!("Pitchfork daemon is not running");
         }
-
         Ok(())
     }
 }
