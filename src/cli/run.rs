@@ -26,8 +26,17 @@ impl Run {
         let ipc = IpcClient::connect().await?;
         ipc.send(IpcMessage::Run(self.name.clone(), self.cmd.clone()))
             .await?;
-        let response = ipc.read().await?;
-        dbg!(&response);
+        loop {
+            match ipc.read().await? {
+                IpcMessage::Started(name) => {
+                    info!("Started daemon {}", name);
+                    break;
+                }
+                msg => {
+                    debug!("ignoring message: {:?}", msg);
+                }
+            }
+        }
         Ok(())
     }
 }

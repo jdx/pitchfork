@@ -2,6 +2,7 @@ use crate::{procs, Result};
 
 mod run;
 mod start;
+mod stop;
 
 #[derive(Debug, clap::Args)]
 pub struct Daemon {
@@ -13,6 +14,7 @@ pub struct Daemon {
 enum Commands {
     Run(run::Run),
     Start(start::Start),
+    Stop(stop::Stop),
 }
 
 impl Daemon {
@@ -20,6 +22,7 @@ impl Daemon {
         match self.command {
             Commands::Run(run) => run.run().await,
             Commands::Start(start) => start.run().await,
+            Commands::Stop(stop) => stop.run().await,
         }
     }
 }

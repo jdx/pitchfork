@@ -1,7 +1,10 @@
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
 use crate::Result;
+use exponential_backoff::Backoff;
+use eyre::bail;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -12,11 +15,13 @@ pub struct IpcClient {
     send: Mutex<SendHalf>,
 }
 
+const CONNECT_ATTEMPTS: u32 = 5;
+const CONNECT_MIN_DELAY: Duration = Duration::from_millis(100);
+const CONNECT_MAX_DELAY: Duration = Duration::from_secs(1);
+
 impl IpcClient {
     pub async fn connect() -> Result<Self> {
         let id = Uuid::new_v4().to_string();
-        // // ensure nobody else can connect to the IPC main sock at the same time
-        // let _fslock = xx::fslock::get(&env::IPC_SOCK_MAIN, false)?;
         let client = Self::connect_(&id, "main").await?;
         trace!("Connected to IPC socket");
         client.send(IpcMessage::Connect(client.id.clone())).await?;
@@ -27,15 +32,33 @@ impl IpcClient {
     }
 
     async fn connect_(id: &str, name: &str) -> Result<Self> {
-        let conn = interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await?;
-        let (recv, send) = conn.split();
-        let recv = BufReader::new(recv);
+        for duration in Backoff::new(CONNECT_ATTEMPTS, CONNECT_MIN_DELAY, CONNECT_MAX_DELAY) {
+            match interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await {
+                Ok(conn) => {
+                    let (recv, send) = conn.split();
+                    let recv = BufReader::new(recv);
 
-        Ok(Self {
-            id: id.to_string(),
-            recv: Mutex::new(recv),
-            send: Mutex::new(send),
-        })
+                    return Ok(Self {
+                        id: id.to_string(),
+                        recv: Mutex::new(recv),
+                        send: Mutex::new(send),
+                    });
+                }
+                Err(err) => {
+                    if let Some(duration) = duration {
+                        debug!(
+                            "Failed to connect to IPC socket: {:?}, retrying in {:?}",
+                            err, duration
+                        );
+                        tokio::time::sleep(duration).await;
+                        continue;
+                    } else {
+                        bail!("Failed to connect to IPC socket: {:?}", err);
+                    }
+                }
+            }
+        }
+        unreachable!()
     }
 
     pub async fn send(&self, msg: IpcMessage) -> Result<()> {

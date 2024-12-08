@@ -16,6 +16,7 @@ color-eyre = "0.6.3"
 console = "0.15"
 dirs = "5"
 duct = "0.13"
+exponential-backoff = "2.0.0"
 eyre = "0.6"
 fork = "0.2.0"
 indexmap = { version = "2", features = ["serde"] }
