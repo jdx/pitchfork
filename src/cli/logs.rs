@@ -1,6 +1,8 @@
 use crate::{env, Result};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashSet};
+use std::io::{BufRead, Seek};
+use std::{fs, thread};
 use xx::regex;
 
 /// Displays logs for daemon(s)
@@ -83,6 +85,24 @@ impl Logs {
         for (date, name, msg) in log_lines {
             println!("{} {} {}", date, name, msg);
         }
+        
+        if self.tail {
+            thread::scope(|s| {
+                for (name, path) in log_files {
+                    s.spawn(move || {
+                        let mut f = fs::File::open(&path).unwrap();
+                        f.seek(std::io::SeekFrom::End(0)).unwrap();
+                        let reader = std::io::BufReader::new(f);
+                        loop {
+                            for line in reader.lines().map_while(Result::ok) {
+                                println!("{} {}", name, line);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        
         Ok(())
     }
 }
