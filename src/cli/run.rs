@@ -27,8 +27,8 @@ impl Run {
             .await?;
         loop {
             match ipc.read().await? {
-                IpcMessage::Started(name) => {
-                    info!("Started daemon {}", name);
+                IpcMessage::DaemonStart(daemon) => {
+                    info!("Started daemon {}", daemon.name);
                     break;
                 }
                 msg => {

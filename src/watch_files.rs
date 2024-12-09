@@ -33,7 +33,9 @@ impl WatchFiles {
                             .flat_map(|e| e.paths.clone())
                             .unique()
                             .collect_vec();
-                        tx.send(paths).await.unwrap();
+                        if !paths.is_empty() {
+                            tx.send(paths).await.unwrap();
+                        }
                     }
                 });
             },

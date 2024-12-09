@@ -11,15 +11,18 @@ pub struct StateFile {
     pub(crate) path: PathBuf,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateFileDaemon {
+    #[serde(skip)]
+    pub name: String,
     pub pid: u32,
     pub status: DaemonStatus,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonStatus {
+    Failed(String),
     Waiting,
     Running,
 }
@@ -47,6 +50,9 @@ impl StateFile {
             Self::new(path.to_path_buf())
         });
         state_file.path = path.to_path_buf();
+        for (name, daemon) in state_file.daemons.iter_mut() {
+            daemon.name = name.clone();
+        }
         Ok(state_file)
     }
 

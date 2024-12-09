@@ -1,4 +1,5 @@
 use crate::env;
+use crate::state_file::StateFileDaemon;
 use crate::Result;
 use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
 use miette::IntoDiagnostic;
@@ -6,12 +7,13 @@ use miette::IntoDiagnostic;
 pub(crate) mod client;
 pub(crate) mod server;
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
 pub enum IpcMessage {
     Connect(String),
     ConnectOK,
     Run(String, Vec<String>),
-    Started(String),
+    DaemonStart(StateFileDaemon),
+    DaemonFailed { name: String, error: String },
     Response(String),
 }
 
@@ -31,10 +33,12 @@ pub fn serialize(msg: &IpcMessage) -> Result<Vec<u8>> {
 }
 
 pub fn deserialize(bytes: &[u8]) -> Result<IpcMessage> {
+    let bytes = bytes[..bytes.len() - 1].to_vec();
+    trace!("msg: {:?}", std::str::from_utf8(&bytes));
     let msg = if *env::IPC_JSON {
-        serde_json::from_slice(bytes).into_diagnostic()?
+        serde_json::from_slice(&bytes).into_diagnostic()?
     } else {
-        rmp_serde::from_slice(bytes).into_diagnostic()?
+        rmp_serde::from_slice(&bytes).into_diagnostic()?
     };
     Ok(msg)
 }

@@ -4,7 +4,6 @@ use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
 use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use duct::cmd;
-use miette::IntoDiagnostic;
 use notify::RecursiveMode;
 use std::collections::HashMap;
 use std::fs;
@@ -15,21 +14,22 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::mpsc::{channel, Sender};
-use tokio::sync::watch;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc::Sender;
 use tokio::{signal, task, time};
 
 pub struct Supervisor {
     state_file: StateFile,
     last_refreshed_at: time::Instant,
     active_pids: HashMap<u32, String>,
-    event_tx: watch::Sender<Event>,
-    event_rx: watch::Receiver<Event>,
+    event_tx: broadcast::Sender<Event>,
+    event_rx: broadcast::Receiver<Event>,
     // ipc: IpcServer,
 }
 
 const INTERVAL: Duration = Duration::from_secs(10);
 
+#[derive(Debug, Clone)]
 enum Event {
     FileChange(Vec<PathBuf>),
     Ipc(IpcMessage, Sender<IpcMessage>),
@@ -40,7 +40,7 @@ enum Event {
 
 impl Supervisor {
     pub async fn new(state_file: StateFile) -> Result<Self> {
-        let (event_tx, event_rx) = watch::channel(Event::Interval);
+        let (event_tx, event_rx) = broadcast::channel(1);
         Ok(Self {
             state_file,
             last_refreshed_at: time::Instant::now(),
@@ -56,21 +56,20 @@ impl Supervisor {
         info!("Starting supervisor with pid {pid}");
 
         let daemon = StateFileDaemon {
+            name: "pitchfork".into(),
             pid,
             status: DaemonStatus::Running,
         };
         self.state_file.daemons.insert("pitchfork".into(), daemon);
         self.state_file.write()?;
 
-        let (tx, mut rx) = channel(1);
-        self.interval_watch(tx.clone())?;
-        self.signals(tx.clone())?;
-        self.file_watch(tx.clone()).await?;
-        self.conn_watch(tx.clone()).await?;
-        self.handle(Event::Interval).await?;
+        self.interval_watch()?;
+        self.signals()?;
+        self.file_watch()?;
+        self.conn_watch().await?;
 
         loop {
-            let e = rx.recv().await.unwrap();
+            let e = self.event_rx.recv().await.unwrap();
             if let Err(err) = self.handle(e).await {
                 error!("supervisor error: {:?}", err);
             }
@@ -116,12 +115,54 @@ impl Supervisor {
     }
 
     async fn handle_ipc(&mut self, msg: IpcMessage, send: Sender<IpcMessage>) -> Result<()> {
+        let mut event_rx = self.event_tx.subscribe();
         match msg {
             IpcMessage::Run(name, cmd) => {
                 info!("received run message: {name:?} cmd: {cmd:?}");
-                send.send(IpcMessage::Started(name))
-                    .await
-                    .into_diagnostic()?;
+                task::spawn({
+                    let name = name.clone();
+                    async move {
+                        while let Ok(Event::DaemonStart(daemon)) = event_rx.recv().await {
+                            if daemon.name == name {
+                                if let Err(err) = send.send(IpcMessage::DaemonStart(daemon)).await {
+                                    error!("failed to send message: {err:?}");
+                                }
+                                return;
+                            }
+                        }
+                    }
+                });
+                let program = cmd[0].clone();
+                let args = cmd[1..].to_vec();
+                let log_path = env::PITCHFORK_LOGS_DIR
+                    .join(&name)
+                    .join(format!("{name}.log"));
+                match duct::cmd(&program, &args)
+                    .stderr_to_stdout()
+                    .stdout_path(log_path)
+                    .reader()
+                {
+                    Ok(child) => {
+                        let pid = *child.pids().first().unwrap();
+                        let daemon = StateFileDaemon {
+                            name: name.clone(),
+                            pid,
+                            status: DaemonStatus::Running,
+                        };
+                        self.state_file.daemons.insert(name, daemon.clone());
+                        self.state_file.write()?;
+                        self.event_tx.send(Event::DaemonStart(daemon)).unwrap();
+                    }
+                    Err(err) => {
+                        self.event_tx
+                            .send(Event::DaemonStart(StateFileDaemon {
+                                name,
+                                pid: 0,
+                                status: DaemonStatus::Failed(err.to_string()),
+                            }))
+                            .unwrap();
+                    }
+                }
             }
             _ => {
                 debug!("received unknown message: {msg}");
@@ -148,7 +189,8 @@ impl Supervisor {
     }
 
     #[cfg(unix)]
-    fn signals(&self, tx: Sender<Event>) -> Result<()> {
+    fn signals(&self) -> Result<()> {
+        let tx = self.event_tx.clone();
         let signals = [
             SignalKind::terminate(),
             SignalKind::alarm(),
@@ -173,7 +215,7 @@ impl Supervisor {
                     if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
                         exit(1);
                     } else {
-                        tx.send(Event::Signal).await.unwrap();
+                        tx.send(Event::Signal).unwrap();
                     }
                 }
             });
@@ -193,9 +235,10 @@ impl Supervisor {
         Ok(())
     }
 
-    async fn file_watch(&self, tx: Sender<Event>) -> Result<()> {
+    fn file_watch(&self) -> Result<()> {
         let bin_path = env::BIN_PATH.clone();
         let state_file = self.state_file.path.clone();
+        let tx = self.event_tx.clone();
         task::spawn(async move {
             let mut wf = WatchFiles::new(Duration::from_secs(2)).unwrap();
 
@@ -203,25 +246,27 @@ impl Supervisor {
             wf.watch(&state_file, RecursiveMode::NonRecursive).unwrap();
 
             while let Some(paths) = wf.rx.recv().await {
-                tx.send(Event::FileChange(paths)).await.unwrap();
+                tx.send(Event::FileChange(paths)).unwrap();
             }
         });
 
         Ok(())
     }
 
-    fn interval_watch(&self, tx: Sender<Event>) -> Result<()> {
+    fn interval_watch(&self) -> Result<()> {
+        let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let mut interval = time::interval(INTERVAL);
             loop {
                 interval.tick().await;
-                tx.send(Event::Interval).await.unwrap();
+                event_tx.send(Event::Interval).unwrap();
             }
         });
         Ok(())
     }
 
-    async fn conn_watch(&self, tx: Sender<Event>) -> Result<()> {
+    async fn conn_watch(&self) -> Result<()> {
+        let tx = self.event_tx.clone();
         // TODO: reuse self.ipc
         let mut ipc = IpcServer::new().await?;
         tokio::spawn(async move {
@@ -234,7 +279,7 @@ impl Supervisor {
                     }
                 };
                 debug!("received message: {:?}", msg);
-                tx.send(Event::Ipc(msg, send)).await.unwrap();
+                tx.send(Event::Ipc(msg, send)).unwrap();
             }
         });
         Ok(())
