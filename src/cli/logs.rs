@@ -2,7 +2,7 @@ use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use notify_debouncer_mini::notify::RecursiveMode;
+use notify::RecursiveMode;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -99,17 +99,24 @@ impl Logs {
                 wf.watch(&lf.path, RecursiveMode::NonRecursive)?;
             }
 
-            while let Some(path) = wf.rx.recv().await {
-                let name = files_to_name.get(&path).unwrap().to_string();
-                let info = log_files.get_mut(&name).unwrap();
-                info.file
-                    .seek(SeekFrom::Start(info.cur))
-                    .into_diagnostic()?;
-                let reader = BufReader::new(&info.file);
-                let lines = reader.lines().map_while(Result::ok).collect_vec();
-                info.cur += lines.iter().fold(0, |acc, l| acc + l.len() as u64);
-                let lines = merge_log_lines(&name, lines);
-                for (date, name, msg) in lines {
+            while let Some(paths) = wf.rx.recv().await {
+                let mut out = vec![];
+                for path in paths {
+                    let name = files_to_name.get(&path).unwrap().to_string();
+                    let info = log_files.get_mut(&name).unwrap();
+                    info.file
+                        .seek(SeekFrom::Start(info.cur))
+                        .into_diagnostic()?;
+                    let reader = BufReader::new(&info.file);
+                    let lines = reader.lines().map_while(Result::ok).collect_vec();
+                    info.cur += lines.iter().fold(0, |acc, l| acc + l.len() as u64);
+                    out.extend(merge_log_lines(&name, lines));
+                }
+                let out = out
+                    .into_iter()
+                    .sorted_by_cached_key(|l| l.0.to_string())
+                    .collect_vec();
+                for (date, name, msg) in out {
                     println!("{} {} {}", date, name, msg);
                 }
             }

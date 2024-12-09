@@ -17,7 +17,6 @@ pub enum IpcMessage {
 
 pub fn fs_name(name: &str) -> Result<Name> {
     let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
-    dbg!(&path);
     let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;
     Ok(fs_name)
 }

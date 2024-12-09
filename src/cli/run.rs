@@ -21,7 +21,6 @@ impl Run {
         if self.cmd.is_empty() {
             bail!("No command provided");
         }
-        dbg!(&self);
 
         let ipc = IpcClient::connect().await?;
         ipc.send(IpcMessage::Run(self.name.clone(), self.cmd.clone()))

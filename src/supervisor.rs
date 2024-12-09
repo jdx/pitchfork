@@ -1,10 +1,11 @@
 use crate::ipc::server::IpcServer;
 use crate::ipc::IpcMessage;
 use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
+use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use duct::cmd;
 use miette::IntoDiagnostic;
-use notify_debouncer_mini::{new_debouncer, notify::*, DebounceEventResult, Debouncer};
+use notify::RecursiveMode;
 use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
@@ -14,7 +15,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc::{channel, Sender};
-use tokio::{signal, time};
+use tokio::{signal, task, time};
 
 pub struct Supervisor {
     state_file: StateFile,
@@ -54,7 +55,7 @@ impl Supervisor {
         let (tx, mut rx) = channel(1);
         self.interval_watch(tx.clone())?;
         self.signals(tx.clone())?;
-        let _file_watcher = self.file_watch(tx.clone())?;
+        self.file_watch(tx.clone()).await?;
         self.conn_watch(tx.clone()).await?;
         self.handle(Event::Interval).await?;
 
@@ -117,12 +118,12 @@ impl Supervisor {
     fn restart(&mut self) -> ! {
         debug!("restarting");
         self.close();
-        if !*env::PITCHFORK_EXEC || cfg!(windows) {
+        if *env::PITCHFORK_EXEC || cfg!(windows) {
             if let Err(err) = cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start() {
                 panic!("failed to restart: {err:?}");
             }
         } else {
-            let x = exec::execvp(&*env::BIN_PATH, &["daemon", "run", "--force"]);
+            let x = exec::execvp(&*env::BIN_PATH, &["pitchfork", "daemon", "run", "--force"]);
             panic!("execvp returned unexpectedly: {x:?}");
         }
         exit(0);
@@ -174,30 +175,21 @@ impl Supervisor {
         Ok(())
     }
 
-    fn file_watch(&self, tx: Sender<Event>) -> Result<Debouncer<RecommendedWatcher>> {
-        let h = tokio::runtime::Handle::current();
-        let mut debouncer =
-            new_debouncer(Duration::from_secs(2), move |res: DebounceEventResult| {
-                let tx = tx.clone();
-                h.spawn(async move {
-                    if let Ok(ev) = res {
-                        let paths = ev.into_iter().map(|e| e.path).collect();
-                        tx.send(Event::FileChange(paths)).await.unwrap();
-                    }
-                });
-            })
-            .into_diagnostic()?;
+    async fn file_watch(&self, tx: Sender<Event>) -> Result<()> {
+        let bin_path = env::BIN_PATH.clone();
+        let state_file = self.state_file.path.clone();
+        task::spawn(async move {
+            let mut wf = WatchFiles::new(Duration::from_secs(2)).unwrap();
 
-        debouncer
-            .watcher()
-            .watch(&env::BIN_PATH, RecursiveMode::NonRecursive)
-            .into_diagnostic()?;
-        debouncer
-            .watcher()
-            .watch(&self.state_file.path, RecursiveMode::NonRecursive)
-            .into_diagnostic()?;
+            wf.watch(&bin_path, RecursiveMode::NonRecursive).unwrap();
+            wf.watch(&state_file, RecursiveMode::NonRecursive).unwrap();
 
-        Ok(debouncer)
+            while let Some(paths) = wf.rx.recv().await {
+                tx.send(Event::FileChange(paths)).await.unwrap();
+            }
+        });
+
+        Ok(())
     }
 
     fn interval_watch(&self, tx: Sender<Event>) -> Result<()> {

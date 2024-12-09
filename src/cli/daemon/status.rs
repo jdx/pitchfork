@@ -1,5 +1,4 @@
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::PitchforkToml;
 use crate::Result;
 
 /// Gets the status of the pitchfork daemon
