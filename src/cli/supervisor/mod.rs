@@ -6,7 +6,7 @@ mod status;
 mod stop;
 
 #[derive(Debug, clap::Args)]
-pub struct Daemon {
+pub struct Supervisor {
     #[clap(subcommand)]
     command: Commands,
 }
@@ -19,7 +19,7 @@ enum Commands {
     Stop(stop::Stop),
 }
 
-impl Daemon {
+impl Supervisor {
     pub async fn run(self) -> Result<()> {
         match self.command {
             Commands::Run(run) => run.run().await,
@@ -35,7 +35,7 @@ impl Daemon {
 pub fn kill_or_stop(existing_pid: u32, force: bool) -> Result<bool> {
     if let Some(process) = procs::get_process(existing_pid) {
         if force {
-            debug!("Killing existing pitchfork daemon with pid {existing_pid}");
+            debug!("Killing existing pitchfork supervisor with pid {existing_pid}");
             if sysinfo::Process::kill_with(process, sysinfo::Signal::Term).is_none() {
                 sysinfo::Process::kill(process);
             }

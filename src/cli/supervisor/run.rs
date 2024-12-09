@@ -1,4 +1,4 @@
-use crate::cli::daemon::kill_or_stop;
+use crate::cli::supervisor::kill_or_stop;
 use crate::env;
 use crate::state_file::StateFile;
 use crate::supervisor::Supervisor;

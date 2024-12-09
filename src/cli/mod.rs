@@ -1,10 +1,10 @@
 use crate::Result;
 use clap::Parser;
 
-mod daemon;
 mod logs;
 mod run;
 mod start;
+mod supervisor;
 mod usage;
 
 #[derive(Debug, clap::Parser)]
@@ -15,7 +15,7 @@ struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 enum Commands {
-    Daemon(daemon::Daemon),
+    Supervisor(supervisor::Supervisor),
     Logs(logs::Logs),
     Run(run::Run),
     Start(start::Start),
@@ -26,7 +26,7 @@ enum Commands {
 pub async fn run() -> Result<()> {
     let args = Cli::parse();
     match args.command {
-        Commands::Daemon(daemon) => daemon.run().await,
+        Commands::Supervisor(supervisor) => supervisor.run().await,
         Commands::Logs(logs) => logs.run().await,
         Commands::Run(run) => run.run().await,
         Commands::Start(start) => start.run().await,

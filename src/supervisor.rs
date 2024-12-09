@@ -119,11 +119,14 @@ impl Supervisor {
         debug!("restarting");
         self.close();
         if *env::PITCHFORK_EXEC || cfg!(windows) {
-            if let Err(err) = cmd!(&*env::BIN_PATH, "daemon", "run", "--force").start() {
+            if let Err(err) = cmd!(&*env::BIN_PATH, "supervisor", "run", "--force").start() {
                 panic!("failed to restart: {err:?}");
             }
         } else {
-            let x = exec::execvp(&*env::BIN_PATH, &["pitchfork", "daemon", "run", "--force"]);
+            let x = exec::execvp(
+                &*env::BIN_PATH,
+                &["pitchfork", "supervisor", "run", "--force"],
+            );
             panic!("execvp returned unexpectedly: {x:?}");
         }
         exit(0);
