@@ -33,7 +33,8 @@ pub fn serialize(msg: &IpcMessage) -> Result<Vec<u8>> {
 }
 
 pub fn deserialize(bytes: &[u8]) -> Result<IpcMessage> {
-    let bytes = bytes[..bytes.len() - 1].to_vec();
+    let mut bytes = bytes.to_vec();
+    bytes.pop();
     trace!("msg: {:?}", std::str::from_utf8(&bytes));
     let msg = if *env::IPC_JSON {
         serde_json::from_slice(&bytes).into_diagnostic()?

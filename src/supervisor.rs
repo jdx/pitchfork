@@ -36,6 +36,7 @@ enum Event {
     Signal,
     Interval,
     DaemonStart(StateFileDaemon),
+    DaemonFailed { name: String, error: String },
 }
 
 impl Supervisor {
@@ -122,12 +123,30 @@ impl Supervisor {
                 task::spawn({
                     let name = name.clone();
                     async move {
-                        while let Ok(Event::DaemonStart(daemon)) = event_rx.recv().await {
-                            if daemon.name == name {
-                                if let Err(err) = send.send(IpcMessage::DaemonStart(daemon)).await {
-                                    error!("failed to send message: {err:?}");
+                        while let Ok(ev) = event_rx.recv().await {
+                            match ev {
+                                Event::DaemonStart(daemon) => {
+                                    if daemon.name == name {
+                                        if let Err(err) =
+                                            send.send(IpcMessage::DaemonStart(daemon)).await
+                                        {
+                                            error!("failed to send message: {err:?}");
+                                        }
+                                        return;
+                                    }
                                 }
-                                return;
+                                Event::DaemonFailed { name: n, error } => {
+                                    if n == name {
+                                        if let Err(err) = send
+                                            .send(IpcMessage::DaemonFailed { name, error })
+                                            .await
+                                        {
+                                            error!("failed to send message: {err:?}");
+                                        }
+                                        return;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -144,6 +163,7 @@ impl Supervisor {
                 {
                     Ok(child) => {
                         let pid = *child.pids().first().unwrap();
+                        info!("started daemon {name} with pid {pid}");
                         let daemon = StateFileDaemon {
                             name: name.clone(),
                             pid,
@@ -154,12 +174,12 @@ impl Supervisor {
                         self.event_tx.send(Event::DaemonStart(daemon)).unwrap();
                     }
                     Err(err) => {
+                        info!("failed to start daemon: {err:?}");
                         self.event_tx
-                            .send(Event::DaemonStart(StateFileDaemon {
+                            .send(Event::DaemonFailed {
                                 name,
-                                pid: 0,
-                                status: DaemonStatus::Failed(err.to_string()),
-                            }))
+                                error: format!("{err:?}"),
+                            })
                             .unwrap();
                     }
                 }
