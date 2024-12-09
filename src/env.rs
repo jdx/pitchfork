@@ -18,13 +18,12 @@ pub static PITCHFORK_LOG: Lazy<log::LevelFilter> =
     Lazy::new(|| var_log_level("PITCHFORK_LOG").unwrap_or(log::LevelFilter::Info));
 pub static PITCHFORK_LOG_FILE_LEVEL: Lazy<log::LevelFilter> =
     Lazy::new(|| var_log_level("PITCHFORK_LOG_FILE_LEVEL").unwrap_or(*PITCHFORK_LOG));
+pub static PITCHFORK_LOGS_DIR: Lazy<PathBuf> =
+    Lazy::new(|| var_path("PITCHFORK_LOGS_DIR").unwrap_or(PITCHFORK_STATE_DIR.join("logs")));
 pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("PITCHFORK_LOG_FILE").unwrap_or(
-        PITCHFORK_STATE_DIR
-            .join("logs")
-            .join("pitchfork")
-            .join("pitchfork.log"),
-    )
+    PITCHFORK_LOGS_DIR
+        .join("pitchfork")
+        .join("pitchfork.log")
 });
 pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| var_true("PITCHFORK_EXEC"));
 
