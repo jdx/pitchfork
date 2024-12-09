@@ -1017,6 +1017,7 @@ dependencies = [
  "notify-debouncer-mini",
  "once_cell",
  "psutil",
+ "regex",
  "rev_lines",
  "rmp-serde",
  "serde",

@@ -1,6 +1,7 @@
 use crate::{env, Result};
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashSet};
+use xx::regex;
 
 /// Displays logs for daemon(s)
 #[derive(Debug, clap::Args)]
@@ -38,29 +39,49 @@ impl Logs {
             .filter(|(_, f)| f.exists())
             .collect::<BTreeMap<_, _>>();
 
-        let log_lines = log_files
-            .iter()
-            .flat_map(|(name, path)| {
-                let rev = match xx::file::open(path) {
-                    Ok(f) => rev_lines::RevLines::new(f),
-                    Err(e) => {
-                        error!("{}: {}", path.display(), e);
-                        return vec![];
+        let log_lines = log_files.iter().flat_map(|(name, path)| {
+            let rev = match xx::file::open(path) {
+                Ok(f) => rev_lines::RevLines::new(f),
+                Err(e) => {
+                    error!("{}: {}", path.display(), e);
+                    return vec![];
+                }
+            };
+            let lines = rev.into_iter().filter_map(Result::ok);
+            let lines = if self.n == 0 {
+                lines.collect_vec()
+            } else {
+                lines.take(self.n).collect_vec()
+            };
+            lines.into_iter().fold(vec![], |mut acc, line| {
+                match regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$")
+                    .captures(&line)
+                {
+                    Some(caps) => {
+                        let date = caps.get(1).unwrap().as_str().to_string();
+                        let msg = caps.get(2).unwrap().as_str().to_string();
+                        acc.push((date, name, msg));
+                        acc
                     }
-                };
-                let lines = rev.into_iter()
-                    .filter_map(Result::ok)
-                    .map(|l| (name, l));
-                if self.n == 0 {
-                    lines.collect()
-                } else {
-                    lines.take(self.n).collect()
+                    None => {
+                        if let Some(l) = acc.last_mut() {
+                            l.2.push_str(&line)
+                        }
+                        acc
+                    }
                 }
             })
-            .rev()
-            .collect_vec();
+        });
+        let log_lines = if self.n == 0 {
+            log_lines.collect_vec()
+        } else {
+            log_lines.take(self.n).collect_vec()
+        };
+        let log_lines = log_lines.into_iter().rev().collect_vec();
 
-        dbg!(&log_lines);
+        for (date, name, msg) in log_lines {
+            println!("{} {} {}", date, name, msg);
+        }
         Ok(())
     }
 }
