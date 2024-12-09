@@ -1,0 +1,34 @@
+name "pitchfork-cli"
+bin "pitchfork"
+usage "Usage: pitchfork-cli <COMMAND>"
+cmd "daemon" subcommand_required=true {
+    cmd "run" help="Runs the internal pitchfork daemon in the foreground" {
+        flag "-f --force" help="kill existing daemon"
+    }
+    cmd "start" help="Starts the internal pitchfork daemon in the background" {
+        flag "-f --force" help="kill existing daemon"
+    }
+    cmd "stop" help="Stops the internal pitchfork daemon running in the background"
+}
+cmd "logs" help="Displays logs for daemon(s)" {
+    flag "-n" help="Show N lines of logs" {
+        long_help "Show N lines of logs\n\nSet to 0 to show all logs"
+        arg "<N>"
+    }
+    flag "-t --tail" help="Show logs in real-time"
+    arg "[NAME]..." help="Show only logs for the specified daemon(s)" var=true
+}
+cmd "run" help="Runs a one-off daemon" {
+    flag "-f --force"
+    arg "<NAME>" help="Name of the daemon to run"
+    arg "[CMD]..." var=true
+}
+cmd "start" help="Starts a daemon from a pitchfork.toml file" {
+    arg "[NAME]..." help="Name of the daemon(s) in pitchfork.toml to start" var=true
+}
+cmd "usage" help="Generates a usage spec for the CLI" {
+    long_help r"Generates a usage spec for the CLI
+
+https://usage.jdx.dev"
+}
+

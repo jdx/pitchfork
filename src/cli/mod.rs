@@ -5,6 +5,7 @@ mod daemon;
 mod logs;
 mod run;
 mod start;
+mod usage;
 
 #[derive(Debug, clap::Parser)]
 struct Cli {
@@ -18,6 +19,7 @@ enum Commands {
     Logs(logs::Logs),
     Run(run::Run),
     Start(start::Start),
+    Usage(usage::Usage),
 }
 
 #[tokio::main]
@@ -28,5 +30,6 @@ pub async fn run() -> Result<()> {
         Commands::Logs(logs) => logs.run().await,
         Commands::Run(run) => run.run().await,
         Commands::Start(start) => start.run().await,
+        Commands::Usage(usage) => usage.run().await,
     }
 }

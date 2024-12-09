@@ -10,9 +10,9 @@ hero:
     - theme: brand
       text: Getting Started
       link: /getting-started
-#    - theme: alt
-#      text: API Examples
-#      link: /api-examples
+    - theme: alt
+      text: CLI Reference
+      link: /cli
 
 # features:
 #   - title: Feature A
@@ -23,4 +23,4 @@ hero:
 #     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
 ---
 
-![pitchfork logo](/img/logo.png)
+<img src="/img/logo.png" alt="pitchfork logo" width="400" />

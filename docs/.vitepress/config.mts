@@ -8,10 +8,12 @@ export default defineConfig({
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: 'Home', link: '/' },
+      { text: 'CLI Reference', link: '/cli' },
     ],
 
     sidebar: [
       { text: 'Getting Started', link: '/getting-started' },
+      { text: 'CLI Reference', link: '/cli' },
     ],
 
     socialLinks: [

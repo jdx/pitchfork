@@ -1,3 +1,6 @@
+[env]
+_.path = "target/debug"
+
 [tasks.ci]
 run = [
   "cargo build",
@@ -12,6 +15,17 @@ run = "bun i && bun run docs:dev"
 run = [
   "cargo fmt --all",
   "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features -- -D warnings",
+]
+
+[tasks.build]
+run = "cargo build"
+
+[tasks.render]
+depends = ["build"]
+run = [
+  "pitchfork usage > pitchfork.usage.kdl",
+  "usage g markdown -mf pitchfork.usage.kdl --out-dir docs/cli",
+  "git add pitchfork.usage.kdl docs",
 ]
 
 [tools]
