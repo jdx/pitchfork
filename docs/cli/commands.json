@@ -75,6 +75,23 @@
             "hidden_aliases": [],
             "examples": []
           },
+          "status": {
+            "full_cmd": [
+              "daemon",
+              "status"
+            ],
+            "usage": "daemon status",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Gets the status of the pitchfork daemon",
+            "name": "status",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
           "stop": {
             "full_cmd": [
               "daemon",

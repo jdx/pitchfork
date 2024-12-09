@@ -8,6 +8,7 @@ cmd "daemon" subcommand_required=true {
     cmd "start" help="Starts the internal pitchfork daemon in the background" {
         flag "-f --force" help="kill existing daemon"
     }
+    cmd "status" help="Gets the status of the pitchfork daemon"
     cmd "stop" help="Stops the internal pitchfork daemon running in the background"
 }
 cmd "logs" help="Displays logs for daemon(s)" {
