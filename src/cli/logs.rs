@@ -54,9 +54,7 @@ impl Logs {
                 lines.take(self.n).collect_vec()
             };
             lines.into_iter().fold(vec![], |mut acc, line| {
-                match regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$")
-                    .captures(&line)
-                {
+                match regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$").captures(&line) {
                     Some(caps) => {
                         let date = caps.get(1).unwrap().as_str().to_string();
                         let msg = caps.get(2).unwrap().as_str().to_string();
@@ -77,7 +75,10 @@ impl Logs {
         } else {
             log_lines.take(self.n).collect_vec()
         };
-        let log_lines = log_lines.into_iter().rev().collect_vec();
+        let log_lines = log_lines
+            .into_iter()
+            .sorted_by_cached_key(|l| l.0.to_string())
+            .collect_vec();
 
         for (date, name, msg) in log_lines {
             println!("{} {} {}", date, name, msg);
