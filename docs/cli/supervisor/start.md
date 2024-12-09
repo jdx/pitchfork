@@ -1,6 +1,6 @@
-# `pitchfork daemon start`
+# `pitchfork supervisor start`
 
-- **Usage**: `pitchfork daemon start [-f --force]`
+- **Usage**: `pitchfork supervisor start [-f --force]`
 
 Starts the internal pitchfork daemon in the background
 

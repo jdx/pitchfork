@@ -5,18 +5,18 @@
     "full_cmd": [],
     "usage": "<SUBCOMMAND>",
     "subcommands": {
-      "daemon": {
+      "supervisor": {
         "full_cmd": [
-          "daemon"
+          "supervisor"
         ],
-        "usage": "daemon <SUBCOMMAND>",
+        "usage": "supervisor <SUBCOMMAND>",
         "subcommands": {
           "run": {
             "full_cmd": [
-              "daemon",
+              "supervisor",
               "run"
             ],
-            "usage": "daemon run [-f --force]",
+            "usage": "supervisor run [-f --force]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -45,10 +45,10 @@
           },
           "start": {
             "full_cmd": [
-              "daemon",
+              "supervisor",
               "start"
             ],
-            "usage": "daemon start [-f --force]",
+            "usage": "supervisor start [-f --force]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -77,10 +77,10 @@
           },
           "status": {
             "full_cmd": [
-              "daemon",
+              "supervisor",
               "status"
             ],
-            "usage": "daemon status",
+            "usage": "supervisor status",
             "subcommands": {},
             "args": [],
             "flags": [],
@@ -94,10 +94,10 @@
           },
           "stop": {
             "full_cmd": [
-              "daemon",
+              "supervisor",
               "stop"
             ],
-            "usage": "daemon stop",
+            "usage": "supervisor stop",
             "subcommands": {},
             "args": [],
             "flags": [],
@@ -115,7 +115,7 @@
         "mounts": [],
         "hide": false,
         "subcommand_required": true,
-        "name": "daemon",
+        "name": "supervisor",
         "aliases": [],
         "hidden_aliases": [],
         "examples": []
