@@ -12,6 +12,10 @@ Name of the daemon to run
 
 ### `[CMD]...`
 
+Runs a one-off daemon
+
 ## Flags
 
 ### `-f --force`
+
+Runs a one-off daemon

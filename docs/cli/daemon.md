@@ -4,6 +4,6 @@
 
 ## Subcommands
 
-- [`pitchfork daemon run [-f --force]`](/daemon/run.md)
-- [`pitchfork daemon start [-f --force]`](/daemon/start.md)
-- [`pitchfork daemon stop`](/daemon/stop.md)
+- [`pitchfork daemon run [-f --force]`](/cli/daemon/run.md)
+- [`pitchfork daemon start [-f --force]`](/cli/daemon/start.md)
+- [`pitchfork daemon stop`](/cli/daemon/stop.md)

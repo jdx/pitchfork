@@ -1,4 +1,18 @@
-import { defineConfig } from 'vitepress'
+import { defineConfig } from "vitepress";
+
+import spec from "../cli/commands.json";
+
+function getCommands(cmd): string[][] {
+  const commands = [];
+  for (const [name, sub] of Object.entries(cmd.subcommands)) {
+    if (sub.hide) continue;
+    commands.push(sub.full_cmd);
+    commands.push(...getCommands(sub));
+  }
+  return commands;
+}
+
+const commands = getCommands(spec.cmd);
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
@@ -7,22 +21,25 @@ export default defineConfig({
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
-      { text: 'Home', link: '/' },
-      { text: 'CLI Reference', link: '/cli' },
+      { text: "Home", link: "/" },
+      { text: "CLI Reference", link: "/cli" },
     ],
 
     sidebar: [
-      { text: 'Getting Started', link: '/getting-started' },
-      { text: 'CLI Reference', link: '/cli' },
+      { text: "Getting Started", link: "/getting-started" },
+      {
+        text: "CLI Reference",
+        link: "/cli",
+        items: commands.map((cmd) => ({
+          text: cmd.join(" "),
+          link: `/cli/${cmd.join("/")}`,
+        })),
+      },
     ],
 
-    socialLinks: [
-      { icon: 'github', link: 'https://github.com/jdx/pitchfork' }
-    ],
+    socialLinks: [{ icon: "github", link: "https://github.com/jdx/pitchfork" }],
 
-    logo: '/logo.png',
+    logo: "/logo.png",
   },
-  head: [
-    ['link', { rel: 'icon', href: '/img/favicon.ico' }],
-  ],
-})
+  head: [["link", { rel: "icon", href: "/img/favicon.ico" }]],
+});

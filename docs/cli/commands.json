@@ -1,0 +1,269 @@
+{
+  "name": "pitchfork-cli",
+  "bin": "pitchfork",
+  "cmd": {
+    "full_cmd": [],
+    "usage": "<SUBCOMMAND>",
+    "subcommands": {
+      "daemon": {
+        "full_cmd": [
+          "daemon"
+        ],
+        "usage": "daemon <SUBCOMMAND>",
+        "subcommands": {
+          "run": {
+            "full_cmd": [
+              "daemon",
+              "run"
+            ],
+            "usage": "daemon run [-f --force]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "force",
+                "usage": "-f --force",
+                "help": "kill existing daemon",
+                "help_first_line": "kill existing daemon",
+                "short": [
+                  "f"
+                ],
+                "long": [
+                  "force"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Runs the internal pitchfork daemon in the foreground",
+            "name": "run",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "start": {
+            "full_cmd": [
+              "daemon",
+              "start"
+            ],
+            "usage": "daemon start [-f --force]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "force",
+                "usage": "-f --force",
+                "help": "kill existing daemon",
+                "help_first_line": "kill existing daemon",
+                "short": [
+                  "f"
+                ],
+                "long": [
+                  "force"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Starts the internal pitchfork daemon in the background",
+            "name": "start",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "stop": {
+            "full_cmd": [
+              "daemon",
+              "stop"
+            ],
+            "usage": "daemon stop",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Stops the internal pitchfork daemon running in the background",
+            "name": "stop",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "name": "daemon",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "logs": {
+        "full_cmd": [
+          "logs"
+        ],
+        "usage": "logs [-n <N>] [-t --tail] [NAME]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "NAME",
+            "usage": "[NAME]...",
+            "help": "Show only logs for the specified daemon(s)",
+            "help_first_line": "Show only logs for the specified daemon(s)",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "n",
+            "usage": "-n <N>",
+            "help": "Show N lines of logs",
+            "help_long": "Show N lines of logs\n\nSet to 0 to show all logs",
+            "help_first_line": "Show N lines of logs",
+            "short": [
+              "n"
+            ],
+            "long": [],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "N",
+              "usage": "<N>",
+              "required": true,
+              "hide": false
+            }
+          },
+          {
+            "name": "tail",
+            "usage": "-t --tail",
+            "help": "Show logs in real-time",
+            "help_first_line": "Show logs in real-time",
+            "short": [
+              "t"
+            ],
+            "long": [
+              "tail"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Displays logs for daemon(s)",
+        "name": "logs",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "run": {
+        "full_cmd": [
+          "run"
+        ],
+        "usage": "run [-f --force] <NAME> [CMD]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "NAME",
+            "usage": "<NAME>",
+            "help": "Name of the daemon to run",
+            "help_first_line": "Name of the daemon to run",
+            "required": true,
+            "hide": false
+          },
+          {
+            "name": "CMD",
+            "usage": "[CMD]...",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "force",
+            "usage": "-f --force",
+            "short": [
+              "f"
+            ],
+            "long": [
+              "force"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Runs a one-off daemon",
+        "name": "run",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "start": {
+        "full_cmd": [
+          "start"
+        ],
+        "usage": "start [NAME]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "NAME",
+            "usage": "[NAME]...",
+            "help": "Name of the daemon(s) in pitchfork.toml to start",
+            "help_first_line": "Name of the daemon(s) in pitchfork.toml to start",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Starts a daemon from a pitchfork.toml file",
+        "name": "start",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "usage": {
+        "full_cmd": [
+          "usage"
+        ],
+        "usage": "usage",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Generates a usage spec for the CLI",
+        "help_long": "Generates a usage spec for the CLI\n\nhttps://usage.jdx.dev",
+        "name": "usage",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      }
+    },
+    "args": [],
+    "flags": [],
+    "mounts": [],
+    "hide": false,
+    "name": "pitchfork",
+    "aliases": [],
+    "hidden_aliases": [],
+    "examples": []
+  },
+  "config": {
+    "props": {}
+  },
+  "usage": "Usage: pitchfork-cli <COMMAND>",
+  "complete": {}
+}
