@@ -6,6 +6,7 @@ use crate::{env, Result};
 use duct::cmd;
 use miette::IntoDiagnostic;
 use notify::RecursiveMode;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::exit;
@@ -15,11 +16,15 @@ use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::watch;
 use tokio::{signal, task, time};
 
 pub struct Supervisor {
     state_file: StateFile,
-    last_run: time::Instant,
+    last_refreshed_at: time::Instant,
+    active_pids: HashMap<u32, String>,
+    event_tx: watch::Sender<Event>,
+    event_rx: watch::Receiver<Event>,
     // ipc: IpcServer,
 }
 
@@ -30,13 +35,18 @@ enum Event {
     Ipc(IpcMessage, Sender<IpcMessage>),
     Signal,
     Interval,
+    DaemonStart(StateFileDaemon),
 }
 
 impl Supervisor {
-    pub async fn new(pid_file: StateFile) -> Result<Self> {
+    pub async fn new(state_file: StateFile) -> Result<Self> {
+        let (event_tx, event_rx) = watch::channel(Event::Interval);
         Ok(Self {
-            state_file: pid_file,
-            last_run: time::Instant::now(),
+            state_file,
+            last_refreshed_at: time::Instant::now(),
+            active_pids: Default::default(),
+            event_tx,
+            event_rx,
             // ipc: IpcServer::new().await?,
         })
     }
@@ -70,9 +80,10 @@ impl Supervisor {
     async fn handle(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Interval => {
-                if self.last_run.elapsed() < INTERVAL {
+                if self.last_refreshed_at.elapsed() < INTERVAL {
                     return Ok(());
                 }
+                self.refresh().await
             }
             Event::FileChange(paths) => {
                 debug!("file change: {:?}", paths);
@@ -80,23 +91,27 @@ impl Supervisor {
                     info!("pitchfork cli updated, restarting");
                     self.restart();
                 }
-                // TODO
-                // if paths.contains(&self.pid_file.path) {
-                //     self.pid_file = PidFile::read(&self.pid_file.path)?;
-                // }
+                if paths.contains(&self.state_file.path) {
+                    self.state_file = StateFile::read(&self.state_file.path)?;
+                }
+                self.refresh().await
             }
             Event::Ipc(msg, send) => {
                 info!("received ipc message: {msg}");
-                self.handle_ipc(msg, send).await?;
+                self.handle_ipc(msg, send).await
             }
             Event::Signal => {
                 info!("received SIGTERM, stopping");
                 self.close();
-                exit(0);
+                exit(0)
             }
+            _ => Ok(()),
         }
+    }
+
+    async fn refresh(&mut self) -> Result<()> {
         debug!("refreshing");
-        self.last_run = time::Instant::now();
+        self.last_refreshed_at = time::Instant::now();
         Ok(())
     }
 

@@ -1,7 +1,7 @@
 use crate::Result;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use notify::{Config, RecommendedWatcher, RecursiveMode};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -24,6 +24,12 @@ impl WatchFiles {
                     if let Ok(ev) = res {
                         let paths = ev
                             .into_iter()
+                            .filter(|e| match e.kind {
+                                EventKind::Modify(_)
+                                | EventKind::Create(_)
+                                | EventKind::Remove(_) => true,
+                                _ => false,
+                            })
                             .flat_map(|e| e.paths.clone())
                             .unique()
                             .collect_vec();
