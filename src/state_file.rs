@@ -1,4 +1,5 @@
 use crate::Result;
+use miette::IntoDiagnostic;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -51,7 +52,7 @@ impl StateFile {
 
     pub fn write(&self) -> Result<()> {
         let _lock = xx::fslock::get(&self.path, false)?;
-        let raw = toml::to_string(self)?;
+        let raw = toml::to_string(self).into_diagnostic()?;
         xx::file::write(&self.path, raw)?;
         Ok(())
     }

@@ -1,10 +1,10 @@
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
 use crate::{env, Result};
-use eyre::eyre;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use interprocess::local_socket::ListenerOptions;
+use miette::{miette, IntoDiagnostic};
 use tokio::fs;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -21,7 +21,7 @@ impl IpcServer {
         let opts = ListenerOptions::new().name(fs_name("main")?);
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let listener = opts.create_tokio()?;
+        let listener = opts.create_tokio().into_diagnostic()?;
         tokio::spawn(async move {
             loop {
                 if let Err(err) = Self::listen(&listener, tx.clone()).await {
@@ -51,7 +51,7 @@ impl IpcServer {
 
     async fn read_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<IpcMessage>> {
         let mut bytes = Vec::new();
-        recv.read_until(0, &mut bytes).await?;
+        recv.read_until(0, &mut bytes).await.into_diagnostic()?;
         if bytes.is_empty() {
             return Ok(None);
         }
@@ -111,14 +111,14 @@ impl IpcServer {
         self.rx
             .recv()
             .await
-            .ok_or_else(|| eyre!("IPC channel closed"))
+            .ok_or_else(|| miette!("IPC channel closed"))
     }
 
     async fn listen(
         listener: &interprocess::local_socket::tokio::Listener,
         tx: Sender<(IpcMessage, Sender<IpcMessage>)>,
     ) -> Result<()> {
-        let stream = listener.accept().await?;
+        let stream = listener.accept().await.into_diagnostic()?;
         trace!("Client accepted");
         let (recv, send) = stream.split();
         let mut incoming_chan = Self::read_messages_chan(recv);

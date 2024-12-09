@@ -1,6 +1,7 @@
 use crate::env;
 use crate::Result;
 use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
+use miette::IntoDiagnostic;
 
 pub(crate) mod client;
 pub(crate) mod server;
@@ -17,24 +18,24 @@ pub enum IpcMessage {
 pub fn fs_name(name: &str) -> Result<Name> {
     let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
     dbg!(&path);
-    let fs_name = path.to_fs_name::<GenericFilePath>()?;
+    let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;
     Ok(fs_name)
 }
 
 pub fn serialize(msg: &IpcMessage) -> Result<Vec<u8>> {
     let msg = if *env::IPC_JSON {
-        serde_json::to_vec(msg)?
+        serde_json::to_vec(msg).into_diagnostic()?
     } else {
-        rmp_serde::to_vec(msg)?
+        rmp_serde::to_vec(msg).into_diagnostic()?
     };
     Ok(msg)
 }
 
 pub fn deserialize(bytes: &[u8]) -> Result<IpcMessage> {
     let msg = if *env::IPC_JSON {
-        serde_json::from_slice(bytes)?
+        serde_json::from_slice(bytes).into_diagnostic()?
     } else {
-        rmp_serde::from_slice(bytes)?
+        rmp_serde::from_slice(bytes).into_diagnostic()?
     };
     Ok(msg)
 }

@@ -1,10 +1,12 @@
+use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use itertools::Itertools;
+use miette::IntoDiagnostic;
 use notify_debouncer_mini::notify::RecursiveMode;
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::path::PathBuf;
 use std::time::Duration;
 use xx::regex;
 
@@ -29,36 +31,42 @@ pub struct Logs {
 impl Logs {
     pub async fn run(&self) -> Result<()> {
         let names = self.name.iter().collect::<HashSet<_>>();
-        let log_files = xx::file::ls(&*env::PITCHFORK_LOGS_DIR)?
+        let mut log_files = xx::file::ls(&*env::PITCHFORK_LOGS_DIR)?
             .into_iter()
             .filter(|d| !d.starts_with("."))
             .filter(|d| d.is_dir())
             .filter_map(|d| d.file_name().map(|f| f.to_string_lossy().to_string()))
             .filter(|n| names.is_empty() || names.contains(n))
             .map(|n| {
+                let path = env::PITCHFORK_LOGS_DIR
+                    .join(&n)
+                    .join(format!("{n}.log"))
+                    .canonicalize()
+                    .into_diagnostic()?;
                 Ok((
                     n.clone(),
-                    env::PITCHFORK_LOGS_DIR
-                        .join(&n)
-                        .join(format!("{n}.log"))
-                        .canonicalize()?,
+                    LogFile {
+                        _name: n,
+                        file: xx::file::open(&path)?,
+                        // TODO: might be better to build the length when reading the file so we don't have gaps
+                        cur: xx::file::metadata(&path).into_diagnostic()?.len(),
+                        path,
+                    },
                 ))
             })
-            .filter_ok(|(_, f)| f.exists())
+            .filter_ok(|(_, f)| f.path.exists())
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let mut log_file_sizes = log_files
+
+        let files_to_name = log_files
             .iter()
-            .map(|(name, path)| {
-                let size = fs::metadata(path).unwrap().len();
-                (path.clone(), size)
-            })
+            .map(|(n, f)| (f.path.clone(), n.clone()))
             .collect::<HashMap<_, _>>();
 
-        let log_lines = log_files.iter().flat_map(|(name, path)| {
-            let rev = match xx::file::open(path) {
+        let log_lines = log_files.iter().flat_map(|(name, lf)| {
+            let rev = match xx::file::open(&lf.path) {
                 Ok(f) => rev_lines::RevLines::new(f),
                 Err(e) => {
-                    error!("{}: {}", path.display(), e);
+                    error!("{}: {}", lf.path.display(), e);
                     return vec![];
                 }
             };
@@ -85,43 +93,25 @@ impl Logs {
         }
 
         if self.tail {
-            let h = tokio::runtime::Handle::current();
-            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-            let mut debouncer = new_debouncer(
-                Duration::from_millis(10),
-                move |res: DebounceEventResult| {
-                    let tx = tx.clone();
-                    h.spawn(async move {
-                        if let Ok(ev) = res {
-                            for path in ev.into_iter().map(|e| e.path) {
-                                tx.send(path).await.unwrap();
-                            }
-                        }
-                    });
-                },
-            )?;
+            let mut wf = WatchFiles::new(Duration::from_millis(10))?;
 
-            for (_name, path) in &log_files {
-                debouncer
-                    .watcher()
-                    .watch(path, RecursiveMode::NonRecursive)?;
+            for lf in log_files.values() {
+                wf.watch(&lf.path, RecursiveMode::NonRecursive)?;
             }
 
-            while let Some(path) = rx.recv().await {
-                let mut f = fs::File::open(&path)?;
-                let name = log_files.iter().find(|(_, p)| **p == path).unwrap().0;
-                let mut existing_size = *log_file_sizes.get(&path).unwrap();
-                f.seek(SeekFrom::Start(existing_size))?;
-                let lines = BufReader::new(f)
-                    .lines()
-                    .filter_map(Result::ok)
-                    .collect_vec();
-                existing_size += lines.iter().fold(0, |acc, l| acc + l.len() as u64);
-                let lines = merge_log_lines(name, lines);
+            while let Some(path) = wf.rx.recv().await {
+                let name = files_to_name.get(&path).unwrap().to_string();
+                let info = log_files.get_mut(&name).unwrap();
+                info.file
+                    .seek(SeekFrom::Start(info.cur))
+                    .into_diagnostic()?;
+                let reader = BufReader::new(&info.file);
+                let lines = reader.lines().map_while(Result::ok).collect_vec();
+                info.cur += lines.iter().fold(0, |acc, l| acc + l.len() as u64);
+                let lines = merge_log_lines(&name, lines);
                 for (date, name, msg) in lines {
                     println!("{} {} {}", date, name, msg);
                 }
-                log_file_sizes.insert(path, existing_size);
             }
         }
 
@@ -146,4 +136,11 @@ fn merge_log_lines(name: &str, lines: Vec<String>) -> Vec<(String, String, Strin
             }
         }
     })
+}
+
+struct LogFile {
+    _name: String,
+    path: PathBuf,
+    file: fs::File,
+    cur: u64,
 }

@@ -1,9 +1,9 @@
 use crate::ipc::{deserialize, fs_name, serialize, IpcMessage};
 use crate::Result;
 use exponential_backoff::Backoff;
-use eyre::bail;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
+use miette::{bail, IntoDiagnostic};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -68,14 +68,14 @@ impl IpcClient {
         }
         msg.push(0);
         let mut send = self.send.lock().await;
-        send.write_all(&msg).await?;
+        send.write_all(&msg).await.into_diagnostic()?;
         Ok(())
     }
 
     pub async fn read(&self) -> Result<IpcMessage> {
         let mut recv = self.recv.lock().await;
         let mut bytes = Vec::new();
-        recv.read_until(0, &mut bytes).await?;
+        recv.read_until(0, &mut bytes).await.into_diagnostic()?;
         deserialize(&bytes)
     }
 }

@@ -1,4 +1,4 @@
-use eyre::Result;
+use crate::Result;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -7,6 +7,7 @@ use std::thread;
 
 use crate::{env, ui};
 use log::{Level, LevelFilter, Metadata, Record};
+use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 
 #[derive(Debug)]
@@ -138,8 +139,9 @@ fn init_log_file(log_file: &Path) -> Result<File> {
     if let Some(log_dir) = log_file.parent() {
         xx::file::mkdirp(log_dir)?;
     }
-    Ok(OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_file)?)
+        .open(log_file)
+        .into_diagnostic()
 }

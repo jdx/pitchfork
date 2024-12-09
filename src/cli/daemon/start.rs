@@ -2,6 +2,7 @@ use crate::cli::daemon::kill_or_stop;
 use crate::state_file::StateFile;
 use crate::{env, Result};
 use duct::cmd;
+use miette::IntoDiagnostic;
 
 /// Starts the internal pitchfork daemon in the background
 #[derive(Debug, clap::Args)]
@@ -24,7 +25,8 @@ impl Start {
         cmd!(&*env::BIN_PATH, "daemon", "run")
             .stdout_null()
             .stderr_null()
-            .start()?;
+            .start()
+            .into_diagnostic()?;
 
         Ok(())
     }

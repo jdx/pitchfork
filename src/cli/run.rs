@@ -1,7 +1,7 @@
 use crate::ipc::client::IpcClient;
 use crate::ipc::IpcMessage;
 use crate::Result;
-use eyre::bail;
+use miette::bail;
 
 /// Runs a one-off daemon
 #[derive(Debug, clap::Args)]

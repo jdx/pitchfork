@@ -11,11 +11,11 @@ mod procs;
 mod state_file;
 mod supervisor;
 mod ui;
+mod watch_files;
 
-pub use eyre::Result;
+pub use miette::Result;
 
 fn main() -> Result<()> {
     logger::init();
-    color_eyre::install()?;
     cli::run()
 }

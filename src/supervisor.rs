@@ -3,6 +3,7 @@ use crate::ipc::IpcMessage;
 use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
 use crate::{env, Result};
 use duct::cmd;
+use miette::IntoDiagnostic;
 use notify_debouncer_mini::{new_debouncer, notify::*, DebounceEventResult, Debouncer};
 use std::fs;
 use std::path::PathBuf;
@@ -102,7 +103,9 @@ impl Supervisor {
         match msg {
             IpcMessage::Run(name, cmd) => {
                 info!("received run message: {name:?} cmd: {cmd:?}");
-                send.send(IpcMessage::Started(name)).await?;
+                send.send(IpcMessage::Started(name))
+                    .await
+                    .into_diagnostic()?;
             }
             _ => {
                 debug!("received unknown message: {msg}");
@@ -182,14 +185,17 @@ impl Supervisor {
                         tx.send(Event::FileChange(paths)).await.unwrap();
                     }
                 });
-            })?;
+            })
+            .into_diagnostic()?;
 
         debouncer
             .watcher()
-            .watch(&env::BIN_PATH, RecursiveMode::NonRecursive)?;
+            .watch(&env::BIN_PATH, RecursiveMode::NonRecursive)
+            .into_diagnostic()?;
         debouncer
             .watcher()
-            .watch(&self.state_file.path, RecursiveMode::NonRecursive)?;
+            .watch(&self.state_file.path, RecursiveMode::NonRecursive)
+            .into_diagnostic()?;
 
         Ok(debouncer)
     }
