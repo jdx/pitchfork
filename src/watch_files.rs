@@ -1,8 +1,8 @@
 use crate::Result;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify::{Config, RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -15,19 +15,25 @@ impl WatchFiles {
     pub fn new(duration: Duration) -> Result<Self> {
         let h = tokio::runtime::Handle::current();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let debouncer = new_debouncer(duration, None, move |res: DebounceEventResult| {
-            let tx = tx.clone();
-            h.spawn(async move {
-                if let Ok(ev) = res {
-                    let paths = ev
-                        .into_iter()
-                        .flat_map(|e| e.paths.clone())
-                        .unique()
-                        .collect_vec();
-                    tx.send(paths).await.unwrap();
-                }
-            });
-        })
+        let debouncer = new_debouncer_opt(
+            duration,
+            None,
+            move |res: DebounceEventResult| {
+                let tx = tx.clone();
+                h.spawn(async move {
+                    if let Ok(ev) = res {
+                        let paths = ev
+                            .into_iter()
+                            .flat_map(|e| e.paths.clone())
+                            .unique()
+                            .collect_vec();
+                        tx.send(paths).await.unwrap();
+                    }
+                });
+            },
+            FileIdMap::new(),
+            Config::default(),
+        )
         .into_diagnostic()?;
 
         Ok(Self { debouncer, rx })
