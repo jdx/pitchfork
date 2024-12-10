@@ -2,6 +2,7 @@ use crate::Result;
 use duct::cmd;
 use miette::IntoDiagnostic;
 
+/// Generates shell completion scripts
 #[derive(Debug, clap::Args)]
 #[clap()]
 pub struct Completion {

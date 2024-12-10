@@ -5,6 +5,7 @@ mod start;
 mod status;
 mod stop;
 
+/// Start, stop, and check the status of the pitchfork supervisor daemon
 #[derive(Debug, clap::Args)]
 pub struct Supervisor {
     #[clap(subcommand)]
