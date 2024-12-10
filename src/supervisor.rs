@@ -6,6 +6,7 @@ use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use duct::cmd;
 use itertools::Itertools;
+use miette::IntoDiagnostic;
 use notify::RecursiveMode;
 use std::collections::HashMap;
 use std::fs;
@@ -28,6 +29,7 @@ pub struct Supervisor {
     active_pids: HashMap<u32, String>,
     event_tx: broadcast::Sender<Event>,
     event_rx: broadcast::Receiver<Event>,
+    pitchfork_bin_file_size: u64,
     procs: Procs,
     // ipc: IpcServer,
 }
@@ -55,6 +57,7 @@ impl Supervisor {
             event_tx,
             event_rx,
             procs: Procs::new(),
+            pitchfork_bin_file_size: fs::metadata(&*env::BIN_PATH).into_diagnostic()?.len(),
             // ipc: IpcServer::new().await?,
         })
     }
@@ -95,8 +98,11 @@ impl Supervisor {
             Event::FileChange(paths) => {
                 debug!("file change: {:?}", paths);
                 if paths.contains(&*env::BIN_PATH) && env::BIN_PATH.exists() {
-                    info!("pitchfork cli updated, restarting");
-                    self.restart();
+                    let new_size = fs::metadata(&*env::BIN_PATH).into_diagnostic()?.len();
+                    if new_size != self.pitchfork_bin_file_size {
+                        info!("pitchfork cli updated, restarting");
+                        self.restart();
+                    }
                 }
                 if paths.contains(&self.state_file.path) {
                     self.state_file = StateFile::read(&self.state_file.path)?;
@@ -275,7 +281,10 @@ impl Supervisor {
         if let Some(daemon) = self.state_file.daemons.get(name) {
             if let Some(pid) = daemon.pid {
                 self.procs.refresh_processes();
-                self.procs.get_process(pid).map(|p| p.kill());
+                if let Some(proc) = self.procs.get_process(pid) {
+                    proc.kill();
+                    proc.wait(); // TODO: no blocking
+                }
                 self.active_pids.remove(&pid);
                 self.state_file
                     .daemons
@@ -293,7 +302,14 @@ impl Supervisor {
                 {
                     warn!("failed to send message: {err:?}");
                 }
+                return Ok(());
             }
+        }
+        if let Err(err) = send
+            .send(IpcMessage::DaemonAlreadyStopped(name.to_string()))
+            .await
+        {
+            warn!("failed to send message: {err:?}");
         }
         Ok(())
     }

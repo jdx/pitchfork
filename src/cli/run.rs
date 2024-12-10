@@ -3,6 +3,7 @@ use crate::ipc::client::IpcClient;
 use crate::ipc::IpcMessage;
 use crate::Result;
 use miette::bail;
+use std::time::Duration;
 
 /// Runs a one-off daemon
 #[derive(Debug, clap::Args)]
@@ -32,6 +33,11 @@ impl Run {
                 match ipc.read().await {
                     Some(IpcMessage::DaemonStop { name }) => {
                         info!("stopped daemon {}", name);
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        break;
+                    }
+                    Some(IpcMessage::DaemonAlreadyStopped(name)) => {
+                        info!("daemon {} already stopped", name);
                         break;
                     }
                     None => {

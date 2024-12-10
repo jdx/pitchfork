@@ -14,6 +14,7 @@ pub enum IpcMessage {
     Run(String, Vec<String>),
     Stop(String),
     DaemonAlreadyRunning(String),
+    DaemonAlreadyStopped(String),
     DaemonStart(StateFileDaemon),
     DaemonStop { name: String },
     DaemonFailed { name: String, error: String },
