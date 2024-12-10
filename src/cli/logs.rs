@@ -92,7 +92,7 @@ fn merge_log_lines(name: &str, lines: Vec<String>) -> Vec<(String, String, Strin
     })
 }
 
-fn get_log_file_infos(names: &Vec<String>) -> Result<BTreeMap<String, LogFile>> {
+fn get_log_file_infos(names: &[String]) -> Result<BTreeMap<String, LogFile>> {
     let names = names.iter().collect::<HashSet<_>>();
     xx::file::ls(&*env::PITCHFORK_LOGS_DIR)?
         .into_iter()
