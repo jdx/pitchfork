@@ -19,7 +19,7 @@
 - [`pitchfork run [-f --force] <NAME> [CMD]...`](/cli/run.md)
 - [`pitchfork start [NAME]...`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)
-- [`pitchfork stop`](/cli/stop.md)
+- [`pitchfork stop <ID>`](/cli/stop.md)
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
 - [`pitchfork supervisor run [-f --force]`](/cli/supervisor/run.md)
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)

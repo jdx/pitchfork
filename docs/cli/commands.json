@@ -416,13 +416,22 @@
         "full_cmd": [
           "stop"
         ],
-        "usage": "stop",
+        "usage": "stop <ID>",
         "subcommands": {},
-        "args": [],
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "The name of the daemon to stop",
+            "help_first_line": "The name of the daemon to stop",
+            "required": true,
+            "hide": false
+          }
+        ],
         "flags": [],
         "mounts": [],
         "hide": false,
-        "help": "Kill a running daemon",
+        "help": "Sends a stop signal to a daemon",
         "name": "stop",
         "aliases": [
           "kill"

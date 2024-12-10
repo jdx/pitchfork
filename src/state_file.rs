@@ -16,7 +16,7 @@ pub struct StateFile {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateFileDaemon {
     pub name: String,
-    pub pid: u32,
+    pub pid: Option<u32>,
     pub status: DaemonStatus,
 }
 
@@ -27,6 +27,7 @@ pub enum DaemonStatus {
     Failed(String),
     Waiting,
     Running,
+    Stopped,
 }
 
 impl DaemonStatus {
@@ -36,6 +37,7 @@ impl DaemonStatus {
             DaemonStatus::Failed(_) => console::style(s).red().to_string(),
             DaemonStatus::Waiting => console::style(s).yellow().to_string(),
             DaemonStatus::Running => console::style(s).green().to_string(),
+            DaemonStatus::Stopped => console::style(s).dim().to_string(),
         }
     }
 }

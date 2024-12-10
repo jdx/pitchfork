@@ -13,8 +13,10 @@ impl Status {
         let daemon = StateFile::get().daemons.get(&self.id);
         if let Some(daemon) = daemon {
             println!("Name: {}", self.id);
-            println!("PID: {}", daemon.pid);
-            println!("Status: {}", daemon.status);
+            if let Some(pid) = &daemon.pid {
+                println!("PID: {pid}");
+            }
+            println!("Status: {}", daemon.status.style());
         } else {
             warn!("Daemon {} not found", self.id);
         }

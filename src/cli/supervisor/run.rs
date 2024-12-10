@@ -16,8 +16,10 @@ impl Run {
     pub async fn run(&self) -> Result<()> {
         let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
         if let Some(d) = pid_file.daemons.get("pitchfork") {
-            if !(kill_or_stop(d.pid, self.force)?) {
-                return Ok(());
+            if let Some(pid) = d.pid {
+                if !(kill_or_stop(pid, self.force)?) {
+                    return Ok(());
+                }
             }
         }
 

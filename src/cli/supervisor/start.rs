@@ -15,10 +15,12 @@ pub struct Start {
 
 impl Start {
     pub async fn run(&self) -> Result<()> {
-        let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
-        if let Some(d) = pid_file.daemons.get("pitchfork") {
-            if !(kill_or_stop(d.pid, self.force)?) {
-                return Ok(());
+        let sf = StateFile::get();
+        if let Some(d) = sf.daemons.get("pitchfork") {
+            if let Some(pid) = d.pid {
+                if !(kill_or_stop(pid, self.force)?) {
+                    return Ok(());
+                }
             }
         }
 

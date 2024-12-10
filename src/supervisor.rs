@@ -60,7 +60,7 @@ impl Supervisor {
 
         let daemon = StateFileDaemon {
             name: "pitchfork".into(),
-            pid,
+            pid: Some(pid),
             status: DaemonStatus::Running,
         };
         self.state_file.daemons.insert("pitchfork".into(), daemon);
@@ -103,13 +103,19 @@ impl Supervisor {
                 self.handle_ipc(msg, send).await
             }
             Event::Signal => {
-                info!("received SIGTERM, stopping");
+                info!("received signal, stopping");
                 self.close();
                 exit(0)
             }
             Event::DaemonStop(daemon) => {
-                self.active_pids.remove(&daemon.pid);
-                self.state_file.daemons.remove(&daemon.name);
+                self.active_pids.remove(&daemon.pid.unwrap());
+                self.state_file
+                    .daemons
+                    .entry(daemon.name.clone())
+                    .and_modify(|d| {
+                        d.pid = None;
+                        d.status = DaemonStatus::Stopped;
+                    });
                 self.state_file.write()?;
                 Ok(())
             }
@@ -186,7 +192,7 @@ impl Supervisor {
                 info!("started daemon {name} with pid {pid}");
                 let daemon = StateFileDaemon {
                     name: name.to_string(),
-                    pid,
+                    pid: Some(pid),
                     status: DaemonStatus::Running,
                 };
                 self.state_file

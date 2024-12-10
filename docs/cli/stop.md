@@ -1,6 +1,12 @@
 # `pitchfork stop`
 
-- **Usage**: `pitchfork stop`
+- **Usage**: `pitchfork stop <ID>`
 - **Aliases**: `kill`
 
-Kill a running daemon
+Sends a stop signal to a daemon
+
+## Arguments
+
+### `<ID>`
+
+The name of the daemon to stop

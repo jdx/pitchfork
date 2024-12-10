@@ -28,7 +28,11 @@ impl Run {
         loop {
             match ipc.read().await? {
                 IpcMessage::DaemonStart(daemon) => {
-                    info!("Started daemon {} with pid {}", daemon.name, daemon.pid);
+                    info!(
+                        "Started daemon {} with pid {}",
+                        daemon.name,
+                        daemon.pid.unwrap()
+                    );
                     break;
                 }
                 IpcMessage::DaemonFailed { name, error } => {

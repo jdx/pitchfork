@@ -65,8 +65,9 @@ cmd "status" help="Display the status of a daemon" {
     alias "stat"
     arg "<ID>"
 }
-cmd "stop" help="Kill a running daemon" {
+cmd "stop" help="Sends a stop signal to a daemon" {
     alias "kill"
+    arg "<ID>" help="The name of the daemon to stop"
 }
 cmd "supervisor" subcommand_required=true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
     cmd "run" help="Runs the internal pitchfork daemon in the foreground" {

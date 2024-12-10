@@ -1,6 +1,6 @@
 use crate::cli::supervisor::kill_or_stop;
 use crate::state_file::StateFile;
-use crate::{env, Result};
+use crate::Result;
 
 /// Stops the internal pitchfork daemon running in the background
 #[derive(Debug, clap::Args)]
@@ -9,13 +9,16 @@ pub struct Stop {}
 
 impl Stop {
     pub async fn run(&self) -> Result<()> {
-        let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
+        let pid_file = StateFile::get();
         if let Some(d) = pid_file.daemons.get("pitchfork") {
-            info!("Stopping pitchfork daemon with pid {}", d.pid);
-            kill_or_stop(d.pid, true)?;
-        } else {
-            warn!("Pitchfork daemon is not running");
+            if let Some(pid) = d.pid {
+                info!("Stopping pitchfork daemon with pid {}", pid);
+                if !(kill_or_stop(pid, false)?) {
+                    return Ok(());
+                }
+            }
         }
+        warn!("Pitchfork daemon is not running");
         Ok(())
     }
 }
