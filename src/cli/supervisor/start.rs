@@ -1,4 +1,5 @@
 use crate::cli::supervisor::kill_or_stop;
+use crate::ipc::client::IpcClient;
 use crate::state_file::StateFile;
 use crate::{env, Result};
 use duct::cmd;
@@ -16,19 +17,25 @@ pub struct Start {
 impl Start {
     pub async fn run(&self) -> Result<()> {
         let sf = StateFile::get();
+        let mut running = false;
         if let Some(d) = sf.daemons.get("pitchfork") {
             if let Some(pid) = d.pid {
                 if !(kill_or_stop(pid, self.force)?) {
-                    return Ok(());
+                    running = true;
                 }
             }
         }
 
-        cmd!(&*env::BIN_PATH, "daemon", "run")
-            .stdout_null()
-            .stderr_null()
-            .start()
-            .into_diagnostic()?;
+        if !running {
+            cmd!(&*env::BIN_PATH, "supervisor", "run")
+                .stdout_null()
+                .stderr_null()
+                .start()
+                .into_diagnostic()?;
+        }
+
+        IpcClient::connect().await?;
+        println!("Pitchfork daemon is running");
 
         Ok(())
     }

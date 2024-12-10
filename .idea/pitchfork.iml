@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src/watch_files/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/src/watch_files/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/docs/.vitepress/cache" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

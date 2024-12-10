@@ -49,7 +49,7 @@ cmd "logs" help="Displays logs for daemon(s)" {
         arg "<N>"
     }
     flag "-t --tail" help="Show logs in real-time"
-    arg "[NAME]..." help="Show only logs for the specified daemon(s)" var=true
+    arg "[ID]..." help="Show only logs for the specified daemon(s)" var=true
 }
 cmd "run" help="Runs a one-off daemon" {
     alias "r"
@@ -89,6 +89,7 @@ cmd "wait" help="Wait for a daemon to stop, tailing the logs along the way" {
     long_help r"Wait for a daemon to stop, tailing the logs along the way
 
 Exits with the same status code as the daemon"
+    arg "<ID>" help="The name of the daemon to wait for"
 }
 
 complete "id" run="pitchfork ls | awk '{print $1}'"

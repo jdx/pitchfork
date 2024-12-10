@@ -254,12 +254,12 @@
         "full_cmd": [
           "logs"
         ],
-        "usage": "logs [-n <N>] [-t --tail] [NAME]...",
+        "usage": "logs [-n <N>] [-t --tail] [ID]...",
         "subcommands": {},
         "args": [
           {
-            "name": "NAME",
-            "usage": "[NAME]...",
+            "name": "ID",
+            "usage": "[ID]...",
             "help": "Show only logs for the specified daemon(s)",
             "help_first_line": "Show only logs for the specified daemon(s)",
             "required": false,
@@ -576,9 +576,18 @@
         "full_cmd": [
           "wait"
         ],
-        "usage": "wait",
+        "usage": "wait <ID>",
         "subcommands": {},
-        "args": [],
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "The name of the daemon to wait for",
+            "help_first_line": "The name of the daemon to wait for",
+            "required": true,
+            "hide": false
+          }
+        ],
         "flags": [],
         "mounts": [],
         "hide": false,

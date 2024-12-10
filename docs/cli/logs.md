@@ -1,13 +1,13 @@
 # `pitchfork logs`
 
-- **Usage**: `pitchfork logs [-n <N>] [-t --tail] [NAME]...`
+- **Usage**: `pitchfork logs [-n <N>] [-t --tail] [ID]...`
 - **Aliases**: `l`
 
 Displays logs for daemon(s)
 
 ## Arguments
 
-### `[NAME]...`
+### `[ID]...`
 
 Show only logs for the specified daemon(s)
 
