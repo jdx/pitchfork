@@ -24,11 +24,13 @@ impl WatchFiles {
                     if let Ok(ev) = res {
                         let paths = ev
                             .into_iter()
-                            .filter(|e| match e.kind {
-                                EventKind::Modify(_)
-                                | EventKind::Create(_)
-                                | EventKind::Remove(_) => true,
-                                _ => false,
+                            .filter(|e| {
+                                matches!(
+                                    e.kind,
+                                    EventKind::Modify(_)
+                                        | EventKind::Create(_)
+                                        | EventKind::Remove(_)
+                                )
                             })
                             .flat_map(|e| e.paths.clone())
                             .unique()
