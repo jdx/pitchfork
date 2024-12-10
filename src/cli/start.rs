@@ -1,3 +1,4 @@
+use crate::cli::supervisor;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::Result;
 
@@ -11,6 +12,7 @@ pub struct Start {
 
 impl Start {
     pub async fn run(&self) -> Result<()> {
+        supervisor::start_if_not_running()?;
         // TODO: read all tomls
         let pt = PitchforkToml::read("pitchfork.toml")?;
         dbg!(&pt);

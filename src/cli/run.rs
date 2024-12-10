@@ -1,3 +1,4 @@
+use crate::cli::supervisor;
 use crate::ipc::client::IpcClient;
 use crate::ipc::IpcMessage;
 use crate::Result;
@@ -17,6 +18,7 @@ pub struct Run {
 
 impl Run {
     pub async fn run(&self) -> Result<()> {
+        supervisor::start_if_not_running()?;
         info!("Running one-off daemon");
         if self.cmd.is_empty() {
             bail!("No command provided");

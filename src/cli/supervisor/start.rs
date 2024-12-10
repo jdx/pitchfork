@@ -1,9 +1,7 @@
-use crate::cli::supervisor::kill_or_stop;
+use crate::cli::supervisor::{kill_or_stop, start};
 use crate::ipc::client::IpcClient;
 use crate::state_file::StateFile;
-use crate::{env, Result};
-use duct::cmd;
-use miette::IntoDiagnostic;
+use crate::Result;
 
 /// Starts the internal pitchfork daemon in the background
 #[derive(Debug, clap::Args)]
@@ -27,11 +25,7 @@ impl Start {
         }
 
         if !running {
-            cmd!(&*env::BIN_PATH, "supervisor", "run")
-                .stdout_null()
-                .stderr_null()
-                .start()
-                .into_diagnostic()?;
+            start()?;
         }
 
         IpcClient::connect().await?;

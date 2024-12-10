@@ -1,5 +1,8 @@
 use crate::procs::Procs;
-use crate::Result;
+use crate::state_file::StateFile;
+use crate::{env, Result};
+use duct::cmd;
+use miette::IntoDiagnostic;
 
 mod run;
 mod start;
@@ -50,4 +53,25 @@ pub fn kill_or_stop(existing_pid: u32, force: bool) -> Result<bool> {
     } else {
         Ok(true)
     }
+}
+
+pub fn start() -> Result<()> {
+    cmd!(&*env::BIN_PATH, "supervisor", "run")
+        .stdout_null()
+        .stderr_null()
+        .start()
+        .into_diagnostic()?;
+    Ok(())
+}
+
+pub fn start_if_not_running() -> Result<()> {
+    let sf = StateFile::get();
+    if let Some(d) = sf.daemons.get("pitchfork") {
+        if let Some(pid) = d.pid {
+            if let Some(proc) = Procs::new().get_process(pid) {
+                return Ok(());
+            }
+        }
+    }
+    start()
 }
