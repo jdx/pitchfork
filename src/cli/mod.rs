@@ -44,7 +44,6 @@ enum Commands {
     Wait(wait::Wait),
 }
 
-#[tokio::main]
 pub async fn run() -> Result<()> {
     let args = Cli::parse();
     match args.command {

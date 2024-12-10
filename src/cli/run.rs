@@ -29,9 +29,12 @@ impl Run {
         if self.force {
             ipc.send(IpcMessage::Stop(self.name.clone())).await?;
             loop {
-                match ipc.read().await? {
-                    IpcMessage::DaemonStop { name } => {
+                match ipc.read().await {
+                    Some(IpcMessage::DaemonStop { name }) => {
                         info!("stopped daemon {}", name);
+                        break;
+                    }
+                    None => {
                         break;
                     }
                     msg => {
@@ -44,8 +47,8 @@ impl Run {
         ipc.send(IpcMessage::Run(self.name.clone(), self.cmd.clone()))
             .await?;
         loop {
-            match ipc.read().await? {
-                IpcMessage::DaemonAlreadyRunning(id) => {
+            match ipc.read().await {
+                Some(IpcMessage::DaemonAlreadyRunning(id)) => {
                     if self.force {
                         bail!("failed to stop daemon {}", id);
                     } else {
@@ -53,7 +56,7 @@ impl Run {
                     }
                     break;
                 }
-                IpcMessage::DaemonStart(daemon) => {
+                Some(IpcMessage::DaemonStart(daemon)) => {
                     info!(
                         "started daemon {} with pid {}",
                         daemon.name,
@@ -61,7 +64,7 @@ impl Run {
                     );
                     break;
                 }
-                IpcMessage::DaemonFailed { name, error } => {
+                Some(IpcMessage::DaemonFailed { name, error }) => {
                     bail!("Failed to start daemon {}: {}", name, error);
                 }
                 msg => {

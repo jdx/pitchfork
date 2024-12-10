@@ -14,8 +14,20 @@ mod ui;
 mod watch_files;
 
 pub use miette::Result;
+use tokio::signal;
+use tokio::signal::unix::SignalKind;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     logger::init();
-    cli::run()
+    handle_epipe();
+    cli::run().await
+}
+
+fn handle_epipe() {
+    let mut pipe_stream = signal::unix::signal(SignalKind::pipe()).unwrap();
+    tokio::spawn(async move {
+        pipe_stream.recv().await;
+        debug!("received SIGPIPE");
+    });
 }

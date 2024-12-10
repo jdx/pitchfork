@@ -25,7 +25,7 @@ impl IpcClient {
         let client = Self::connect_(&id, "main").await?;
         trace!("Connected to IPC socket");
         client.send(IpcMessage::Connect(client.id.clone())).await?;
-        let msg = client.read().await?;
+        let msg = client.read().await.unwrap();
         assert!(msg.is_connect_ok());
         debug!("Connected to IPC main");
         Ok(client)
@@ -72,10 +72,22 @@ impl IpcClient {
         Ok(())
     }
 
-    pub async fn read(&self) -> Result<IpcMessage> {
+    pub async fn read(&self) -> Option<IpcMessage> {
         let mut recv = self.recv.lock().await;
         let mut bytes = Vec::new();
-        recv.read_until(0, &mut bytes).await.into_diagnostic()?;
-        deserialize(&bytes)
+        if let Err(err) = recv.read_until(0, &mut bytes).await.into_diagnostic() {
+            warn!("Failed to read IPC message: {}", err);
+        }
+        if bytes.is_empty() {
+            None
+        } else {
+            match deserialize(&bytes) {
+                Ok(msg) => Some(msg),
+                Err(err) => {
+                    warn!("Failed to deserialize IPC message: {}", err);
+                    None
+                }
+            }
+        }
     }
 }

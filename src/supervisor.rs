@@ -6,7 +6,6 @@ use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use duct::cmd;
 use itertools::Itertools;
-use miette::IntoDiagnostic;
 use notify::RecursiveMode;
 use std::collections::HashMap;
 use std::fs;
@@ -275,9 +274,8 @@ impl Supervisor {
         info!("received stop message: {name}");
         if let Some(daemon) = self.state_file.daemons.get(name) {
             if let Some(pid) = daemon.pid {
-                cmd!("kill", "-TERM", pid.to_string())
-                    .run()
-                    .into_diagnostic()?;
+                self.procs.refresh_processes();
+                self.procs.get_process(pid).map(|p| p.kill());
                 self.active_pids.remove(&pid);
                 self.state_file
                     .daemons
@@ -330,11 +328,6 @@ impl Supervisor {
             SignalKind::user_defined2(),
         ];
         static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
-        let mut pipe_stream = signal::unix::signal(SignalKind::pipe()).unwrap();
-        tokio::spawn(async move {
-            pipe_stream.recv().await;
-            debug!("received SIGPIPE");
-        });
         for signal in signals {
             let tx = tx.clone();
             tokio::spawn(async move {
