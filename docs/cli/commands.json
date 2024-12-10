@@ -169,9 +169,18 @@
         "full_cmd": [
           "disable"
         ],
-        "usage": "disable",
+        "usage": "disable <ID>",
         "subcommands": {},
-        "args": [],
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "Name of the daemon to disable",
+            "help_first_line": "Name of the daemon to disable",
+            "required": true,
+            "hide": false
+          }
+        ],
         "flags": [],
         "mounts": [],
         "hide": false,
@@ -187,9 +196,18 @@
         "full_cmd": [
           "enable"
         ],
-        "usage": "enable",
+        "usage": "enable <ID>",
         "subcommands": {},
-        "args": [],
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "Name of the daemon to enable",
+            "help_first_line": "Name of the daemon to enable",
+            "required": true,
+            "hide": false
+          }
+        ],
         "flags": [],
         "mounts": [],
         "hide": false,

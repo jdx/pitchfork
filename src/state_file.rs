@@ -1,13 +1,14 @@
 use crate::{env, Result};
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateFile {
     pub daemons: BTreeMap<String, StateFileDaemon>,
+    pub disabled: BTreeSet<String>,
     #[serde(skip)]
     pub(crate) path: PathBuf,
 }
@@ -43,6 +44,7 @@ impl StateFile {
     pub fn new(path: PathBuf) -> Self {
         Self {
             daemons: Default::default(),
+            disabled: Default::default(),
             path,
         }
     }

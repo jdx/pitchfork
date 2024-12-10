@@ -32,9 +32,11 @@ cmd "completion" help="Generates shell completion scripts" {
 }
 cmd "disable" help="Prevent a daemon from restarting" {
     alias "d"
+    arg "<ID>" help="Name of the daemon to disable"
 }
 cmd "enable" help="Allow a daemon to start" {
     alias "e"
+    arg "<ID>" help="Name of the daemon to enable"
 }
 cmd "list" help="List all daemons" {
     alias "ls"
