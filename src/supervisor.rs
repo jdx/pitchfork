@@ -153,7 +153,6 @@ impl Supervisor {
                         }
                     }
                 });
-                // cmd.push("2>&1".to_string());
                 let args = vec!["-c".to_string(), cmd.join(" ")];
                 let log_path = env::PITCHFORK_LOGS_DIR
                     .join(&name)
