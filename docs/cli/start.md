@@ -1,6 +1,7 @@
 # `pitchfork start`
 
 - **Usage**: `pitchfork start [NAME]...`
+- **Aliases**: `s`
 
 Starts a daemon from a pitchfork.toml file
 

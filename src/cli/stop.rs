@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// Kill a running daemon
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "kill", verbatim_doc_comment)]
 pub struct Stop {}
 
 impl Stop {

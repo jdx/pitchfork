@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// Removes stopped/failed daemons from `pitchfork list`
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "c", verbatim_doc_comment)]
 pub struct Clean {}
 
 impl Clean {

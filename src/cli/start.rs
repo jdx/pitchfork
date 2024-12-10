@@ -3,7 +3,7 @@ use crate::Result;
 
 /// Starts a daemon from a pitchfork.toml file
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "s", verbatim_doc_comment)]
 pub struct Start {
     /// Name of the daemon(s) in pitchfork.toml to start
     name: Vec<String>,

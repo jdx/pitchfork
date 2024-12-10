@@ -5,7 +5,7 @@ use miette::bail;
 
 /// Runs a one-off daemon
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "r", verbatim_doc_comment)]
 pub struct Run {
     /// Name of the daemon to run
     name: String,

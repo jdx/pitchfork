@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// Allow a daemon to start
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "e", verbatim_doc_comment)]
 pub struct Enable {}
 
 impl Enable {

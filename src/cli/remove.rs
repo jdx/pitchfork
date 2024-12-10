@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// Remove a daemon from pitchfork.toml
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "rm", verbatim_doc_comment)]
 pub struct Remove {}
 
 impl Remove {

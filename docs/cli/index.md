@@ -23,5 +23,4 @@
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
 - [`pitchfork supervisor status`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
-- [`pitchfork usage`](/cli/usage.md)
 - [`pitchfork wait`](/cli/wait.md)

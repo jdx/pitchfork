@@ -1,6 +1,7 @@
 # `pitchfork run`
 
 - **Usage**: `pitchfork run [-f --force] <NAME> [CMD]...`
+- **Aliases**: `r`
 
 Runs a one-off daemon
 

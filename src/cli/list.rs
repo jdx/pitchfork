@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// List all daemons
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "ls", verbatim_doc_comment)]
 pub struct List {}
 
 impl List {

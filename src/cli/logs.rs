@@ -12,7 +12,7 @@ use xx::regex;
 
 /// Displays logs for daemon(s)
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "l", verbatim_doc_comment)]
 pub struct Logs {
     /// Show only logs for the specified daemon(s)
     name: Vec<String>,

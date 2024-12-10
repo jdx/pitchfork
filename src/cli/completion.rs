@@ -19,7 +19,7 @@ impl Completion {
             &self.shell,
             "pitchfork",
             "--usage-cmd",
-            "pitchfork --usage",
+            "pitchfork usage",
         )
         .run()
         .into_diagnostic()?;

@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// Display the status of a daemons
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "stat", verbatim_doc_comment)]
 pub struct Status {}
 
 impl Status {

@@ -1,6 +1,7 @@
 # `pitchfork logs`
 
 - **Usage**: `pitchfork logs [-n <N>] [-t --tail] [NAME]...`
+- **Aliases**: `l`
 
 Displays logs for daemon(s)
 

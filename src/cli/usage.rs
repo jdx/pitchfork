@@ -6,7 +6,7 @@ use clap::CommandFactory;
 ///
 /// https://usage.jdx.dev
 #[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
+#[clap(hide = true, verbatim_doc_comment)]
 pub struct Usage {}
 
 impl Usage {

@@ -1,15 +1,26 @@
 name "pitchfork-cli"
 bin "pitchfork"
 usage "Usage: pitchfork-cli <COMMAND>"
-cmd "add"
-cmd "clean"
+cmd "add" help="Add a new daemon to pitchfork.toml" {
+    alias "a"
+}
+cmd "clean" help="Removes stopped/failed daemons from `pitchfork list`" {
+    alias "c"
+}
 cmd "completion" {
     arg "<SHELL>" help="The shell to generate completion for"
 }
-cmd "disable"
-cmd "enable"
-cmd "list"
+cmd "disable" help="Prevent a daemon from restarting" {
+    alias "d"
+}
+cmd "enable" help="Allow a daemon to start" {
+    alias "e"
+}
+cmd "list" help="List all daemons" {
+    alias "ls"
+}
 cmd "logs" help="Displays logs for daemon(s)" {
+    alias "l"
     flag "-n" help="Show N lines of logs" {
         long_help "Show N lines of logs\n\nSet to 0 to show all logs"
         arg "<N>"
@@ -17,17 +28,25 @@ cmd "logs" help="Displays logs for daemon(s)" {
     flag "-t --tail" help="Show logs in real-time"
     arg "[NAME]..." help="Show only logs for the specified daemon(s)" var=true
 }
-cmd "remove"
+cmd "remove" help="Remove a daemon from pitchfork.toml" {
+    alias "rm"
+}
 cmd "run" help="Runs a one-off daemon" {
+    alias "r"
     flag "-f --force"
     arg "<NAME>" help="Name of the daemon to run"
     arg "[CMD]..." var=true
 }
 cmd "start" help="Starts a daemon from a pitchfork.toml file" {
+    alias "s"
     arg "[NAME]..." help="Name of the daemon(s) in pitchfork.toml to start" var=true
 }
-cmd "status"
-cmd "stop"
+cmd "status" help="Display the status of a daemons" {
+    alias "stat"
+}
+cmd "stop" help="Kill a running daemon" {
+    alias "kill"
+}
 cmd "supervisor" subcommand_required=true {
     cmd "run" help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
@@ -38,10 +57,15 @@ cmd "supervisor" subcommand_required=true {
     cmd "status" help="Gets the status of the pitchfork daemon"
     cmd "stop" help="Stops the internal pitchfork daemon running in the background"
 }
-cmd "usage" help="Generates a usage spec for the CLI" {
+cmd "usage" hide=true help="Generates a usage spec for the CLI" {
     long_help r"Generates a usage spec for the CLI
 
 https://usage.jdx.dev"
 }
-cmd "wait"
+cmd "wait" help="Wait for a daemon to stop, tailing the logs along the way" {
+    alias "w"
+    long_help r"Wait for a daemon to stop, tailing the logs along the way
+
+Exits with the same status code as the daemon"
+}
 

@@ -1,7 +1,8 @@
 use crate::Result;
 
+/// Prevent a daemon from restarting
 #[derive(Debug, clap::Args)]
-#[clap()]
+#[clap(visible_alias = "d", verbatim_doc_comment)]
 pub struct Disable {}
 
 impl Disable {
