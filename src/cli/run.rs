@@ -25,13 +25,37 @@ impl Run {
         }
 
         let ipc = IpcClient::connect().await?;
+
+        if self.force {
+            ipc.send(IpcMessage::Stop(self.name.clone())).await?;
+            loop {
+                match ipc.read().await? {
+                    IpcMessage::DaemonStop { name } => {
+                        info!("stopped daemon {}", name);
+                        break;
+                    }
+                    msg => {
+                        debug!("ignoring message: {:?}", msg);
+                    }
+                }
+            }
+        }
+
         ipc.send(IpcMessage::Run(self.name.clone(), self.cmd.clone()))
             .await?;
         loop {
             match ipc.read().await? {
+                IpcMessage::DaemonAlreadyRunning(id) => {
+                    if self.force {
+                        bail!("failed to stop daemon {}", id);
+                    } else {
+                        info!("daemon {} already running", id);
+                    }
+                    break;
+                }
                 IpcMessage::DaemonStart(daemon) => {
                     info!(
-                        "Started daemon {} with pid {}",
+                        "started daemon {} with pid {}",
                         daemon.name,
                         daemon.pid.unwrap()
                     );

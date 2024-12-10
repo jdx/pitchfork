@@ -1,12 +1,16 @@
 use crate::ipc::server::IpcServer;
 use crate::ipc::IpcMessage;
+use crate::procs::Procs;
 use crate::state_file::{DaemonStatus, StateFile, StateFileDaemon};
 use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use duct::cmd;
+use itertools::Itertools;
+use miette::IntoDiagnostic;
 use notify::RecursiveMode;
 use std::collections::HashMap;
 use std::fs;
+use std::iter::once;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic;
@@ -25,6 +29,7 @@ pub struct Supervisor {
     active_pids: HashMap<u32, String>,
     event_tx: broadcast::Sender<Event>,
     event_rx: broadcast::Receiver<Event>,
+    procs: Procs,
     // ipc: IpcServer,
 }
 
@@ -50,6 +55,7 @@ impl Supervisor {
             active_pids: Default::default(),
             event_tx,
             event_rx,
+            procs: Procs::new(),
             // ipc: IpcServer::new().await?,
         })
     }
@@ -132,7 +138,10 @@ impl Supervisor {
     async fn handle_ipc(&mut self, msg: IpcMessage, send: Sender<IpcMessage>) -> Result<()> {
         match msg {
             IpcMessage::Run(name, cmd) => {
-                self.run(send, &name, cmd)?;
+                self.run(send, &name, cmd).await?;
+            }
+            IpcMessage::Stop(name) => {
+                self.stop(send, &name).await?;
             }
             _ => {
                 debug!("received unknown message: {msg}");
@@ -141,10 +150,22 @@ impl Supervisor {
         Ok(())
     }
 
-    fn run(&mut self, send: Sender<IpcMessage>, name: &str, cmd: Vec<String>) -> Result<()> {
+    async fn run(&mut self, send: Sender<IpcMessage>, name: &str, cmd: Vec<String>) -> Result<()> {
         let tx = self.event_tx.clone();
         let mut event_rx = self.event_tx.subscribe();
         info!("received run message: {name:?} cmd: {cmd:?}");
+        if let Some(daemon) = self.state_file.daemons.get(name) {
+            if let Some(pid) = daemon.pid {
+                warn!("daemon {name} already running with pid {}", pid);
+                if let Err(err) = send
+                    .send(IpcMessage::DaemonAlreadyRunning(name.to_string()))
+                    .await
+                {
+                    warn!("failed to send message: {err:?}");
+                }
+                return Ok(());
+            }
+        }
         task::spawn({
             let name = name.to_string();
             async move {
@@ -173,6 +194,9 @@ impl Supervisor {
                 }
             }
         });
+        let cmd = once("exec".to_string())
+            .chain(cmd.into_iter())
+            .collect_vec();
         let args = vec!["-c".to_string(), cmd.join(" ")];
         let log_path = env::PITCHFORK_LOGS_DIR
             .join(name)
@@ -212,6 +236,7 @@ impl Supervisor {
                         .open(&log_path)
                         .await
                         .unwrap();
+                    dbg!(&log_path);
                     loop {
                         select! {
                             Ok(Some(line)) = stdout.next_line() => {
@@ -243,6 +268,35 @@ impl Supervisor {
             }
         }
 
+        Ok(())
+    }
+
+    async fn stop(&mut self, send: Sender<IpcMessage>, name: &str) -> Result<()> {
+        info!("received stop message: {name}");
+        if let Some(daemon) = self.state_file.daemons.get(name) {
+            if let Some(pid) = daemon.pid {
+                cmd!("kill", "-TERM", pid.to_string())
+                    .run()
+                    .into_diagnostic()?;
+                self.active_pids.remove(&pid);
+                self.state_file
+                    .daemons
+                    .entry(name.to_string())
+                    .and_modify(|d| {
+                        d.pid = None;
+                        d.status = DaemonStatus::Stopped;
+                    });
+                self.state_file.write()?;
+                if let Err(err) = send
+                    .send(IpcMessage::DaemonStop {
+                        name: name.to_string(),
+                    })
+                    .await
+                {
+                    warn!("failed to send message: {err:?}");
+                }
+            }
+        }
         Ok(())
     }
 

@@ -12,7 +12,10 @@ pub enum IpcMessage {
     Connect(String),
     ConnectOK,
     Run(String, Vec<String>),
+    Stop(String),
+    DaemonAlreadyRunning(String),
     DaemonStart(StateFileDaemon),
+    DaemonStop { name: String },
     DaemonFailed { name: String, error: String },
     Response(String),
 }
