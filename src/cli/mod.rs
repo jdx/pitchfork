@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod activate;
 mod add;
+mod cd;
 mod clean;
 mod completion;
 mod disable;
@@ -28,6 +29,7 @@ struct Cli {
 enum Commands {
     Activate(activate::Activate),
     Add(add::Add),
+    Cd(cd::Cd),
     Clean(clean::Clean),
     Completion(completion::Completion),
     Disable(disable::Disable),
@@ -50,6 +52,7 @@ pub async fn run() -> Result<()> {
     match args.command {
         Commands::Activate(activate) => activate.run().await,
         Commands::Add(add) => add.run().await,
+        Commands::Cd(cd) => cd.run().await,
         Commands::Clean(clean) => clean.run().await,
         Commands::Completion(completion) => completion.run().await,
         Commands::Disable(disable) => disable.run().await,

@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{env, Result};
 
 /// Activate pitchfork in your shell session
 ///
@@ -13,6 +13,21 @@ pub struct Activate {
 
 impl Activate {
     pub async fn run(&self) -> Result<()> {
-        unimplemented!();
+        let s = match self.shell.as_str() {
+            "fish" => {
+                format!(
+                    r#"
+function __pitchfork --on-variable PWD
+    {} cd --shell-pid "$fish_pid"
+end
+__pitchfork
+"#,
+                    env::BIN_PATH.display()
+                )
+            }
+            _ => unimplemented!(),
+        };
+        println!("{}", s.trim());
+        Ok(())
     }
 }
