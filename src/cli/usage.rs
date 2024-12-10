@@ -12,8 +12,8 @@ pub struct Usage {}
 impl Usage {
     pub async fn run(&self) -> Result<()> {
         let mut cmd = Cli::command();
-        eprintln!("Generating usage spec...");
         clap_usage::generate(&mut cmd, "pitchfork", &mut std::io::stdout());
+        println!("{}", include_str!("../../pitchfork-extras.usage.kdl"));
         Ok(())
     }
 }

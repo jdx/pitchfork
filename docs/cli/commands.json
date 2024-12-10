@@ -373,13 +373,20 @@
         "full_cmd": [
           "status"
         ],
-        "usage": "status",
+        "usage": "status <ID>",
         "subcommands": {},
-        "args": [],
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "required": true,
+            "hide": false
+          }
+        ],
         "flags": [],
         "mounts": [],
         "hide": false,
-        "help": "Display the status of a daemons",
+        "help": "Display the status of a daemon",
         "name": "status",
         "aliases": [
           "stat"
@@ -571,5 +578,10 @@
     "props": {}
   },
   "usage": "Usage: pitchfork-cli <COMMAND>",
-  "complete": {}
+  "complete": {
+    "id": {
+      "name": "id",
+      "run": "pitchfork ls | awk '{print $1}'"
+    }
+  }
 }

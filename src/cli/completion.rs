@@ -24,7 +24,6 @@ impl Completion {
         )
         .run()
         .into_diagnostic()?;
-
         Ok(())
     }
 }

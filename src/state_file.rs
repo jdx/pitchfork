@@ -1,5 +1,6 @@
-use crate::Result;
+use crate::{env, Result};
 use miette::IntoDiagnostic;
+use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,14 @@ impl StateFile {
             daemons: Default::default(),
             path,
         }
+    }
+
+    pub fn get() -> &'static Self {
+        static STATE_FILE: Lazy<StateFile> = Lazy::new(|| {
+            let path = &*env::PITCHFORK_STATE_FILE;
+            StateFile::read(path).expect("Error reading state file")
+        });
+        &STATE_FILE
     }
 
     pub fn read<P: AsRef<Path>>(path: P) -> Result<Self> {

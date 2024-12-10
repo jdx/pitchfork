@@ -59,8 +59,9 @@ cmd "start" help="Starts a daemon from a pitchfork.toml file" {
     alias "s"
     arg "[NAME]..." help="Name of the daemon(s) in pitchfork.toml to start" var=true
 }
-cmd "status" help="Display the status of a daemons" {
+cmd "status" help="Display the status of a daemon" {
     alias "stat"
+    arg "<ID>"
 }
 cmd "stop" help="Kill a running daemon" {
     alias "kill"
@@ -86,4 +87,6 @@ cmd "wait" help="Wait for a daemon to stop, tailing the logs along the way" {
 
 Exits with the same status code as the daemon"
 }
+
+complete "id" run="pitchfork ls | awk '{print $1}'"
 
