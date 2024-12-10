@@ -38,6 +38,7 @@ cmd "enable" help="Allow a daemon to start" {
 }
 cmd "list" help="List all daemons" {
     alias "ls"
+    flag "--hide-header" help="Show header"
 }
 cmd "logs" help="Displays logs for daemon(s)" {
     alias "l"

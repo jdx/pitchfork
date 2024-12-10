@@ -205,10 +205,23 @@
         "full_cmd": [
           "list"
         ],
-        "usage": "list",
+        "usage": "list [--hide-header]",
         "subcommands": {},
         "args": [],
-        "flags": [],
+        "flags": [
+          {
+            "name": "hide-header",
+            "usage": "--hide-header",
+            "help": "Show header",
+            "help_first_line": "Show header",
+            "short": [],
+            "long": [
+              "hide-header"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "List all daemons",

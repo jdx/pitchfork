@@ -14,7 +14,7 @@
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork disable`](/cli/disable.md)
 - [`pitchfork enable`](/cli/enable.md)
-- [`pitchfork list`](/cli/list.md)
+- [`pitchfork list [--hide-header]`](/cli/list.md)
 - [`pitchfork logs [-n <N>] [-t --tail] [NAME]...`](/cli/logs.md)
 - [`pitchfork run [-f --force] <NAME> [CMD]...`](/cli/run.md)
 - [`pitchfork start [NAME]...`](/cli/start.md)
