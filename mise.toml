@@ -34,6 +34,7 @@ run = [
 bun = "latest"
 
 [tasks.pre-commit]
+depends = ["render", "lint-fix"]
 run = [
   "cargo fmt -- $(git diff --name-only --cached | grep '\\.rs$')",
   "git -c advice.addEmptyPathspec=false add $(git diff --name-only --cached | grep '\\.rs$')",

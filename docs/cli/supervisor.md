@@ -2,6 +2,8 @@
 
 - **Usage**: `pitchfork supervisor <SUBCOMMAND>`
 
+Start, stop, and check the status of the pitchfork supervisor daemon
+
 ## Subcommands
 
 - [`pitchfork supervisor run [-f --force]`](/cli/supervisor/run.md)

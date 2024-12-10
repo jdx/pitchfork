@@ -7,14 +7,15 @@
 ## Subcommands
 
 - [`pitchfork activate <SHELL>`](/cli/activate.md)
-- [`pitchfork add`](/cli/add.md)
 - [`pitchfork clean`](/cli/clean.md)
+- [`pitchfork config <SUBCOMMAND>`](/cli/config.md)
+- [`pitchfork config add`](/cli/config/add.md)
+- [`pitchfork config remove`](/cli/config/remove.md)
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork disable`](/cli/disable.md)
 - [`pitchfork enable`](/cli/enable.md)
 - [`pitchfork list`](/cli/list.md)
 - [`pitchfork logs [-n <N>] [-t --tail] [NAME]...`](/cli/logs.md)
-- [`pitchfork remove`](/cli/remove.md)
 - [`pitchfork run [-f --force] <NAME> [CMD]...`](/cli/run.md)
 - [`pitchfork start [NAME]...`](/cli/start.md)
 - [`pitchfork status`](/cli/status.md)

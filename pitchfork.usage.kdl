@@ -7,13 +7,23 @@ cmd "activate" help="Activate pitchfork in your shell session" {
 Necessary for autostart/stop when entering/exiting projects with pitchfork.toml files"
     arg "<SHELL>" help="The shell to generate source for"
 }
-cmd "add" help="Add a new daemon to pitchfork.toml" {
-    alias "a"
+cmd "cd" hide=true {
+    flag "--shell-pid" required=true {
+        arg "<SHELL_PID>"
+    }
 }
 cmd "clean" help="Removes stopped/failed daemons from `pitchfork list`" {
     alias "c"
 }
-cmd "completion" {
+cmd "config" subcommand_required=true help="manage/edit pitchfork.toml files" {
+    cmd "add" help="Add a new daemon to pitchfork.toml" {
+        alias "a"
+    }
+    cmd "remove" help="Remove a daemon from pitchfork.toml" {
+        alias "rm"
+    }
+}
+cmd "completion" help="Generates shell completion scripts" {
     arg "<SHELL>" help="The shell to generate completion for"
 }
 cmd "disable" help="Prevent a daemon from restarting" {
@@ -34,9 +44,6 @@ cmd "logs" help="Displays logs for daemon(s)" {
     flag "-t --tail" help="Show logs in real-time"
     arg "[NAME]..." help="Show only logs for the specified daemon(s)" var=true
 }
-cmd "remove" help="Remove a daemon from pitchfork.toml" {
-    alias "rm"
-}
 cmd "run" help="Runs a one-off daemon" {
     alias "r"
     flag "-f --force"
@@ -53,7 +60,7 @@ cmd "status" help="Display the status of a daemons" {
 cmd "stop" help="Kill a running daemon" {
     alias "kill"
 }
-cmd "supervisor" subcommand_required=true {
+cmd "supervisor" subcommand_required=true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
     cmd "run" help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
     }

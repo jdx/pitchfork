@@ -2,6 +2,8 @@
 
 - **Usage**: `pitchfork completion <SHELL>`
 
+Generates shell completion scripts
+
 ## Arguments
 
 ### `<SHELL>`
