@@ -13,7 +13,6 @@ pub struct StateFile {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateFileDaemon {
-    #[serde(skip)]
     pub name: String,
     pub pid: u32,
     pub status: DaemonStatus,
