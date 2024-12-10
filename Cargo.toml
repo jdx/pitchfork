@@ -4,6 +4,10 @@ description = "Daemons with DX"
 license = "MIT"
 version = "0.1.0"
 edition = "2021"
+include = [
+    "src/**/*.rs",
+    "assets/**/*",
+]
 
 [[bin]]
 name = "pitchfork"

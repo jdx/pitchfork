@@ -13,18 +13,38 @@ pub struct Activate {
 
 impl Activate {
     pub async fn run(&self) -> Result<()> {
+        let pitchfork = env::BIN_PATH.to_string_lossy().to_string();
         let s = match self.shell.as_str() {
-            "fish" => {
-                format!(
-                    r#"
+            "bash" => format!(
+                r#"
+__pitchfork() {{
+    {pitchfork} cd --shell-pid $$
+}}
+{}
+{}
+chpwd_functions+=(__pitchfork)
+__pitchfork
+"#,
+                include_str!("../../assets/bash_zsh_support/chpwd/function.sh"),
+                include_str!("../../assets/bash_zsh_support/chpwd/load.sh")
+            ),
+            "zsh" => format!(
+                r#"
+__pitchfork() {{
+    {pitchfork} cd --shell-pid $$
+}}
+chpwd_functions+=(__pitchfork)
+__pitchfork
+"#
+            ),
+            "fish" => format!(
+                r#"
 function __pitchfork --on-variable PWD
-    {} cd --shell-pid "$fish_pid"
+    {pitchfork} cd --shell-pid "$fish_pid"
 end
 __pitchfork
 "#,
-                    env::BIN_PATH.display()
-                )
-            }
+            ),
             _ => unimplemented!(),
         };
         println!("{}", s.trim());
