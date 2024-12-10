@@ -15,7 +15,11 @@ cmd "cd" hide=true {
 cmd "clean" help="Removes stopped/failed daemons from `pitchfork list`" {
     alias "c"
 }
-cmd "config" subcommand_required=true help="manage/edit pitchfork.toml files" {
+cmd "config" help="manage/edit pitchfork.toml files" {
+    alias "cfg"
+    long_help r"manage/edit pitchfork.toml files
+
+without a subcommand, lists all pitchfork.toml files from the current directory"
     cmd "add" help="Add a new daemon to pitchfork.toml" {
         alias "a"
     }

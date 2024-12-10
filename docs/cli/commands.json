@@ -131,10 +131,12 @@
         "flags": [],
         "mounts": [],
         "hide": false,
-        "subcommand_required": true,
         "help": "manage/edit pitchfork.toml files",
+        "help_long": "manage/edit pitchfork.toml files\n\nwithout a subcommand, lists all pitchfork.toml files from the current directory",
         "name": "config",
-        "aliases": [],
+        "aliases": [
+          "cfg"
+        ],
         "hidden_aliases": [],
         "examples": []
       },

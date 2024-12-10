@@ -3,6 +3,7 @@ pub use std::env::*;
 use std::path::PathBuf;
 
 pub static BIN_PATH: Lazy<PathBuf> = Lazy::new(|| current_exe().unwrap().canonicalize().unwrap());
+pub static CWD: Lazy<PathBuf> = Lazy::new(|| current_dir().unwrap_or_default());
 
 pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| dirs::home_dir().unwrap_or_default());
 pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {

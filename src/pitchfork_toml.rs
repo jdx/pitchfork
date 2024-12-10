@@ -1,5 +1,5 @@
 use crate::daemon::Daemon;
-use crate::Result;
+use crate::{env, Result};
 use indexmap::IndexMap;
 use miette::IntoDiagnostic;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,12 @@ pub struct PitchforkToml {
     pub daemons: IndexMap<String, Daemon>,
     #[serde(skip)]
     pub path: PathBuf,
+}
+
+impl PitchforkToml {
+    pub fn list_paths() -> Vec<PathBuf> {
+        xx::file::find_up_all(&env::CWD, &["pitchfork.toml"])
+    }
 }
 
 impl PitchforkToml {
