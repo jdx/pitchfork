@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StateFile {
     pub daemons: BTreeMap<String, StateFileDaemon>,
     #[serde(skip)]
