@@ -1,6 +1,12 @@
 name "pitchfork-cli"
 bin "pitchfork"
 usage "Usage: pitchfork-cli <COMMAND>"
+cmd "activate" help="Activate pitchfork in your shell session" {
+    long_help r"Activate pitchfork in your shell session
+
+Necessary for autostart/stop when entering/exiting projects with pitchfork.toml files"
+    arg "<SHELL>" help="The shell to generate source for"
+}
 cmd "add" help="Add a new daemon to pitchfork.toml" {
     alias "a"
 }

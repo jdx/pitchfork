@@ -6,6 +6,7 @@
 
 ## Subcommands
 
+- [`pitchfork activate <SHELL>`](/cli/activate.md)
 - [`pitchfork add`](/cli/add.md)
 - [`pitchfork clean`](/cli/clean.md)
 - [`pitchfork completion <SHELL>`](/cli/completion.md)

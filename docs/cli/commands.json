@@ -5,6 +5,32 @@
     "full_cmd": [],
     "usage": "<SUBCOMMAND>",
     "subcommands": {
+      "activate": {
+        "full_cmd": [
+          "activate"
+        ],
+        "usage": "activate <SHELL>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "SHELL",
+            "usage": "<SHELL>",
+            "help": "The shell to generate source for",
+            "help_first_line": "The shell to generate source for",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Activate pitchfork in your shell session",
+        "help_long": "Activate pitchfork in your shell session\n\nNecessary for autostart/stop when entering/exiting projects with pitchfork.toml files",
+        "name": "activate",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "add": {
         "full_cmd": [
           "add"
