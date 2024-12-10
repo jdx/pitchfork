@@ -68,7 +68,7 @@ pub fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
     if let Some(d) = sf.daemons.get("pitchfork") {
         if let Some(pid) = d.pid {
-            if let Some(proc) = Procs::new().get_process(pid) {
+            if Procs::new().get_process(pid).is_some() {
                 return Ok(());
             }
         }
