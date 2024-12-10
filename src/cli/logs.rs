@@ -121,7 +121,7 @@ fn get_log_file_infos(names: &[String]) -> Result<BTreeMap<String, LogFile>> {
         .collect::<Result<BTreeMap<_, _>>>()
 }
 
-pub async fn tail_logs(names: &Vec<String>) -> Result<()> {
+pub async fn tail_logs(names: &[String]) -> Result<()> {
     let mut log_files = get_log_file_infos(names)?;
     let mut wf = WatchFiles::new(Duration::from_millis(10))?;
 

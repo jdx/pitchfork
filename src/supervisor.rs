@@ -89,7 +89,7 @@ impl Supervisor {
             }
             Event::FileChange(paths) => {
                 debug!("file change: {:?}", paths);
-                if paths.contains(&*env::BIN_PATH) {
+                if paths.contains(&*env::BIN_PATH) && env::BIN_PATH.exists() {
                     info!("pitchfork cli updated, restarting");
                     self.restart();
                 }
