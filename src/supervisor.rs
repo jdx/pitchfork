@@ -257,7 +257,9 @@ impl Supervisor {
     async fn stop(&self, id: &str) -> Result<IpcResponse> {
         info!("stopping daemon: {id}");
         if let Some(daemon) = self.get_daemon(id).await {
+            trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
+                trace!("killing pid: {pid}");
                 PROCS.refresh_processes();
                 if PROCS.is_running(pid) {
                     self.upsert_daemon(UpsertDaemonOpts {
@@ -267,9 +269,15 @@ impl Supervisor {
                     })
                     .await?;
                     PROCS.kill_async(pid).await?;
+                } else {
+                    debug!("pid {pid} not running");
                 }
                 return Ok(IpcResponse::Ok);
+            } else {
+                debug!("daemon {id} not running");
             }
+        } else {
+            debug!("daemon {id} not found");
         }
         Ok(IpcResponse::DaemonAlreadyStopped)
     }

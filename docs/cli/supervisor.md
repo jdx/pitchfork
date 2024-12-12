@@ -1,6 +1,7 @@
 # `pitchfork supervisor`
 
 - **Usage**: `pitchfork supervisor <SUBCOMMAND>`
+- **Aliases**: `sup`
 
 Start, stop, and check the status of the pitchfork supervisor daemon
 

@@ -8,6 +8,7 @@ mod stop;
 
 /// Start, stop, and check the status of the pitchfork supervisor daemon
 #[derive(Debug, clap::Args)]
+#[clap(visible_alias = "sup", verbatim_doc_comment)]
 pub struct Supervisor {
     #[clap(subcommand)]
     command: Commands,

@@ -51,6 +51,7 @@ impl Procs {
             .unwrap()
             .process(sysinfo::Pid::from_u32(pid))
         {
+            debug!("killing process {}", pid);
             #[cfg(windows)]
             process.kill();
             #[cfg(unix)]

@@ -83,6 +83,7 @@ cmd "stop" help="Sends a stop signal to a daemon" {
     arg "[ID]..." help="The name of the daemon to stop" var=true
 }
 cmd "supervisor" subcommand_required=true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
+    alias "sup"
     cmd "run" help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
     }

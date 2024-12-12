@@ -663,7 +663,9 @@
         "subcommand_required": true,
         "help": "Start, stop, and check the status of the pitchfork supervisor daemon",
         "name": "supervisor",
-        "aliases": [],
+        "aliases": [
+          "sup"
+        ],
         "hidden_aliases": [],
         "examples": []
       },
