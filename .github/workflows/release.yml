@@ -49,6 +49,6 @@ jobs:
           shared-key: rust-${{ matrix.target }}
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          bin: wait-for-gh-rate-limit
+          bin: pitchfork
           target: ${{ matrix.target }}
           token: ${{ secrets.GITHUB_TOKEN }}
