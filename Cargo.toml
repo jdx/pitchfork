@@ -2,7 +2,7 @@
 name = "pitchfork-cli"
 description = "Daemons with DX"
 license = "MIT"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 homepage = "https://pitchfork.jdx.dev"
 repository = "https://github.com/jdx/pitchfork"
