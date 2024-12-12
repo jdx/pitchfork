@@ -1,0 +1,41 @@
+[env]
+_.path = "target/debug"
+
+[tasks.ci]
+run = [
+  "cargo build",
+  "cargo test",
+]
+
+[tasks.docs]
+dir = "docs"
+run = "bun i && exec bun run docs:dev"
+
+[tasks.lint-fix]
+run = [
+  "cargo fmt --all",
+  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features -- -D warnings",
+]
+
+[tasks.build]
+run = "cargo build"
+
+[tasks.render]
+depends = ["build"]
+run = [
+  "pitchfork usage > pitchfork.usage.kdl",
+  "rm -rf docs/cli && mkdir -p docs/cli",
+  "usage g markdown -mf pitchfork.usage.kdl --out-dir docs/cli --url-prefix /cli",
+  "usage g json -f pitchfork.usage.kdl > docs/cli/commands.json",
+  "git add pitchfork.usage.kdl docs",
+]
+
+[tools]
+bun = "latest"
+
+[tasks.pre-commit]
+depends = ["render", "lint-fix"]
+run = [
+  "cargo fmt -- $(git diff --name-only --cached | grep '\\.rs$')",
+  "git -c advice.addEmptyPathspec=false add $(git diff --name-only --cached | grep '\\.rs$')",
+]

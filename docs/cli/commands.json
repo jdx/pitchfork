@@ -1,0 +1,735 @@
+{
+  "name": "pitchfork-cli",
+  "bin": "pitchfork",
+  "cmd": {
+    "full_cmd": [],
+    "usage": "<SUBCOMMAND>",
+    "subcommands": {
+      "activate": {
+        "full_cmd": [
+          "activate"
+        ],
+        "usage": "activate <SHELL>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "SHELL",
+            "usage": "<SHELL>",
+            "help": "The shell to generate source for",
+            "help_first_line": "The shell to generate source for",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Activate pitchfork in your shell session",
+        "help_long": "Activate pitchfork in your shell session\n\nNecessary for autostart/stop when entering/exiting projects with pitchfork.toml files",
+        "name": "activate",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "cd": {
+        "full_cmd": [
+          "cd"
+        ],
+        "usage": "cd <--shell-pid <SHELL_PID>>",
+        "subcommands": {},
+        "args": [],
+        "flags": [
+          {
+            "name": "shell-pid",
+            "usage": "--shell-pid <SHELL_PID>",
+            "short": [],
+            "long": [
+              "shell-pid"
+            ],
+            "required": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "SHELL_PID",
+              "usage": "<SHELL_PID>",
+              "required": true,
+              "hide": false
+            }
+          }
+        ],
+        "mounts": [],
+        "hide": true,
+        "name": "cd",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "clean": {
+        "full_cmd": [
+          "clean"
+        ],
+        "usage": "clean",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Removes stopped/failed daemons from `pitchfork list`",
+        "name": "clean",
+        "aliases": [
+          "c"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "config": {
+        "full_cmd": [
+          "config"
+        ],
+        "usage": "config <SUBCOMMAND>",
+        "subcommands": {
+          "add": {
+            "full_cmd": [
+              "config",
+              "add"
+            ],
+            "usage": "config add [--autostart] [--autostop] <ID> [ARGS]...",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "ID",
+                "usage": "<ID>",
+                "help": "ID of the daemon to add",
+                "help_first_line": "ID of the daemon to add",
+                "required": true,
+                "hide": false
+              },
+              {
+                "name": "ARGS",
+                "usage": "[ARGS]...",
+                "help": "Arguments to pass to the daemon",
+                "help_first_line": "Arguments to pass to the daemon",
+                "required": false,
+                "var": true,
+                "hide": false
+              }
+            ],
+            "flags": [
+              {
+                "name": "autostart",
+                "usage": "--autostart",
+                "help": "Autostart the daemon when entering the directory",
+                "help_first_line": "Autostart the daemon when entering the directory",
+                "short": [],
+                "long": [
+                  "autostart"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "autostop",
+                "usage": "--autostop",
+                "help": "Autostop the daemon when leaving the directory",
+                "help_first_line": "Autostop the daemon when leaving the directory",
+                "short": [],
+                "long": [
+                  "autostop"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Add a new daemon to ./pitchfork.toml",
+            "name": "add",
+            "aliases": [
+              "a"
+            ],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "remove": {
+            "full_cmd": [
+              "config",
+              "remove"
+            ],
+            "usage": "config remove <ID>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "ID",
+                "usage": "<ID>",
+                "help": "The ID of the daemon to remove",
+                "help_first_line": "The ID of the daemon to remove",
+                "required": true,
+                "hide": false
+              }
+            ],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Remove a daemon from pitchfork.toml",
+            "name": "remove",
+            "aliases": [
+              "rm"
+            ],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "manage/edit pitchfork.toml files",
+        "help_long": "manage/edit pitchfork.toml files\n\nwithout a subcommand, lists all pitchfork.toml files from the current directory",
+        "name": "config",
+        "aliases": [
+          "cfg"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "completion": {
+        "full_cmd": [
+          "completion"
+        ],
+        "usage": "completion <SHELL>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "SHELL",
+            "usage": "<SHELL>",
+            "help": "The shell to generate completion for",
+            "help_first_line": "The shell to generate completion for",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Generates shell completion scripts",
+        "name": "completion",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "disable": {
+        "full_cmd": [
+          "disable"
+        ],
+        "usage": "disable <ID>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "Name of the daemon to disable",
+            "help_first_line": "Name of the daemon to disable",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Prevent a daemon from restarting",
+        "name": "disable",
+        "aliases": [
+          "d"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "enable": {
+        "full_cmd": [
+          "enable"
+        ],
+        "usage": "enable <ID>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "Name of the daemon to enable",
+            "help_first_line": "Name of the daemon to enable",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Allow a daemon to start",
+        "name": "enable",
+        "aliases": [
+          "e"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "list": {
+        "full_cmd": [
+          "list"
+        ],
+        "usage": "list [--hide-header]",
+        "subcommands": {},
+        "args": [],
+        "flags": [
+          {
+            "name": "hide-header",
+            "usage": "--hide-header",
+            "help": "Show header",
+            "help_first_line": "Show header",
+            "short": [],
+            "long": [
+              "hide-header"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "List all daemons",
+        "name": "list",
+        "aliases": [
+          "ls"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "logs": {
+        "full_cmd": [
+          "logs"
+        ],
+        "usage": "logs [FLAGS] [ID]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "[ID]...",
+            "help": "Show only logs for the specified daemon(s)",
+            "help_first_line": "Show only logs for the specified daemon(s)",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "clear",
+            "usage": "-c --clear",
+            "help": "Delete logs",
+            "help_first_line": "Delete logs",
+            "short": [
+              "c"
+            ],
+            "long": [
+              "clear"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "n",
+            "usage": "-n <N>",
+            "help": "Show N lines of logs",
+            "help_long": "Show N lines of logs\n\nSet to 0 to show all logs",
+            "help_first_line": "Show N lines of logs",
+            "short": [
+              "n"
+            ],
+            "long": [],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "N",
+              "usage": "<N>",
+              "required": true,
+              "hide": false
+            }
+          },
+          {
+            "name": "tail",
+            "usage": "-t --tail",
+            "help": "Show logs in real-time",
+            "help_first_line": "Show logs in real-time",
+            "short": [
+              "t"
+            ],
+            "long": [
+              "tail"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Displays logs for daemon(s)",
+        "name": "logs",
+        "aliases": [
+          "l"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "run": {
+        "full_cmd": [
+          "run"
+        ],
+        "usage": "run [-f --force] <ID> [RUN]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "Name of the daemon to run",
+            "help_first_line": "Name of the daemon to run",
+            "required": true,
+            "hide": false
+          },
+          {
+            "name": "RUN",
+            "usage": "[RUN]...",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "force",
+            "usage": "-f --force",
+            "short": [
+              "f"
+            ],
+            "long": [
+              "force"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Runs a one-off daemon",
+        "name": "run",
+        "aliases": [
+          "r"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "start": {
+        "full_cmd": [
+          "start"
+        ],
+        "usage": "start [-a --all] [-f --force] [ID]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "[ID]...",
+            "help": "ID of the daemon(s) in pitchfork.toml to start",
+            "help_first_line": "ID of the daemon(s) in pitchfork.toml to start",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "all",
+            "usage": "-a --all",
+            "help": "Start all daemons in all pitchfork.tomls",
+            "help_first_line": "Start all daemons in all pitchfork.tomls",
+            "short": [
+              "a"
+            ],
+            "long": [
+              "all"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "shell-pid",
+            "usage": "--shell-pid <SHELL_PID>",
+            "short": [],
+            "long": [
+              "shell-pid"
+            ],
+            "hide": true,
+            "global": false,
+            "arg": {
+              "name": "SHELL_PID",
+              "usage": "<SHELL_PID>",
+              "required": true,
+              "hide": false
+            }
+          },
+          {
+            "name": "force",
+            "usage": "-f --force",
+            "help": "Stop the daemon if it is already running",
+            "help_first_line": "Stop the daemon if it is already running",
+            "short": [
+              "f"
+            ],
+            "long": [
+              "force"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Starts a daemon from a pitchfork.toml file",
+        "name": "start",
+        "aliases": [
+          "s"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "status": {
+        "full_cmd": [
+          "status"
+        ],
+        "usage": "status <ID>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Display the status of a daemon",
+        "name": "status",
+        "aliases": [
+          "stat"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "stop": {
+        "full_cmd": [
+          "stop"
+        ],
+        "usage": "stop [ID]...",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "[ID]...",
+            "help": "The name of the daemon to stop",
+            "help_first_line": "The name of the daemon to stop",
+            "required": false,
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Sends a stop signal to a daemon",
+        "name": "stop",
+        "aliases": [
+          "kill"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "supervisor": {
+        "full_cmd": [
+          "supervisor"
+        ],
+        "usage": "supervisor <SUBCOMMAND>",
+        "subcommands": {
+          "run": {
+            "full_cmd": [
+              "supervisor",
+              "run"
+            ],
+            "usage": "supervisor run [-f --force]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "force",
+                "usage": "-f --force",
+                "help": "kill existing daemon",
+                "help_first_line": "kill existing daemon",
+                "short": [
+                  "f"
+                ],
+                "long": [
+                  "force"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Runs the internal pitchfork daemon in the foreground",
+            "name": "run",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "start": {
+            "full_cmd": [
+              "supervisor",
+              "start"
+            ],
+            "usage": "supervisor start [-f --force]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "force",
+                "usage": "-f --force",
+                "help": "kill existing daemon",
+                "help_first_line": "kill existing daemon",
+                "short": [
+                  "f"
+                ],
+                "long": [
+                  "force"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Starts the internal pitchfork daemon in the background",
+            "name": "start",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "status": {
+            "full_cmd": [
+              "supervisor",
+              "status"
+            ],
+            "usage": "supervisor status",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Gets the status of the pitchfork daemon",
+            "name": "status",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "stop": {
+            "full_cmd": [
+              "supervisor",
+              "stop"
+            ],
+            "usage": "supervisor stop",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Stops the internal pitchfork daemon running in the background",
+            "name": "stop",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "help": "Start, stop, and check the status of the pitchfork supervisor daemon",
+        "name": "supervisor",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "usage": {
+        "full_cmd": [
+          "usage"
+        ],
+        "usage": "usage",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": true,
+        "help": "Generates a usage spec for the CLI",
+        "help_long": "Generates a usage spec for the CLI\n\nhttps://usage.jdx.dev",
+        "name": "usage",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "wait": {
+        "full_cmd": [
+          "wait"
+        ],
+        "usage": "wait <ID>",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "<ID>",
+            "help": "The name of the daemon to wait for",
+            "help_first_line": "The name of the daemon to wait for",
+            "required": true,
+            "hide": false
+          }
+        ],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Wait for a daemon to stop, tailing the logs along the way",
+        "help_long": "Wait for a daemon to stop, tailing the logs along the way\n\nExits with the same status code as the daemon",
+        "name": "wait",
+        "aliases": [
+          "w"
+        ],
+        "hidden_aliases": [],
+        "examples": []
+      }
+    },
+    "args": [],
+    "flags": [],
+    "mounts": [],
+    "hide": false,
+    "name": "pitchfork",
+    "aliases": [],
+    "hidden_aliases": [],
+    "examples": []
+  },
+  "config": {
+    "props": {}
+  },
+  "usage": "Usage: pitchfork-cli <COMMAND>",
+  "complete": {
+    "id": {
+      "name": "id",
+      "run": "pitchfork ls | awk '{print $1}'"
+    }
+  }
+}

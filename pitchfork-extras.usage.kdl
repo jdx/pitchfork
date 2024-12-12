@@ -1,0 +1,1 @@
+complete "id" run="pitchfork ls | awk '{print $1}'"
