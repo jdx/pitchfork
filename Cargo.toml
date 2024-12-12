@@ -10,6 +10,7 @@ documentation = "https://pitchfork.jdx.dev"
 include = [
     "src/**/*.rs",
     "assets/**/*",
+    "/pitchfork-extras.usage.kdl",
 ]
 
 [[bin]]
