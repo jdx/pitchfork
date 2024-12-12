@@ -22,6 +22,14 @@ Pitchfork is a CLI for launching daemons with a focus on developer experience.
 
 Here's some common ways to use pitchfork.
 
+## Installing pitchfork
+
+[mise-en-place](https://mise.jdx.dev) is the recommended way to install pitchfork.
+
+- mise-en-place – `mise use -g pitchfork`
+- cargo – `cargo install pitchfork-cli`
+- github - <https://github.com/jdx/pitchfork/releases>
+
 ### Launching a one-off daemon
 
 This workflow is an alternative to something like shell jobs—`mytask &`. This just runs a process in
