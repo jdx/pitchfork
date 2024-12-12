@@ -1,6 +1,6 @@
 use crate::daemon::RunOptions;
 use crate::ipc::client::IpcClient;
-use crate::Result;
+use crate::{env, Result};
 use miette::bail;
 
 /// Runs a one-off daemon
@@ -29,7 +29,7 @@ impl Run {
             cmd: self.run.clone(),
             shell_pid: None,
             force: self.force,
-            dir: None,
+            dir: env::CWD.clone(),
             autostop: false,
         })
         .await?;

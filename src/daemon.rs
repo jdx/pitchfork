@@ -19,7 +19,7 @@ pub struct RunOptions {
     pub cmd: Vec<String>,
     pub force: bool,
     pub shell_pid: Option<u32>,
-    pub dir: Option<PathBuf>,
+    pub dir: PathBuf,
     pub autostop: bool,
 }
 

@@ -64,7 +64,10 @@ impl Start {
                     dir: daemon
                         .path
                         .as_ref()
-                        .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+                        .unwrap()
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_default(),
                 })
                 .await?;
             } else {

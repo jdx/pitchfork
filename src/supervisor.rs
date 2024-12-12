@@ -154,6 +154,7 @@ impl Supervisor {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .current_dir(&opts.dir)
             .spawn()
             .into_diagnostic()?;
         let pid = child.id().unwrap();
@@ -164,7 +165,7 @@ impl Supervisor {
                 pid: Some(pid),
                 status: DaemonStatus::Running,
                 shell_pid: opts.shell_pid,
-                dir: opts.dir,
+                dir: Some(opts.dir),
                 autostop: opts.autostop,
             })
             .await?;
