@@ -2,7 +2,9 @@ use crate::Result;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
-use sysinfo::{ProcessesToUpdate, Signal};
+use sysinfo::ProcessesToUpdate;
+#[cfg(unix)]
+use sysinfo::Signal;
 
 pub struct Procs {
     system: Mutex<sysinfo::System>,

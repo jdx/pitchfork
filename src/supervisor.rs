@@ -304,9 +304,9 @@ impl Supervisor {
     #[cfg(windows)]
     fn signals(&self) -> Result<()> {
         tokio::spawn(async move {
-            let mut stream = signal::ctrl_c().unwrap();
+            static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
             loop {
-                stream.recv().await;
+                signal::ctrl_c().await.unwrap();
                 if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
                     exit(1);
                 } else {

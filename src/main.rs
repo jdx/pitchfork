@@ -16,15 +16,18 @@ mod watch_files;
 
 pub use miette::Result;
 use tokio::signal;
+#[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     logger::init();
+    #[cfg(unix)]
     handle_epipe();
     cli::run().await
 }
 
+#[cfg(unix)]
 fn handle_epipe() {
     let mut pipe_stream = signal::unix::signal(SignalKind::pipe()).unwrap();
     tokio::spawn(async move {
