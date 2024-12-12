@@ -4,6 +4,9 @@ description = "Daemons with DX"
 license = "MIT"
 version = "0.1.0"
 edition = "2021"
+homepage = "https://pitchfork.jdx.dev"
+repository = "https://github.com/jdx/pitchfork"
+documentation = "https://pitchfork.jdx.dev"
 include = [
     "src/**/*.rs",
     "assets/**/*",
