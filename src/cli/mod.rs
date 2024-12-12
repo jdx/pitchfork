@@ -19,6 +19,7 @@ mod usage;
 mod wait;
 
 #[derive(Debug, clap::Parser)]
+#[clap(name = "pitchfork", version = env!("CARGO_PKG_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Cli {
     #[clap(subcommand)]
     command: Commands,

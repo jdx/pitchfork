@@ -1,6 +1,8 @@
-name "pitchfork-cli"
+name "pitchfork"
 bin "pitchfork"
-usage "Usage: pitchfork-cli <COMMAND>"
+version "0.1.2"
+about "Daemons with DX"
+usage "Usage: pitchfork <COMMAND>"
 cmd "activate" help="Activate pitchfork in your shell session" {
     long_help r"Activate pitchfork in your shell session
 

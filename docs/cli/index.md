@@ -2,6 +2,8 @@
 
 **Usage**: `pitchfork <SUBCOMMAND>`
 
+**Version**: 0.1.2
+
 - **Usage**: `pitchfork <SUBCOMMAND>`
 
 ## Subcommands

@@ -1,5 +1,5 @@
 {
-  "name": "pitchfork-cli",
+  "name": "pitchfork",
   "bin": "pitchfork",
   "cmd": {
     "full_cmd": [],
@@ -725,11 +725,13 @@
   "config": {
     "props": {}
   },
-  "usage": "Usage: pitchfork-cli <COMMAND>",
+  "version": "0.1.2",
+  "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
       "name": "id",
       "run": "pitchfork ls | awk '{print $1}'"
     }
-  }
+  },
+  "about": "Daemons with DX"
 }
