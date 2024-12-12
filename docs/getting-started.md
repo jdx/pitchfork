@@ -95,7 +95,8 @@ auto = ["start", "stop"]
 
 ## Logs
 
-Logs for daemons started with pitchfork can be viewed with [`pitchfork logs`](/cli/logs).
+Logs for daemons started with pitchfork can be viewed with [`pitchfork logs`](/cli/logs) or by viewing
+the files directly in `~/.local/state/pitchfork/logs`.
 
 ```bash
 $ pitchfork logs api
