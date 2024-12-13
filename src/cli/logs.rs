@@ -54,6 +54,7 @@ impl Logs {
 
     fn print_existing_logs(&self) -> Result<()> {
         let log_files = get_log_file_infos(&self.id)?;
+        trace!("log files for: {}", log_files.keys().join(", "));
         let log_lines = log_files
             .iter()
             .flat_map(|(name, lf)| {
@@ -77,7 +78,7 @@ impl Logs {
         let log_lines = if self.n == 0 {
             log_lines.collect_vec()
         } else {
-            log_lines.take(self.n).collect_vec()
+            log_lines.rev().take(self.n).rev().collect_vec()
         };
 
         for (date, id, msg) in log_lines {

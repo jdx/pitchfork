@@ -273,6 +273,11 @@ impl Supervisor {
                     })
                     .await?;
                     PROCS.kill_async(pid).await?;
+                    PROCS.refresh_processes();
+                    for pid in PROCS.all_children(pid) {
+                        debug!("killing child pid: {pid}");
+                        PROCS.kill_async(pid).await?;
+                    }
                 } else {
                     debug!("pid {pid} not running");
                 }
