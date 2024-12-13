@@ -3,6 +3,7 @@ use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto};
 use crate::{env, Result};
 use duct::cmd;
 use itertools::Itertools;
+use log::LevelFilter;
 use miette::IntoDiagnostic;
 use std::collections::HashSet;
 
@@ -15,7 +16,7 @@ pub struct Cd {
 
 impl Cd {
     pub async fn run(&self) -> Result<()> {
-        if let Ok(ipc) = IpcClient::connect(false).await {
+        if let Ok(ipc) = IpcClient::connect(true).await {
             ipc.update_shell_dir(self.shell_pid, env::CWD.clone())
                 .await?;
 
@@ -49,6 +50,16 @@ impl Cd {
             }
             if args.len() > 3 {
                 cmd(&*env::PITCHFORK_BIN, args).run().into_diagnostic()?;
+            }
+            for (level, msg) in ipc.get_notifications().await? {
+                match level {
+                    LevelFilter::Trace => trace!("{}", msg),
+                    LevelFilter::Debug => debug!("{}", msg),
+                    LevelFilter::Info => info!("{}", msg),
+                    LevelFilter::Warn => warn!("{}", msg),
+                    LevelFilter::Error => error!("{}", msg),
+                    _ => {}
+                }
             }
         } else {
             debug!("No daemon running");

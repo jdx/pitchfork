@@ -24,7 +24,7 @@ pub struct Logs {
     /// Show N lines of logs
     ///
     /// Set to 0 to show all logs
-    #[clap(short, default_value = "10")]
+    #[clap(short, default_value = "100")]
     n: usize,
 
     /// Show logs in real-time
@@ -54,31 +54,31 @@ impl Logs {
 
     fn print_existing_logs(&self) -> Result<()> {
         let log_files = get_log_file_infos(&self.id)?;
-        let log_lines = log_files.iter().flat_map(|(name, lf)| {
-            let rev = match xx::file::open(&lf.path) {
-                Ok(f) => rev_lines::RevLines::new(f),
-                Err(e) => {
-                    error!("{}: {}", lf.path.display(), e);
-                    return vec![];
-                }
-            };
-            let lines = rev.into_iter().filter_map(Result::ok);
-            let lines = if self.n == 0 {
-                lines.collect_vec()
-            } else {
-                lines.take(self.n).collect_vec()
-            };
-            merge_log_lines(name, lines)
-        });
+        let log_lines = log_files
+            .iter()
+            .flat_map(|(name, lf)| {
+                let rev = match xx::file::open(&lf.path) {
+                    Ok(f) => rev_lines::RevLines::new(f),
+                    Err(e) => {
+                        error!("{}: {}", lf.path.display(), e);
+                        return vec![];
+                    }
+                };
+                let lines = rev.into_iter().filter_map(Result::ok);
+                let lines = if self.n == 0 {
+                    lines.collect_vec()
+                } else {
+                    lines.take(self.n).collect_vec()
+                };
+                merge_log_lines(name, lines)
+            })
+            .sorted_by_cached_key(|l| l.0.to_string());
+
         let log_lines = if self.n == 0 {
             log_lines.collect_vec()
         } else {
             log_lines.take(self.n).collect_vec()
         };
-        let log_lines = log_lines
-            .into_iter()
-            .sorted_by_cached_key(|l| l.0.to_string())
-            .collect_vec();
 
         for (date, id, msg) in log_lines {
             if self.id.len() == 1 {

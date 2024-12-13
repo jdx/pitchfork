@@ -24,15 +24,20 @@ impl Run {
 
         let ipc = IpcClient::connect(true).await?;
 
-        ipc.run(RunOptions {
-            id: self.id.clone(),
-            cmd: self.run.clone(),
-            shell_pid: None,
-            force: self.force,
-            dir: env::CWD.clone(),
-            autostop: false,
-        })
-        .await?;
+        let started = ipc
+            .run(RunOptions {
+                id: self.id.clone(),
+                cmd: self.run.clone(),
+                shell_pid: None,
+                force: self.force,
+                dir: env::CWD.clone(),
+                autostop: false,
+            })
+            .await?;
+
+        if !started.is_empty() {
+            info!("started {}", started.join(", "));
+        }
         Ok(())
     }
 }

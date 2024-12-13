@@ -53,23 +53,27 @@ impl Start {
             let daemon = pt.daemons.get(id);
             if let Some(daemon) = daemon {
                 let cmd = shell_words::split(&daemon.run).into_diagnostic()?;
-                ipc.run(RunOptions {
-                    id: id.clone(),
-                    cmd,
-                    shell_pid: self.shell_pid,
-                    force: self.force,
-                    autostop: daemon
-                        .auto
-                        .contains(&crate::pitchfork_toml::PitchforkTomlAuto::Stop),
-                    dir: daemon
-                        .path
-                        .as_ref()
-                        .unwrap()
-                        .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_default(),
-                })
-                .await?;
+                let started = ipc
+                    .run(RunOptions {
+                        id: id.clone(),
+                        cmd,
+                        shell_pid: self.shell_pid,
+                        force: self.force,
+                        autostop: daemon
+                            .auto
+                            .contains(&crate::pitchfork_toml::PitchforkTomlAuto::Stop),
+                        dir: daemon
+                            .path
+                            .as_ref()
+                            .unwrap()
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default(),
+                    })
+                    .await?;
+                if !started.is_empty() {
+                    info!("started {}", started.join(", "));
+                }
             } else {
                 warn!("Daemon {} not found", id);
             }

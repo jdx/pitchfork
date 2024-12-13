@@ -30,6 +30,13 @@ run = [
   "git add pitchfork.usage.kdl docs",
 ]
 
+[tasks.install-dev]
+env = { "PITCHFORK_LOG" = "debug" }
+run = [
+  "cargo install --path . --debug",
+  "pitchfork sup start -f",
+]
+
 [tools]
 bun = "latest"
 

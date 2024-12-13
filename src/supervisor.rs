@@ -4,12 +4,11 @@ use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
-use crate::watch_files::WatchFiles;
 use crate::{env, Result};
 use duct::cmd;
 use itertools::Itertools;
+use log::LevelFilter::Info;
 use miette::IntoDiagnostic;
-use notify::RecursiveMode;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs;
@@ -23,10 +22,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tokio::sync::Mutex;
-use tokio::{select, signal, task, time};
+use tokio::{select, signal, time};
 
 pub struct Supervisor {
     state_file: Mutex<StateFile>,
+    pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     last_refreshed_at: Mutex<time::Instant>,
 }
 
@@ -48,6 +48,7 @@ pub fn start_if_not_running() -> Result<()> {
 }
 
 pub fn start_in_background() -> Result<()> {
+    debug!("starting supervisor in background");
     cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
         .stdout_null()
         .stderr_null()
@@ -61,6 +62,7 @@ impl Supervisor {
         Ok(Self {
             state_file: Mutex::new(StateFile::new(env::PITCHFORK_STATE_FILE.clone())),
             last_refreshed_at: Mutex::new(time::Instant::now()),
+            pending_notifications: Mutex::new(vec![]),
         })
     }
 
@@ -78,7 +80,7 @@ impl Supervisor {
 
         self.interval_watch()?;
         self.signals()?;
-        self.file_watch().await?;
+        // self.file_watch().await?;
 
         let ipc = IpcServer::new()?;
         self.conn_watch(ipc).await
@@ -122,6 +124,8 @@ impl Supervisor {
                 {
                     info!("autostopping {daemon}");
                     self.stop(&daemon.id).await?;
+                    self.add_notification(Info, format!("autostopped {daemon}"))
+                        .await;
                 }
             }
         }
@@ -332,31 +336,31 @@ impl Supervisor {
         exit(0)
     }
 
-    async fn file_watch(&self) -> Result<()> {
-        let state_file = self.state_file.lock().await.path.clone();
-        task::spawn(async move {
-            let mut wf = WatchFiles::new(Duration::from_secs(2)).unwrap();
+    // async fn file_watch(&self) -> Result<()> {
+    //     let state_file = self.state_file.lock().await.path.clone();
+    //     task::spawn(async move {
+    //         let mut wf = WatchFiles::new(Duration::from_secs(2)).unwrap();
+    //
+    //         wf.watch(&state_file, RecursiveMode::NonRecursive).unwrap();
+    //
+    //         while let Some(paths) = wf.rx.recv().await {
+    //             if let Err(err) = SUPERVISOR.handle_file_change(paths).await {
+    //                 error!("failed to handle file change: {err}");
+    //             }
+    //         }
+    //     });
+    //
+    //     Ok(())
+    // }
 
-            wf.watch(&state_file, RecursiveMode::NonRecursive).unwrap();
-
-            while let Some(paths) = wf.rx.recv().await {
-                if let Err(err) = SUPERVISOR.handle_file_change(paths).await {
-                    error!("failed to handle file change: {err}");
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    async fn handle_file_change(&self, paths: Vec<PathBuf>) -> Result<()> {
-        debug!("file change: {:?}", paths);
-        // let path = self.state_file.lock().await.path.clone();
-        // if paths.contains(&path) {
-        //     *self.state_file.lock().await = StateFile::read(&path)?;
-        // }
-        self.refresh().await
-    }
+    // async fn handle_file_change(&self, paths: Vec<PathBuf>) -> Result<()> {
+    //     debug!("file change: {:?}", paths);
+    //     // let path = self.state_file.lock().await.path.clone();
+    //     // if paths.contains(&path) {
+    //     //     *self.state_file.lock().await = StateFile::read(&path)?;
+    //     // }
+    //     self.refresh().await
+    // }
 
     fn interval_watch(&self) -> Result<()> {
         tokio::spawn(async move {
@@ -421,6 +425,10 @@ impl Supervisor {
                 let daemons = self.active_daemons().await;
                 IpcResponse::ActiveDaemons(daemons)
             }
+            IpcRequest::GetNotifications => {
+                let notifications = self.get_notifications().await;
+                IpcResponse::Notifications(notifications)
+            }
             IpcRequest::UpdateShellDir { shell_pid, dir } => {
                 let prev = self.get_shell_dir(shell_pid).await;
                 self.set_shell_dir(shell_pid, dir).await?;
@@ -454,6 +462,17 @@ impl Supervisor {
         let _ = self.remove_daemon("pitchfork").await;
         let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);
         // TODO: cleanly stop ipc server
+    }
+
+    async fn add_notification(&self, level: log::LevelFilter, message: String) {
+        self.pending_notifications
+            .lock()
+            .await
+            .push((level, message));
+    }
+
+    async fn get_notifications(&self) -> Vec<(log::LevelFilter, String)> {
+        self.pending_notifications.lock().await.drain(..).collect()
     }
 
     async fn active_daemons(&self) -> Vec<Daemon> {

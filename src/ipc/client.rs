@@ -134,12 +134,13 @@ impl IpcClient {
         }
     }
 
-    pub async fn run(&self, opts: RunOptions) -> Result<()> {
-        info!("starting daemon {}", opts.id);
+    pub async fn run(&self, opts: RunOptions) -> Result<Vec<String>> {
+        debug!("starting daemon {}", opts.id);
         let rsp = self.request(IpcRequest::Run(opts.clone())).await?;
+        let mut started_daemons = vec![];
         match rsp {
             IpcResponse::DaemonStart { daemon } => {
-                info!("started daemon {}", daemon);
+                started_daemons.push(daemon.id);
             }
             IpcResponse::DaemonAlreadyRunning => {
                 warn!("daemon {} already running", opts.id);
@@ -149,7 +150,7 @@ impl IpcClient {
             }
             rsp => unreachable!("unexpected response: {rsp:?}"),
         }
-        Ok(())
+        Ok(started_daemons)
     }
 
     pub async fn active_daemons(&self) -> Result<Vec<Daemon>> {
@@ -191,6 +192,14 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {
             IpcResponse::DisabledDaemons(daemons) => Ok(daemons),
+            rsp => unreachable!("unexpected response: {rsp:?}"),
+        }
+    }
+
+    pub async fn get_notifications(&self) -> Result<Vec<(log::LevelFilter, String)>> {
+        let rsp = self.request(IpcRequest::GetNotifications).await?;
+        match rsp {
+            IpcResponse::Notifications(notifications) => Ok(notifications),
             rsp => unreachable!("unexpected response: {rsp:?}"),
         }
     }

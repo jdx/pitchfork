@@ -33,6 +33,7 @@ pub enum IpcRequest {
     Enable { id: String },
     Disable { id: String },
     UpdateShellDir { shell_pid: u32, dir: PathBuf },
+    GetNotifications,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
@@ -41,6 +42,7 @@ pub enum IpcResponse {
     Yes,
     No,
     Error(String),
+    Notifications(Vec<(log::LevelFilter, String)>),
     ActiveDaemons(Vec<Daemon>),
     DisabledDaemons(Vec<String>),
     DaemonAlreadyStopped,

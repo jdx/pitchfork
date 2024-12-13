@@ -70,7 +70,7 @@ impl PitchforkToml {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PitchforkTomlDaemon {
     pub run: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub auto: Vec<PitchforkTomlAuto>,
     #[serde(skip)]
     pub path: Option<PathBuf>,
