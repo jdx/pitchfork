@@ -9,7 +9,7 @@ use miette::bail;
 pub struct Run {
     /// Name of the daemon to run
     id: String,
-    #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
+    #[clap(last = true)]
     run: Vec<String>,
     #[clap(short, long)]
     force: bool,
