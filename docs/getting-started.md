@@ -6,7 +6,6 @@ Pitchfork is a CLI for launching daemons with a focus on developer experience.
 
 - launching development services like web APIs and databases
 - running rsync/unison to synchronize directories with a remote machine
-- [coming soon] cross-platform systemd alternative that requires far less boiler-plate
 
 ## Features
 
