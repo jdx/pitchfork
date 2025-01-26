@@ -2,6 +2,10 @@
 
 Pitchfork is a CLI for launching daemons with a focus on developer experience.
 
+:::warning
+This project is experimental. It works in basic situations but you'll undoubtedly encounter bugs.
+:::
+
 ## Use-cases
 
 - launching development services like web APIs and databases
