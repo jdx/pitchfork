@@ -18,6 +18,7 @@
             "help": "The shell to generate source for",
             "help_first_line": "The shell to generate source for",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           }
         ],
@@ -53,6 +54,7 @@
               "name": "SHELL_PID",
               "usage": "<SHELL_PID>",
               "required": true,
+              "double_dash": "Optional",
               "hide": false
             }
           }
@@ -102,6 +104,7 @@
                 "help": "ID of the daemon to add",
                 "help_first_line": "ID of the daemon to add",
                 "required": true,
+                "double_dash": "Optional",
                 "hide": false
               },
               {
@@ -110,6 +113,7 @@
                 "help": "Arguments to pass to the daemon",
                 "help_first_line": "Arguments to pass to the daemon",
                 "required": false,
+                "double_dash": "Automatic",
                 "var": true,
                 "hide": false
               }
@@ -164,6 +168,7 @@
                 "help": "The ID of the daemon to remove",
                 "help_first_line": "The ID of the daemon to remove",
                 "required": true,
+                "double_dash": "Optional",
                 "hide": false
               }
             ],
@@ -205,6 +210,7 @@
             "help": "The shell to generate completion for",
             "help_first_line": "The shell to generate completion for",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           }
         ],
@@ -230,6 +236,7 @@
             "help": "Name of the daemon to disable",
             "help_first_line": "Name of the daemon to disable",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           }
         ],
@@ -257,6 +264,7 @@
             "help": "Name of the daemon to enable",
             "help_first_line": "Name of the daemon to enable",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           }
         ],
@@ -315,6 +323,7 @@
             "help": "Show only logs for the specified daemon(s)",
             "help_first_line": "Show only logs for the specified daemon(s)",
             "required": false,
+            "double_dash": "Optional",
             "var": true,
             "hide": false
           }
@@ -350,6 +359,7 @@
               "name": "N",
               "usage": "<N>",
               "required": true,
+              "double_dash": "Optional",
               "hide": false
             }
           },
@@ -382,7 +392,7 @@
         "full_cmd": [
           "run"
         ],
-        "usage": "run [-f --force] <ID> [RUN]...",
+        "usage": "run [-f --force] <ID> [-- RUN]...",
         "subcommands": {},
         "args": [
           {
@@ -391,12 +401,14 @@
             "help": "Name of the daemon to run",
             "help_first_line": "Name of the daemon to run",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           },
           {
             "name": "RUN",
-            "usage": "[RUN]...",
+            "usage": "[-- RUN]...",
             "required": false,
+            "double_dash": "Required",
             "var": true,
             "hide": false
           }
@@ -438,6 +450,7 @@
             "help": "ID of the daemon(s) in pitchfork.toml to start",
             "help_first_line": "ID of the daemon(s) in pitchfork.toml to start",
             "required": false,
+            "double_dash": "Optional",
             "var": true,
             "hide": false
           }
@@ -470,6 +483,7 @@
               "name": "SHELL_PID",
               "usage": "<SHELL_PID>",
               "required": true,
+              "double_dash": "Optional",
               "hide": false
             }
           },
@@ -509,6 +523,7 @@
             "name": "ID",
             "usage": "<ID>",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           }
         ],
@@ -536,6 +551,7 @@
             "help": "The name of the daemon to stop",
             "help_first_line": "The name of the daemon to stop",
             "required": false,
+            "double_dash": "Optional",
             "var": true,
             "hide": false
           }
@@ -699,6 +715,7 @@
             "help": "The name of the daemon to wait for",
             "help_first_line": "The name of the daemon to wait for",
             "required": true,
+            "double_dash": "Optional",
             "hide": false
           }
         ],

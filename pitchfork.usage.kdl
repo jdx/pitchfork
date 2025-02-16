@@ -1,109 +1,101 @@
-name "pitchfork"
-bin "pitchfork"
+name pitchfork
+bin pitchfork
 version "0.1.5"
 about "Daemons with DX"
 usage "Usage: pitchfork <COMMAND>"
-cmd "activate" help="Activate pitchfork in your shell session" {
-    long_help r"Activate pitchfork in your shell session
-
-Necessary for autostart/stop when entering/exiting projects with pitchfork.toml files"
-    arg "<SHELL>" help="The shell to generate source for"
+cmd activate help="Activate pitchfork in your shell session" {
+    long_help "Activate pitchfork in your shell session\n\nNecessary for autostart/stop when entering/exiting projects with pitchfork.toml files"
+    arg <SHELL> help="The shell to generate source for"
 }
-cmd "cd" hide=true {
-    flag "--shell-pid" required=true {
-        arg "<SHELL_PID>"
+cmd cd hide=#true {
+    flag --shell-pid required=#true {
+        arg <SHELL_PID>
     }
 }
-cmd "clean" help="Removes stopped/failed daemons from `pitchfork list`" {
-    alias "c"
+cmd clean help="Removes stopped/failed daemons from `pitchfork list`" {
+    alias c
 }
-cmd "config" help="manage/edit pitchfork.toml files" {
-    alias "cfg"
-    long_help r"manage/edit pitchfork.toml files
-
-without a subcommand, lists all pitchfork.toml files from the current directory"
-    cmd "add" help="Add a new daemon to ./pitchfork.toml" {
-        alias "a"
-        flag "--autostart" help="Autostart the daemon when entering the directory"
-        flag "--autostop" help="Autostop the daemon when leaving the directory"
-        arg "<ID>" help="ID of the daemon to add"
-        arg "[ARGS]..." help="Arguments to pass to the daemon" var=true
+cmd config help="manage/edit pitchfork.toml files" {
+    alias cfg
+    long_help "manage/edit pitchfork.toml files\n\nwithout a subcommand, lists all pitchfork.toml files from the current directory"
+    cmd add help="Add a new daemon to ./pitchfork.toml" {
+        alias a
+        flag --autostart help="Autostart the daemon when entering the directory"
+        flag --autostop help="Autostop the daemon when leaving the directory"
+        arg <ID> help="ID of the daemon to add"
+        arg "[ARGS]..." help="Arguments to pass to the daemon" required=#false double_dash=automatic var=#true
     }
-    cmd "remove" help="Remove a daemon from pitchfork.toml" {
-        alias "rm"
-        arg "<ID>" help="The ID of the daemon to remove"
+    cmd remove help="Remove a daemon from pitchfork.toml" {
+        alias rm
+        arg <ID> help="The ID of the daemon to remove"
     }
 }
-cmd "completion" help="Generates shell completion scripts" {
-    arg "<SHELL>" help="The shell to generate completion for"
+cmd completion help="Generates shell completion scripts" {
+    arg <SHELL> help="The shell to generate completion for"
 }
-cmd "disable" help="Prevent a daemon from restarting" {
-    alias "d"
-    arg "<ID>" help="Name of the daemon to disable"
+cmd disable help="Prevent a daemon from restarting" {
+    alias d
+    arg <ID> help="Name of the daemon to disable"
 }
-cmd "enable" help="Allow a daemon to start" {
-    alias "e"
-    arg "<ID>" help="Name of the daemon to enable"
+cmd enable help="Allow a daemon to start" {
+    alias e
+    arg <ID> help="Name of the daemon to enable"
 }
-cmd "list" help="List all daemons" {
-    alias "ls"
-    flag "--hide-header" help="Show header"
+cmd list help="List all daemons" {
+    alias ls
+    flag --hide-header help="Show header"
 }
-cmd "logs" help="Displays logs for daemon(s)" {
-    alias "l"
+cmd logs help="Displays logs for daemon(s)" {
+    alias l
     flag "-c --clear" help="Delete logs"
-    flag "-n" help="Show N lines of logs" {
+    flag -n help="Show N lines of logs" {
         long_help "Show N lines of logs\n\nSet to 0 to show all logs"
-        arg "<N>"
+        arg <N>
     }
     flag "-t --tail" help="Show logs in real-time"
-    arg "[ID]..." help="Show only logs for the specified daemon(s)" var=true
+    arg "[ID]..." help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
-cmd "run" help="Runs a one-off daemon" {
-    alias "r"
+cmd run help="Runs a one-off daemon" {
+    alias r
     flag "-f --force"
-    arg "<ID>" help="Name of the daemon to run"
-    arg "[RUN]..." var=true
+    arg <ID> help="Name of the daemon to run"
+    arg "[-- RUN]..." required=#false var=#true
 }
-cmd "start" help="Starts a daemon from a pitchfork.toml file" {
-    alias "s"
+cmd start help="Starts a daemon from a pitchfork.toml file" {
+    alias s
     flag "-a --all" help="Start all daemons in all pitchfork.tomls"
-    flag "--shell-pid" hide=true {
-        arg "<SHELL_PID>"
+    flag --shell-pid hide=#true {
+        arg <SHELL_PID>
     }
     flag "-f --force" help="Stop the daemon if it is already running"
-    arg "[ID]..." help="ID of the daemon(s) in pitchfork.toml to start" var=true
+    arg "[ID]..." help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true
 }
-cmd "status" help="Display the status of a daemon" {
-    alias "stat"
-    arg "<ID>"
+cmd status help="Display the status of a daemon" {
+    alias stat
+    arg <ID>
 }
-cmd "stop" help="Sends a stop signal to a daemon" {
-    alias "kill"
-    arg "[ID]..." help="The name of the daemon to stop" var=true
+cmd stop help="Sends a stop signal to a daemon" {
+    alias kill
+    arg "[ID]..." help="The name of the daemon to stop" required=#false var=#true
 }
-cmd "supervisor" subcommand_required=true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
-    alias "sup"
-    cmd "run" help="Runs the internal pitchfork daemon in the foreground" {
+cmd supervisor subcommand_required=#true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
+    alias sup
+    cmd run help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
     }
-    cmd "start" help="Starts the internal pitchfork daemon in the background" {
+    cmd start help="Starts the internal pitchfork daemon in the background" {
         flag "-f --force" help="kill existing daemon"
     }
-    cmd "status" help="Gets the status of the pitchfork daemon"
-    cmd "stop" help="Stops the internal pitchfork daemon running in the background"
+    cmd status help="Gets the status of the pitchfork daemon"
+    cmd stop help="Stops the internal pitchfork daemon running in the background"
 }
-cmd "usage" hide=true help="Generates a usage spec for the CLI" {
-    long_help r"Generates a usage spec for the CLI
-
-https://usage.jdx.dev"
+cmd usage hide=#true help="Generates a usage spec for the CLI" {
+    long_help "Generates a usage spec for the CLI\n\nhttps://usage.jdx.dev"
 }
-cmd "wait" help="Wait for a daemon to stop, tailing the logs along the way" {
-    alias "w"
-    long_help r"Wait for a daemon to stop, tailing the logs along the way
-
-Exits with the same status code as the daemon"
-    arg "<ID>" help="The name of the daemon to wait for"
+cmd wait help="Wait for a daemon to stop, tailing the logs along the way" {
+    alias w
+    long_help "Wait for a daemon to stop, tailing the logs along the way\n\nExits with the same status code as the daemon"
+    arg <ID> help="The name of the daemon to wait for"
 }
 
 complete "id" run="pitchfork ls | awk '{print $1}'"

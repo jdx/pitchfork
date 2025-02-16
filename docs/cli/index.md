@@ -18,7 +18,7 @@
 - [`pitchfork enable <ID>`](/cli/enable.md)
 - [`pitchfork list [--hide-header]`](/cli/list.md)
 - [`pitchfork logs [FLAGS] [ID]...`](/cli/logs.md)
-- [`pitchfork run [-f --force] <ID> [RUN]...`](/cli/run.md)
+- [`pitchfork run [-f --force] <ID> [-- RUN]...`](/cli/run.md)
 - [`pitchfork start [-a --all] [-f --force] [ID]...`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)
 - [`pitchfork stop [ID]...`](/cli/stop.md)
