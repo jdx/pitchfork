@@ -31,7 +31,7 @@ impl Wait {
 
         let mut interval = time::interval(time::Duration::from_millis(100));
         loop {
-            if PROCS.is_running(pid) {
+            if !PROCS.is_running(pid) {
                 break;
             }
             interval.tick().await;
