@@ -32,6 +32,8 @@ impl Run {
                 force: self.force,
                 dir: env::CWD.clone(),
                 autostop: false,
+                cron_schedule: None,
+                cron_retrigger: None,
             })
             .await?;
 

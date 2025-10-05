@@ -69,6 +69,8 @@ impl Start {
                             .parent()
                             .map(|p| p.to_path_buf())
                             .unwrap_or_default(),
+                        cron_schedule: daemon.cron.as_ref().map(|c| c.schedule.clone()),
+                        cron_retrigger: daemon.cron.as_ref().map(|c| c.retrigger),
                     })
                     .await?;
                 if !started.is_empty() {

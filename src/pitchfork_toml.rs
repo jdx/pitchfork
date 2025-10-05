@@ -72,8 +72,34 @@ pub struct PitchforkTomlDaemon {
     pub run: String,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub auto: Vec<PitchforkTomlAuto>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cron: Option<PitchforkTomlCron>,
     #[serde(skip)]
     pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PitchforkTomlCron {
+    pub schedule: String,
+    #[serde(default = "default_retrigger")]
+    pub retrigger: CronRetrigger,
+}
+
+fn default_retrigger() -> CronRetrigger {
+    CronRetrigger::Finish
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CronRetrigger {
+    /// Retrigger if the previous command is finished (success or error)
+    Finish,
+    /// Always retrigger, stop the previous command if running
+    Always,
+    /// Retrigger only if the previous command succeeded
+    Success,
+    /// Retrigger only if the previous command failed
+    Fail,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]

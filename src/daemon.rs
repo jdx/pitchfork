@@ -1,4 +1,5 @@
 use crate::daemon_status::DaemonStatus;
+use crate::pitchfork_toml::CronRetrigger;
 use std::fmt::Display;
 use std::path::PathBuf;
 
@@ -11,6 +12,12 @@ pub struct Daemon {
     pub status: DaemonStatus,
     pub dir: Option<PathBuf>,
     pub autostop: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cron_schedule: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cron_retrigger: Option<CronRetrigger>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_exit_success: Option<bool>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -21,6 +28,8 @@ pub struct RunOptions {
     pub shell_pid: Option<u32>,
     pub dir: PathBuf,
     pub autostop: bool,
+    pub cron_schedule: Option<String>,
+    pub cron_retrigger: Option<CronRetrigger>,
 }
 
 impl Display for Daemon {
