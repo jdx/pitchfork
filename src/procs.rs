@@ -42,11 +42,13 @@ impl Procs {
         let all = system.processes();
         let mut children = vec![];
         for (child_pid, process) in all {
+            let mut process = process;
             while let Some(parent) = process.parent() {
                 if parent == sysinfo::Pid::from_u32(pid) {
                     children.push(child_pid.as_u32());
                     break;
                 }
+                process = system.process(parent).unwrap();
             }
         }
         children
