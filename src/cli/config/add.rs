@@ -34,6 +34,7 @@ impl Add {
             PitchforkTomlDaemon {
                 run: shell_words::join(&self.args),
                 auto,
+                cron: None,
                 path: None,
             },
         );

@@ -2,8 +2,15 @@ import { defineConfig } from "vitepress";
 
 import spec from "../cli/commands.json";
 
-function getCommands(cmd): string[][] {
-  const commands = [];
+interface Cmd {
+  name: string;
+  full_cmd: string[];
+  subcommands: Record<string, Cmd>;
+  hide?: boolean;
+}
+
+function getCommands(cmd: Cmd): string[][] {
+  const commands: string[][] = [];
   for (const [name, sub] of Object.entries(cmd.subcommands)) {
     if (sub.hide) continue;
     commands.push(sub.full_cmd);
@@ -29,6 +36,7 @@ export default defineConfig({
     sidebar: [
       { text: "Getting Started", link: "/getting-started" },
       { text: "Integration with mise", link: "/mise" },
+      { text: "Cron Scheduling", link: "/cron" },
       {
         text: "CLI Reference",
         link: "/cli",

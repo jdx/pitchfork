@@ -79,6 +79,7 @@ impl Supervisor {
         .await?;
 
         self.interval_watch()?;
+        self.cron_watch()?;
         self.signals()?;
         // self.file_watch().await?;
 
@@ -140,6 +141,7 @@ impl Supervisor {
             if let Some(pid) = daemon.pid {
                 if opts.force {
                     self.stop(id).await?;
+                    info!("run: stop completed for daemon {id}");
                 } else {
                     warn!("daemon {id} already running with pid {pid}");
                     return Ok(IpcResponse::DaemonAlreadyRunning);
@@ -152,7 +154,7 @@ impl Supervisor {
         let args = vec!["-c".to_string(), cmd.join(" ")];
         let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
         xx::file::mkdirp(log_path.parent().unwrap())?;
-        debug!("starting daemon: {id} with args: {args:?}");
+        info!("run: spawning daemon {id} with args: {args:?}");
         let mut child = tokio::process::Command::new("sh")
             .args(&args)
             .stdin(std::process::Stdio::null())
@@ -171,6 +173,9 @@ impl Supervisor {
                 shell_pid: opts.shell_pid,
                 dir: Some(opts.dir),
                 autostop: opts.autostop,
+                cron_schedule: opts.cron_schedule.clone(),
+                cron_retrigger: opts.cron_retrigger,
+                last_exit_success: None,
             })
             .await?;
         let id = id.to_string();
@@ -214,11 +219,15 @@ impl Supervisor {
                 }
             }
             let exit_status = child.wait().await;
-            if SUPERVISOR
-                .get_daemon(&id)
-                .await
-                .is_some_and(|d| d.status.is_stopped())
+            let current_daemon = SUPERVISOR.get_daemon(&id).await;
+            // Check if this monitoring task is for the current daemon process
+            if current_daemon.is_none()
+                || current_daemon.as_ref().is_some_and(|d| d.pid != Some(pid))
             {
+                // Another process has taken over, don't update status
+                return;
+            }
+            if current_daemon.is_some_and(|d| d.status.is_stopped()) {
                 // was stopped by this supervisor so don't update status
                 return;
             }
@@ -229,6 +238,7 @@ impl Supervisor {
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             status: DaemonStatus::Stopped,
+                            last_exit_success: Some(true),
                             ..Default::default()
                         })
                         .await
@@ -238,6 +248,7 @@ impl Supervisor {
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             status: DaemonStatus::Errored(status.code()),
+                            last_exit_success: Some(false),
                             ..Default::default()
                         })
                         .await
@@ -248,6 +259,7 @@ impl Supervisor {
                     .upsert_daemon(UpsertDaemonOpts {
                         id: id.clone(),
                         status: DaemonStatus::Errored(None),
+                        last_exit_success: Some(false),
                         ..Default::default()
                     })
                     .await
@@ -272,14 +284,25 @@ impl Supervisor {
                         ..Default::default()
                     })
                     .await?;
-                    PROCS.kill_async(pid).await?;
+                    if let Err(e) = PROCS.kill_async(pid).await {
+                        warn!("failed to kill pid {pid}: {e}");
+                    }
                     PROCS.refresh_processes();
-                    for pid in PROCS.all_children(pid) {
-                        debug!("killing child pid: {pid}");
-                        PROCS.kill_async(pid).await?;
+                    for child_pid in PROCS.all_children(pid) {
+                        debug!("killing child pid: {child_pid}");
+                        if let Err(e) = PROCS.kill_async(child_pid).await {
+                            warn!("failed to kill child pid {child_pid}: {e}");
+                        }
                     }
                 } else {
                     debug!("pid {pid} not running");
+                    // Still update status even if process is not running
+                    self.upsert_daemon(UpsertDaemonOpts {
+                        id: id.to_string(),
+                        status: DaemonStatus::Stopped,
+                        ..Default::default()
+                    })
+                    .await?;
                 }
                 return Ok(IpcResponse::Ok);
             } else {
@@ -380,6 +403,108 @@ impl Supervisor {
             }
         });
         Ok(())
+    }
+
+    fn cron_watch(&self) -> Result<()> {
+        tokio::spawn(async move {
+            // Check every minute for cron schedules
+            // FIXME: need a better logic, what if the schedule gap is very short (30s, 1min)?
+            let mut interval = time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                if let Err(err) = SUPERVISOR.check_cron_schedules().await {
+                    error!("failed to check cron schedules: {err}");
+                }
+            }
+        });
+        Ok(())
+    }
+
+    async fn check_cron_schedules(&self) -> Result<()> {
+        use cron::Schedule;
+        use std::str::FromStr;
+
+        let now = chrono::Local::now();
+        let daemons = self.state_file.lock().await.daemons.clone();
+
+        for (id, daemon) in daemons {
+            if let Some(schedule_str) = &daemon.cron_schedule {
+                if let Some(retrigger) = daemon.cron_retrigger {
+                    // Parse the cron schedule
+                    let schedule = match Schedule::from_str(schedule_str) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!("invalid cron schedule for daemon {id}: {e}");
+                            continue;
+                        }
+                    };
+
+                    // Check if we should trigger now
+                    let should_trigger = schedule.upcoming(chrono::Local).take(1).any(|next| {
+                        // If the next execution is within the next minute, trigger it
+                        let diff = next.signed_duration_since(now);
+                        diff.num_seconds() < 60 && diff.num_seconds() >= 0
+                    });
+
+                    if should_trigger {
+                        let should_run = match retrigger {
+                            crate::pitchfork_toml::CronRetrigger::Finish => {
+                                // Run if not currently running
+                                daemon.pid.is_none()
+                            }
+                            crate::pitchfork_toml::CronRetrigger::Always => {
+                                // Always run (force restart handled in run method)
+                                true
+                            }
+                            crate::pitchfork_toml::CronRetrigger::Success => {
+                                // Run only if previous command succeeded
+                                daemon.pid.is_none() && daemon.last_exit_success.unwrap_or(false)
+                            }
+                            crate::pitchfork_toml::CronRetrigger::Fail => {
+                                // Run only if previous command failed
+                                daemon.pid.is_none() && !daemon.last_exit_success.unwrap_or(true)
+                            }
+                        };
+
+                        if should_run {
+                            info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
+                            // Get the run command from pitchfork.toml
+                            if let Some(run_cmd) = self.get_daemon_run_command(&id) {
+                                let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                                // Use force: true for Always retrigger to ensure restart
+                                let force = matches!(
+                                    retrigger,
+                                    crate::pitchfork_toml::CronRetrigger::Always
+                                );
+                                let opts = RunOptions {
+                                    id: id.clone(),
+                                    cmd: shell_words::split(&run_cmd).unwrap_or_default(),
+                                    force,
+                                    shell_pid: None,
+                                    dir,
+                                    autostop: daemon.autostop,
+                                    cron_schedule: Some(schedule_str.clone()),
+                                    cron_retrigger: Some(retrigger),
+                                };
+                                if let Err(e) = self.run(opts).await {
+                                    error!("failed to run cron daemon {id}: {e}");
+                                }
+                            } else {
+                                warn!("no run command found for cron daemon {id}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_daemon_run_command(&self, id: &str) -> Option<String> {
+        use crate::pitchfork_toml::PitchforkToml;
+        let pt = PitchforkToml::all_merged();
+        pt.daemons.get(id).map(|d| d.run.clone())
     }
 
     async fn conn_watch(&self, mut ipc: IpcServer) -> ! {
@@ -516,6 +641,15 @@ impl Supervisor {
             shell_pid: opts.shell_pid,
             autostop: opts.autostop || existing.is_some_and(|d| d.autostop),
             dir: opts.dir.or(existing.and_then(|d| d.dir.clone())),
+            cron_schedule: opts
+                .cron_schedule
+                .or(existing.and_then(|d| d.cron_schedule.clone())),
+            cron_retrigger: opts
+                .cron_retrigger
+                .or(existing.and_then(|d| d.cron_retrigger)),
+            last_exit_success: opts
+                .last_exit_success
+                .or(existing.and_then(|d| d.last_exit_success)),
         };
         state_file
             .daemons
@@ -602,6 +736,9 @@ struct UpsertDaemonOpts {
     shell_pid: Option<u32>,
     dir: Option<PathBuf>,
     autostop: bool,
+    cron_schedule: Option<String>,
+    cron_retrigger: Option<crate::pitchfork_toml::CronRetrigger>,
+    last_exit_success: Option<bool>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -613,6 +750,9 @@ impl Default for UpsertDaemonOpts {
             shell_pid: None,
             dir: None,
             autostop: false,
+            cron_schedule: None,
+            cron_retrigger: None,
+            last_exit_success: None,
         }
     }
 }
