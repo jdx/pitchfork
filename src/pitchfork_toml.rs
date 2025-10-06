@@ -74,6 +74,8 @@ pub struct PitchforkTomlDaemon {
     pub auto: Vec<PitchforkTomlAuto>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cron: Option<PitchforkTomlCron>,
+    #[serde(default)]
+    pub retry: u32,
     #[serde(skip)]
     pub path: Option<PathBuf>,
 }

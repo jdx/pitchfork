@@ -1,6 +1,6 @@
 name pitchfork
 bin pitchfork
-version "0.1.5"
+version "0.2.0"
 about "Daemons with DX"
 usage "Usage: pitchfork <COMMAND>"
 cmd activate help="Activate pitchfork in your shell session" {
@@ -23,7 +23,7 @@ cmd config help="manage/edit pitchfork.toml files" {
         flag --autostart help="Autostart the daemon when entering the directory"
         flag --autostop help="Autostop the daemon when leaving the directory"
         arg <ID> help="ID of the daemon to add"
-        arg "[ARGS]..." help="Arguments to pass to the daemon" required=#false double_dash=automatic var=#true
+        arg "[ARGS]…" help="Arguments to pass to the daemon" required=#false double_dash=automatic var=#true
     }
     cmd remove help="Remove a daemon from pitchfork.toml" {
         alias rm
@@ -53,13 +53,16 @@ cmd logs help="Displays logs for daemon(s)" {
         arg <N>
     }
     flag "-t --tail" help="Show logs in real-time"
-    arg "[ID]..." help="Show only logs for the specified daemon(s)" required=#false var=#true
+    arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
 cmd run help="Runs a one-off daemon" {
     alias r
     flag "-f --force"
+    flag --retry help="Number of times to retry on error exit" {
+        arg <RETRY>
+    }
     arg <ID> help="Name of the daemon to run"
-    arg "[-- RUN]..." required=#false var=#true
+    arg "[-- RUN]…" required=#false var=#true
 }
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s
@@ -68,7 +71,7 @@ cmd start help="Starts a daemon from a pitchfork.toml file" {
         arg <SHELL_PID>
     }
     flag "-f --force" help="Stop the daemon if it is already running"
-    arg "[ID]..." help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true
+    arg "[ID]…" help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true
 }
 cmd status help="Display the status of a daemon" {
     alias stat
@@ -76,7 +79,7 @@ cmd status help="Display the status of a daemon" {
 }
 cmd stop help="Sends a stop signal to a daemon" {
     alias kill
-    arg "[ID]..." help="The name of the daemon to stop" required=#false var=#true
+    arg "[ID]…" help="The name of the daemon to stop" required=#false var=#true
 }
 cmd supervisor subcommand_required=#true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
     alias sup

@@ -13,6 +13,9 @@ pub struct Run {
     run: Vec<String>,
     #[clap(short, long)]
     force: bool,
+    /// Number of times to retry on error exit
+    #[clap(long, default_value = "0")]
+    retry: u32,
 }
 
 impl Run {
@@ -34,6 +37,8 @@ impl Run {
                 autostop: false,
                 cron_schedule: None,
                 cron_retrigger: None,
+                retry: self.retry,
+                retry_count: 0,
             })
             .await?;
 

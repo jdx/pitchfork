@@ -71,6 +71,8 @@ impl Start {
                             .unwrap_or_default(),
                         cron_schedule: daemon.cron.as_ref().map(|c| c.schedule.clone()),
                         cron_retrigger: daemon.cron.as_ref().map(|c| c.retrigger),
+                        retry: daemon.retry,
+                        retry_count: 0,
                     })
                     .await?;
                 if !started.is_empty() {

@@ -105,6 +105,62 @@ impl Supervisor {
                 self.leave_dir(&dir).await?;
             }
         }
+
+        self.check_retry().await?;
+
+        Ok(())
+    }
+
+    async fn check_retry(&self) -> Result<()> {
+        let state_file = self.state_file.lock().await;
+        let daemons_to_retry: Vec<(String, Daemon)> = state_file
+            .daemons
+            .iter()
+            .filter(|(_id, d)| {
+                // Daemon is errored, not currently running, and has retries remaining
+                d.status.is_errored() && d.pid.is_none() && d.retry > 0 && d.retry_count < d.retry
+            })
+            .map(|(id, d)| (id.clone(), d.clone()))
+            .collect();
+        drop(state_file);
+
+        for (id, daemon) in daemons_to_retry {
+            info!(
+                "retrying daemon {} ({}/{} attempts)",
+                id,
+                daemon.retry_count + 1,
+                daemon.retry
+            );
+
+            // Get command from pitchfork.toml
+            if let Some(run_cmd) = self.get_daemon_run_command(&id) {
+                let retry_opts = RunOptions {
+                    id: id.clone(),
+                    cmd: shell_words::split(&run_cmd).unwrap_or_default(),
+                    force: false,
+                    shell_pid: daemon.shell_pid,
+                    dir: daemon.dir.unwrap_or_else(|| env::CWD.clone()),
+                    autostop: daemon.autostop,
+                    cron_schedule: daemon.cron_schedule,
+                    cron_retrigger: daemon.cron_retrigger,
+                    retry: daemon.retry,
+                    retry_count: daemon.retry_count + 1,
+                };
+                if let Err(e) = self.run(retry_opts).await {
+                    error!("failed to retry daemon {}: {}", id, e);
+                }
+            } else {
+                warn!("no run command found for daemon {}, cannot retry", id);
+                // Mark as exhausted
+                self.upsert_daemon(UpsertDaemonOpts {
+                    id,
+                    retry_count: Some(daemon.retry),
+                    ..Default::default()
+                })
+                .await?;
+            }
+        }
+
         Ok(())
     }
 
@@ -171,11 +227,13 @@ impl Supervisor {
                 pid: Some(pid),
                 status: DaemonStatus::Running,
                 shell_pid: opts.shell_pid,
-                dir: Some(opts.dir),
+                dir: Some(opts.dir.clone()),
                 autostop: opts.autostop,
                 cron_schedule: opts.cron_schedule.clone(),
                 cron_retrigger: opts.cron_retrigger,
                 last_exit_success: None,
+                retry: Some(opts.retry),
+                retry_count: Some(opts.retry_count),
             })
             .await?;
         let id = id.to_string();
@@ -227,6 +285,7 @@ impl Supervisor {
                 // Another process has taken over, don't update status
                 return;
             }
+            let current_daemon_clone = current_daemon.clone();
             if current_daemon.is_some_and(|d| d.status.is_stopped()) {
                 // was stopped by this supervisor so don't update status
                 return;
@@ -244,15 +303,38 @@ impl Supervisor {
                         .await
                         .unwrap();
                 } else {
-                    SUPERVISOR
-                        .upsert_daemon(UpsertDaemonOpts {
-                            id: id.clone(),
-                            status: DaemonStatus::Errored(status.code()),
-                            last_exit_success: Some(false),
-                            ..Default::default()
-                        })
-                        .await
-                        .unwrap();
+                    // Handle error exit - mark for retry
+                    if let Some(daemon) = current_daemon_clone {
+                        let retry_remaining = daemon.retry.saturating_sub(daemon.retry_count);
+                        if retry_remaining > 0 {
+                            info!(
+                                "daemon {id} failed, marking for retry ({}/{} attempts used)",
+                                daemon.retry_count, daemon.retry
+                            );
+                            // Mark daemon as errored and needing retry
+                            // The retry will be handled by interval_watch
+                            SUPERVISOR
+                                .upsert_daemon(UpsertDaemonOpts {
+                                    id: id.clone(),
+                                    status: DaemonStatus::Errored(status.code()),
+                                    last_exit_success: Some(false),
+                                    retry_count: Some(daemon.retry_count),
+                                    ..Default::default()
+                                })
+                                .await
+                                .unwrap();
+                        } else {
+                            SUPERVISOR
+                                .upsert_daemon(UpsertDaemonOpts {
+                                    id: id.clone(),
+                                    status: DaemonStatus::Errored(status.code()),
+                                    last_exit_success: Some(false),
+                                    ..Default::default()
+                                })
+                                .await
+                                .unwrap();
+                        }
+                    }
                 }
             } else {
                 SUPERVISOR
@@ -485,6 +567,8 @@ impl Supervisor {
                                     autostop: daemon.autostop,
                                     cron_schedule: Some(schedule_str.clone()),
                                     cron_retrigger: Some(retrigger),
+                                    retry: daemon.retry,
+                                    retry_count: daemon.retry_count,
                                 };
                                 if let Err(e) = self.run(opts).await {
                                     error!("failed to run cron daemon {id}: {e}");
@@ -650,6 +734,10 @@ impl Supervisor {
             last_exit_success: opts
                 .last_exit_success
                 .or(existing.and_then(|d| d.last_exit_success)),
+            retry: opts.retry.unwrap_or(existing.map(|d| d.retry).unwrap_or(0)),
+            retry_count: opts
+                .retry_count
+                .unwrap_or(existing.map(|d| d.retry_count).unwrap_or(0)),
         };
         state_file
             .daemons
@@ -739,6 +827,8 @@ struct UpsertDaemonOpts {
     cron_schedule: Option<String>,
     cron_retrigger: Option<crate::pitchfork_toml::CronRetrigger>,
     last_exit_success: Option<bool>,
+    retry: Option<u32>,
+    retry_count: Option<u32>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -753,6 +843,8 @@ impl Default for UpsertDaemonOpts {
             cron_schedule: None,
             cron_retrigger: None,
             last_exit_success: None,
+            retry: None,
+            retry_count: None,
         }
     }
 }

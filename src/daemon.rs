@@ -18,6 +18,10 @@ pub struct Daemon {
     pub cron_retrigger: Option<CronRetrigger>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_exit_success: Option<bool>,
+    #[serde(default)]
+    pub retry: u32,
+    #[serde(default)]
+    pub retry_count: u32,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -30,6 +34,8 @@ pub struct RunOptions {
     pub autostop: bool,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
+    pub retry: u32,
+    pub retry_count: u32,
 }
 
 impl Display for Daemon {

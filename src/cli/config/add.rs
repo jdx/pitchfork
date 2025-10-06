@@ -35,6 +35,7 @@ impl Add {
                 run: shell_words::join(&self.args),
                 auto,
                 cron: None,
+                retry: 0,
                 path: None,
             },
         );

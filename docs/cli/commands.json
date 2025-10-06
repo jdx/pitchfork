@@ -95,7 +95,7 @@
               "config",
               "add"
             ],
-            "usage": "config add [--autostart] [--autostop] <ID> [ARGS]...",
+            "usage": "config add [--autostart] [--autostop] <ID> [ARGS]…",
             "subcommands": {},
             "args": [
               {
@@ -109,7 +109,7 @@
               },
               {
                 "name": "ARGS",
-                "usage": "[ARGS]...",
+                "usage": "[ARGS]…",
                 "help": "Arguments to pass to the daemon",
                 "help_first_line": "Arguments to pass to the daemon",
                 "required": false,
@@ -314,12 +314,12 @@
         "full_cmd": [
           "logs"
         ],
-        "usage": "logs [FLAGS] [ID]...",
+        "usage": "logs [FLAGS] [ID]…",
         "subcommands": {},
         "args": [
           {
             "name": "ID",
-            "usage": "[ID]...",
+            "usage": "[ID]…",
             "help": "Show only logs for the specified daemon(s)",
             "help_first_line": "Show only logs for the specified daemon(s)",
             "required": false,
@@ -392,7 +392,7 @@
         "full_cmd": [
           "run"
         ],
-        "usage": "run [-f --force] <ID> [-- RUN]...",
+        "usage": "run [-f --force] [--retry <RETRY>] <ID> [-- RUN]…",
         "subcommands": {},
         "args": [
           {
@@ -406,7 +406,7 @@
           },
           {
             "name": "RUN",
-            "usage": "[-- RUN]...",
+            "usage": "[-- RUN]…",
             "required": false,
             "double_dash": "Required",
             "var": true,
@@ -425,6 +425,25 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "retry",
+            "usage": "--retry <RETRY>",
+            "help": "Number of times to retry on error exit",
+            "help_first_line": "Number of times to retry on error exit",
+            "short": [],
+            "long": [
+              "retry"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "RETRY",
+              "usage": "<RETRY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
           }
         ],
         "mounts": [],
@@ -441,12 +460,12 @@
         "full_cmd": [
           "start"
         ],
-        "usage": "start [-a --all] [-f --force] [ID]...",
+        "usage": "start [-a --all] [-f --force] [ID]…",
         "subcommands": {},
         "args": [
           {
             "name": "ID",
-            "usage": "[ID]...",
+            "usage": "[ID]…",
             "help": "ID of the daemon(s) in pitchfork.toml to start",
             "help_first_line": "ID of the daemon(s) in pitchfork.toml to start",
             "required": false,
@@ -542,12 +561,12 @@
         "full_cmd": [
           "stop"
         ],
-        "usage": "stop [ID]...",
+        "usage": "stop [ID]…",
         "subcommands": {},
         "args": [
           {
             "name": "ID",
-            "usage": "[ID]...",
+            "usage": "[ID]…",
             "help": "The name of the daemon to stop",
             "help_first_line": "The name of the daemon to stop",
             "required": false,
@@ -744,7 +763,7 @@
   "config": {
     "props": {}
   },
-  "version": "0.1.5",
+  "version": "0.2.0",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
