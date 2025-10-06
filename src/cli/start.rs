@@ -19,6 +19,12 @@ pub struct Start {
     /// Stop the daemon if it is already running
     #[clap(short, long)]
     force: bool,
+    /// Delay in seconds before considering daemon ready (default: 3 seconds)
+    #[clap(long)]
+    delay: Option<u64>,
+    /// Wait until output matches this regex pattern before considering daemon ready
+    #[clap(long)]
+    output: Option<String>,
 }
 
 impl Start {
@@ -41,6 +47,9 @@ impl Start {
         } else {
             self.id.clone()
         };
+        let mut any_failed = false;
+        let mut last_exit_code = 0;
+
         for id in &ids {
             if disabled_daemons.contains(id) {
                 warn!("Daemon {} is disabled", id);
@@ -53,7 +62,7 @@ impl Start {
             let daemon = pt.daemons.get(id);
             if let Some(daemon) = daemon {
                 let cmd = shell_words::split(&daemon.run).into_diagnostic()?;
-                let started = ipc
+                let (started, exit_code) = ipc
                     .run(RunOptions {
                         id: id.clone(),
                         cmd,
@@ -73,14 +82,26 @@ impl Start {
                         cron_retrigger: daemon.cron.as_ref().map(|c| c.retrigger),
                         retry: daemon.retry,
                         retry_count: 0,
+                        ready_delay: self.delay.or(daemon.ready_delay).or(Some(3)),
+                        ready_output: self.output.clone().or(daemon.ready_output.clone()),
+                        wait_ready: true,
                     })
                     .await?;
                 if !started.is_empty() {
                     info!("started {}", started.join(", "));
                 }
+                if let Some(code) = exit_code {
+                    any_failed = true;
+                    last_exit_code = code;
+                    error!("daemon {} failed with exit code {}", id, code);
+                }
             } else {
                 warn!("Daemon {} not found", id);
             }
+        }
+
+        if any_failed {
+            std::process::exit(last_exit_code);
         }
         Ok(())
     }

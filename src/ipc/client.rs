@@ -134,13 +134,20 @@ impl IpcClient {
         }
     }
 
-    pub async fn run(&self, opts: RunOptions) -> Result<Vec<String>> {
+    pub async fn run(&self, opts: RunOptions) -> Result<(Vec<String>, Option<i32>)> {
         debug!("starting daemon {}", opts.id);
         let rsp = self.request(IpcRequest::Run(opts.clone())).await?;
         let mut started_daemons = vec![];
+        let mut exit_code = None;
         match rsp {
             IpcResponse::DaemonStart { daemon } => {
                 started_daemons.push(daemon.id);
+            }
+            IpcResponse::DaemonReady { daemon } => {
+                started_daemons.push(daemon.id);
+            }
+            IpcResponse::DaemonFailedWithCode { exit_code: code } => {
+                exit_code = Some(code.unwrap_or(1));
             }
             IpcResponse::DaemonAlreadyRunning => {
                 warn!("daemon {} already running", opts.id);
@@ -150,7 +157,7 @@ impl IpcClient {
             }
             rsp => unreachable!("unexpected response: {rsp:?}"),
         }
-        Ok(started_daemons)
+        Ok((started_daemons, exit_code))
     }
 
     pub async fn active_daemons(&self) -> Result<Vec<Daemon>> {

@@ -16,6 +16,12 @@ pub struct Run {
     /// Number of times to retry on error exit
     #[clap(long, default_value = "0")]
     retry: u32,
+    /// Delay in seconds before considering daemon ready (default: 3 seconds)
+    #[clap(short, long)]
+    delay: Option<u64>,
+    /// Wait until output matches this regex pattern before considering daemon ready
+    #[clap(short, long)]
+    output: Option<String>,
 }
 
 impl Run {
@@ -27,7 +33,7 @@ impl Run {
 
         let ipc = IpcClient::connect(true).await?;
 
-        let started = ipc
+        let (started, exit_code) = ipc
             .run(RunOptions {
                 id: self.id.clone(),
                 cmd: self.run.clone(),
@@ -39,11 +45,18 @@ impl Run {
                 cron_retrigger: None,
                 retry: self.retry,
                 retry_count: 0,
+                ready_delay: self.delay.or(Some(3)),
+                ready_output: self.output.clone(),
+                wait_ready: true,
             })
             .await?;
 
         if !started.is_empty() {
             info!("started {}", started.join(", "));
+        }
+
+        if let Some(code) = exit_code {
+            std::process::exit(code);
         }
         Ok(())
     }

@@ -49,6 +49,8 @@ pub enum IpcResponse {
     DaemonAlreadyRunning,
     DaemonStart { daemon: Daemon },
     DaemonFailed { error: String },
+    DaemonReady { daemon: Daemon },
+    DaemonFailedWithCode { exit_code: Option<i32> },
 }
 
 fn fs_name(name: &str) -> Result<Name> {
