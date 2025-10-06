@@ -47,7 +47,7 @@ impl Start {
                 continue;
             }
             if !self.force && active_daemons.contains(id) {
-                trace!("Daemon {} is already running", id);
+                warn!("Daemon {} is already running", id);
                 continue;
             }
             let daemon = pt.daemons.get(id);
