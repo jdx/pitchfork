@@ -38,7 +38,7 @@ run = [
 ]
 
 [tools]
-bun = "latest"
+bun = "latest" # for docs and test
 
 [tasks.pre-commit]
 depends = ["render", "lint-fix"]
