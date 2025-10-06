@@ -9,7 +9,7 @@ Add a `cron` section to your daemon configuration in `pitchfork.toml`:
 ```toml
 [daemons.my-task]
 run = "./scripts/my-script.sh"
-cron = { schedule = "0 2 * * *", retrigger = "finish" } # Run at 2 AM every day
+cron = { schedule = "0 0 2 * * *", retrigger = "finish" } # Run at 2 AM every day
 ```
 
 ## Retrigger Behavior
@@ -25,7 +25,7 @@ Retrigger the command only if the previous execution has finished (whether it su
 ```toml
 [daemons.backup]
 run = "./backup.sh"
-cron = { schedule = "0 2 * * *", retrigger = "finish" }
+cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
 ```
 
 ### `always`
@@ -37,7 +37,7 @@ Always retrigger the command at the scheduled time. If the previous command is s
 ```toml
 [daemons.health-check]
 run = "curl -f http://localhost:8080/health"
-cron = { schedule = "*/5 * * * *", retrigger = "always" }
+cron = { schedule = "0 */5 * * * *", retrigger = "always" }
 ```
 
 ### `success`
@@ -49,7 +49,7 @@ Retrigger the command only if the previous execution finished successfully (exit
 ```toml
 [daemons.process-data]
 run = "./process.sh"
-cron = { schedule = "0 * * * *", retrigger = "success" }
+cron = { schedule = "0 0 * * * *", retrigger = "success" }
 ```
 
 ### `fail`
@@ -61,7 +61,7 @@ Retrigger the command only if the previous execution failed (non-zero exit code)
 ```toml
 [daemons.retry-task]
 run = "./flaky-task.sh"
-cron = { schedule = "*/10 * * * *", retrigger = "fail" }
+cron = { schedule = "0 */10 * * * *", retrigger = "fail" }
 ```
 
 ## Starting Cron Daemons
