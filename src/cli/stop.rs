@@ -1,5 +1,4 @@
-use crate::cli::supervisor::kill_or_stop;
-use crate::state_file::StateFile;
+use crate::ipc::client::IpcClient;
 use crate::Result;
 use miette::ensure;
 
@@ -17,16 +16,9 @@ impl Stop {
             !self.id.is_empty(),
             "You must provide at least one daemon to stop"
         );
-        let pid_file = StateFile::get();
+        let ipc = IpcClient::connect(false).await?;
         for id in &self.id {
-            if let Some(d) = pid_file.daemons.get(id) {
-                if let Some(pid) = d.pid {
-                    info!("stopping {} with pid {}", id, pid);
-                    kill_or_stop(pid, true).await?;
-                    continue;
-                }
-            }
-            warn!("{} is not running", id);
+            ipc.stop(id.clone()).await?;
         }
         Ok(())
     }

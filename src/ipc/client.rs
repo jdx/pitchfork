@@ -210,4 +210,19 @@ impl IpcClient {
             rsp => unreachable!("unexpected response: {rsp:?}"),
         }
     }
+
+    pub async fn stop(&self, id: String) -> Result<()> {
+        let rsp = self.request(IpcRequest::Stop { id: id.clone() }).await?;
+        match rsp {
+            IpcResponse::Ok => {
+                info!("stopped daemon {}", id);
+                Ok(())
+            }
+            IpcResponse::DaemonAlreadyStopped => {
+                warn!("daemon {} is not running", id);
+                Ok(())
+            }
+            rsp => unreachable!("unexpected response: {rsp:?}"),
+        }
+    }
 }
