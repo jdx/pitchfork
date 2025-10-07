@@ -28,6 +28,9 @@ pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> =
 
 pub static IPC_SOCK_DIR: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("sock"));
 pub static IPC_SOCK_MAIN: Lazy<PathBuf> = Lazy::new(|| IPC_SOCK_DIR.join("main.sock"));
+
+// Capture the PATH at startup so daemons can find user tools
+pub static ORIGINAL_PATH: Lazy<Option<String>> = Lazy::new(|| var("PATH").ok());
 pub static IPC_JSON: Lazy<bool> = Lazy::new(|| !var_false("IPC_JSON"));
 
 fn var_path(name: &str) -> Option<PathBuf> {

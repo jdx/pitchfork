@@ -220,18 +220,23 @@ impl Supervisor {
         let cmd = once("exec".to_string())
             .chain(cmd.into_iter())
             .collect_vec();
-        let args = vec!["-c".to_string(), cmd.join(" ")];
+        let args = vec!["-c".to_string(), shell_words::join(&cmd)];
         let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
         xx::file::mkdirp(log_path.parent().unwrap())?;
         info!("run: spawning daemon {id} with args: {args:?}");
-        let mut child = tokio::process::Command::new("sh")
-            .args(&args)
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .current_dir(&opts.dir)
-            .spawn()
-            .into_diagnostic()?;
+            .current_dir(&opts.dir);
+        
+        // Ensure daemon can find user tools by using the original PATH
+        if let Some(ref path) = *env::ORIGINAL_PATH {
+            cmd.env("PATH", path);
+        }
+        
+        let mut child = cmd.spawn().into_diagnostic()?;
         let pid = child.id().unwrap();
         info!("started daemon {id} with pid {pid}");
         let daemon = self
