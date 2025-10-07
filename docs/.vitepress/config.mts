@@ -36,6 +36,7 @@ export default defineConfig({
     sidebar: [
       { text: "Getting Started", link: "/getting-started" },
       { text: "Integration with mise", link: "/mise" },
+      { text: "Ready Checks", link: "/ready-checks" },
       { text: "Cron Scheduling", link: "/cron" },
       {
         text: "CLI Reference",

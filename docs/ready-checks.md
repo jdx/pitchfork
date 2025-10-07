@@ -1,4 +1,4 @@
-# Readiness Checks
+# Ready Checks
 
 Pitchfork now supports readiness checks to determine when a daemon has successfully started and is ready to accept requests. This is useful when you want `pitchfork start` or `pitchfork run` to wait until the daemon is actually ready before returning.
 
