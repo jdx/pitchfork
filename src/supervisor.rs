@@ -195,7 +195,7 @@ impl Supervisor {
 
     async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
-        let cmd = opts.cmd;
+        let cmd = opts.cmd.clone();
         let daemon = self.get_daemon(id).await;
         if let Some(daemon) = daemon {
             if let Some(pid) = daemon.pid {
@@ -208,6 +208,49 @@ impl Supervisor {
                 }
             }
         }
+
+        // If wait_ready is true and retry is configured, implement retry loop
+        if opts.wait_ready && opts.retry > 0 {
+            let max_attempts = opts.retry + 1; // initial attempt + retries
+            for attempt in 0..max_attempts {
+                let mut retry_opts = opts.clone();
+                retry_opts.retry_count = attempt;
+                retry_opts.cmd = cmd.clone();
+
+                let result = self.run_once(retry_opts).await?;
+
+                match result {
+                    IpcResponse::DaemonReady { daemon } => {
+                        return Ok(IpcResponse::DaemonReady { daemon });
+                    }
+                    IpcResponse::DaemonFailedWithCode { exit_code } => {
+                        if attempt < opts.retry {
+                            let backoff_secs = 2u64.pow(attempt);
+                            info!(
+                                "daemon {id} failed (attempt {}/{}), retrying in {}s",
+                                attempt + 1,
+                                max_attempts,
+                                backoff_secs
+                            );
+                            time::sleep(Duration::from_secs(backoff_secs)).await;
+                            continue;
+                        } else {
+                            info!("daemon {id} failed after {} attempts", max_attempts);
+                            return Ok(IpcResponse::DaemonFailedWithCode { exit_code });
+                        }
+                    }
+                    other => return Ok(other),
+                }
+            }
+        }
+
+        // No retry or wait_ready is false
+        self.run_once(opts).await
+    }
+
+    async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
+        let id = &opts.id;
+        let cmd = opts.cmd;
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
@@ -230,12 +273,12 @@ impl Supervisor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .current_dir(&opts.dir);
-        
+
         // Ensure daemon can find user tools by using the original PATH
         if let Some(ref path) = *env::ORIGINAL_PATH {
             cmd.env("PATH", path);
         }
-        
+
         let mut child = cmd.spawn().into_diagnostic()?;
         let pid = child.id().unwrap();
         info!("started daemon {id} with pid {pid}");
@@ -303,6 +346,23 @@ impl Supervisor {
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
 
+            // Use a channel to communicate process exit status
+            let (exit_tx, mut exit_rx) =
+                tokio::sync::mpsc::channel::<std::io::Result<std::process::ExitStatus>>(1);
+
+            // Spawn a task to wait for process exit
+            let child_pid = child.id().unwrap();
+            tokio::spawn(async move {
+                let result = child.wait().await;
+                debug!(
+                    "daemon pid {child_pid} wait() completed with result: {:?}",
+                    result
+                );
+                let _ = exit_tx.send(result).await;
+            });
+
+            let mut exit_status = None;
+
             loop {
                 select! {
                     Ok(Some(line)) = stdout.next_line() => {
@@ -343,6 +403,21 @@ impl Supervisor {
                             }
                         }
                     },
+                    Some(result) = exit_rx.recv() => {
+                        // Process exited - save exit status and notify if not ready yet
+                        exit_status = Some(result);
+                        debug!("daemon {id} process exited, exit_status: {:?}", exit_status);
+                        if !ready_notified {
+                            if let Some(tx) = ready_tx.take() {
+                                let exit_code = exit_status.as_ref().and_then(|r| r.as_ref().ok().and_then(|s| s.code()));
+                                debug!("daemon {id} not ready yet, sending failure notification with exit_code: {:?}", exit_code);
+                                let _ = tx.send(Err(exit_code));
+                            }
+                        } else {
+                            debug!("daemon {id} was already marked ready, not sending failure notification");
+                        }
+                        break;
+                    }
                     _ = async {
                         if let Some(ref mut timer) = delay_timer {
                             timer.await;
@@ -364,16 +439,20 @@ impl Supervisor {
                 }
             }
 
-            let exit_status = child.wait().await;
-            let current_daemon = SUPERVISOR.get_daemon(&id).await;
-
-            // Notify about failure if not ready yet
-            if !ready_notified {
-                if let Some(tx) = ready_tx {
-                    let exit_code = exit_status.as_ref().ok().and_then(|s| s.code());
-                    let _ = tx.send(Err(exit_code));
+            // Get the final exit status
+            let exit_status = if let Some(status) = exit_status {
+                status
+            } else {
+                // Streams closed but process hasn't exited yet, wait for it
+                match exit_rx.recv().await {
+                    Some(status) => status,
+                    None => {
+                        warn!("daemon {id} exit channel closed without receiving status");
+                        Err(std::io::Error::other("exit channel closed"))
+                    }
                 }
-            }
+            };
+            let current_daemon = SUPERVISOR.get_daemon(&id).await;
 
             // Check if this monitoring task is for the current daemon process
             if current_daemon.is_none()

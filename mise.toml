@@ -14,7 +14,7 @@ run = "bun i && exec bun run docs:dev"
 [tasks.lint-fix]
 run = [
   "cargo fmt --all",
-  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features -- -D warnings",
+  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features --allow-no-vcs -- -D warnings",
 ]
 
 [tasks.build]

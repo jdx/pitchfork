@@ -53,7 +53,7 @@ pub enum IpcResponse {
     DaemonFailedWithCode { exit_code: Option<i32> },
 }
 
-fn fs_name(name: &str) -> Result<Name> {
+fn fs_name(name: &str) -> Result<Name<'_>> {
     let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
     let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;
     Ok(fs_name)

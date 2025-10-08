@@ -35,10 +35,8 @@ impl List {
                 ),
                 Cell::new(daemon.status.style()),
                 Cell::new(
-                    sf.disabled
-                        .contains(id)
-                        .then_some("disabled")
-                        .unwrap_or_default(),
+                    if sf.disabled
+                        .contains(id) { "disabled" } else { Default::default() },
                 ),
             ]);
         }
