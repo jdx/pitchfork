@@ -18,6 +18,7 @@ This project is experimental. It works in basic situations but you'll undoubtedl
 - Auto start daemons when entering a project directory - then auto stop when leaving
 - Restart daemons on failure
 - Cron jobs
+- 🚧 Global configuration
 - 🚧 Automatically start daemons on boot
 
 ## Workflows
@@ -95,24 +96,6 @@ Here's a `pitchfork.toml` with this configured:
 [daemons.api]
 run = "npm run server:api"
 auto = ["start", "stop"]
-```
-
-## Automatic Retry on Failure
-
-Pitchfork can automatically retry daemons when they exit with an error code. Configure the number of retry attempts using the `retry` field in `pitchfork.toml`:
-
-```toml
-[daemons.api]
-run = "npm run server:api"
-retry = 5  # Retry up to 5 times on error exit
-```
-
-When a daemon exits with a non-zero exit code, pitchfork will automatically restart it until the retry count is exhausted. Each retry attempt is tracked, and when all retries are used, the daemon remains in an errored state.
-
-You can also specify retry behavior for one-off daemons using the `--retry` flag:
-
-```bash
-pitchfork run my-task --retry 3 -- ./my-flaky-script.sh
 ```
 
 ## Logs

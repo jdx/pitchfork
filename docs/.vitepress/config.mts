@@ -37,6 +37,7 @@ export default defineConfig({
       { text: "Getting Started", link: "/getting-started" },
       { text: "Integration with mise", link: "/mise" },
       { text: "Ready Checks", link: "/ready-checks" },
+      { text: "Retry on Failure", link: "/retry" },
       { text: "Cron Scheduling", link: "/cron" },
       {
         text: "CLI Reference",
