@@ -61,6 +61,12 @@ cmd run help="Runs a one-off daemon" {
     flag --retry help="Number of times to retry on error exit" {
         arg <RETRY>
     }
+    flag "-d --delay" help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
+        arg <DELAY>
+    }
+    flag "-o --output" help="Wait until output matches this regex pattern before considering daemon ready" {
+        arg <OUTPUT>
+    }
     arg <ID> help="Name of the daemon to run"
     arg "[-- RUN]…" required=#false var=#true
 }
@@ -71,6 +77,12 @@ cmd start help="Starts a daemon from a pitchfork.toml file" {
         arg <SHELL_PID>
     }
     flag "-f --force" help="Stop the daemon if it is already running"
+    flag --delay help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
+        arg <DELAY>
+    }
+    flag --output help="Wait until output matches this regex pattern before considering daemon ready" {
+        arg <OUTPUT>
+    }
     arg "[ID]…" help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true
 }
 cmd status help="Display the status of a daemon" {

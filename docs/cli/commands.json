@@ -392,7 +392,7 @@
         "full_cmd": [
           "run"
         ],
-        "usage": "run [-f --force] [--retry <RETRY>] <ID> [-- RUN]…",
+        "usage": "run [FLAGS] <ID> [-- RUN]…",
         "subcommands": {},
         "args": [
           {
@@ -444,6 +444,48 @@
               "double_dash": "Optional",
               "hide": false
             }
+          },
+          {
+            "name": "delay",
+            "usage": "-d --delay <DELAY>",
+            "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "help_first_line": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "short": [
+              "d"
+            ],
+            "long": [
+              "delay"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DELAY",
+              "usage": "<DELAY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output",
+            "usage": "-o --output <OUTPUT>",
+            "help": "Wait until output matches this regex pattern before considering daemon ready",
+            "help_first_line": "Wait until output matches this regex pattern before considering daemon ready",
+            "short": [
+              "o"
+            ],
+            "long": [
+              "output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT",
+              "usage": "<OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
           }
         ],
         "mounts": [],
@@ -460,7 +502,7 @@
         "full_cmd": [
           "start"
         ],
-        "usage": "start [-a --all] [-f --force] [ID]…",
+        "usage": "start [FLAGS] [ID]…",
         "subcommands": {},
         "args": [
           {
@@ -519,6 +561,44 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "delay",
+            "usage": "--delay <DELAY>",
+            "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "help_first_line": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "short": [],
+            "long": [
+              "delay"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DELAY",
+              "usage": "<DELAY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output",
+            "usage": "--output <OUTPUT>",
+            "help": "Wait until output matches this regex pattern before considering daemon ready",
+            "help_first_line": "Wait until output matches this regex pattern before considering daemon ready",
+            "short": [],
+            "long": [
+              "output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT",
+              "usage": "<OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
           }
         ],
         "mounts": [],
