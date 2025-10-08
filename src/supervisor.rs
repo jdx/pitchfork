@@ -198,13 +198,17 @@ impl Supervisor {
         let cmd = opts.cmd.clone();
         let daemon = self.get_daemon(id).await;
         if let Some(daemon) = daemon {
-            if let Some(pid) = daemon.pid {
-                if opts.force {
-                    self.stop(id).await?;
-                    info!("run: stop completed for daemon {id}");
-                } else {
-                    warn!("daemon {id} already running with pid {pid}");
-                    return Ok(IpcResponse::DaemonAlreadyRunning);
+            // Stopping state is treated as "not running" - the monitoring task will clean it up
+            // Only check for Running state with a valid PID
+            if !daemon.status.is_stopping() && !daemon.status.is_stopped() {
+                if let Some(pid) = daemon.pid {
+                    if opts.force {
+                        self.stop(id).await?;
+                        info!("run: stop completed for daemon {id}");
+                    } else {
+                        warn!("daemon {id} already running with pid {pid}");
+                        return Ok(IpcResponse::DaemonAlreadyRunning);
+                    }
                 }
             }
         }
@@ -462,18 +466,25 @@ impl Supervisor {
                 return;
             }
             let current_daemon_clone = current_daemon.clone();
+            let is_stopping = current_daemon
+                .as_ref()
+                .is_some_and(|d| d.status.is_stopping());
+
             if current_daemon.is_some_and(|d| d.status.is_stopped()) {
                 // was stopped by this supervisor so don't update status
                 return;
             }
             if let Ok(status) = exit_status {
                 info!("daemon {id} exited with status {status}");
-                if status.success() {
+                if status.success() || is_stopping {
+                    // If stopping, always mark as Stopped with success
+                    // This allows monitoring task to clear PID after stop() was called
                     SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
+                            pid: None, // Clear PID now that process has exited
                             status: DaemonStatus::Stopped,
-                            last_exit_success: Some(true),
+                            last_exit_success: Some(status.success()),
                             ..Default::default()
                         })
                         .await
@@ -494,7 +505,6 @@ impl Supervisor {
                                     id: id.clone(),
                                     status: DaemonStatus::Errored(status.code()),
                                     last_exit_success: Some(false),
-                                    retry_count: Some(daemon.retry_count),
                                     ..Default::default()
                                 })
                                 .await
@@ -554,7 +564,15 @@ impl Supervisor {
                 trace!("killing pid: {pid}");
                 PROCS.refresh_processes();
                 if PROCS.is_running(pid) {
-                    // First kill the process
+                    // First set status to Stopping (keeps PID for monitoring task)
+                    self.upsert_daemon(UpsertDaemonOpts {
+                        id: id.to_string(),
+                        status: DaemonStatus::Stopping,
+                        ..Default::default()
+                    })
+                    .await?;
+
+                    // Then kill the process
                     if let Err(e) = PROCS.kill_async(pid).await {
                         warn!("failed to kill pid {pid}: {e}");
                     }
@@ -565,17 +583,10 @@ impl Supervisor {
                             warn!("failed to kill child pid {child_pid}: {e}");
                         }
                     }
-                    // Then update the status and clear pid
-                    self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
-                        pid: None,
-                        status: DaemonStatus::Stopped,
-                        ..Default::default()
-                    })
-                    .await?;
+                    // Monitoring task will clear PID and set to Stopped when it detects exit
                 } else {
                     debug!("pid {pid} not running");
-                    // Still update status even if process is not running
+                    // Process already dead, directly mark as stopped
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
                         pid: None,
