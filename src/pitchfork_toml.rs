@@ -11,7 +11,11 @@ pub struct PitchforkToml {
 
 impl PitchforkToml {
     pub fn list_paths() -> Vec<PathBuf> {
-        xx::file::find_up_all(&env::CWD, &["pitchfork.toml"])
+        let mut paths = Vec::new();
+        paths.push(env::PITCHFORK_GLOBAL_CONFIG_SYSTEM.clone());
+        paths.push(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
+        paths.extend(xx::file::find_up_all(&env::CWD, &["pitchfork.toml"]));
+        paths
     }
 
     pub fn all_merged() -> PitchforkToml {
@@ -60,7 +64,7 @@ impl PitchforkToml {
         }
     }
 
-    fn merge(&mut self, pt: Self) {
+    pub fn merge(&mut self, pt: Self) {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
