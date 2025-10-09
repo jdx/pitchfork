@@ -84,6 +84,8 @@ pub struct PitchforkTomlDaemon {
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub boot_start: Option<bool>,
     #[serde(skip)]
     pub path: Option<PathBuf>,
 }

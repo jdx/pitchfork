@@ -2,6 +2,7 @@ use crate::Result;
 use clap::Parser;
 
 mod activate;
+mod boot;
 mod cd;
 mod clean;
 mod completion;
@@ -28,6 +29,7 @@ struct Cli {
 #[derive(Debug, clap::Subcommand)]
 enum Commands {
     Activate(activate::Activate),
+    Boot(boot::Boot),
     Cd(cd::Cd),
     Clean(clean::Clean),
     Config(config::Config),
@@ -49,6 +51,7 @@ pub async fn run() -> Result<()> {
     let args = Cli::parse();
     match args.command {
         Commands::Activate(activate) => activate.run().await,
+        Commands::Boot(boot) => boot.run().await,
         Commands::Cd(cd) => cd.run().await,
         Commands::Clean(clean) => clean.run().await,
         Commands::Config(config) => config.run().await,

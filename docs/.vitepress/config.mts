@@ -39,6 +39,7 @@ export default defineConfig({
       { text: "Ready Checks", link: "/ready-checks" },
       { text: "Retry on Failure", link: "/retry" },
       { text: "Cron Scheduling", link: "/cron" },
+      { text: "Start on Boot", link: "/boot-start" },
       { text: "Configuration", link: "/config" },
       { text: "Architecture", link: "/architecture" },
       {

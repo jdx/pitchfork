@@ -38,6 +38,7 @@ impl Add {
                 retry: 0,
                 ready_delay: None,
                 ready_output: None,
+                boot_start: None,
                 path: None,
             },
         );
