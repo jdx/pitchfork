@@ -491,41 +491,23 @@ impl Supervisor {
                         .unwrap();
                 } else {
                     // Handle error exit - mark for retry
-                    if let Some(daemon) = current_daemon_clone {
-                        let retry_remaining = daemon.retry.saturating_sub(daemon.retry_count);
-                        if retry_remaining > 0 {
-                            info!(
-                                "daemon {id} failed, marking for retry ({}/{} attempts used)",
-                                daemon.retry_count, daemon.retry
-                            );
-                            // Mark daemon as errored and needing retry
-                            // The retry will be handled by interval_watch
-                            SUPERVISOR
-                                .upsert_daemon(UpsertDaemonOpts {
-                                    id: id.clone(),
-                                    status: DaemonStatus::Errored(status.code()),
-                                    last_exit_success: Some(false),
-                                    ..Default::default()
-                                })
-                                .await
-                                .unwrap();
-                        } else {
-                            SUPERVISOR
-                                .upsert_daemon(UpsertDaemonOpts {
-                                    id: id.clone(),
-                                    status: DaemonStatus::Errored(status.code()),
-                                    last_exit_success: Some(false),
-                                    ..Default::default()
-                                })
-                                .await
-                                .unwrap();
-                        }
-                    }
+                    // retry_count increment will be handled by interval_watch
+                    SUPERVISOR
+                        .upsert_daemon(UpsertDaemonOpts {
+                            id: id.clone(),
+                            pid: None,
+                            status: DaemonStatus::Errored(status.code()),
+                            last_exit_success: Some(false),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
                 }
             } else {
                 SUPERVISOR
                     .upsert_daemon(UpsertDaemonOpts {
                         id: id.clone(),
+                        pid: None,
                         status: DaemonStatus::Errored(None),
                         last_exit_success: Some(false),
                         ..Default::default()
