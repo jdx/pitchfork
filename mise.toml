@@ -2,6 +2,7 @@
 _.path = "target/debug"
 
 [tasks.ci]
+depends = ["lint"]
 run = [
   "cargo build",
   "cargo test",
@@ -10,6 +11,12 @@ run = [
 [tasks.docs]
 dir = "docs"
 run = "bun i && exec bun run docs:dev"
+
+[tasks.lint]
+run = [
+  "cargo fmt --check",
+  "cargo clippy --all-targets --all-features -- -D warnings",
+]
 
 [tasks.lint-fix]
 run = [
