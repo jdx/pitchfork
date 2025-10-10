@@ -12,6 +12,12 @@ pub struct Procs {
 
 pub static PROCS: Lazy<Procs> = Lazy::new(Procs::new);
 
+impl Default for Procs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Procs {
     pub fn new() -> Self {
         let procs = Self {

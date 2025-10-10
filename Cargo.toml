@@ -17,6 +17,10 @@ include = [
 name = "pitchfork"
 path = "src/main.rs"
 
+[lib]
+name = "pitchfork_cli"
+path = "src/lib.rs"
+
 [dependencies]
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
@@ -50,3 +54,6 @@ xx = { version = "2", features = ["fslock", "hash"] }
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

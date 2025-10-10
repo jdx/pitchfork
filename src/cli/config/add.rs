@@ -36,6 +36,8 @@ impl Add {
                 auto,
                 cron: None,
                 retry: 0,
+                ready_delay: None,
+                ready_output: None,
                 path: None,
             },
         );

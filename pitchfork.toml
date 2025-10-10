@@ -1,3 +1,4 @@
 [daemons.docs]
 run = "mise run -q docs"
 auto = ["start", "stop"]
+ready_output = "http://localhost:"

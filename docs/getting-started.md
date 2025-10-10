@@ -13,11 +13,13 @@ This project is experimental. It works in basic situations but you'll undoubtedl
 
 ## Features
 
-- only starting daemons if they have not already been started
-- auto start daemons when entering in a project directory - then auto stop when leaving
-- restarting daemons on failure
-- cron jobs
-- [coming soon] automatically start daemons on boot
+- Only start daemons if they have not already been started
+- Ready check based on delay, output or HTTP response
+- Auto start daemons when entering a project directory - then auto stop when leaving
+- Restart daemons on failure
+- Cron jobs
+- 🚧 Global configuration
+- 🚧 Automatically start daemons on boot
 
 ## Workflows
 
@@ -44,9 +46,8 @@ You need to label the daemon with a name, in this case "docs". Once it's started
 we reference it. If you run `pitchfork run docs "..."` again, it will not do anything if the daemon
 is still running—this way you can start one-off daemons without thinking if you've already done so.
 
-On [`pitchfork run`](/cli/run), pitchfork will emit the output of `npm start docs-dev-server` for a few seconds.
-If it fails during that time, it will exit non-zero to help you see if the daemon was configured/setup
-correctly. -- TODO this needs to be implemented
+On [`pitchfork run`](/cli/run), pitchfork will check the running status for a few seconds.
+If it fails during that time, it will exit non-zero to help you see if the daemon was configured/setup correctly. See more in [Ready Checks](/ready-checks).
 
 ### Adding a daemon to a project
 
@@ -95,24 +96,6 @@ Here's a `pitchfork.toml` with this configured:
 [daemons.api]
 run = "npm run server:api"
 auto = ["start", "stop"]
-```
-
-## Automatic Retry on Failure
-
-Pitchfork can automatically retry daemons when they exit with an error code. Configure the number of retry attempts using the `retry` field in `pitchfork.toml`:
-
-```toml
-[daemons.api]
-run = "npm run server:api"
-retry = 5  # Retry up to 5 times on error exit
-```
-
-When a daemon exits with a non-zero exit code, pitchfork will automatically restart it until the retry count is exhausted. Each retry attempt is tracked, and when all retries are used, the daemon remains in an errored state.
-
-You can also specify retry behavior for one-off daemons using the `--retry` flag:
-
-```bash
-pitchfork run my-task --retry 3 -- ./my-flaky-script.sh
 ```
 
 ## Logs

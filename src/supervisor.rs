@@ -21,6 +21,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
+use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::{select, signal, time};
 
@@ -145,6 +146,9 @@ impl Supervisor {
                     cron_retrigger: daemon.cron_retrigger,
                     retry: daemon.retry,
                     retry_count: daemon.retry_count + 1,
+                    ready_delay: daemon.ready_delay,
+                    ready_output: daemon.ready_output.clone(),
+                    wait_ready: false,
                 };
                 if let Err(e) = self.run(retry_opts).await {
                     error!("failed to retry daemon {}: {}", id, e);
@@ -191,34 +195,95 @@ impl Supervisor {
 
     async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
-        let cmd = opts.cmd;
+        let cmd = opts.cmd.clone();
         let daemon = self.get_daemon(id).await;
         if let Some(daemon) = daemon {
-            if let Some(pid) = daemon.pid {
-                if opts.force {
-                    self.stop(id).await?;
-                    info!("run: stop completed for daemon {id}");
-                } else {
-                    warn!("daemon {id} already running with pid {pid}");
-                    return Ok(IpcResponse::DaemonAlreadyRunning);
+            // Stopping state is treated as "not running" - the monitoring task will clean it up
+            // Only check for Running state with a valid PID
+            if !daemon.status.is_stopping() && !daemon.status.is_stopped() {
+                if let Some(pid) = daemon.pid {
+                    if opts.force {
+                        self.stop(id).await?;
+                        info!("run: stop completed for daemon {id}");
+                    } else {
+                        warn!("daemon {id} already running with pid {pid}");
+                        return Ok(IpcResponse::DaemonAlreadyRunning);
+                    }
                 }
             }
         }
+
+        // If wait_ready is true and retry is configured, implement retry loop
+        if opts.wait_ready && opts.retry > 0 {
+            let max_attempts = opts.retry + 1; // initial attempt + retries
+            for attempt in 0..max_attempts {
+                let mut retry_opts = opts.clone();
+                retry_opts.retry_count = attempt;
+                retry_opts.cmd = cmd.clone();
+
+                let result = self.run_once(retry_opts).await?;
+
+                match result {
+                    IpcResponse::DaemonReady { daemon } => {
+                        return Ok(IpcResponse::DaemonReady { daemon });
+                    }
+                    IpcResponse::DaemonFailedWithCode { exit_code } => {
+                        if attempt < opts.retry {
+                            let backoff_secs = 2u64.pow(attempt);
+                            info!(
+                                "daemon {id} failed (attempt {}/{}), retrying in {}s",
+                                attempt + 1,
+                                max_attempts,
+                                backoff_secs
+                            );
+                            time::sleep(Duration::from_secs(backoff_secs)).await;
+                            continue;
+                        } else {
+                            info!("daemon {id} failed after {} attempts", max_attempts);
+                            return Ok(IpcResponse::DaemonFailedWithCode { exit_code });
+                        }
+                    }
+                    other => return Ok(other),
+                }
+            }
+        }
+
+        // No retry or wait_ready is false
+        self.run_once(opts).await
+    }
+
+    async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
+        let id = &opts.id;
+        let cmd = opts.cmd;
+
+        // Create channel for readiness notification if wait_ready is true
+        let (ready_tx, ready_rx) = if opts.wait_ready {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+
         let cmd = once("exec".to_string())
             .chain(cmd.into_iter())
             .collect_vec();
-        let args = vec!["-c".to_string(), cmd.join(" ")];
+        let args = vec!["-c".to_string(), shell_words::join(&cmd)];
         let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
         xx::file::mkdirp(log_path.parent().unwrap())?;
         info!("run: spawning daemon {id} with args: {args:?}");
-        let mut child = tokio::process::Command::new("sh")
-            .args(&args)
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(&args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .current_dir(&opts.dir)
-            .spawn()
-            .into_diagnostic()?;
+            .current_dir(&opts.dir);
+
+        // Ensure daemon can find user tools by using the original PATH
+        if let Some(ref path) = *env::ORIGINAL_PATH {
+            cmd.env("PATH", path);
+        }
+
+        let mut child = cmd.spawn().into_diagnostic()?;
         let pid = child.id().unwrap();
         info!("started daemon {id} with pid {pid}");
         let daemon = self
@@ -234,10 +299,17 @@ impl Supervisor {
                 last_exit_success: None,
                 retry: Some(opts.retry),
                 retry_count: Some(opts.retry_count),
+                ready_delay: opts.ready_delay,
+                ready_output: opts.ready_output.clone(),
             })
             .await?;
-        let id = id.to_string();
+
+        let id_clone = id.to_string();
+        let ready_delay = opts.ready_delay;
+        let ready_output = opts.ready_output.clone();
+
         tokio::spawn(async move {
+            let id = id_clone;
             let stdout = child.stdout.take().unwrap();
             let stderr = child.stderr.take().unwrap();
             let mut stdout = tokio::io::BufReader::new(stdout).lines();
@@ -250,6 +322,7 @@ impl Supervisor {
                     .await
                     .unwrap(),
             );
+
             let now = || chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
             let format_line = |line: String| {
                 if line.starts_with(&format!("{id} ")) {
@@ -259,25 +332,132 @@ impl Supervisor {
                     format!("{} {id} {line}\n", now())
                 }
             };
+
+            // Setup readiness checking
+            let mut ready_notified = false;
+            let mut ready_tx = ready_tx;
+            let ready_pattern =
+                ready_output
+                    .as_ref()
+                    .and_then(|pattern| match regex::Regex::new(pattern) {
+                        Ok(re) => Some(re),
+                        Err(e) => {
+                            error!("invalid regex pattern for daemon {id}: {e}");
+                            None
+                        }
+                    });
+
+            let mut delay_timer =
+                ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
+
+            // Use a channel to communicate process exit status
+            let (exit_tx, mut exit_rx) =
+                tokio::sync::mpsc::channel::<std::io::Result<std::process::ExitStatus>>(1);
+
+            // Spawn a task to wait for process exit
+            let child_pid = child.id().unwrap();
+            tokio::spawn(async move {
+                let result = child.wait().await;
+                debug!(
+                    "daemon pid {child_pid} wait() completed with result: {:?}",
+                    result
+                );
+                let _ = exit_tx.send(result).await;
+            });
+
+            let mut exit_status = None;
+
             loop {
                 select! {
                     Ok(Some(line)) = stdout.next_line() => {
-                        let line = format_line(line);
-                        log_appender.write_all(line.as_bytes()).await.unwrap();
+                        let formatted = format_line(line.clone());
+                        log_appender.write_all(formatted.as_bytes()).await.unwrap();
                         log_appender.flush().await.unwrap();
-                        trace!("stdout: {id} {line}");
+                        trace!("stdout: {id} {formatted}");
+
+                        // Check if output matches ready pattern
+                        if !ready_notified {
+                            if let Some(ref pattern) = ready_pattern {
+                                if pattern.is_match(&line) {
+                                    info!("daemon {id} ready: output matched pattern");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                }
+                            }
+                        }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
-                        let line = format_line(line);
-                        log_appender.write_all(line.as_bytes()).await.unwrap();
+                        let formatted = format_line(line.clone());
+                        log_appender.write_all(formatted.as_bytes()).await.unwrap();
                         log_appender.flush().await.unwrap();
-                        trace!("stderr: {id} {line}");
+                        trace!("stderr: {id} {formatted}");
+
+                        // Check if output matches ready pattern (also check stderr)
+                        if !ready_notified {
+                            if let Some(ref pattern) = ready_pattern {
+                                if pattern.is_match(&line) {
+                                    info!("daemon {id} ready: output matched pattern");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                }
+                            }
+                        }
                     },
+                    Some(result) = exit_rx.recv() => {
+                        // Process exited - save exit status and notify if not ready yet
+                        exit_status = Some(result);
+                        debug!("daemon {id} process exited, exit_status: {:?}", exit_status);
+                        if !ready_notified {
+                            if let Some(tx) = ready_tx.take() {
+                                let exit_code = exit_status.as_ref().and_then(|r| r.as_ref().ok().and_then(|s| s.code()));
+                                debug!("daemon {id} not ready yet, sending failure notification with exit_code: {:?}", exit_code);
+                                let _ = tx.send(Err(exit_code));
+                            }
+                        } else {
+                            debug!("daemon {id} was already marked ready, not sending failure notification");
+                        }
+                        break;
+                    }
+                    _ = async {
+                        if let Some(ref mut timer) = delay_timer {
+                            timer.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    } => {
+                        if !ready_notified && ready_pattern.is_none() {
+                            info!("daemon {id} ready: delay elapsed");
+                            ready_notified = true;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                        }
+                        // Disable timer after it fires
+                        delay_timer = None;
+                    }
                     else => break,
                 }
             }
-            let exit_status = child.wait().await;
+
+            // Get the final exit status
+            let exit_status = if let Some(status) = exit_status {
+                status
+            } else {
+                // Streams closed but process hasn't exited yet, wait for it
+                match exit_rx.recv().await {
+                    Some(status) => status,
+                    None => {
+                        warn!("daemon {id} exit channel closed without receiving status");
+                        Err(std::io::Error::other("exit channel closed"))
+                    }
+                }
+            };
             let current_daemon = SUPERVISOR.get_daemon(&id).await;
+
             // Check if this monitoring task is for the current daemon process
             if current_daemon.is_none()
                 || current_daemon.as_ref().is_some_and(|d| d.pid != Some(pid))
@@ -286,60 +466,48 @@ impl Supervisor {
                 return;
             }
             let current_daemon_clone = current_daemon.clone();
+            let is_stopping = current_daemon
+                .as_ref()
+                .is_some_and(|d| d.status.is_stopping());
+
             if current_daemon.is_some_and(|d| d.status.is_stopped()) {
                 // was stopped by this supervisor so don't update status
                 return;
             }
             if let Ok(status) = exit_status {
                 info!("daemon {id} exited with status {status}");
-                if status.success() {
+                if status.success() || is_stopping {
+                    // If stopping, always mark as Stopped with success
+                    // This allows monitoring task to clear PID after stop() was called
                     SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
+                            pid: None, // Clear PID now that process has exited
                             status: DaemonStatus::Stopped,
-                            last_exit_success: Some(true),
+                            last_exit_success: Some(status.success()),
                             ..Default::default()
                         })
                         .await
                         .unwrap();
                 } else {
                     // Handle error exit - mark for retry
-                    if let Some(daemon) = current_daemon_clone {
-                        let retry_remaining = daemon.retry.saturating_sub(daemon.retry_count);
-                        if retry_remaining > 0 {
-                            info!(
-                                "daemon {id} failed, marking for retry ({}/{} attempts used)",
-                                daemon.retry_count, daemon.retry
-                            );
-                            // Mark daemon as errored and needing retry
-                            // The retry will be handled by interval_watch
-                            SUPERVISOR
-                                .upsert_daemon(UpsertDaemonOpts {
-                                    id: id.clone(),
-                                    status: DaemonStatus::Errored(status.code()),
-                                    last_exit_success: Some(false),
-                                    retry_count: Some(daemon.retry_count),
-                                    ..Default::default()
-                                })
-                                .await
-                                .unwrap();
-                        } else {
-                            SUPERVISOR
-                                .upsert_daemon(UpsertDaemonOpts {
-                                    id: id.clone(),
-                                    status: DaemonStatus::Errored(status.code()),
-                                    last_exit_success: Some(false),
-                                    ..Default::default()
-                                })
-                                .await
-                                .unwrap();
-                        }
-                    }
+                    // retry_count increment will be handled by interval_watch
+                    SUPERVISOR
+                        .upsert_daemon(UpsertDaemonOpts {
+                            id: id.clone(),
+                            pid: None,
+                            status: DaemonStatus::Errored(status.code()),
+                            last_exit_success: Some(false),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
                 }
             } else {
                 SUPERVISOR
                     .upsert_daemon(UpsertDaemonOpts {
                         id: id.clone(),
+                        pid: None,
                         status: DaemonStatus::Errored(None),
                         last_exit_success: Some(false),
                         ..Default::default()
@@ -349,7 +517,25 @@ impl Supervisor {
             }
         });
 
-        Ok(IpcResponse::DaemonStart { daemon })
+        // If wait_ready is true, wait for readiness notification
+        if let Some(ready_rx) = ready_rx {
+            match ready_rx.await {
+                Ok(Ok(())) => {
+                    info!("daemon {id} is ready");
+                    Ok(IpcResponse::DaemonReady { daemon })
+                }
+                Ok(Err(exit_code)) => {
+                    error!("daemon {id} failed before becoming ready");
+                    Ok(IpcResponse::DaemonFailedWithCode { exit_code })
+                }
+                Err(_) => {
+                    error!("readiness channel closed unexpectedly for daemon {id}");
+                    Ok(IpcResponse::DaemonStart { daemon })
+                }
+            }
+        } else {
+            Ok(IpcResponse::DaemonStart { daemon })
+        }
     }
 
     async fn stop(&self, id: &str) -> Result<IpcResponse> {
@@ -360,12 +546,15 @@ impl Supervisor {
                 trace!("killing pid: {pid}");
                 PROCS.refresh_processes();
                 if PROCS.is_running(pid) {
+                    // First set status to Stopping (keeps PID for monitoring task)
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
-                        status: DaemonStatus::Stopped,
+                        status: DaemonStatus::Stopping,
                         ..Default::default()
                     })
                     .await?;
+
+                    // Then kill the process
                     if let Err(e) = PROCS.kill_async(pid).await {
                         warn!("failed to kill pid {pid}: {e}");
                     }
@@ -376,11 +565,13 @@ impl Supervisor {
                             warn!("failed to kill child pid {child_pid}: {e}");
                         }
                     }
+                    // Monitoring task will clear PID and set to Stopped when it detects exit
                 } else {
                     debug!("pid {pid} not running");
-                    // Still update status even if process is not running
+                    // Process already dead, directly mark as stopped
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
+                        pid: None,
                         status: DaemonStatus::Stopped,
                         ..Default::default()
                     })
@@ -569,6 +760,9 @@ impl Supervisor {
                                     cron_retrigger: Some(retrigger),
                                     retry: daemon.retry,
                                     retry_count: daemon.retry_count,
+                                    ready_delay: daemon.ready_delay,
+                                    ready_output: daemon.ready_output.clone(),
+                                    wait_ready: false,
                                 };
                                 if let Err(e) = self.run(opts).await {
                                     error!("failed to run cron daemon {id}: {e}");
@@ -738,6 +932,10 @@ impl Supervisor {
             retry_count: opts
                 .retry_count
                 .unwrap_or(existing.map(|d| d.retry_count).unwrap_or(0)),
+            ready_delay: opts.ready_delay.or(existing.and_then(|d| d.ready_delay)),
+            ready_output: opts
+                .ready_output
+                .or(existing.and_then(|d| d.ready_output.clone())),
         };
         state_file
             .daemons
@@ -829,6 +1027,8 @@ struct UpsertDaemonOpts {
     last_exit_success: Option<bool>,
     retry: Option<u32>,
     retry_count: Option<u32>,
+    ready_delay: Option<u64>,
+    ready_output: Option<String>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -845,6 +1045,8 @@ impl Default for UpsertDaemonOpts {
             last_exit_success: None,
             retry: None,
             retry_count: None,
+            ready_delay: None,
+            ready_output: None,
         }
     }
 }

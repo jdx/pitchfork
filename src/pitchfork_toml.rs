@@ -76,6 +76,10 @@ pub struct PitchforkTomlDaemon {
     pub cron: Option<PitchforkTomlCron>,
     #[serde(default)]
     pub retry: u32,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ready_delay: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ready_output: Option<String>,
     #[serde(skip)]
     pub path: Option<PathBuf>,
 }
