@@ -843,7 +843,7 @@
   "config": {
     "props": {}
   },
-  "version": "0.2.0",
+  "version": "0.2.1",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
