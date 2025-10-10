@@ -33,7 +33,7 @@ duct = "0.13"
 exponential-backoff = "2"
 indexmap = { version = "2", features = ["serde"] }
 interprocess = { version = "2", features = ["tokio"] }
-itertools = "0.13"
+itertools = "0.14"
 log = {version="0.4", features=["serde"]}
 miette = { version = "7", features = ["fancy"] }
 notify = { version = "7", features = ["macos_kqueue"] }
