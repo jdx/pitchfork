@@ -101,6 +101,9 @@ impl Start {
         }
 
         if any_failed {
+            if last_exit_code != 0 {
+                error!("Process exited with code {}", last_exit_code);
+            }
             std::process::exit(last_exit_code);
         }
         Ok(())

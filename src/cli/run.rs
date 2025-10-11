@@ -56,6 +56,7 @@ impl Run {
         }
 
         if let Some(code) = exit_code {
+            error!("Process exited with code {}", code);
             std::process::exit(code);
         }
         Ok(())
