@@ -2,9 +2,8 @@
 _.path = "target/debug"
 
 [tasks.ci]
-depends = ["lint"]
+depends = ["lint", "build"]
 run = [
-  "cargo build",
   "cargo test",
 ]
 
