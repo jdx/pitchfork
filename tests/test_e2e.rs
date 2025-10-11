@@ -1,145 +1,7 @@
-use pitchfork_cli::*;
-use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+mod common;
+
+use common::{get_script_path, TestEnv};
 use std::time::Duration;
-use tempfile::TempDir;
-
-/// Helper struct for E2E test environment
-struct TestEnv {
-    temp_dir: TempDir,
-    pitchfork_bin: PathBuf,
-    home_dir: PathBuf,
-}
-
-impl TestEnv {
-    /// Create a new test environment with isolated directories
-    fn new() -> Self {
-        let temp_dir = TempDir::new().unwrap();
-        let home_dir = temp_dir.path().join("home");
-        fs::create_dir_all(&home_dir).unwrap();
-
-        // Find the pitchfork binary
-        let pitchfork_bin = if cfg!(debug_assertions) {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join("debug")
-                .join("pitchfork")
-        } else {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join("release")
-                .join("pitchfork")
-        };
-
-        Self {
-            temp_dir,
-            pitchfork_bin,
-            home_dir,
-        }
-    }
-
-    /// Get the project directory path
-    fn project_dir(&self) -> PathBuf {
-        self.temp_dir.path().to_path_buf()
-    }
-
-    /// Create a pitchfork.toml file with the given content
-    fn create_toml(&self, content: &str) -> PathBuf {
-        let toml_path = self.project_dir().join("pitchfork.toml");
-        fs::write(&toml_path, content).unwrap();
-        toml_path
-    }
-
-    /// Run a pitchfork command and return the output
-    fn run_command(&self, args: &[&str]) -> std::process::Output {
-        self.run_command_with_env(args, &[])
-    }
-
-    /// Run a pitchfork command with additional environment variables
-    fn run_command_with_env(
-        &self,
-        args: &[&str],
-        extra_env: &[(&str, &str)],
-    ) -> std::process::Output {
-        let mut cmd = Command::new(&self.pitchfork_bin);
-        cmd.args(args)
-            .current_dir(self.project_dir())
-            .env("HOME", &self.home_dir)
-            .env("PITCHFORK_LOG", "debug")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        for (key, value) in extra_env {
-            cmd.env(key, value);
-        }
-
-        cmd.output().expect("Failed to execute pitchfork command")
-    }
-
-    /// Run a pitchfork command in the background
-    fn run_background(&self, args: &[&str]) -> std::process::Child {
-        let mut cmd = Command::new(&self.pitchfork_bin);
-        cmd.args(args)
-            .current_dir(self.project_dir())
-            .env("HOME", &self.home_dir)
-            .env("PITCHFORK_LOG", "debug")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        cmd.spawn().expect("Failed to spawn pitchfork command")
-    }
-
-    /// Wait for a specific duration
-    fn sleep(&self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
-
-    /// Check if the pitchfork binary exists, build if necessary
-    fn ensure_binary_exists(&self) -> Result<()> {
-        if !self.pitchfork_bin.exists() {
-            eprintln!("Building pitchfork binary...");
-            let status = Command::new("cargo")
-                .args(["build"])
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .status()
-                .expect("Failed to build pitchfork");
-
-            if !status.success() {
-                panic!("Failed to build pitchfork binary");
-            }
-        }
-        Ok(())
-    }
-
-    /// Read log file for a daemon
-    fn read_logs(&self, daemon_id: &str) -> String {
-        let log_path = self
-            .home_dir
-            .join(".local")
-            .join("state")
-            .join("pitchfork")
-            .join("logs")
-            .join(daemon_id)
-            .join(format!("{}.log", daemon_id));
-
-        if log_path.exists() {
-            fs::read_to_string(log_path).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    }
-
-    /// Get the state file path
-    #[allow(dead_code)]
-    fn state_file_path(&self) -> PathBuf {
-        self.home_dir
-            .join(".local")
-            .join("state")
-            .join("pitchfork")
-            .join("state")
-    }
-}
 
 #[test]
 
@@ -147,9 +9,7 @@ fn test_instant_fail_task() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let fail_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fail.ts");
+    let fail_script = get_script_path("fail.ts");
     let toml_content = format!(
         r#"
 [daemons.instant_fail]
@@ -191,9 +51,7 @@ fn test_two_second_fail_task() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let fail_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fail.ts");
+    let fail_script = get_script_path("fail.ts");
     let toml_content = format!(
         r#"
 [daemons.two_sec_fail]
@@ -240,9 +98,7 @@ fn test_four_second_fail_task() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let fail_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fail.ts");
+    let fail_script = get_script_path("fail.ts");
     let toml_content = format!(
         r#"
 [daemons.four_sec_fail]
@@ -344,9 +200,7 @@ fn test_logs_tail_command() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("slowly_output.ts");
+    let script = get_script_path("slowly_output.ts");
     let toml_content = format!(
         r#"
 [daemons.test_tail]
@@ -396,9 +250,7 @@ fn test_wait_command() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("slowly_output.ts");
+    let script = get_script_path("slowly_output.ts");
     let toml_content = format!(
         r#"
 [daemons.test_wait]
@@ -420,7 +272,6 @@ ready_delay = 0
         "Start command should succeed"
     );
 
-    // Here `start` needs ~700ms, not sure why it's so slow
     assert!(
         start_elapsed < Duration::from_secs(2),
         "Start should return quickly with ready_delay=0, took {:?}",
@@ -494,9 +345,7 @@ fn test_retry_zero() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let fail_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fail.ts");
+    let fail_script = get_script_path("fail.ts");
     let toml_content = format!(
         r#"
 [daemons.retry_zero]
@@ -540,9 +389,7 @@ fn test_retry_three() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let fail_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fail.ts");
+    let fail_script = get_script_path("fail.ts");
     let toml_content = format!(
         r#"
 [daemons.retry_three]
@@ -602,9 +449,7 @@ fn test_retry_success_on_third() {
         .unwrap()
         .as_millis()
         .to_string();
-    let success_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("success_on_third.ts");
+    let success_script = get_script_path("success_on_third.ts");
     let toml_content = format!(
         r#"
 [daemons.retry_success]
@@ -758,9 +603,7 @@ fn test_ready_output_no_match_blocks() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("slowly_output.ts");
+    let script = get_script_path("slowly_output.ts");
     let toml_content = format!(
         r#"
 [daemons.ready_no_match]
@@ -877,9 +720,7 @@ fn test_retry_with_ready_check() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let fail_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fail.ts");
+    let fail_script = get_script_path("fail.ts");
     let toml_content = format!(
         r#"
 [daemons.retry_ready]

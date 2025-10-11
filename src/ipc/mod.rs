@@ -8,19 +8,19 @@ use std::path::PathBuf;
 pub(crate) mod client;
 pub(crate) mod server;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
-pub enum IpcMessage {
-    Connect(String),
-    ConnectOK,
-    Run(String, Vec<String>),
-    Stop(String),
-    DaemonAlreadyRunning(String),
-    DaemonAlreadyStopped(String),
-    DaemonStart(Daemon),
-    DaemonStop { name: String },
-    DaemonFailed { name: String, error: String },
-    Response(String),
-}
+// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
+// pub enum IpcMessage {
+//     Connect(String),
+//     ConnectOK,
+//     Run(String, Vec<String>),
+//     Stop(String),
+//     DaemonAlreadyRunning(String),
+//     DaemonAlreadyStopped(String),
+//     DaemonStart(Daemon),
+//     DaemonStop { name: String },
+//     DaemonFailed { name: String, error: String },
+//     Response(String),
+// }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
 pub enum IpcRequest {
