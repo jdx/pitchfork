@@ -1,5 +1,7 @@
+use crate::ui::style::edim;
 use crate::watch_files::WatchFiles;
 use crate::{env, Result};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Timelike};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::RecursiveMode;
@@ -30,6 +32,14 @@ pub struct Logs {
     /// Show logs in real-time
     #[clap(short, long)]
     tail: bool,
+
+    /// Show logs from this time (format: "YYYY-MM-DD HH:MM:SS")
+    #[clap(long)]
+    from: Option<String>,
+
+    /// Show logs until this time (format: "YYYY-MM-DD HH:MM:SS")
+    #[clap(long)]
+    to: Option<String>,
 }
 
 impl Logs {
@@ -44,7 +54,11 @@ impl Logs {
             }
             return Ok(());
         }
-        self.print_existing_logs()?;
+
+        let from = self.from.as_ref().and_then(|s| parse_datetime(s).ok());
+        let to = self.to.as_ref().and_then(|s| parse_datetime(s).ok());
+
+        self.print_existing_logs(from, to)?;
         if self.tail {
             tail_logs(&self.id).await?;
         }
@@ -52,7 +66,11 @@ impl Logs {
         Ok(())
     }
 
-    fn print_existing_logs(&self) -> Result<()> {
+    fn print_existing_logs(
+        &self,
+        from: Option<DateTime<Local>>,
+        to: Option<DateTime<Local>>,
+    ) -> Result<()> {
         let log_files = get_log_file_infos(&self.id)?;
         trace!("log files for: {}", log_files.keys().join(", "));
         let log_lines = log_files
@@ -73,6 +91,23 @@ impl Logs {
                 };
                 merge_log_lines(name, lines)
             })
+            .filter(|(date, _, _)| {
+                if let Ok(dt) = parse_datetime(date) {
+                    if let Some(from) = from {
+                        if dt < from {
+                            return false;
+                        }
+                    }
+                    if let Some(to) = to {
+                        if dt > to {
+                            return false;
+                        }
+                    }
+                    true
+                } else {
+                    true // Include lines without valid timestamps
+                }
+            })
             .sorted_by_cached_key(|l| l.0.to_string());
 
         let log_lines = if self.n == 0 {
@@ -83,9 +118,9 @@ impl Logs {
 
         for (date, id, msg) in log_lines {
             if self.id.len() == 1 {
-                println!("{} {}", date, msg);
+                println!("{} {}", edim(&date), msg);
             } else {
-                println!("{} {} {}", date, id, msg);
+                println!("{} {} {}", edim(&date), id, msg);
             }
         }
         Ok(())
@@ -171,7 +206,7 @@ pub async fn tail_logs(names: &[String]) -> Result<()> {
             .sorted_by_cached_key(|l| l.0.to_string())
             .collect_vec();
         for (date, name, msg) in out {
-            println!("{} {} {}", date, name, msg);
+            println!("{} {} {}", edim(&date), name, msg);
         }
     }
     Ok(())
@@ -182,4 +217,73 @@ struct LogFile {
     path: PathBuf,
     file: fs::File,
     cur: u64,
+}
+
+fn parse_datetime(s: &str) -> Result<DateTime<Local>> {
+    NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+        .into_diagnostic()
+        .map(|dt| Local.from_local_datetime(&dt).unwrap())
+}
+
+/// Print logs for a specific daemon within a time range
+/// This is a public API used by other commands (like run/start) to show logs on failure
+pub fn print_logs_for_time_range(
+    daemon_id: &str,
+    from: DateTime<Local>,
+    to: Option<DateTime<Local>>,
+) -> Result<()> {
+    let daemon_ids = vec![daemon_id.to_string()];
+    let log_files = get_log_file_infos(&daemon_ids)?;
+
+    // Truncate 'from' to second precision to match log timestamp precision
+    // This ensures we include logs that occurred in the same second as the start time
+    let from = from.with_nanosecond(0).unwrap();
+    let to = to.map(|t| t.with_nanosecond(0).unwrap());
+
+    let log_lines = log_files
+        .iter()
+        .flat_map(|(name, lf)| {
+            let rev = match xx::file::open(&lf.path) {
+                Ok(f) => rev_lines::RevLines::new(f),
+                Err(e) => {
+                    error!("{}: {}", lf.path.display(), e);
+                    return vec![];
+                }
+            };
+            let lines = rev.into_iter().filter_map(Result::ok).collect_vec();
+            merge_log_lines(name, lines)
+        })
+        .filter(|(date, _, _)| {
+            if let Ok(dt) = parse_datetime(date) {
+                // include logs at the exact start time
+                if dt < from {
+                    return false;
+                }
+                if let Some(to) = to {
+                    if dt > to {
+                        return false;
+                    }
+                }
+                true
+            } else {
+                true
+            }
+        })
+        .sorted_by_cached_key(|l| l.0.to_string())
+        .collect_vec();
+
+    if log_lines.is_empty() {
+        eprintln!(
+            "No logs found for daemon '{}' in the specified time range",
+            daemon_id
+        );
+    } else {
+        eprintln!("\n{} {} {}", edim("==="), edim("Error logs"), edim("==="));
+        for (date, _id, msg) in log_lines {
+            eprintln!("{} {}", edim(&date), msg);
+        }
+        eprintln!("{} {} {}\n", edim("==="), edim("End of logs"), edim("==="));
+    }
+
+    Ok(())
 }

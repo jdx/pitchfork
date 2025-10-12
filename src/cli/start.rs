@@ -61,6 +61,8 @@ impl Start {
             }
             let daemon = pt.daemons.get(id);
             if let Some(daemon) = daemon {
+                info!("Starting daemon {}", id);
+                let start_time = chrono::Local::now();
                 let cmd = shell_words::split(&daemon.run).into_diagnostic()?;
                 let (started, exit_code) = ipc
                     .run(RunOptions {
@@ -94,6 +96,15 @@ impl Start {
                     any_failed = true;
                     last_exit_code = code;
                     error!("daemon {} failed with exit code {}", id, code);
+                    
+                    // Print logs from the time we started this specific daemon
+                    if let Err(e) = crate::cli::logs::print_logs_for_time_range(
+                        id,
+                        start_time,
+                        None,
+                    ) {
+                        error!("Failed to print logs: {}", e);
+                    }
                 }
             } else {
                 warn!("Daemon {} not found", id);

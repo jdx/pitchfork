@@ -31,6 +31,7 @@ impl Run {
             bail!("No command provided");
         }
 
+        let start_time = chrono::Local::now();
         let ipc = IpcClient::connect(true).await?;
 
         let (started, exit_code) = ipc
@@ -56,7 +57,14 @@ impl Run {
         }
 
         if let Some(code) = exit_code {
-            error!("Process exited with code {}", code);
+            error!("Daemon '{}' failed with exit code {}", self.id, code);
+
+            // Print logs from the time we started
+            if let Err(e) = crate::cli::logs::print_logs_for_time_range(&self.id, start_time, None)
+            {
+                error!("Failed to print logs: {}", e);
+            }
+
             std::process::exit(code);
         }
         Ok(())
