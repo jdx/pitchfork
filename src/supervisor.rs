@@ -465,7 +465,6 @@ impl Supervisor {
                 // Another process has taken over, don't update status
                 return;
             }
-            let current_daemon_clone = current_daemon.clone();
             let is_stopping = current_daemon
                 .as_ref()
                 .is_some_and(|d| d.status.is_stopping());
