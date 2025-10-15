@@ -7,6 +7,17 @@ pub static PITCHFORK_BIN: Lazy<PathBuf> =
 pub static CWD: Lazy<PathBuf> = Lazy::new(|| current_dir().unwrap_or_default());
 
 pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| dirs::home_dir().unwrap_or_default());
+pub static PITCHFORK_CONFIG_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    var_path("PITCHFORK_CONFIG_DIR").unwrap_or(
+        dirs::config_dir()
+            .unwrap_or(HOME_DIR.join(".config"))
+            .join("pitchfork"),
+    )
+});
+pub static PITCHFORK_GLOBAL_CONFIG_USER: Lazy<PathBuf> =
+    Lazy::new(|| PITCHFORK_CONFIG_DIR.join("config.toml"));
+pub static PITCHFORK_GLOBAL_CONFIG_SYSTEM: Lazy<PathBuf> =
+    Lazy::new(|| PathBuf::from("/etc/pitchfork/config.toml"));
 pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     var_path("PITCHFORK_STATE_DIR").unwrap_or(
         dirs::state_dir()
