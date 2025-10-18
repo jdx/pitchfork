@@ -40,6 +40,7 @@ export default defineConfig({
       { text: "Retry on Failure", link: "/retry" },
       { text: "Cron Scheduling", link: "/cron" },
       { text: "Configuration", link: "/config" },
+      { text: "Architecture", link: "/architecture" },
       {
         text: "CLI Reference",
         link: "/cli",

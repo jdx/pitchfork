@@ -2,6 +2,8 @@
 
 This document explains how Pitchfork works by following the complete execution flow of the `pitchfork start` command.
 
+> Temporarily this document is LLM-generated and may be outdated. We will update it soon.
+
 ## Overview
 
 Pitchfork is a process supervisor built in Rust. The system has two main parts:
