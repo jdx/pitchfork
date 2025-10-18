@@ -220,9 +220,11 @@ struct LogFile {
 }
 
 fn parse_datetime(s: &str) -> Result<DateTime<Local>> {
-    NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-        .into_diagnostic()
-        .map(|dt| Local.from_local_datetime(&dt).unwrap())
+    let naive_dt = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").into_diagnostic()?;
+    Local
+        .from_local_datetime(&naive_dt)
+        .single()
+        .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'. ", s))
 }
 
 /// Print logs for a specific daemon within a time range
