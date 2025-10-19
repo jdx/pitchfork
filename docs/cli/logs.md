@@ -27,3 +27,11 @@ Set to 0 to show all logs
 ### `-t --tail`
 
 Show logs in real-time
+
+### `--from <FROM>`
+
+Show logs from this time (format: "YYYY-MM-DD HH:MM:SS")
+
+### `--to <TO>`
+
+Show logs until this time (format: "YYYY-MM-DD HH:MM:SS")
