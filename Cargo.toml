@@ -22,7 +22,7 @@ name = "pitchfork_cli"
 path = "src/lib.rs"
 
 [dependencies]
-auto-launch = { git = "https://github.com/gaojunran/auto-launch.git", version = "0.5.0" }
+auto-launcher = "0.6.0"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 clap_usage = "2"
