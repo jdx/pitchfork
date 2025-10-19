@@ -9,7 +9,7 @@ mod config;
 mod disable;
 mod enable;
 mod list;
-mod logs;
+pub mod logs;
 mod run;
 mod start;
 mod status;
