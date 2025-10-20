@@ -87,9 +87,9 @@ dependencies = [
 
 [[package]]
 name = "auto-launcher"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28c9bb7e90d814c3cfdbc8ba3cde05e9442b39c04bcb2bb5169607cc8960af6a"
+checksum = "aa871af263fe9f0150d234d1e265a1117e0348ff6409ffcced0d387bdf087ac9"
 dependencies = [
  "dirs 6.0.0",
  "thiserror 2.0.17",
