@@ -67,7 +67,7 @@ impl Supervisor {
         })
     }
 
-    pub async fn start(&self) -> Result<()> {
+    pub async fn start(&self, is_boot: bool) -> Result<()> {
         let pid = std::process::id();
         info!("Starting supervisor with pid {pid}");
 
@@ -78,6 +78,12 @@ impl Supervisor {
             ..Default::default()
         })
         .await?;
+
+        // If this is a boot start, automatically start boot_start daemons
+        if is_boot {
+            info!("Boot start mode enabled, starting boot_start daemons");
+            self.start_boot_daemons().await?;
+        }
 
         self.interval_watch()?;
         self.cron_watch()?;
@@ -190,6 +196,73 @@ impl Supervisor {
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn start_boot_daemons(&self) -> Result<()> {
+        use crate::pitchfork_toml::PitchforkToml;
+
+        info!("Scanning for boot_start daemons");
+        let pt = PitchforkToml::all_merged();
+
+        let boot_daemons: Vec<_> = pt
+            .daemons
+            .iter()
+            .filter(|(_id, d)| d.boot_start.unwrap_or(false))
+            .collect();
+
+        if boot_daemons.is_empty() {
+            info!("No daemons configured with boot_start = true");
+            return Ok(());
+        }
+
+        info!("Found {} daemon(s) to start at boot", boot_daemons.len());
+
+        for (id, daemon) in boot_daemons {
+            info!("Starting boot daemon: {}", id);
+
+            let dir = daemon
+                .path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| env::CWD.clone());
+
+            let run_opts = RunOptions {
+                id: id.clone(),
+                cmd: shell_words::split(&daemon.run).unwrap_or_default(),
+                force: false,
+                shell_pid: None,
+                dir,
+                autostop: false, // Boot daemons should not autostop
+                cron_schedule: daemon.cron.as_ref().map(|c| c.schedule.clone()),
+                cron_retrigger: daemon.cron.as_ref().map(|c| c.retrigger),
+                retry: daemon.retry,
+                retry_count: 0,
+                ready_delay: daemon.ready_delay,
+                ready_output: daemon.ready_output.clone(),
+                wait_ready: false, // Don't block on boot daemons
+            };
+
+            match self.run(run_opts).await {
+                Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
+                    info!("Successfully started boot daemon: {}", id);
+                }
+                Ok(IpcResponse::DaemonAlreadyRunning) => {
+                    info!("Boot daemon already running: {}", id);
+                }
+                Ok(other) => {
+                    warn!(
+                        "Unexpected response when starting boot daemon {}: {:?}",
+                        id, other
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to start boot daemon {}: {}", id, e);
+                }
+            }
+        }
+
         Ok(())
     }
 

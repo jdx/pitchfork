@@ -32,6 +32,75 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "boot": {
+        "full_cmd": [
+          "boot"
+        ],
+        "usage": "boot <SUBCOMMAND>",
+        "subcommands": {
+          "enable": {
+            "full_cmd": [
+              "boot",
+              "enable"
+            ],
+            "usage": "boot enable",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Enable boot start for pitchfork supervisor",
+            "name": "enable",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "disable": {
+            "full_cmd": [
+              "boot",
+              "disable"
+            ],
+            "usage": "boot disable",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Disable boot start for pitchfork supervisor",
+            "name": "disable",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "status": {
+            "full_cmd": [
+              "boot",
+              "status"
+            ],
+            "usage": "boot status",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Check boot start status",
+            "name": "status",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "help": "Enable or disable boot start",
+        "name": "boot",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "cd": {
         "full_cmd": [
           "cd"
@@ -376,6 +445,44 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "from",
+            "usage": "--from <FROM>",
+            "help": "Show logs from this time (format: \"YYYY-MM-DD HH:MM:SS\")",
+            "help_first_line": "Show logs from this time (format: \"YYYY-MM-DD HH:MM:SS\")",
+            "short": [],
+            "long": [
+              "from"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "FROM",
+              "usage": "<FROM>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "to",
+            "usage": "--to <TO>",
+            "help": "Show logs until this time (format: \"YYYY-MM-DD HH:MM:SS\")",
+            "help_first_line": "Show logs until this time (format: \"YYYY-MM-DD HH:MM:SS\")",
+            "short": [],
+            "long": [
+              "to"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "TO",
+              "usage": "<TO>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
           }
         ],
         "mounts": [],
@@ -677,7 +784,7 @@
               "supervisor",
               "run"
             ],
-            "usage": "supervisor run [-f --force]",
+            "usage": "supervisor run [-f --force] [--boot]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -691,6 +798,18 @@
                 ],
                 "long": [
                   "force"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "boot",
+                "usage": "--boot",
+                "help": "run as boot start (auto-start boot_start daemons)",
+                "help_first_line": "run as boot start (auto-start boot_start daemons)",
+                "short": [],
+                "long": [
+                  "boot"
                 ],
                 "hide": false,
                 "global": false

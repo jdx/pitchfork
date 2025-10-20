@@ -10,6 +10,10 @@
 ## Subcommands
 
 - [`pitchfork activate <SHELL>`](/cli/activate.md)
+- [`pitchfork boot <SUBCOMMAND>`](/cli/boot.md)
+- [`pitchfork boot enable`](/cli/boot/enable.md)
+- [`pitchfork boot disable`](/cli/boot/disable.md)
+- [`pitchfork boot status`](/cli/boot/status.md)
 - [`pitchfork clean`](/cli/clean.md)
 - [`pitchfork config <SUBCOMMAND>`](/cli/config.md)
 - [`pitchfork config add [--autostart] [--autostop] <ID> [ARGS]…`](/cli/config/add.md)
@@ -24,7 +28,7 @@
 - [`pitchfork status <ID>`](/cli/status.md)
 - [`pitchfork stop [ID]…`](/cli/stop.md)
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
-- [`pitchfork supervisor run [-f --force]`](/cli/supervisor/run.md)
+- [`pitchfork supervisor run [-f --force] [--boot]`](/cli/supervisor/run.md)
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
 - [`pitchfork supervisor status`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)

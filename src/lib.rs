@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
 
+pub mod boot_manager;
 pub mod cli;
 pub mod daemon;
 pub mod daemon_status;

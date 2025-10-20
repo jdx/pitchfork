@@ -10,6 +10,9 @@ pub struct Run {
     /// kill existing daemon
     #[clap(short, long)]
     force: bool,
+    /// run as boot start (auto-start boot_start daemons)
+    #[clap(long)]
+    boot: bool,
 }
 
 impl Run {
@@ -23,6 +26,6 @@ impl Run {
             }
         }
 
-        SUPERVISOR.start().await
+        SUPERVISOR.start(self.boot).await
     }
 }

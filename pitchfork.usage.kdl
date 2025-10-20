@@ -7,6 +7,11 @@ cmd activate help="Activate pitchfork in your shell session" {
     long_help "Activate pitchfork in your shell session\n\nNecessary for autostart/stop when entering/exiting projects with pitchfork.toml files"
     arg <SHELL> help="The shell to generate source for"
 }
+cmd boot subcommand_required=#true help="Enable or disable boot start" {
+    cmd enable help="Enable boot start for pitchfork supervisor"
+    cmd disable help="Disable boot start for pitchfork supervisor"
+    cmd status help="Check boot start status"
+}
 cmd cd hide=#true {
     flag --shell-pid required=#true {
         arg <SHELL_PID>
@@ -53,6 +58,12 @@ cmd logs help="Displays logs for daemon(s)" {
         arg <N>
     }
     flag "-t --tail" help="Show logs in real-time"
+    flag --from help="Show logs from this time (format: \"YYYY-MM-DD HH:MM:SS\")" {
+        arg <FROM>
+    }
+    flag --to help="Show logs until this time (format: \"YYYY-MM-DD HH:MM:SS\")" {
+        arg <TO>
+    }
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
 cmd run help="Runs a one-off daemon" {
@@ -97,6 +108,7 @@ cmd supervisor subcommand_required=#true help="Start, stop, and check the status
     alias sup
     cmd run help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
+        flag --boot help="run as boot start (auto-start boot_start daemons)"
     }
     cmd start help="Starts the internal pitchfork daemon in the background" {
         flag "-f --force" help="kill existing daemon"

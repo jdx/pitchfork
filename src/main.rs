@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
 
+mod boot_manager;
 mod cli;
 mod daemon;
 mod daemon_status;
