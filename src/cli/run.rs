@@ -26,15 +26,13 @@ pub struct Run {
 
 impl Run {
     pub async fn run(&self) -> Result<()> {
-        info!("Running one-off daemon");
         if self.run.is_empty() {
             bail!("No command provided");
         }
 
-        let start_time = chrono::Local::now();
         let ipc = IpcClient::connect(true).await?;
 
-        let (started, exit_code) = ipc
+        let (_started, exit_code) = ipc
             .run(RunOptions {
                 id: self.id.clone(),
                 cmd: self.run.clone(),
@@ -52,20 +50,8 @@ impl Run {
             })
             .await?;
 
-        if !started.is_empty() {
-            info!("started {}", started.join(", "));
-        }
-
-        if let Some(code) = exit_code {
-            error!("Daemon '{}' failed with exit code {}", self.id, code);
-
-            // Print logs from the time we started
-            if let Err(e) = crate::cli::logs::print_logs_for_time_range(&self.id, start_time, None)
-            {
-                error!("Failed to print logs: {}", e);
-            }
-
-            std::process::exit(code);
+        if exit_code.is_some() {
+            std::process::exit(1);
         }
         Ok(())
     }

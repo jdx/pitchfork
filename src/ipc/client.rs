@@ -135,25 +135,45 @@ impl IpcClient {
     }
 
     pub async fn run(&self, opts: RunOptions) -> Result<(Vec<String>, Option<i32>)> {
-        debug!("starting daemon {}", opts.id);
+        info!("starting daemon {}", opts.id);
+        let start_time = chrono::Local::now();
         let rsp = self.request(IpcRequest::Run(opts.clone())).await?;
         let mut started_daemons = vec![];
         let mut exit_code = None;
         match rsp {
             IpcResponse::DaemonStart { daemon } => {
-                started_daemons.push(daemon.id);
+                started_daemons.push(daemon.id.clone());
+                info!("started {}", daemon.id);
             }
             IpcResponse::DaemonReady { daemon } => {
-                started_daemons.push(daemon.id);
+                started_daemons.push(daemon.id.clone());
+                info!("started {}", daemon.id);
             }
             IpcResponse::DaemonFailedWithCode { exit_code: code } => {
-                exit_code = Some(code.unwrap_or(1));
+                let code = code.unwrap_or(1);
+                exit_code = Some(code);
+                error!("daemon {} failed with exit code {}", opts.id, code);
+
+                // Print logs from the time we started this specific daemon
+                if let Err(e) =
+                    crate::cli::logs::print_logs_for_time_range(&opts.id, start_time, None)
+                {
+                    error!("Failed to print logs: {}", e);
+                }
             }
             IpcResponse::DaemonAlreadyRunning => {
                 warn!("daemon {} already running", opts.id);
             }
             IpcResponse::DaemonFailed { error } => {
-                bail!("failed to start daemon {}: {error}", opts.id);
+                error!("Failed to start daemon {}: {}", opts.id, error);
+                exit_code = Some(1);
+
+                // Print logs from the time we started this specific daemon
+                if let Err(e) =
+                    crate::cli::logs::print_logs_for_time_range(&opts.id, start_time, None)
+                {
+                    error!("Failed to print logs: {}", e);
+                }
             }
             rsp => unreachable!("unexpected response: {rsp:?}"),
         }
