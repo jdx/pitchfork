@@ -3,7 +3,6 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::Result;
 use miette::ensure;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Starts a daemon from a pitchfork.toml file
@@ -37,12 +36,6 @@ impl Start {
         let pt = PitchforkToml::all_merged();
         let ipc = Arc::new(IpcClient::connect(true).await?);
         let disabled_daemons = ipc.get_disabled_daemons().await?;
-        let active_daemons: HashSet<String> = ipc
-            .active_daemons()
-            .await?
-            .into_iter()
-            .map(|d| d.id)
-            .collect();
         let ids = if self.all {
             pt.daemons.keys().cloned().collect()
         } else {
@@ -56,10 +49,6 @@ impl Start {
                 warn!("Daemon {} is disabled", id);
                 continue;
             }
-            // if !self.force && active_daemons.contains(&id) {
-            //     warn!("Daemon {} is already running", id);
-            //     continue;
-            // }
 
             let daemon_data = match pt.daemons.get(&id) {
                 Some(d) => {

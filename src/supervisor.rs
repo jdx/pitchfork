@@ -486,12 +486,25 @@ impl Supervisor {
                         debug!("daemon {id} process exited, exit_status: {:?}", exit_status);
                         if !ready_notified {
                             if let Some(tx) = ready_tx.take() {
-                                let exit_code = exit_status.as_ref().and_then(|r| r.as_ref().ok().and_then(|s| s.code()));
-                                debug!("daemon {id} not ready yet, sending failure notification with exit_code: {:?}", exit_code);
-                                let _ = tx.send(Err(exit_code));
+                                // Check if process exited successfully
+                                let is_success = exit_status.as_ref()
+                                    .and_then(|r| r.as_ref().ok())
+                                    .map(|s| s.success())
+                                    .unwrap_or(false);
+
+                                if is_success {
+                                    debug!("daemon {id} exited successfully before ready check, sending success notification");
+                                    let _ = tx.send(Ok(()));
+                                } else {
+                                    let exit_code = exit_status.as_ref()
+                                        .and_then(|r| r.as_ref().ok())
+                                        .and_then(|s| s.code());
+                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {:?}", exit_code);
+                                    let _ = tx.send(Err(exit_code));
+                                }
                             }
                         } else {
-                            debug!("daemon {id} was already marked ready, not sending failure notification");
+                            debug!("daemon {id} was already marked ready, not sending notification");
                         }
                         break;
                     }

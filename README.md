@@ -88,16 +88,12 @@ run = "npm run server:api"
 run = "npm run server:docs"
 ```
 
-Start all daemons:
+Start all daemons or mutiple daemons **in parallel**:
 
 ```sh-session
 $ pitchfork start --all
-```
 
-Or start individual ones:
-
-```sh-session
-$ pitchfork start redis
+$ pitchfork start redis api
 ```
 
 ### Shell hook (auto start/stop)
@@ -144,7 +140,7 @@ ready.http = { url = "http://localhost:5432" }
 [daemons.redis]
 run = "redis-server --port 6379"
 auto = ["start", "stop"]
-ready.delay = "2s"
+ready.delay = 2
 
 [daemons.api]
 run = "npm run dev:api"
