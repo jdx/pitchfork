@@ -18,8 +18,8 @@ This project is experimental. It works in basic situations but you'll undoubtedl
 - Auto start daemons when entering a project directory - then auto stop when leaving
 - Restart daemons on failure
 - Cron jobs
-- 🚧 Global configuration
-- 🚧 Automatically start daemons on boot
+- Global configuration
+- Automatically start daemons on boot
 
 ## Workflows
 
