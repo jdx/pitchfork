@@ -30,7 +30,7 @@ comfy-table = "7.1.3"
 console = "0.16"
 cron = "0.15"
 dirs = "6"
-duct = "0.13"
+duct = "1.0"
 exponential-backoff = "2"
 indexmap = { version = "2", features = ["serde"] }
 interprocess = { version = "2", features = ["tokio"] }
