@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
       - name: Install cross-compilation tools
-        uses: taiki-e/setup-cross-toolchain-action@84e58a47fc2bcd3821a2aa8c153595bbffb0e10f # v1
+        uses: taiki-e/setup-cross-toolchain-action@15a579e0045e5e4f668b73a441b9609884abffc9 # v1
         with:
           target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
