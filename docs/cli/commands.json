@@ -380,7 +380,7 @@
         "mounts": [],
         "hide": false,
         "help": "List all daemons",
-        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status, and\nwhether they are disabled.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status\n  api     12345  running\n  worker  12346  running\n  db      -      stopped  disabled",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status   Error\n  api     12345  running\n  worker  -      errored  exit code 1\n  db      -      stopped  disabled",
         "name": "list",
         "aliases": [
           "ls"
