@@ -38,7 +38,9 @@ run = "python -m http.server 8080"
 ready_output = "Serving HTTP on"
 ```
 
-### HTTP Request (TODO)
+### HTTP Request
+
+HTTP ready checks are not yet implemented. This feature is planned for a future release.
 
 ## Behaviors
 

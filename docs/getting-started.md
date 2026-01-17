@@ -21,10 +21,6 @@ This project is experimental. It works in basic situations but you'll undoubtedl
 - Global configuration
 - Automatically start daemons on boot
 
-## Workflows
-
-Here's some common ways to use pitchfork.
-
 ## Installing pitchfork
 
 [mise-en-place](https://mise.jdx.dev) is the recommended way to install pitchfork.
@@ -64,11 +60,11 @@ run = "npm run server:docs"
 
 You can start all the daemons with [`pitchfork start --all`](/cli/start) or individual ones with their name, e.g.: `pitchfork start redis`.
 If it's already started, nothing happens.
-You can also have pitchfork automatically start the daemons when entering the project in your terminal with the [shell hook](#shell_hook).
+You can also have pitchfork automatically start the daemons when entering the project in your terminal with the [shell hook](#shell-hook).
 
 ### Adding a global daemon that runs on boot
 
-TODO - implement this
+To configure daemons to start automatically when your system boots, see [Start on Boot](/boot-start).
 
 ## Shell hook
 
@@ -122,7 +118,7 @@ you shouldn't need to really be aware of it. It should just run in the backgroun
 
 ## Configuration
 
-TODO: For now, you'll need to reference [the code](https://github.com/jdx/pitchfork/blob/main/src/env.rs).
+For detailed configuration options, see the [Configuration Reference](/config).
 
 ## Troubleshooting
 

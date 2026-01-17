@@ -11,7 +11,7 @@ And bun just needs a `bun run` to run. Note that if you do not write tests, `bun
 - [x] Why `pf start` takes ~700ms? (not `--release`)
 - [x] Cron
 - [x] More complex situations
-- [ ] Behaviour when `retry_delay` & `retry_output` exist together, the test needs to be modified
+- [ ] Behaviour when `ready_delay` & `ready_output` exist together, the test needs to be modified
 
 ### Cron tests
 

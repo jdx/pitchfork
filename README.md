@@ -88,7 +88,7 @@ run = "npm run server:api"
 run = "npm run server:docs"
 ```
 
-Start all daemons or mutiple daemons **in parallel**:
+Start all daemons or multiple daemons **in parallel**:
 
 ```sh-session
 $ pitchfork start --all
@@ -135,17 +135,17 @@ Here's a complete example showing how to use pitchfork for a development environ
 [daemons.postgres]
 run = "docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16"
 auto = ["start", "stop"]
-ready.http = { url = "http://localhost:5432" }
+ready_delay = 5
 
 [daemons.redis]
 run = "redis-server --port 6379"
 auto = ["start", "stop"]
-ready.delay = 2
+ready_delay = 2
 
 [daemons.api]
 run = "npm run dev:api"
 auto = ["start", "stop"]
-ready.http = { url = "http://localhost:3000/health" }
+ready_output = "listening on"
 depends = ["postgres", "redis"]
 
 [daemons.worker]
