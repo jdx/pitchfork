@@ -15,7 +15,7 @@ use std::sync::Arc;
     long_about = "\
 Starts a daemon from a pitchfork.toml file
 
-Daemons are defined in pitchfork.toml with a [daemons.<name>] section.
+Daemons are defined in pitchfork.toml with a `[daemons.<name>]` section.
 The command waits for the daemon to be ready before returning.
 
 Examples:
