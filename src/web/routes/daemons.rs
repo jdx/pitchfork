@@ -1,4 +1,8 @@
-use axum::{extract::Path, response::Html};
+use axum::{
+    extract::{Path, Query},
+    response::Html,
+};
+use serde::Deserialize;
 
 use crate::daemon::RunOptions;
 use crate::env;
@@ -266,14 +270,15 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         )
     } else if config_info.is_some() {
         format!(
-            r#"
+            r##"
             <h1>Daemon: {id}</h1>
             <p>This daemon is configured but has not been started yet.</p>
             <div class="actions">
-                <button hx-post="/daemons/{id}/start" class="btn btn-primary">Start</button>
+                <button hx-post="/daemons/{id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
                 <a href="/daemons" class="btn">Back to List</a>
             </div>
-        "#
+            <div id="start-result"></div>
+        "##
         )
     } else {
         format!(
@@ -288,8 +293,15 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     Html(base_html(&format!("Daemon: {}", id), &content))
 }
 
-pub async fn start(Path(id): Path<String>) -> Html<String> {
+#[derive(Deserialize, Default)]
+pub struct StartQuery {
+    #[serde(default)]
+    from: Option<String>,
+}
+
+pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> Html<String> {
     let pt = PitchforkToml::all_merged();
+    let from_detail = query.from.as_deref() == Some("detail");
 
     let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
         let dir = daemon_config
@@ -329,17 +341,34 @@ pub async fn start(Path(id): Path<String>) -> Html<String> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
 
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
-    } else if let Some(err) = start_error {
-        Html(format!(
-            r#"<tr id="daemon-{id}"><td colspan="5" class="error">{err}</td></tr>"#
-        ))
+    // Return different content based on context
+    if from_detail {
+        if let Some(err) = start_error {
+            Html(format!(r#"<div class="error">{err}</div>"#))
+        } else if let Some(daemon) = state.daemons.get(&id) {
+            let status = &daemon.status;
+            Html(format!(
+                r#"<div class="success">Started! Status: {status}. <a href="/daemons/{id}">Refresh page</a></div>"#
+            ))
+        } else {
+            Html(format!(
+                r#"<div>Starting... <a href="/daemons/{id}">Refresh page</a></div>"#
+            ))
+        }
     } else {
-        Html(format!(
-            r#"<tr id="daemon-{id}"><td colspan="5">Starting {id}...</td></tr>"#
-        ))
+        // Return table row for list page
+        if let Some(daemon) = state.daemons.get(&id) {
+            let is_disabled = state.disabled.contains(&id);
+            Html(daemon_row(&id, daemon, is_disabled))
+        } else if let Some(err) = start_error {
+            Html(format!(
+                r#"<tr id="daemon-{id}"><td colspan="5" class="error">{err}</td></tr>"#
+            ))
+        } else {
+            Html(format!(
+                r#"<tr id="daemon-{id}"><td colspan="5">Starting {id}...</td></tr>"#
+            ))
+        }
     }
 }
 
@@ -363,7 +392,7 @@ pub async fn stop(Path(id): Path<String>) -> Html<String> {
 pub async fn restart(Path(id): Path<String>) -> Html<String> {
     let _ = SUPERVISOR.stop(&id).await;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    start(Path(id)).await
+    start(Path(id), Query(StartQuery::default())).await
 }
 
 pub async fn enable(Path(id): Path<String>) -> Html<String> {
