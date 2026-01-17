@@ -12,6 +12,7 @@ pub async fn serve(port: u16) -> Result<()> {
     let app = Router::new()
         // Dashboard
         .route("/", get(routes::index::index))
+        .route("/_stats", get(routes::index::stats_partial))
         .route("/health", get(|| async { "OK" }))
         // Daemons
         .route("/daemons", get(routes::daemons::list))

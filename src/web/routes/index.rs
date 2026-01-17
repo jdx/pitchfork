@@ -63,6 +63,62 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     )
 }
 
+fn get_stats() -> (usize, usize, usize, usize) {
+    let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
+        .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
+    let pt = PitchforkToml::all_merged();
+
+    let user_daemons: Vec<_> = state
+        .daemons
+        .iter()
+        .filter(|(id, _)| *id != "pitchfork")
+        .collect();
+
+    let running = user_daemons
+        .iter()
+        .filter(|(_, d)| d.status.is_running())
+        .count();
+    let stopped = user_daemons
+        .iter()
+        .filter(|(_, d)| d.status.is_stopped())
+        .count();
+    let errored = user_daemons
+        .iter()
+        .filter(|(_, d)| d.status.is_errored())
+        .count();
+
+    let mut all_ids: HashSet<&String> = user_daemons.iter().map(|(id, _)| *id).collect();
+    for id in pt.daemons.keys() {
+        all_ids.insert(id);
+    }
+    let total = all_ids.len();
+
+    (total, running, stopped, errored)
+}
+
+pub async fn stats_partial() -> Html<String> {
+    let (total, running_count, stopped_count, errored_count) = get_stats();
+
+    Html(format!(
+        r#"<div class="stat-card">
+            <div class="stat-value">{total}</div>
+            <div class="stat-label">Total</div>
+        </div>
+        <div class="stat-card running">
+            <div class="stat-value">{running_count}</div>
+            <div class="stat-label">Running</div>
+        </div>
+        <div class="stat-card stopped">
+            <div class="stat-value">{stopped_count}</div>
+            <div class="stat-label">Stopped</div>
+        </div>
+        <div class="stat-card errored">
+            <div class="stat-value">{errored_count}</div>
+            <div class="stat-label">Errored</div>
+        </div>"#
+    ))
+}
+
 pub async fn index() -> Html<String> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
@@ -146,7 +202,7 @@ pub async fn index() -> Html<String> {
         </div>
     </nav>
     <main>
-        <div class="stats-grid">
+        <div class="stats-grid" hx-get="/_stats" hx-trigger="every 5s" hx-swap="innerHTML">
             <div class="stat-card">
                 <div class="stat-value">{total}</div>
                 <div class="stat-label">Total</div>
