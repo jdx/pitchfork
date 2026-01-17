@@ -380,7 +380,7 @@
         "mounts": [],
         "hide": false,
         "help": "List all daemons",
-        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status, and\nwhether they are disabled.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status\n  api     12345  running\n  worker  12346  running\n  db      -      stopped  disabled",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status   Error\n  api     12345  running\n  worker  -      errored  exit code 1\n  db      -      stopped  disabled",
         "name": "list",
         "aliases": [
           "ls"
@@ -500,7 +500,7 @@
         "mounts": [],
         "hide": false,
         "help": "Displays logs for daemon(s)",
-        "help_long": "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show last 100 lines for 'api'\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api -n 0         Show all logs (no limit)\n  pitchfork logs api --tail       Follow logs in real-time\n  pitchfork logs api --from '2024-01-15 10:00:00'\n                                  Show logs since a specific time\n  pitchfork logs api --to '2024-01-15 12:00:00'\n                                  Show logs until a specific time\n  pitchfork logs api --clear      Delete logs for 'api'",
+        "help_long": "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show last 100 lines for 'api'\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api -n 0         Show all logs (no limit)\n  pitchfork logs api --tail       Follow logs in real-time\n  pitchfork logs api --from '2024-01-15 10:00:00'\n                                  Show logs since a specific time\n  pitchfork logs api --to '2024-01-15 12:00:00'\n                                  Show logs until a specific time\n  pitchfork logs api --clear      Delete logs for 'api'\n  pitchfork logs --clear          Delete logs for all daemons",
         "name": "logs",
         "aliases": [
           "l"

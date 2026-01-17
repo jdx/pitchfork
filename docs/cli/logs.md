@@ -21,6 +21,7 @@ Examples:
   pitchfork logs api --to '2024-01-15 12:00:00'
                                   Show logs until a specific time
   pitchfork logs api --clear      Delete logs for 'api'
+  pitchfork logs --clear          Delete logs for all daemons
 
 ## Arguments
 
