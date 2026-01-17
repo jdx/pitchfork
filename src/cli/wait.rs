@@ -8,7 +8,22 @@ use tokio::time;
 ///
 /// Exits with the same status code as the daemon
 #[derive(Debug, clap::Args)]
-#[clap(visible_alias = "w", verbatim_doc_comment)]
+#[clap(
+    visible_alias = "w",
+    verbatim_doc_comment,
+    long_about = "\
+Wait for a daemon to stop, tailing the logs along the way
+
+Blocks until the specified daemon stops running, while displaying its
+log output in real-time. Exits with the same status code as the daemon.
+
+Useful in scripts that need to wait for a daemon to complete.
+
+Examples:
+  pitchfork wait api              Wait for 'api' to stop
+  pitchfork w api                 Alias for 'wait'
+  pitchfork wait api && echo done Run command after daemon stops"
+)]
 pub struct Wait {
     /// The name of the daemon to wait for
     id: String,

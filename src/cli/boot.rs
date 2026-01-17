@@ -3,7 +3,24 @@ use crate::Result;
 use clap::Parser;
 
 #[derive(Debug, Parser)]
-#[clap(about = "Enable or disable boot start")]
+#[clap(
+    about = "Enable or disable boot start",
+    long_about = "\
+Enable or disable boot start
+
+Manages whether pitchfork supervisor starts automatically when the system
+boots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).
+
+Subcommands:
+  enable    Register pitchfork to start on boot
+  disable   Remove pitchfork from boot startup
+  status    Check if boot start is currently enabled
+
+Examples:
+  pitchfork boot enable           Start pitchfork on system boot
+  pitchfork boot disable          Don't start pitchfork on boot
+  pitchfork boot status           Check boot start status"
+)]
 pub struct Boot {
     #[clap(subcommand)]
     command: BootCommands,
@@ -12,10 +29,24 @@ pub struct Boot {
 #[derive(Debug, clap::Subcommand)]
 enum BootCommands {
     /// Enable boot start for pitchfork supervisor
+    #[clap(long_about = "\
+Enable boot start for pitchfork supervisor
+
+Registers pitchfork to start automatically when the system boots.
+On macOS, creates a LaunchAgent. On Linux, creates a systemd user service.")]
     Enable(BootEnable),
     /// Disable boot start for pitchfork supervisor
+    #[clap(long_about = "\
+Disable boot start for pitchfork supervisor
+
+Removes the boot start registration. Pitchfork will no longer start
+automatically on system boot.")]
     Disable(BootDisable),
     /// Check boot start status
+    #[clap(long_about = "\
+Check boot start status
+
+Reports whether pitchfork is configured to start on system boot.")]
     Status(BootStatus),
 }
 

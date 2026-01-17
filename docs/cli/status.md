@@ -6,6 +6,19 @@
 
 Display the status of a daemon
 
+Shows detailed information about a single daemon including its PID and
+current status (running, stopped, failed, etc.).
+
+Example:
+  pitchfork status api
+
+Output:
+  Name: api
+  PID: 12345
+  Status: running
+
 ## Arguments
 
 ### `<ID>`
+
+Name of the daemon to check

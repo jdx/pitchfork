@@ -5,6 +5,19 @@
 
 Enable or disable boot start
 
+Manages whether pitchfork supervisor starts automatically when the system
+boots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).
+
+Subcommands:
+  enable    Register pitchfork to start on boot
+  disable   Remove pitchfork from boot startup
+  status    Check if boot start is currently enabled
+
+Examples:
+  pitchfork boot enable           Start pitchfork on system boot
+  pitchfork boot disable          Don't start pitchfork on boot
+  pitchfork boot status           Check boot start status
+
 ## Subcommands
 
 - [`pitchfork boot disable`](/cli/boot/disable.md)

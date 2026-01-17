@@ -3,8 +3,25 @@ use crate::Result;
 
 /// Display the status of a daemon
 #[derive(Debug, clap::Args)]
-#[clap(visible_alias = "stat", verbatim_doc_comment)]
+#[clap(
+    visible_alias = "stat",
+    verbatim_doc_comment,
+    long_about = "\
+Display the status of a daemon
+
+Shows detailed information about a single daemon including its PID and
+current status (running, stopped, failed, etc.).
+
+Example:
+  pitchfork status api
+
+Output:
+  Name: api
+  PID: 12345
+  Status: running"
+)]
 pub struct Status {
+    /// Name of the daemon to check
     pub id: String,
 }
 
