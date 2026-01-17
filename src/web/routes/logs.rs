@@ -20,8 +20,8 @@ fn base_html(title: &str, content: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - Pitchfork</title>
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/htmx-sse.js"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
