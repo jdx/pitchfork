@@ -47,7 +47,7 @@ pub async fn list() -> Html<String> {
     let mut file_list = String::new();
     for path in paths {
         let exists = path.exists();
-        let display = path.display();
+        let display = html_escape(&path.display().to_string());
         let exists_badge = if exists {
             r#"<span class="badge exists">exists</span>"#
         } else {
@@ -206,7 +206,7 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return Html(format!(
                     r#"<div class="error">Failed to create directory: {}</div>"#,
-                    e
+                    html_escape(&e.to_string())
                 ));
             }
         }
@@ -230,7 +230,7 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
                 <p>{}</p>
             </div>
         "#,
-            e
+            html_escape(&e.to_string())
         )),
     }
 }

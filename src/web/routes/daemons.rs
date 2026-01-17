@@ -10,18 +10,10 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
 
-/// Validate daemon ID to prevent path traversal and XSS attacks
+/// Validate daemon ID to prevent path traversal attacks
+/// Note: HTML characters are allowed since we escape all output
 fn is_valid_daemon_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains("..")
-        && id != "."
-        && !id.contains('<')
-        && !id.contains('>')
-        && !id.contains('&')
-        && !id.contains('"')
-        && !id.contains('\'')
+    !id.is_empty() && !id.contains('/') && !id.contains('\\') && !id.contains("..") && id != "."
 }
 
 fn html_escape(s: &str) -> String {
