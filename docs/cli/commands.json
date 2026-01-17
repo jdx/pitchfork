@@ -15,8 +15,8 @@
           {
             "name": "SHELL",
             "usage": "<SHELL>",
-            "help": "The shell to generate source for",
-            "help_first_line": "The shell to generate source for",
+            "help": "Shell to activate (bash, zsh, fish)",
+            "help_first_line": "Shell to activate (bash, zsh, fish)",
             "required": true,
             "double_dash": "Optional",
             "hide": false
@@ -26,7 +26,7 @@
         "mounts": [],
         "hide": false,
         "help": "Activate pitchfork in your shell session",
-        "help_long": "Activate pitchfork in your shell session\n\nNecessary for autostart/stop when entering/exiting projects with pitchfork.toml files",
+        "help_long": "Activate pitchfork in your shell session\n\nGenerates shell code that enables automatic daemon management when changing\ndirectories. Required for auto-start/stop features in pitchfork.toml.\n\nSupported shells: bash, zsh, fish\n\nAdd to your shell config:\n  bash (~/.bashrc):\n    eval \"$(pitchfork activate bash)\"\n\n  zsh (~/.zshrc):\n    eval \"$(pitchfork activate zsh)\"\n\n  fish (~/.config/fish/config.fish):\n    pitchfork activate fish | source",
         "name": "activate",
         "aliases": [],
         "hidden_aliases": [],
@@ -50,6 +50,7 @@
             "mounts": [],
             "hide": false,
             "help": "Enable boot start for pitchfork supervisor",
+            "help_long": "Enable boot start for pitchfork supervisor\n\nRegisters pitchfork to start automatically when the system boots.\nOn macOS, creates a LaunchAgent. On Linux, creates a systemd user service.",
             "name": "enable",
             "aliases": [],
             "hidden_aliases": [],
@@ -67,6 +68,7 @@
             "mounts": [],
             "hide": false,
             "help": "Disable boot start for pitchfork supervisor",
+            "help_long": "Disable boot start for pitchfork supervisor\n\nRemoves the boot start registration. Pitchfork will no longer start\nautomatically on system boot.",
             "name": "disable",
             "aliases": [],
             "hidden_aliases": [],
@@ -84,6 +86,7 @@
             "mounts": [],
             "hide": false,
             "help": "Check boot start status",
+            "help_long": "Check boot start status\n\nReports whether pitchfork is configured to start on system boot.",
             "name": "status",
             "aliases": [],
             "hidden_aliases": [],
@@ -96,6 +99,7 @@
         "hide": false,
         "subcommand_required": true,
         "help": "Enable or disable boot start",
+        "help_long": "Enable or disable boot start\n\nManages whether pitchfork supervisor starts automatically when the system\nboots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).\n\nSubcommands:\n  enable    Register pitchfork to start on boot\n  disable   Remove pitchfork from boot startup\n  status    Check if boot start is currently enabled\n\nExamples:\n  pitchfork boot enable           Start pitchfork on system boot\n  pitchfork boot disable          Don't start pitchfork on boot\n  pitchfork boot status           Check boot start status",
         "name": "boot",
         "aliases": [],
         "hidden_aliases": [],
@@ -146,6 +150,7 @@
         "mounts": [],
         "hide": false,
         "help": "Removes stopped/failed daemons from `pitchfork list`",
+        "help_long": "Removes stopped/failed daemons from `pitchfork list`\n\nCleans up the daemon list by removing entries for daemons that are no\nlonger running. Does not affect running daemons or their configurations.\n\nUse this to clear out old entries after stopping daemons manually or\nafter daemons have failed.\n\nExamples:\n  pitchfork clean                 Remove all stopped/failed entries\n  pitchfork c                     Alias for 'clean'",
         "name": "clean",
         "aliases": [
           "c"
@@ -276,8 +281,8 @@
           {
             "name": "SHELL",
             "usage": "<SHELL>",
-            "help": "The shell to generate completion for",
-            "help_first_line": "The shell to generate completion for",
+            "help": "Shell to generate completions for (bash, zsh, fish)",
+            "help_first_line": "Shell to generate completions for (bash, zsh, fish)",
             "required": true,
             "double_dash": "Optional",
             "hide": false
@@ -287,6 +292,7 @@
         "mounts": [],
         "hide": false,
         "help": "Generates shell completion scripts",
+        "help_long": "Generates shell completion scripts\n\nCreates tab-completion scripts for your shell. Requires the 'usage' CLI tool.\n\nSupported shells: bash, zsh, fish\n\nInstallation:\n  bash:\n    pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork\n\n  zsh:\n    pitchfork completion zsh > ~/.zfunc/_pitchfork\n\n  fish:\n    pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish",
         "name": "completion",
         "aliases": [],
         "hidden_aliases": [],
@@ -313,6 +319,7 @@
         "mounts": [],
         "hide": false,
         "help": "Prevent a daemon from restarting",
+        "help_long": "Prevent a daemon from restarting\n\nDisables a daemon to prevent it from being started automatically or manually.\nThe daemon will remain disabled until 'pitchfork enable' is called.\nUseful for temporarily stopping a service without removing it from config.\n\nExamples:\n  pitchfork disable api           Prevent daemon from starting\n  pitchfork d api                 Alias for 'disable'\n  pitchfork list                  Shows 'disabled' status in output",
         "name": "disable",
         "aliases": [
           "d"
@@ -341,6 +348,7 @@
         "mounts": [],
         "hide": false,
         "help": "Allow a daemon to start",
+        "help_long": "Allow a daemon to start\n\nRe-enables a previously disabled daemon, allowing it to be started manually\nor automatically. Use this after 'pitchfork disable' to restore normal operation.\n\nExamples:\n  pitchfork enable api            Enable a disabled daemon\n  pitchfork e api                 Alias for 'enable'",
         "name": "enable",
         "aliases": [
           "e"
@@ -359,8 +367,8 @@
           {
             "name": "hide-header",
             "usage": "--hide-header",
-            "help": "Show header",
-            "help_first_line": "Show header",
+            "help": "Hide the table header row",
+            "help_first_line": "Hide the table header row",
             "short": [],
             "long": [
               "hide-header"
@@ -372,6 +380,7 @@
         "mounts": [],
         "hide": false,
         "help": "List all daemons",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status, and\nwhether they are disabled.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status\n  api     12345  running\n  worker  12346  running\n  db      -      stopped  disabled",
         "name": "list",
         "aliases": [
           "ls"
@@ -430,7 +439,10 @@
               "required": true,
               "double_dash": "Optional",
               "hide": false
-            }
+            },
+            "default": [
+              "100"
+            ]
           },
           {
             "name": "tail",
@@ -488,6 +500,7 @@
         "mounts": [],
         "hide": false,
         "help": "Displays logs for daemon(s)",
+        "help_long": "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show last 100 lines for 'api'\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api -n 0         Show all logs (no limit)\n  pitchfork logs api --tail       Follow logs in real-time\n  pitchfork logs api --from '2024-01-15 10:00:00'\n                                  Show logs since a specific time\n  pitchfork logs api --to '2024-01-15 12:00:00'\n                                  Show logs until a specific time\n  pitchfork logs api --clear      Delete logs for 'api'",
         "name": "logs",
         "aliases": [
           "l"
@@ -514,6 +527,8 @@
           {
             "name": "RUN",
             "usage": "[-- RUN]…",
+            "help": "Command and arguments to run (after --)",
+            "help_first_line": "Command and arguments to run (after --)",
             "required": false,
             "double_dash": "Required",
             "var": true,
@@ -524,6 +539,8 @@
           {
             "name": "force",
             "usage": "-f --force",
+            "help": "Stop the daemon if it is already running",
+            "help_first_line": "Stop the daemon if it is already running",
             "short": [
               "f"
             ],
@@ -550,7 +567,10 @@
               "required": true,
               "double_dash": "Optional",
               "hide": false
-            }
+            },
+            "default": [
+              "0"
+            ]
           },
           {
             "name": "delay",
@@ -598,6 +618,7 @@
         "mounts": [],
         "hide": false,
         "help": "Runs a one-off daemon",
+        "help_long": "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready",
         "name": "run",
         "aliases": [
           "r"
@@ -711,6 +732,7 @@
         "mounts": [],
         "hide": false,
         "help": "Starts a daemon from a pitchfork.toml file",
+        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready",
         "name": "start",
         "aliases": [
           "s"
@@ -728,6 +750,8 @@
           {
             "name": "ID",
             "usage": "<ID>",
+            "help": "Name of the daemon to check",
+            "help_first_line": "Name of the daemon to check",
             "required": true,
             "double_dash": "Optional",
             "hide": false
@@ -737,6 +761,7 @@
         "mounts": [],
         "hide": false,
         "help": "Display the status of a daemon",
+        "help_long": "Display the status of a daemon\n\nShows detailed information about a single daemon including its PID and\ncurrent status (running, stopped, failed, etc.).\n\nExample:\n  pitchfork status api\n\nOutput:\n  Name: api\n  PID: 12345\n  Status: running",
         "name": "status",
         "aliases": [
           "stat"
@@ -766,6 +791,7 @@
         "mounts": [],
         "hide": false,
         "help": "Sends a stop signal to a daemon",
+        "help_long": "Sends a stop signal to a daemon\n\nSends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'\nto check if the daemon has stopped.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork kill api           Same as 'stop' (alias)",
         "name": "stop",
         "aliases": [
           "kill"
@@ -941,7 +967,7 @@
         "mounts": [],
         "hide": false,
         "help": "Wait for a daemon to stop, tailing the logs along the way",
-        "help_long": "Wait for a daemon to stop, tailing the logs along the way\n\nExits with the same status code as the daemon",
+        "help_long": "Wait for a daemon to stop, tailing the logs along the way\n\nBlocks until the specified daemon stops running, while displaying its\nlog output in real-time. Exits with the same status code as the daemon.\n\nUseful in scripts that need to wait for a daemon to complete.\n\nExamples:\n  pitchfork wait api              Wait for 'api' to stop\n  pitchfork w api                 Alias for 'wait'\n  pitchfork wait api && echo done Run command after daemon stops",
         "name": "wait",
         "aliases": [
           "w"

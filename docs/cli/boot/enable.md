@@ -4,3 +4,6 @@
 - **Usage**: `pitchfork boot enable`
 
 Enable boot start for pitchfork supervisor
+
+Registers pitchfork to start automatically when the system boots.
+On macOS, creates a LaunchAgent. On Linux, creates a systemd user service.

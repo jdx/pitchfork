@@ -6,6 +6,22 @@
 
 Displays logs for daemon(s)
 
+Shows logs from managed daemons. Logs are stored in the pitchfork logs directory
+and include timestamps for filtering.
+
+Examples:
+  pitchfork logs api              Show last 100 lines for 'api'
+  pitchfork logs api worker       Show logs for multiple daemons
+  pitchfork logs                  Show logs for all daemons
+  pitchfork logs api -n 50        Show last 50 lines
+  pitchfork logs api -n 0         Show all logs (no limit)
+  pitchfork logs api --tail       Follow logs in real-time
+  pitchfork logs api --from '2024-01-15 10:00:00'
+                                  Show logs since a specific time
+  pitchfork logs api --to '2024-01-15 12:00:00'
+                                  Show logs until a specific time
+  pitchfork logs api --clear      Delete logs for 'api'
+
 ## Arguments
 
 ### `[ID]…`
@@ -23,6 +39,8 @@ Delete logs
 Show N lines of logs
 
 Set to 0 to show all logs
+
+**Default:** `100`
 
 ### `-t --tail`
 

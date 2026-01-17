@@ -6,8 +6,22 @@
 
 List all daemons
 
+Displays a table of all tracked daemons with their PIDs, status, and
+whether they are disabled.
+
+Example:
+  pitchfork list
+  pitchfork ls                    Alias for 'list'
+  pitchfork list --hide-header    Output without column headers
+
+Output:
+  Name    PID    Status
+  api     12345  running
+  worker  12346  running
+  db      -      stopped  disabled
+
 ## Flags
 
 ### `--hide-header`
 
-Show header
+Hide the table header row

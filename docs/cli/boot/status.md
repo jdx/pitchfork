@@ -4,3 +4,5 @@
 - **Usage**: `pitchfork boot status`
 
 Check boot start status
+
+Reports whether pitchfork is configured to start on system boot.

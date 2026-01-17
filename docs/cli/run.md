@@ -6,6 +6,21 @@
 
 Runs a one-off daemon
 
+Runs a command as a managed daemon without needing a pitchfork.toml.
+The daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.
+
+Examples:
+  pitchfork run api -- npm run dev
+                                Run npm as daemon named 'api'
+  pitchfork run api -f -- npm run dev
+                                Force restart if 'api' is running
+  pitchfork run api --retry 3 -- ./server
+                                Restart up to 3 times on failure
+  pitchfork run api -d 5 -- ./server
+                                Wait 5 seconds for ready check
+  pitchfork run api -o 'Listening' -- ./server
+                                Wait for output pattern before ready
+
 ## Arguments
 
 ### `<ID>`
@@ -14,13 +29,19 @@ Name of the daemon to run
 
 ### `[-- RUN]…`
 
+Command and arguments to run (after --)
+
 ## Flags
 
 ### `-f --force`
 
+Stop the daemon if it is already running
+
 ### `--retry <RETRY>`
 
 Number of times to retry on error exit
+
+**Default:** `0`
 
 ### `-d --delay <DELAY>`
 

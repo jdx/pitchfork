@@ -5,9 +5,28 @@ use comfy_table::{Cell, ContentArrangement, Table};
 
 /// List all daemons
 #[derive(Debug, clap::Args)]
-#[clap(visible_alias = "ls", verbatim_doc_comment)]
+#[clap(
+    visible_alias = "ls",
+    verbatim_doc_comment,
+    long_about = "\
+List all daemons
+
+Displays a table of all tracked daemons with their PIDs, status, and
+whether they are disabled.
+
+Example:
+  pitchfork list
+  pitchfork ls                    Alias for 'list'
+  pitchfork list --hide-header    Output without column headers
+
+Output:
+  Name    PID    Status
+  api     12345  running
+  worker  12346  running
+  db      -      stopped  disabled"
+)]
 pub struct List {
-    /// Show header
+    /// Hide the table header row
     #[clap(long)]
     hide_header: bool,
 }

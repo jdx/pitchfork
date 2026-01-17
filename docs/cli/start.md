@@ -6,6 +6,18 @@
 
 Starts a daemon from a pitchfork.toml file
 
+Daemons are defined in pitchfork.toml with a [daemons.<name>] section.
+The command waits for the daemon to be ready before returning.
+
+Examples:
+  pitchfork start api           Start a single daemon
+  pitchfork start api worker    Start multiple daemons
+  pitchfork start --all         Start all daemons in pitchfork.toml
+  pitchfork start api -f        Restart daemon if already running
+  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
+  pitchfork start api --output 'Listening on'
+                                Wait for output pattern before ready
+
 ## Arguments
 
 ### `[ID]…`

@@ -5,10 +5,23 @@
 
 Activate pitchfork in your shell session
 
-Necessary for autostart/stop when entering/exiting projects with pitchfork.toml files
+Generates shell code that enables automatic daemon management when changing
+directories. Required for auto-start/stop features in pitchfork.toml.
+
+Supported shells: bash, zsh, fish
+
+Add to your shell config:
+  bash (~/.bashrc):
+    eval "$(pitchfork activate bash)"
+
+  zsh (~/.zshrc):
+    eval "$(pitchfork activate zsh)"
+
+  fish (~/.config/fish/config.fish):
+    pitchfork activate fish | source
 
 ## Arguments
 
 ### `<SHELL>`
 
-The shell to generate source for
+Shell to activate (bash, zsh, fish)

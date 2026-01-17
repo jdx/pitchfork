@@ -4,3 +4,6 @@
 - **Usage**: `pitchfork boot disable`
 
 Disable boot start for pitchfork supervisor
+
+Removes the boot start registration. Pitchfork will no longer start
+automatically on system boot.

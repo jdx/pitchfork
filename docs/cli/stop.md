@@ -6,6 +6,14 @@
 
 Sends a stop signal to a daemon
 
+Sends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'
+to check if the daemon has stopped.
+
+Examples:
+  pitchfork stop api           Stop a single daemon
+  pitchfork stop api worker    Stop multiple daemons
+  pitchfork kill api           Same as 'stop' (alias)
+
 ## Arguments
 
 ### `[ID]…`

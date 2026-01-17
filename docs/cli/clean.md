@@ -5,3 +5,13 @@
 - **Aliases**: `c`
 
 Removes stopped/failed daemons from `pitchfork list`
+
+Cleans up the daemon list by removing entries for daemons that are no
+longer running. Does not affect running daemons or their configurations.
+
+Use this to clear out old entries after stopping daemons manually or
+after daemons have failed.
+
+Examples:
+  pitchfork clean                 Remove all stopped/failed entries
+  pitchfork c                     Alias for 'clean'
