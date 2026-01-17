@@ -2,11 +2,22 @@ use once_cell::sync::Lazy;
 pub use std::env::*;
 use std::path::PathBuf;
 
-pub static PITCHFORK_BIN: Lazy<PathBuf> =
-    Lazy::new(|| current_exe().unwrap().canonicalize().unwrap());
-pub static CWD: Lazy<PathBuf> = Lazy::new(|| current_dir().unwrap_or_default());
+pub static PITCHFORK_BIN: Lazy<PathBuf> = Lazy::new(|| {
+    current_exe()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|e| {
+            eprintln!("Warning: Could not determine pitchfork binary path: {e}");
+            args().next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("pitchfork"))
+        })
+});
+pub static CWD: Lazy<PathBuf> = Lazy::new(|| current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| dirs::home_dir().unwrap_or_default());
+pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    dirs::home_dir().unwrap_or_else(|| {
+        eprintln!("Warning: Could not determine home directory");
+        PathBuf::from("/tmp")
+    })
+});
 pub static PITCHFORK_CONFIG_DIR: Lazy<PathBuf> = Lazy::new(|| {
     var_path("PITCHFORK_CONFIG_DIR").unwrap_or(HOME_DIR.join(".config").join("pitchfork"))
 });

@@ -342,7 +342,9 @@ impl Supervisor {
             .collect_vec();
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
         let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
-        xx::file::mkdirp(log_path.parent().unwrap())?;
+        if let Some(parent) = log_path.parent() {
+            xx::file::mkdirp(parent)?;
+        }
         info!("run: spawning daemon {id} with args: {args:?}");
         let mut cmd = tokio::process::Command::new("sh");
         cmd.args(&args)
@@ -357,7 +359,15 @@ impl Supervisor {
         }
 
         let mut child = cmd.spawn().into_diagnostic()?;
-        let pid = child.id().unwrap();
+        let pid = match child.id() {
+            Some(p) => p,
+            None => {
+                warn!("Daemon {id} exited before PID could be captured");
+                return Ok(IpcResponse::DaemonFailed {
+                    error: "Process exited immediately".to_string(),
+                });
+            }
+        };
         info!("started daemon {id} with pid {pid}");
         let daemon = self
             .upsert_daemon(UpsertDaemonOpts {
@@ -383,18 +393,28 @@ impl Supervisor {
 
         tokio::spawn(async move {
             let id = id_clone;
-            let stdout = child.stdout.take().unwrap();
-            let stderr = child.stderr.take().unwrap();
+            let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
+                (Some(out), Some(err)) => (out, err),
+                _ => {
+                    error!("Failed to capture stdout/stderr for daemon {id}");
+                    return;
+                }
+            };
             let mut stdout = tokio::io::BufReader::new(stdout).lines();
             let mut stderr = tokio::io::BufReader::new(stderr).lines();
-            let mut log_appender = BufWriter::new(
-                tokio::fs::File::options()
-                    .append(true)
-                    .create(true)
-                    .open(&log_path)
-                    .await
-                    .unwrap(),
-            );
+            let log_file = match tokio::fs::File::options()
+                .append(true)
+                .create(true)
+                .open(&log_path)
+                .await
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("Failed to open log file for daemon {id}: {e}");
+                    return;
+                }
+            };
+            let mut log_appender = BufWriter::new(log_file);
 
             let now = || chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
             let format_line = |line: String| {
@@ -428,7 +448,7 @@ impl Supervisor {
                 tokio::sync::mpsc::channel::<std::io::Result<std::process::ExitStatus>>(1);
 
             // Spawn a task to wait for process exit
-            let child_pid = child.id().unwrap();
+            let child_pid = child.id().unwrap_or(0);
             tokio::spawn(async move {
                 let result = child.wait().await;
                 debug!(
@@ -444,8 +464,12 @@ impl Supervisor {
                 select! {
                     Ok(Some(line)) = stdout.next_line() => {
                         let formatted = format_line(line.clone());
-                        log_appender.write_all(formatted.as_bytes()).await.unwrap();
-                        log_appender.flush().await.unwrap();
+                        if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
+                            error!("Failed to write to log for daemon {id}: {e}");
+                        }
+                        if let Err(e) = log_appender.flush().await {
+                            error!("Failed to flush log for daemon {id}: {e}");
+                        }
                         trace!("stdout: {id} {formatted}");
 
                         // Check if output matches ready pattern
@@ -463,8 +487,12 @@ impl Supervisor {
                     }
                     Ok(Some(line)) = stderr.next_line() => {
                         let formatted = format_line(line.clone());
-                        log_appender.write_all(formatted.as_bytes()).await.unwrap();
-                        log_appender.flush().await.unwrap();
+                        if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
+                            error!("Failed to write to log for daemon {id}: {e}");
+                        }
+                        if let Err(e) = log_appender.flush().await {
+                            error!("Failed to flush log for daemon {id}: {e}");
+                        }
                         trace!("stderr: {id} {formatted}");
 
                         // Check if output matches ready pattern (also check stderr)
@@ -564,7 +592,7 @@ impl Supervisor {
                 if status.success() || is_stopping {
                     // If stopping, always mark as Stopped with success
                     // This allows monitoring task to clear PID after stop() was called
-                    SUPERVISOR
+                    if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             pid: None, // Clear PID now that process has exited
@@ -573,11 +601,13 @@ impl Supervisor {
                             ..Default::default()
                         })
                         .await
-                        .unwrap();
+                    {
+                        error!("Failed to update daemon state for {id}: {e}");
+                    }
                 } else {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
-                    SUPERVISOR
+                    if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             pid: None,
@@ -586,19 +616,21 @@ impl Supervisor {
                             ..Default::default()
                         })
                         .await
-                        .unwrap();
+                    {
+                        error!("Failed to update daemon state for {id}: {e}");
+                    }
                 }
-            } else {
-                SUPERVISOR
-                    .upsert_daemon(UpsertDaemonOpts {
-                        id: id.clone(),
-                        pid: None,
-                        status: DaemonStatus::Errored(None),
-                        last_exit_success: Some(false),
-                        ..Default::default()
-                    })
-                    .await
-                    .unwrap();
+            } else if let Err(e) = SUPERVISOR
+                .upsert_daemon(UpsertDaemonOpts {
+                    id: id.clone(),
+                    pid: None,
+                    status: DaemonStatus::Errored(None),
+                    last_exit_success: Some(false),
+                    ..Default::default()
+                })
+                .await
+            {
+                error!("Failed to update daemon state for {id}: {e}");
             }
         });
 
@@ -685,8 +717,15 @@ impl Supervisor {
         ];
         static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
         for signal in signals {
+            let stream = match signal::unix::signal(signal) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("Failed to register signal handler for {:?}: {}", signal, e);
+                    continue;
+                }
+            };
             tokio::spawn(async move {
-                let mut stream = signal::unix::signal(signal).unwrap();
+                let mut stream = stream;
                 loop {
                     stream.recv().await;
                     if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
@@ -705,7 +744,10 @@ impl Supervisor {
         tokio::spawn(async move {
             static RECEIVED_SIGNAL: AtomicBool = AtomicBool::new(false);
             loop {
-                signal::ctrl_c().await.unwrap();
+                if let Err(e) = signal::ctrl_c().await {
+                    error!("Failed to wait for ctrl-c: {}", e);
+                    return;
+                }
                 if RECEIVED_SIGNAL.swap(true, atomic::Ordering::SeqCst) {
                     exit(1);
                 } else {
@@ -1083,9 +1125,9 @@ impl Supervisor {
         self.state_file.lock().await.shell_dirs.iter().fold(
             HashMap::new(),
             |mut acc, (pid, dir)| {
-                acc.entry(dir.clone())
-                    .or_default()
-                    .push(pid.parse().unwrap());
+                if let Ok(pid) = pid.parse() {
+                    acc.entry(dir.clone()).or_default().push(pid);
+                }
                 acc
             },
         )

@@ -28,7 +28,10 @@ impl StateFile {
     pub fn get() -> &'static Self {
         static STATE_FILE: Lazy<StateFile> = Lazy::new(|| {
             let path = &*env::PITCHFORK_STATE_FILE;
-            StateFile::read(path).expect("Error reading state file")
+            StateFile::read(path).unwrap_or_else(|e| {
+                warn!("Could not read state file: {e}, starting fresh");
+                StateFile::new(path.to_path_buf())
+            })
         });
         &STATE_FILE
     }

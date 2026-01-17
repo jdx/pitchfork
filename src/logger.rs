@@ -26,7 +26,10 @@ impl log::Log for Logger {
     fn log(&self, record: &Record) {
         if record.level() <= self.file_level {
             if let Some(log_file) = &self.log_file {
-                let mut log_file = log_file.lock().unwrap();
+                let mut log_file = match log_file.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
                 let out = format!(
                     "{now} {level} {args}",
                     now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),

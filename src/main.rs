@@ -30,9 +30,15 @@ async fn main() -> Result<()> {
 
 #[cfg(unix)]
 fn handle_epipe() {
-    let mut pipe_stream = signal::unix::signal(SignalKind::pipe()).unwrap();
-    tokio::spawn(async move {
-        pipe_stream.recv().await;
-        debug!("received SIGPIPE");
-    });
+    match signal::unix::signal(SignalKind::pipe()) {
+        Ok(mut pipe_stream) => {
+            tokio::spawn(async move {
+                pipe_stream.recv().await;
+                debug!("received SIGPIPE");
+            });
+        }
+        Err(e) => {
+            warn!("Could not set up SIGPIPE handler: {}", e);
+        }
+    }
 }
