@@ -26,7 +26,6 @@ fn base_html(title: &str, content: &str) -> String {
         <a href="/" class="nav-brand">Pitchfork</a>
         <div class="nav-links">
             <a href="/">Dashboard</a>
-            <a href="/daemons" class="active">Daemons</a>
             <a href="/logs">Logs</a>
             <a href="/config">Config</a>
         </div>

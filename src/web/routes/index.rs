@@ -5,6 +5,64 @@ use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 
+fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
+    let status_class = match &d.status {
+        crate::daemon_status::DaemonStatus::Running => "running",
+        crate::daemon_status::DaemonStatus::Stopped => "stopped",
+        crate::daemon_status::DaemonStatus::Waiting => "waiting",
+        crate::daemon_status::DaemonStatus::Stopping => "stopping",
+        crate::daemon_status::DaemonStatus::Failed(_) => "failed",
+        crate::daemon_status::DaemonStatus::Errored(_) => "errored",
+    };
+
+    let pid_display = d
+        .pid
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let error_msg = d.status.error_message().unwrap_or_default();
+    let disabled_badge = if is_disabled {
+        r#"<span class="badge disabled">disabled</span>"#
+    } else {
+        ""
+    };
+
+    let actions = if d.status.is_running() {
+        format!(
+            r##"
+            <button hx-post="/daemons/{id}/stop" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
+            <button hx-post="/daemons/{id}/restart" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
+        "##
+        )
+    } else {
+        format!(
+            r##"
+            <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+        "##
+        )
+    };
+
+    let toggle_btn = if is_disabled {
+        format!(
+            r##"<button hx-post="/daemons/{id}/enable" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
+        )
+    } else {
+        format!(
+            r##"<button hx-post="/daemons/{id}/disable" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
+        )
+    };
+
+    format!(
+        r#"<tr id="daemon-{id}">
+        <td><a href="/daemons/{id}">{id}</a> {disabled_badge}</td>
+        <td>{pid_display}</td>
+        <td><span class="status {status_class}">{}</span></td>
+        <td class="error-msg">{error_msg}</td>
+        <td class="actions">{actions} {toggle_btn} <a href="/logs/{id}" class="btn btn-sm">Logs</a></td>
+    </tr>"#,
+        d.status
+    )
+}
+
 pub async fn index() -> Html<String> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
@@ -37,13 +95,44 @@ pub async fn index() -> Html<String> {
     }
     let total = all_ids.len();
 
+    // Build daemon table rows
+    let mut rows = String::new();
+    for (id, daemon) in &state.daemons {
+        if id == "pitchfork" {
+            continue;
+        }
+        let is_disabled = state.disabled.contains(id);
+        rows.push_str(&daemon_row(id, daemon, is_disabled));
+    }
+
+    // Add configured-but-not-started daemons
+    for id in pt.daemons.keys() {
+        if !state.daemons.contains_key(id) {
+            rows.push_str(&format!(
+                r##"<tr id="daemon-{id}">
+                <td><a href="/daemons/{id}">{id}</a> <span class="badge">not started</span></td>
+                <td>-</td>
+                <td><span class="status stopped">not started</span></td>
+                <td></td>
+                <td class="actions">
+                    <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                </td>
+            </tr>"##
+            ));
+        }
+    }
+
+    if rows.is_empty() {
+        rows = r#"<tr><td colspan="5" class="empty">No daemons configured. Add some to pitchfork.toml</td></tr>"#.to_string();
+    }
+
     let html = format!(
-        r#"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Pitchfork Dashboard</title>
+    <title>Pitchfork</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -52,17 +141,15 @@ pub async fn index() -> Html<String> {
         <a href="/" class="nav-brand">Pitchfork</a>
         <div class="nav-links">
             <a href="/" class="active">Dashboard</a>
-            <a href="/daemons">Daemons</a>
             <a href="/logs">Logs</a>
             <a href="/config">Config</a>
         </div>
     </nav>
     <main>
-        <h1>Dashboard</h1>
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-value">{total}</div>
-                <div class="stat-label">Total Daemons</div>
+                <div class="stat-label">Total</div>
             </div>
             <div class="stat-card running">
                 <div class="stat-value">{running_count}</div>
@@ -78,15 +165,23 @@ pub async fn index() -> Html<String> {
             </div>
         </div>
 
-        <h2>Quick Actions</h2>
-        <div class="actions">
-            <a href="/daemons" class="btn">Manage Daemons</a>
-            <a href="/logs" class="btn">View Logs</a>
-            <a href="/config" class="btn">Edit Config</a>
-        </div>
+        <table class="daemon-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>PID</th>
+                    <th>Status</th>
+                    <th>Error</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML">
+                {rows}
+            </tbody>
+        </table>
     </main>
 </body>
-</html>"#
+</html>"##
     );
 
     Html(html)
