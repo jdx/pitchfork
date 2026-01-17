@@ -85,6 +85,8 @@ pub struct PitchforkTomlDaemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ready_http: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip)]
     pub path: Option<PathBuf>,

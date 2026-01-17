@@ -38,15 +38,33 @@ run = "python -m http.server 8080"
 ready_output = "Serving HTTP on"
 ```
 
-### HTTP Request
+### HTTP Check
 
-HTTP ready checks are not yet implemented. This feature is planned for a future release.
+Wait until an HTTP endpoint returns a 2xx status code. This is useful for web services that have a health check endpoint.
+
+```bash
+pitchfork run myapp --http http://localhost:8080/health -- node server.js
+pitchfork start myapp --http http://localhost:3000/ready
+```
+
+```toml
+[daemons.api]
+run = "python -m uvicorn main:app"
+ready_http = "http://localhost:8000/health"
+
+[daemons.webserver]
+run = "node server.js"
+ready_http = "http://localhost:3000/ready"
+```
+
+The HTTP check polls the endpoint every 500ms with a 5 second timeout per request until it receives a successful response (2xx status code).
 
 ## Behaviors
 
 - **Delay check**: Daemon runs for the specified delay period without failing → `pitchfork start`/`pitchfork run` exits with code 0
 - **Output check**: Daemon output matches the pattern → `pitchfork start`/`pitchfork run` exits with code 0
-- If both `delay` and `output` are specified, the output pattern takes precedence.
+- **HTTP check**: HTTP endpoint returns 2xx status → `pitchfork start`/`pitchfork run` exits with code 0
+- If multiple checks are specified, the first one to succeed marks the daemon as ready
 - Daemon fails (exits with non-zero code) before becoming ready → `pitchfork start`/`pitchfork run` exits with the same exit code as the daemon
 
 

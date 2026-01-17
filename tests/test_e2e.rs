@@ -861,3 +861,53 @@ ready_delay = 0
     env.run_command(&["stop", "clear_test_1"]);
     env.run_command(&["stop", "clear_test_2"]);
 }
+
+#[test]
+fn test_ready_http_check() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let script = get_script_path("http_server.ts");
+    // Server starts listening after 1 second delay
+    let toml_content = format!(
+        r#"
+[daemons.http_test]
+run = "bun run {} 1 18081"
+ready_http = "http://localhost:18081/health"
+"#,
+        script.display()
+    );
+    env.create_toml(&toml_content);
+
+    let start_time = std::time::Instant::now();
+    let output = env.run_command(&["start", "http_test"]);
+    let elapsed = start_time.elapsed();
+
+    println!("Start took: {:?}", elapsed);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(output.status.success(), "Start command should succeed");
+
+    // Should take at least 1 second (the delay before server starts)
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "Should wait for HTTP server to be ready"
+    );
+
+    // Should not take too long (less than 10 seconds)
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "Should not take too long to detect ready state"
+    );
+
+    // Verify logs show the server started
+    let logs = env.read_logs("http_test");
+    assert!(
+        logs.contains("Server listening"),
+        "Logs should contain server start message"
+    );
+
+    // Clean up
+    env.run_command(&["stop", "http_test"]);
+}

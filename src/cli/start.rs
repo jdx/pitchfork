@@ -23,7 +23,9 @@ Examples:
   pitchfork start api -f        Restart daemon if already running
   pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
   pitchfork start api --output 'Listening on'
-                                Wait for output pattern before ready"
+                                Wait for output pattern before ready
+  pitchfork start api --http http://localhost:8080/health
+                                Wait for HTTP endpoint to return 2xx"
 )]
 pub struct Start {
     /// ID of the daemon(s) in pitchfork.toml to start
@@ -42,6 +44,9 @@ pub struct Start {
     /// Wait until output matches this regex pattern before considering daemon ready
     #[clap(long)]
     output: Option<String>,
+    /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
+    #[clap(long)]
+    http: Option<String>,
 }
 
 impl Start {
@@ -84,6 +89,7 @@ impl Start {
                     let retry = d.retry;
                     let ready_delay = d.ready_delay;
                     let ready_output = d.ready_output.clone();
+                    let ready_http = d.ready_http.clone();
 
                     (
                         run,
@@ -94,6 +100,7 @@ impl Start {
                         retry,
                         ready_delay,
                         ready_output,
+                        ready_http,
                     )
                 }
                 None => {
@@ -111,6 +118,7 @@ impl Start {
                 retry,
                 ready_delay,
                 ready_output,
+                ready_http,
             ) = daemon_data;
 
             let ipc_clone = ipc.clone();
@@ -118,6 +126,7 @@ impl Start {
             let force = self.force;
             let delay = self.delay;
             let output = self.output.clone();
+            let http = self.http.clone();
 
             let task = tokio::spawn(async move {
                 let cmd = match shell_words::split(&run) {
@@ -142,6 +151,7 @@ impl Start {
                         retry_count: 0,
                         ready_delay: delay.or(ready_delay).or(Some(3)),
                         ready_output: output.or(ready_output),
+                        ready_http: http.or(ready_http),
                         wait_ready: true,
                     })
                     .await

@@ -17,6 +17,8 @@ Examples:
   pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
   pitchfork start api --output 'Listening on'
                                 Wait for output pattern before ready
+  pitchfork start api --http http://localhost:8080/health
+                                Wait for HTTP endpoint to return 2xx
 
 ## Arguments
 
@@ -41,3 +43,7 @@ Delay in seconds before considering daemon ready (default: 3 seconds)
 ### `--output <OUTPUT>`
 
 Wait until output matches this regex pattern before considering daemon ready
+
+### `--http <HTTP>`
+
+Wait until HTTP endpoint returns 2xx status before considering daemon ready

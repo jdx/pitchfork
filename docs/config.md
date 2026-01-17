@@ -21,6 +21,7 @@ retry = 3
 auto = ["start", "stop"]
 ready_delay = 5
 ready_output = "pattern to match"
+ready_http = "http://localhost:8080/health"
 depends = ["other-daemon"]
 boot_start = true
 cron = { schedule = "0 0 * * * *", retrigger = "finish" }
@@ -35,6 +36,7 @@ cron = { schedule = "0 0 * * * *", retrigger = "finish" }
 | `auto` | array | Auto-start/stop behavior: `["start"]`, `["stop"]`, or `["start", "stop"]` |
 | `ready_delay` | integer | Seconds to wait before considering the daemon ready (default: 3) |
 | `ready_output` | string | Output pattern (regex) to match for readiness |
+| `ready_http` | string | HTTP endpoint URL to poll for readiness (2xx = ready) |
 | `depends` | array | List of daemon names that must be started before this daemon |
 | `boot_start` | boolean | Start this daemon automatically on system boot (default: false). See [Start on Boot](/boot-start) |
 | `cron` | table | Cron scheduling configuration. See [Cron](/cron) |
