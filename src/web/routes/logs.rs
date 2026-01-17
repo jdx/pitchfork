@@ -188,7 +188,7 @@ pub async fn stream_sse(
                             let mut new_content = String::new();
                             if file.read_to_string(&mut new_content).is_ok() && !new_content.is_empty() {
                                 let escaped = html_escape(&new_content);
-                                yield Ok(Event::default().data(escaped));
+                                yield Ok(Event::default().event("message").data(escaped));
                             }
                         }
                     }
