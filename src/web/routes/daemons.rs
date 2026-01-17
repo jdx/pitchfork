@@ -347,12 +347,10 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         } else if let Some(daemon) = state.daemons.get(&id) {
             let status = &daemon.status;
             Html(format!(
-                r#"<div class="success">Started! Status: {status}. <a href="/daemons/{id}">Refresh page</a></div>"#
+                r#"<div class="success">Started! Status: {status}</div><script>setTimeout(function(){{ window.location.href='/'; }}, 1000);</script>"#
             ))
         } else {
-            Html(format!(
-                r#"<div>Starting... <a href="/daemons/{id}">Refresh page</a></div>"#
-            ))
+            Html(r#"<div>Starting...</div><script>setTimeout(function(){ window.location.href='/'; }, 1000);</script>"#.to_string())
         }
     } else {
         // Return table row for list page
