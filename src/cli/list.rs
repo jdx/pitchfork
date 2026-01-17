@@ -11,8 +11,8 @@ use comfy_table::{Cell, ContentArrangement, Table};
     long_about = "\
 List all daemons
 
-Displays a table of all tracked daemons with their PIDs, status, and
-whether they are disabled.
+Displays a table of all tracked daemons with their PIDs, status,
+whether they are disabled, and any error messages.
 
 Example:
   pitchfork list
@@ -20,9 +20,9 @@ Example:
   pitchfork list --hide-header    Output without column headers
 
 Output:
-  Name    PID    Status
+  Name    PID    Status   Error
   api     12345  running
-  worker  12346  running
+  worker  -      errored  exit code 1
   db      -      stopped  disabled"
 )]
 pub struct List {
@@ -38,11 +38,16 @@ impl List {
             .load_preset(comfy_table::presets::NOTHING)
             .set_content_arrangement(ContentArrangement::Dynamic);
         if !self.hide_header && console::user_attended() {
-            table.set_header(vec!["Name", "PID", "Status", ""]);
+            table.set_header(vec!["Name", "PID", "Status", "", "Error"]);
         }
 
         let sf = StateFile::get();
         for (id, daemon) in sf.daemons.iter() {
+            let error_msg = daemon
+                .status
+                .error_message()
+                .map(|msg| console::style(msg).red().to_string())
+                .unwrap_or_default();
             table.add_row(vec![
                 Cell::new(id),
                 Cell::new(
@@ -58,6 +63,7 @@ impl List {
                 } else {
                     Default::default()
                 }),
+                Cell::new(error_msg),
             ]);
         }
 

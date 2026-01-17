@@ -163,6 +163,47 @@ run = "sleep 10"
     env.run_command(&["stop", "test_list"]);
 }
 
+#[test]
+fn test_list_shows_error_messages() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let fail_script = get_script_path("fail.ts");
+    let toml_content = format!(
+        r#"
+[daemons.list_error_test]
+run = "bun run {} 0"
+"#,
+        fail_script.display()
+    );
+    env.create_toml(&toml_content);
+
+    // Start the daemon (it will fail instantly)
+    let _ = env.run_command(&["start", "list_error_test"]);
+
+    // Give it a moment to register the failure
+    env.sleep(Duration::from_millis(500));
+
+    // Run list command and check for error message
+    let output = env.run_command(&["list"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("List output: {}", stdout);
+
+    assert!(
+        stdout.contains("list_error_test"),
+        "List should show the daemon"
+    );
+    assert!(
+        stdout.contains("exit code"),
+        "List should show the exit code error message, got: {}",
+        stdout
+    );
+    assert!(output.status.success(), "List command should succeed");
+
+    // Clean up
+    let _ = env.run_command(&["stop", "list_error_test"]);
+}
+
 // will be fixed later, logs command is working now
 // #[test]
 
