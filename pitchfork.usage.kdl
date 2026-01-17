@@ -59,12 +59,12 @@ cmd enable help="Allow a daemon to start" {
 }
 cmd list help="List all daemons" {
     alias ls
-    long_help "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status, and\nwhether they are disabled.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status\n  api     12345  running\n  worker  12346  running\n  db      -      stopped  disabled"
+    long_help "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status   Error\n  api     12345  running\n  worker  -      errored  exit code 1\n  db      -      stopped  disabled"
     flag --hide-header help="Hide the table header row"
 }
 cmd logs help="Displays logs for daemon(s)" {
     alias l
-    long_help "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show last 100 lines for 'api'\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api -n 0         Show all logs (no limit)\n  pitchfork logs api --tail       Follow logs in real-time\n  pitchfork logs api --from '2024-01-15 10:00:00'\n                                  Show logs since a specific time\n  pitchfork logs api --to '2024-01-15 12:00:00'\n                                  Show logs until a specific time\n  pitchfork logs api --clear      Delete logs for 'api'"
+    long_help "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show last 100 lines for 'api'\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api -n 0         Show all logs (no limit)\n  pitchfork logs api --tail       Follow logs in real-time\n  pitchfork logs api --from '2024-01-15 10:00:00'\n                                  Show logs since a specific time\n  pitchfork logs api --to '2024-01-15 12:00:00'\n                                  Show logs until a specific time\n  pitchfork logs api --clear      Delete logs for 'api'\n  pitchfork logs --clear          Delete logs for all daemons"
     flag "-c --clear" help="Delete logs"
     flag -n help="Show N lines of logs" default="100" {
         long_help "Show N lines of logs\n\nSet to 0 to show all logs"
@@ -81,7 +81,7 @@ cmd logs help="Displays logs for daemon(s)" {
 }
 cmd run help="Runs a one-off daemon" {
     alias r
-    long_help "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx"
+    long_help "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready"
     flag "-f --force" help="Stop the daemon if it is already running"
     flag --retry help="Number of times to retry on error exit" default="0" {
         arg <RETRY>
@@ -92,15 +92,13 @@ cmd run help="Runs a one-off daemon" {
     flag "-o --output" help="Wait until output matches this regex pattern before considering daemon ready" {
         arg <OUTPUT>
     }
-    flag --http help="Wait until HTTP endpoint returns 2xx status before considering daemon ready" {
-        arg <HTTP>
-    }
+    flag "-q --quiet" help="Suppress startup log output"
     arg <ID> help="Name of the daemon to run"
     arg "[-- RUN]…" help="Command and arguments to run (after --)" required=#false var=#true
 }
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s
-    long_help "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx"
+    long_help "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready"
     flag "-a --all" help="Start all daemons in all pitchfork.tomls"
     flag --shell-pid hide=#true {
         arg <SHELL_PID>
@@ -112,9 +110,7 @@ cmd start help="Starts a daemon from a pitchfork.toml file" {
     flag --output help="Wait until output matches this regex pattern before considering daemon ready" {
         arg <OUTPUT>
     }
-    flag --http help="Wait until HTTP endpoint returns 2xx status before considering daemon ready" {
-        arg <HTTP>
-    }
+    flag "-q --quiet" help="Suppress startup log output"
     arg "[ID]…" help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true
 }
 cmd status help="Display the status of a daemon" {

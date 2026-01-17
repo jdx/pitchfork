@@ -1,7 +1,9 @@
+use crate::cli::logs::print_startup_logs;
 use crate::daemon::RunOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::Result;
+use chrono::{DateTime, Local};
 use miette::ensure;
 use std::sync::Arc;
 
@@ -47,6 +49,9 @@ pub struct Start {
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
     #[clap(long)]
     http: Option<String>,
+    /// Suppress startup log output
+    #[clap(short, long)]
+    quiet: bool,
 }
 
 impl Start {
@@ -133,11 +138,13 @@ impl Start {
                     Ok(c) => c,
                     Err(e) => {
                         error!("Failed to parse command for daemon {}: {}", id, e);
-                        return Some(1);
+                        return (id, None, Some(1));
                     }
                 };
 
-                match ipc_clone
+                let start_time = Local::now();
+
+                let exit_code = match ipc_clone
                     .run(RunOptions {
                         id: id.clone(),
                         cmd,
@@ -161,7 +168,9 @@ impl Start {
                         error!("Failed to start daemon {}: {}", id, e);
                         Some(1)
                     }
-                }
+                };
+
+                (id, Some(start_time), exit_code)
             });
 
             tasks.push(task);
@@ -169,17 +178,29 @@ impl Start {
 
         // wait for all tasks to complete
         let mut any_failed = false;
+        let mut successful_daemons: Vec<(String, DateTime<Local>)> = Vec::new();
 
         for task in tasks {
             match task.await {
-                Ok(exit_code) => {
+                Ok((id, start_time, exit_code)) => {
                     if exit_code.is_some() {
                         any_failed = true;
+                    } else if let Some(start_time) = start_time {
+                        successful_daemons.push((id, start_time));
                     }
                 }
                 Err(e) => {
                     error!("Task panicked: {}", e);
                     any_failed = true;
+                }
+            }
+        }
+
+        // Show startup logs for successful daemons (unless --quiet)
+        if !self.quiet {
+            for (id, start_time) in successful_daemons {
+                if let Err(e) = print_startup_logs(&id, start_time) {
+                    debug!("Failed to print startup logs for {}: {}", id, e);
                 }
             }
         }

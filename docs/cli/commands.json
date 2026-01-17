@@ -615,29 +615,24 @@
             }
           },
           {
-            "name": "http",
-            "usage": "--http <HTTP>",
-            "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
-            "help_first_line": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
-            "short": [],
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
             "long": [
-              "http"
+              "quiet"
             ],
             "hide": false,
-            "global": false,
-            "arg": {
-              "name": "HTTP",
-              "usage": "<HTTP>",
-              "required": true,
-              "double_dash": "Optional",
-              "hide": false
-            }
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Runs a one-off daemon",
-        "help_long": "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx",
+        "help_long": "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready",
         "name": "run",
         "aliases": [
           "r"
@@ -748,29 +743,24 @@
             }
           },
           {
-            "name": "http",
-            "usage": "--http <HTTP>",
-            "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
-            "help_first_line": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
-            "short": [],
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
             "long": [
-              "http"
+              "quiet"
             ],
             "hide": false,
-            "global": false,
-            "arg": {
-              "name": "HTTP",
-              "usage": "<HTTP>",
-              "required": true,
-              "double_dash": "Optional",
-              "hide": false
-            }
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Starts a daemon from a pitchfork.toml file",
-        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx",
+        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready",
         "name": "start",
         "aliases": [
           "s"
