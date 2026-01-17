@@ -248,8 +248,13 @@ pub fn print_logs_for_time_range(
     // Truncate 'from' to second precision to match log timestamp precision
     // This ensures we include logs that occurred in the same second as the start time
     // Note: with_nanosecond(0) cannot fail since 0 is always valid
-    let from = from.with_nanosecond(0).expect("0 is always valid for nanoseconds");
-    let to = to.map(|t| t.with_nanosecond(0).expect("0 is always valid for nanoseconds"));
+    let from = from
+        .with_nanosecond(0)
+        .expect("0 is always valid for nanoseconds");
+    let to = to.map(|t| {
+        t.with_nanosecond(0)
+            .expect("0 is always valid for nanoseconds")
+    });
 
     let log_lines = log_files
         .iter()

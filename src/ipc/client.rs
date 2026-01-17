@@ -62,7 +62,10 @@ impl IpcClient {
                 }
             }
         }
-        bail!("failed to connect to IPC socket after {} attempts", CONNECT_ATTEMPTS)
+        bail!(
+            "failed to connect to IPC socket after {} attempts",
+            CONNECT_ATTEMPTS
+        )
     }
 
     pub async fn send(&self, msg: IpcRequest) -> Result<()> {

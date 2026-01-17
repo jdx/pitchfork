@@ -7,7 +7,10 @@ pub static PITCHFORK_BIN: Lazy<PathBuf> = Lazy::new(|| {
         .and_then(|p| p.canonicalize())
         .unwrap_or_else(|e| {
             eprintln!("Warning: Could not determine pitchfork binary path: {e}");
-            args().next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("pitchfork"))
+            args()
+                .next()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("pitchfork"))
         })
 });
 pub static CWD: Lazy<PathBuf> = Lazy::new(|| current_dir().unwrap_or_else(|_| PathBuf::from(".")));

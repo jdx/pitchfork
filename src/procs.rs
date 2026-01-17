@@ -74,10 +74,7 @@ impl Procs {
     }
 
     fn kill(&self, pid: u32) -> bool {
-        if let Some(process) = self
-            .lock_system()
-            .process(sysinfo::Pid::from_u32(pid))
-        {
+        if let Some(process) = self.lock_system().process(sysinfo::Pid::from_u32(pid)) {
             debug!("killing process {}", pid);
             #[cfg(windows)]
             process.kill();
