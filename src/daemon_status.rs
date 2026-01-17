@@ -22,4 +22,13 @@ impl DaemonStatus {
             DaemonStatus::Errored(_) => console::style(s).red().to_string(),
         }
     }
+
+    pub fn error_message(&self) -> Option<String> {
+        match self {
+            DaemonStatus::Failed(msg) => Some(msg.clone()),
+            DaemonStatus::Errored(Some(code)) => Some(format!("exit code {code}")),
+            DaemonStatus::Errored(None) => Some("unknown exit code".to_string()),
+            _ => None,
+        }
+    }
 }
