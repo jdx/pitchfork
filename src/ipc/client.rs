@@ -62,13 +62,16 @@ impl IpcClient {
                 }
             }
         }
-        unreachable!()
+        bail!(
+            "failed to connect to IPC socket after {} attempts",
+            CONNECT_ATTEMPTS
+        )
     }
 
     pub async fn send(&self, msg: IpcRequest) -> Result<()> {
         let mut msg = serialize(&msg)?;
         if msg.contains(&0) {
-            panic!("IPC message contains null");
+            bail!("IPC message contains null byte");
         }
         msg.push(0);
         let mut send = self.send.lock().await;
@@ -115,7 +118,7 @@ impl IpcClient {
                 info!("daemon {} already enabled", id);
                 Ok(false)
             }
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
     }
 
@@ -130,7 +133,7 @@ impl IpcClient {
                 info!("daemon {} already disabled", id);
                 Ok(false)
             }
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
     }
 
@@ -175,7 +178,7 @@ impl IpcClient {
                     error!("Failed to print logs: {}", e);
                 }
             }
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
         Ok((started_daemons, exit_code))
     }
@@ -184,7 +187,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetActiveDaemons).await?;
         match rsp {
             IpcResponse::ActiveDaemons(daemons) => Ok(daemons),
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
     }
 
@@ -199,7 +202,7 @@ impl IpcClient {
             IpcResponse::Ok => {
                 trace!("updated shell dir for pid {shell_pid} to {}", dir.display());
             }
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
         Ok(())
     }
@@ -210,7 +213,7 @@ impl IpcClient {
             IpcResponse::Ok => {
                 trace!("cleaned");
             }
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
         Ok(())
     }
@@ -219,7 +222,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {
             IpcResponse::DisabledDaemons(daemons) => Ok(daemons),
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
     }
 
@@ -227,7 +230,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetNotifications).await?;
         match rsp {
             IpcResponse::Notifications(notifications) => Ok(notifications),
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
     }
 
@@ -242,7 +245,7 @@ impl IpcClient {
                 warn!("daemon {} is not running", id);
                 Ok(())
             }
-            rsp => unreachable!("unexpected response: {rsp:?}"),
+            rsp => bail!("unexpected IPC response: {rsp:?}"),
         }
     }
 }

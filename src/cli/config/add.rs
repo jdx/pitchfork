@@ -43,7 +43,12 @@ impl Add {
             },
         );
         pt.write()?;
-        println!("added {} to {}", self.id, pt.path.unwrap().display());
+        let path_display = pt
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "pitchfork.toml".to_string());
+        println!("added {} to {}", self.id, path_display);
         Ok(())
     }
 }

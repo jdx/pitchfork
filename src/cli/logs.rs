@@ -131,8 +131,10 @@ fn merge_log_lines(id: &str, lines: Vec<String>) -> Vec<(String, String, String)
     lines.into_iter().fold(vec![], |mut acc, line| {
         match regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w)+ (.*)$").captures(&line) {
             Some(caps) => {
-                let date = caps.get(1).unwrap().as_str().to_string();
-                let msg = caps.get(3).unwrap().as_str().to_string();
+                let (date, msg) = match (caps.get(1), caps.get(3)) {
+                    (Some(d), Some(m)) => (d.as_str().to_string(), m.as_str().to_string()),
+                    _ => return acc, // Skip malformed lines
+                };
                 acc.push((date, id.to_string(), msg));
                 acc
             }
@@ -191,15 +193,21 @@ pub async fn tail_logs(names: &[String]) -> Result<()> {
     while let Some(paths) = wf.rx.recv().await {
         let mut out = vec![];
         for path in paths {
-            let name = files_to_name.get(&path).unwrap().to_string();
-            let info = log_files.get_mut(&name).unwrap();
+            let Some(name) = files_to_name.get(&path) else {
+                warn!("Unknown log file changed: {}", path.display());
+                continue;
+            };
+            let Some(info) = log_files.get_mut(name) else {
+                warn!("No log info for: {name}");
+                continue;
+            };
             info.file
                 .seek(SeekFrom::Start(info.cur))
                 .into_diagnostic()?;
             let reader = BufReader::new(&info.file);
             let lines = reader.lines().map_while(Result::ok).collect_vec();
             info.cur += lines.iter().fold(0, |acc, l| acc + l.len() as u64);
-            out.extend(merge_log_lines(&name, lines));
+            out.extend(merge_log_lines(name, lines));
         }
         let out = out
             .into_iter()
@@ -239,8 +247,14 @@ pub fn print_logs_for_time_range(
 
     // Truncate 'from' to second precision to match log timestamp precision
     // This ensures we include logs that occurred in the same second as the start time
-    let from = from.with_nanosecond(0).unwrap();
-    let to = to.map(|t| t.with_nanosecond(0).unwrap());
+    // Note: with_nanosecond(0) cannot fail since 0 is always valid
+    let from = from
+        .with_nanosecond(0)
+        .expect("0 is always valid for nanoseconds");
+    let to = to.map(|t| {
+        t.with_nanosecond(0)
+            .expect("0 is always valid for nanoseconds")
+    });
 
     let log_lines = log_files
         .iter()

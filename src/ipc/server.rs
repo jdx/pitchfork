@@ -4,7 +4,7 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use interprocess::local_socket::ListenerOptions;
-use miette::{miette, IntoDiagnostic};
+use miette::{bail, miette, IntoDiagnostic};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -36,7 +36,7 @@ impl IpcServer {
     async fn send(send: &mut SendHalf, msg: IpcResponse) -> Result<()> {
         let mut msg = serialize(&msg)?;
         if msg.contains(&0) {
-            panic!("IPC message contains null");
+            bail!("IPC message contains null byte");
         }
         msg.push(0);
         if let Err(err) = send.write_all(&msg).await {

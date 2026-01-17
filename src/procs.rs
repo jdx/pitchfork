@@ -27,24 +27,27 @@ impl Procs {
         procs
     }
 
+    fn lock_system(&self) -> std::sync::MutexGuard<'_, sysinfo::System> {
+        self.system.lock().unwrap_or_else(|poisoned| {
+            warn!("System mutex was poisoned, recovering");
+            poisoned.into_inner()
+        })
+    }
+
     pub fn title(&self, pid: u32) -> Option<String> {
-        self.system
-            .lock()
-            .unwrap()
+        self.lock_system()
             .process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.name().to_string_lossy().to_string())
     }
 
     pub fn is_running(&self, pid: u32) -> bool {
-        self.system
-            .lock()
-            .unwrap()
+        self.lock_system()
             .process(sysinfo::Pid::from_u32(pid))
             .is_some()
     }
 
     pub fn all_children(&self, pid: u32) -> Vec<u32> {
-        let system = self.system.lock().unwrap();
+        let system = self.lock_system();
         let all = system.processes();
         let mut children = vec![];
         for (child_pid, process) in all {
@@ -54,7 +57,10 @@ impl Procs {
                     children.push(child_pid.as_u32());
                     break;
                 }
-                process = system.process(parent).unwrap();
+                match system.process(parent) {
+                    Some(p) => process = p,
+                    None => break,
+                }
             }
         }
         children
@@ -68,12 +74,7 @@ impl Procs {
     }
 
     fn kill(&self, pid: u32) -> bool {
-        if let Some(process) = self
-            .system
-            .lock()
-            .unwrap()
-            .process(sysinfo::Pid::from_u32(pid))
-        {
+        if let Some(process) = self.lock_system().process(sysinfo::Pid::from_u32(pid)) {
             debug!("killing process {}", pid);
             #[cfg(windows)]
             process.kill();
@@ -87,9 +88,7 @@ impl Procs {
     }
 
     pub(crate) fn refresh_processes(&self) {
-        self.system
-            .lock()
-            .unwrap()
+        self.lock_system()
             .refresh_processes(ProcessesToUpdate::All, true);
     }
 }
