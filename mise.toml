@@ -12,16 +12,10 @@ dir = "docs"
 run = "bun i && exec bun run docs:dev"
 
 [tasks.lint]
-run = [
-  "cargo fmt --check",
-  "cargo clippy --all-targets --all-features -- -D warnings",
-]
+run = "hk check"
 
 [tasks.lint-fix]
-run = [
-  "cargo fmt --all",
-  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features --allow-no-vcs -- -D warnings",
-]
+run = "hk fix"
 
 [tasks.build]
 run = "cargo build"
@@ -45,12 +39,6 @@ run = [
 
 [tools]
 bun = "latest" # for docs and test
+hk = "latest"
+pkl = "latest" # for hk config
 usage = "latest" # for rendering CLI usage
-
-
-[tasks.pre-commit]
-depends = ["render", "lint-fix"]
-run = [
-  "cargo fmt -- $(git diff --name-only --cached | grep '\\.rs$')",
-  "git -c advice.addEmptyPathspec=false add $(git diff --name-only --cached | grep '\\.rs$')",
-]
