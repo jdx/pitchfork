@@ -40,4 +40,5 @@ run = [
 [tools]
 bun = "latest" # for docs and test
 hk = "latest"
+pkl = "latest" # for hk config
 usage = "latest" # for rendering CLI usage
