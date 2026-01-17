@@ -26,6 +26,8 @@ pub struct Daemon {
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ready_http: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -42,6 +44,7 @@ pub struct RunOptions {
     pub retry_count: u32,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
+    pub ready_http: Option<String>,
     pub wait_ready: bool,
 }
 

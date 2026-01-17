@@ -81,7 +81,7 @@ cmd logs help="Displays logs for daemon(s)" {
 }
 cmd run help="Runs a one-off daemon" {
     alias r
-    long_help "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready"
+    long_help "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx"
     flag "-f --force" help="Stop the daemon if it is already running"
     flag --retry help="Number of times to retry on error exit" default="0" {
         arg <RETRY>
@@ -92,12 +92,15 @@ cmd run help="Runs a one-off daemon" {
     flag "-o --output" help="Wait until output matches this regex pattern before considering daemon ready" {
         arg <OUTPUT>
     }
+    flag --http help="Wait until HTTP endpoint returns 2xx status before considering daemon ready" {
+        arg <HTTP>
+    }
     arg <ID> help="Name of the daemon to run"
     arg "[-- RUN]…" help="Command and arguments to run (after --)" required=#false var=#true
 }
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s
-    long_help "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready"
+    long_help "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx"
     flag "-a --all" help="Start all daemons in all pitchfork.tomls"
     flag --shell-pid hide=#true {
         arg <SHELL_PID>
@@ -108,6 +111,9 @@ cmd start help="Starts a daemon from a pitchfork.toml file" {
     }
     flag --output help="Wait until output matches this regex pattern before considering daemon ready" {
         arg <OUTPUT>
+    }
+    flag --http help="Wait until HTTP endpoint returns 2xx status before considering daemon ready" {
+        arg <HTTP>
     }
     arg "[ID]…" help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true
 }

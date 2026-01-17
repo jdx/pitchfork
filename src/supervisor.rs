@@ -154,6 +154,7 @@ impl Supervisor {
                     retry_count: daemon.retry_count + 1,
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
+                    ready_http: daemon.ready_http.clone(),
                     wait_ready: false,
                 };
                 if let Err(e) = self.run(retry_opts).await {
@@ -241,6 +242,7 @@ impl Supervisor {
                 retry_count: 0,
                 ready_delay: daemon.ready_delay,
                 ready_output: daemon.ready_output.clone(),
+                ready_http: daemon.ready_http.clone(),
                 wait_ready: false, // Don't block on boot daemons
             };
 
@@ -384,12 +386,14 @@ impl Supervisor {
                 retry_count: Some(opts.retry_count),
                 ready_delay: opts.ready_delay,
                 ready_output: opts.ready_output.clone(),
+                ready_http: opts.ready_http.clone(),
             })
             .await?;
 
         let id_clone = id.to_string();
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
+        let ready_http = opts.ready_http.clone();
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -442,6 +446,17 @@ impl Supervisor {
 
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
+
+            // Setup HTTP readiness check interval (poll every 500ms)
+            let mut http_check_interval = ready_http
+                .as_ref()
+                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+            let http_client = ready_http.as_ref().map(|_| {
+                reqwest::Client::builder()
+                    .timeout(Duration::from_secs(5))
+                    .build()
+                    .unwrap_or_default()
+            });
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
@@ -537,13 +552,40 @@ impl Supervisor {
                         break;
                     }
                     _ = async {
+                        if let Some(ref mut interval) = http_check_interval {
+                            interval.tick().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_http.is_some() => {
+                        if let (Some(url), Some(client)) = (&ready_http, &http_client) {
+                            match client.get(url).send().await {
+                                Ok(response) if response.status().is_success() => {
+                                    info!("daemon {id} ready: HTTP check passed (status {})", response.status());
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    // Stop checking once ready
+                                    http_check_interval = None;
+                                }
+                                Ok(response) => {
+                                    trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
+                                }
+                                Err(e) => {
+                                    trace!("daemon {id} HTTP check failed: {e}");
+                                }
+                            }
+                        }
+                    }
+                    _ = async {
                         if let Some(ref mut timer) = delay_timer {
                             timer.await;
                         } else {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        if !ready_notified && ready_pattern.is_none() {
+                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
                             if let Some(tx) = ready_tx.take() {
@@ -889,6 +931,7 @@ impl Supervisor {
                                     retry_count: daemon.retry_count,
                                     ready_delay: daemon.ready_delay,
                                     ready_output: daemon.ready_output.clone(),
+                                    ready_http: daemon.ready_http.clone(),
                                     wait_ready: false,
                                 };
                                 if let Err(e) = self.run(opts).await {
@@ -1063,6 +1106,9 @@ impl Supervisor {
             ready_output: opts
                 .ready_output
                 .or(existing.and_then(|d| d.ready_output.clone())),
+            ready_http: opts
+                .ready_http
+                .or(existing.and_then(|d| d.ready_http.clone())),
         };
         state_file
             .daemons
@@ -1156,6 +1202,7 @@ struct UpsertDaemonOpts {
     retry_count: Option<u32>,
     ready_delay: Option<u64>,
     ready_output: Option<String>,
+    ready_http: Option<String>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -1174,6 +1221,7 @@ impl Default for UpsertDaemonOpts {
             retry_count: None,
             ready_delay: None,
             ready_output: None,
+            ready_http: None,
         }
     }
 }

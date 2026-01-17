@@ -24,7 +24,9 @@ Examples:
   pitchfork run api -d 5 -- ./server
                                 Wait 5 seconds for ready check
   pitchfork run api -o 'Listening' -- ./server
-                                Wait for output pattern before ready"
+                                Wait for output pattern before ready
+  pitchfork run api --http http://localhost:8080/health -- ./server
+                                Wait for HTTP endpoint to return 2xx"
 )]
 pub struct Run {
     /// Name of the daemon to run
@@ -44,6 +46,9 @@ pub struct Run {
     /// Wait until output matches this regex pattern before considering daemon ready
     #[clap(short, long)]
     output: Option<String>,
+    /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
+    #[clap(long)]
+    http: Option<String>,
 }
 
 impl Run {
@@ -68,6 +73,7 @@ impl Run {
                 retry_count: 0,
                 ready_delay: self.delay.or(Some(3)),
                 ready_output: self.output.clone(),
+                ready_http: self.http.clone(),
                 wait_ready: true,
             })
             .await?;
