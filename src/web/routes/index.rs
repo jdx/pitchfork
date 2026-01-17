@@ -1,11 +1,14 @@
 use axum::response::Html;
+use std::collections::HashSet;
 
 use crate::env;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 
 pub async fn index() -> Html<String> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
+    let pt = PitchforkToml::all_merged();
 
     // Exclude the "pitchfork" supervisor daemon from counts
     let user_daemons: Vec<_> = state
@@ -26,7 +29,13 @@ pub async fn index() -> Html<String> {
         .iter()
         .filter(|(_, d)| d.status.is_errored())
         .count();
-    let total = user_daemons.len();
+
+    // Total includes both state file daemons and configured-but-not-started daemons
+    let mut all_ids: HashSet<&String> = user_daemons.iter().map(|(id, _)| *id).collect();
+    for id in pt.daemons.keys() {
+        all_ids.insert(id);
+    }
+    let total = all_ids.len();
 
     let html = format!(
         r#"<!DOCTYPE html>
