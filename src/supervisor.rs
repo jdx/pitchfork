@@ -217,6 +217,8 @@ impl Supervisor {
     }
 
     /// Cancel any pending autostop for daemons in the given directory
+    /// Also cancels autostops for daemons in parent directories (e.g., entering /project/subdir
+    /// cancels pending autostop for daemon in /project)
     async fn cancel_pending_autostops_for_dir(&self, dir: &Path) {
         let mut pending = self.pending_autostops.lock().await;
         let daemons_to_cancel: Vec<String> = {
@@ -225,10 +227,11 @@ impl Supervisor {
                 .daemons
                 .iter()
                 .filter(|(_id, d)| {
-                    d.dir
-                        .as_ref()
-                        .map(|daemon_dir| daemon_dir.starts_with(dir))
-                        .unwrap_or(false)
+                    d.dir.as_ref().is_some_and(|daemon_dir| {
+                        // Cancel if entering a directory inside or equal to daemon's directory
+                        // OR if daemon is in a subdirectory of the entered directory
+                        dir.starts_with(daemon_dir) || daemon_dir.starts_with(dir)
+                    })
                 })
                 .map(|(id, _)| id.clone())
                 .collect()
@@ -350,6 +353,15 @@ impl Supervisor {
     async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
+
+        // Clear any pending autostop for this daemon since it's being started
+        {
+            let mut pending = self.pending_autostops.lock().await;
+            if pending.remove(id).is_some() {
+                info!("cleared pending autostop for {} (daemon starting)", id);
+            }
+        }
+
         let daemon = self.get_daemon(id).await;
         if let Some(daemon) = daemon {
             // Stopping state is treated as "not running" - the monitoring task will clean it up
