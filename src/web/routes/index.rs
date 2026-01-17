@@ -7,22 +7,26 @@ pub async fn index() -> Html<String> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
 
-    let running_count = state
+    // Exclude the "pitchfork" supervisor daemon from counts
+    let user_daemons: Vec<_> = state
         .daemons
-        .values()
-        .filter(|d| d.status.is_running())
+        .iter()
+        .filter(|(id, _)| *id != "pitchfork")
+        .collect();
+
+    let running_count = user_daemons
+        .iter()
+        .filter(|(_, d)| d.status.is_running())
         .count();
-    let stopped_count = state
-        .daemons
-        .values()
-        .filter(|d| d.status.is_stopped())
+    let stopped_count = user_daemons
+        .iter()
+        .filter(|(_, d)| d.status.is_stopped())
         .count();
-    let errored_count = state
-        .daemons
-        .values()
-        .filter(|d| d.status.is_errored())
+    let errored_count = user_daemons
+        .iter()
+        .filter(|(_, d)| d.status.is_errored())
         .count();
-    let total = state.daemons.len();
+    let total = user_daemons.len();
 
     let html = format!(
         r#"<!DOCTYPE html>
