@@ -10,7 +10,7 @@ use rust_embed::Embed;
 struct Assets;
 
 pub async fn static_handler(uri: Uri) -> impl IntoResponse {
-    let path = uri.path().trim_start_matches('/');
+    let path = uri.path().trim_start_matches("/static/");
 
     match Assets::get(path) {
         Some(content) => {
