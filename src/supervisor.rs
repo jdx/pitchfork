@@ -29,6 +29,8 @@ pub struct Supervisor {
     state_file: Mutex<StateFile>,
     pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     last_refreshed_at: Mutex<time::Instant>,
+    /// Map of daemon ID to scheduled autostop time
+    pending_autostops: Mutex<HashMap<String, time::Instant>>,
 }
 
 const INTERVAL: Duration = Duration::from_secs(10);
@@ -64,6 +66,7 @@ impl Supervisor {
             state_file: Mutex::new(StateFile::new(env::PITCHFORK_STATE_FILE.clone())),
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
+            pending_autostops: Mutex::new(HashMap::new()),
         })
     }
 
@@ -114,6 +117,7 @@ impl Supervisor {
         }
 
         self.check_retry().await?;
+        self.process_pending_autostops().await?;
 
         Ok(())
     }
@@ -178,21 +182,101 @@ impl Supervisor {
         debug!("left dir {}", dir.display());
         let shell_dirs = self.get_dirs_with_shell_pids().await;
         let shell_dirs = shell_dirs.keys().collect_vec();
+        let delay_secs = *env::PITCHFORK_AUTOSTOP_DELAY;
+
         for daemon in self.active_daemons().await {
             if !daemon.autostop {
                 continue;
             }
             // if this daemon's dir starts with the left dir
             // and no other shell pid has this dir as a prefix
-            // stop the daemon
+            // schedule the daemon for autostop
             if let Some(daemon_dir) = daemon.dir.as_ref() {
                 if daemon_dir.starts_with(dir)
                     && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
                 {
-                    info!("autostopping {daemon}");
-                    self.stop(&daemon.id).await?;
-                    self.add_notification(Info, format!("autostopped {daemon}"))
-                        .await;
+                    if delay_secs == 0 {
+                        // No delay configured, stop immediately
+                        info!("autostopping {daemon}");
+                        self.stop(&daemon.id).await?;
+                        self.add_notification(Info, format!("autostopped {daemon}"))
+                            .await;
+                    } else {
+                        // Schedule autostop with delay
+                        let stop_at = time::Instant::now() + Duration::from_secs(delay_secs);
+                        let mut pending = self.pending_autostops.lock().await;
+                        if !pending.contains_key(&daemon.id) {
+                            info!("scheduling autostop for {} in {}s", daemon.id, delay_secs);
+                            pending.insert(daemon.id.clone(), stop_at);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Cancel any pending autostop for daemons in the given directory
+    /// Also cancels autostops for daemons in parent directories (e.g., entering /project/subdir
+    /// cancels pending autostop for daemon in /project)
+    async fn cancel_pending_autostops_for_dir(&self, dir: &Path) {
+        let mut pending = self.pending_autostops.lock().await;
+        let daemons_to_cancel: Vec<String> = {
+            let state_file = self.state_file.lock().await;
+            state_file
+                .daemons
+                .iter()
+                .filter(|(_id, d)| {
+                    d.dir.as_ref().is_some_and(|daemon_dir| {
+                        // Cancel if entering a directory inside or equal to daemon's directory
+                        // OR if daemon is in a subdirectory of the entered directory
+                        dir.starts_with(daemon_dir) || daemon_dir.starts_with(dir)
+                    })
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        for daemon_id in daemons_to_cancel {
+            if pending.remove(&daemon_id).is_some() {
+                info!("cancelled pending autostop for {}", daemon_id);
+            }
+        }
+    }
+
+    /// Process any pending autostops that have reached their scheduled time
+    async fn process_pending_autostops(&self) -> Result<()> {
+        let now = time::Instant::now();
+        let to_stop: Vec<String> = {
+            let pending = self.pending_autostops.lock().await;
+            pending
+                .iter()
+                .filter(|(_, stop_at)| now >= **stop_at)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+
+        for daemon_id in to_stop {
+            // Remove from pending first
+            {
+                let mut pending = self.pending_autostops.lock().await;
+                pending.remove(&daemon_id);
+            }
+
+            // Check if daemon is still running and should be stopped
+            if let Some(daemon) = self.get_daemon(&daemon_id).await {
+                if daemon.autostop && daemon.status.is_running() {
+                    // Verify no shell is in the daemon's directory
+                    let shell_dirs = self.get_dirs_with_shell_pids().await;
+                    let shell_dirs = shell_dirs.keys().collect_vec();
+                    if let Some(daemon_dir) = daemon.dir.as_ref() {
+                        if !shell_dirs.iter().any(|d| d.starts_with(daemon_dir)) {
+                            info!("autostopping {} (after delay)", daemon_id);
+                            self.stop(&daemon_id).await?;
+                            self.add_notification(Info, format!("autostopped {daemon_id}"))
+                                .await;
+                        }
+                    }
                 }
             }
         }
@@ -269,6 +353,15 @@ impl Supervisor {
     async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
+
+        // Clear any pending autostop for this daemon since it's being started
+        {
+            let mut pending = self.pending_autostops.lock().await;
+            if pending.remove(id).is_some() {
+                info!("cleared pending autostop for {} (daemon starting)", id);
+            }
+        }
+
         let daemon = self.get_daemon(id).await;
         if let Some(daemon) = daemon {
             // Stopping state is treated as "not running" - the monitoring task will clean it up
@@ -966,7 +1059,9 @@ impl Supervisor {
             }
             IpcRequest::UpdateShellDir { shell_pid, dir } => {
                 let prev = self.get_shell_dir(shell_pid).await;
-                self.set_shell_dir(shell_pid, dir).await?;
+                self.set_shell_dir(shell_pid, dir.clone()).await?;
+                // Cancel any pending autostops for daemons in the new directory
+                self.cancel_pending_autostops_for_dir(&dir).await;
                 if let Some(prev) = prev {
                     self.leave_dir(&prev).await?;
                 }
