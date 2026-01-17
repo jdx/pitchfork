@@ -34,7 +34,8 @@ Examples:
                                   Show logs since a specific time
   pitchfork logs api --to '2024-01-15 12:00:00'
                                   Show logs until a specific time
-  pitchfork logs api --clear      Delete logs for 'api'"
+  pitchfork logs api --clear      Delete logs for 'api'
+  pitchfork logs --clear          Delete logs for all daemons"
 )]
 pub struct Logs {
     /// Show only logs for the specified daemon(s)
@@ -66,7 +67,13 @@ pub struct Logs {
 impl Logs {
     pub async fn run(&self) -> Result<()> {
         if self.clear {
-            for id in &self.id {
+            let ids = if self.id.is_empty() {
+                // Clear all logs when no daemon specified
+                get_all_daemon_ids()?
+            } else {
+                self.id.clone()
+            };
+            for id in &ids {
                 let log_dir = env::PITCHFORK_LOGS_DIR.join(id);
                 let path = log_dir.join(format!("{}.log", id));
                 if path.exists() {
@@ -167,6 +174,15 @@ fn merge_log_lines(id: &str, lines: Vec<String>) -> Vec<(String, String, String)
             }
         }
     })
+}
+
+fn get_all_daemon_ids() -> Result<Vec<String>> {
+    Ok(xx::file::ls(&*env::PITCHFORK_LOGS_DIR)?
+        .into_iter()
+        .filter(|d| !d.starts_with("."))
+        .filter(|d| d.is_dir())
+        .filter_map(|d| d.file_name().map(|f| f.to_string_lossy().to_string()))
+        .collect())
 }
 
 fn get_log_file_infos(names: &[String]) -> Result<BTreeMap<String, LogFile>> {

@@ -98,7 +98,11 @@ impl IpcClient {
         self.request_with_timeout(msg, REQUEST_TIMEOUT).await
     }
 
-    async fn request_with_timeout(&self, msg: IpcRequest, timeout: Duration) -> Result<IpcResponse> {
+    async fn request_with_timeout(
+        &self,
+        msg: IpcRequest,
+        timeout: Duration,
+    ) -> Result<IpcResponse> {
         self.send(msg).await?;
         self.read(timeout).await
     }
