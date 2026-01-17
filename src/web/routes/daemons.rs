@@ -291,7 +291,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 pub async fn start(Path(id): Path<String>) -> Html<String> {
     let pt = PitchforkToml::all_merged();
 
-    if let Some(daemon_config) = pt.daemons.get(&id) {
+    let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
         let dir = daemon_config
             .path
             .as_ref()
@@ -316,8 +316,13 @@ pub async fn start(Path(id): Path<String>) -> Html<String> {
             wait_ready: false, // Don't block web request
         };
 
-        let _ = SUPERVISOR.run(opts).await;
-    }
+        match SUPERVISOR.run(opts).await {
+            Ok(_) => None,
+            Err(e) => Some(format!("Failed to start: {}", e)),
+        }
+    } else {
+        Some(format!("Daemon '{}' not found in config", id))
+    };
 
     // Return updated row
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -327,6 +332,10 @@ pub async fn start(Path(id): Path<String>) -> Html<String> {
     if let Some(daemon) = state.daemons.get(&id) {
         let is_disabled = state.disabled.contains(&id);
         Html(daemon_row(&id, daemon, is_disabled))
+    } else if let Some(err) = start_error {
+        Html(format!(
+            r#"<tr id="daemon-{id}"><td colspan="5" class="error">{err}</td></tr>"#
+        ))
     } else {
         Html(format!(
             r#"<tr id="daemon-{id}"><td colspan="5">Starting {id}...</td></tr>"#
