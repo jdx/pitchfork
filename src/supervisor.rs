@@ -70,7 +70,7 @@ impl Supervisor {
         })
     }
 
-    pub async fn start(&self, is_boot: bool) -> Result<()> {
+    pub async fn start(&self, is_boot: bool, web_port: Option<u16>) -> Result<()> {
         let pid = std::process::id();
         info!("Starting supervisor with pid {pid}");
 
@@ -92,6 +92,15 @@ impl Supervisor {
         self.cron_watch()?;
         self.signals()?;
         // self.file_watch().await?;
+
+        // Start web server if port is configured
+        if let Some(port) = web_port {
+            tokio::spawn(async move {
+                if let Err(e) = crate::web::serve(port).await {
+                    error!("Web server error: {}", e);
+                }
+            });
+        }
 
         let ipc = IpcServer::new()?;
         self.conn_watch(ipc).await
@@ -352,7 +361,7 @@ impl Supervisor {
         Ok(())
     }
 
-    async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
+    pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
 
@@ -790,7 +799,7 @@ impl Supervisor {
         }
     }
 
-    async fn stop(&self, id: &str) -> Result<IpcResponse> {
+    pub async fn stop(&self, id: &str) -> Result<IpcResponse> {
         info!("stopping daemon: {id}");
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
@@ -1214,7 +1223,7 @@ impl Supervisor {
         Ok(daemon)
     }
 
-    async fn enable(&self, id: String) -> Result<bool> {
+    pub async fn enable(&self, id: String) -> Result<bool> {
         info!("enabling daemon: {id}");
         let mut state_file = self.state_file.lock().await;
         let result = state_file.disabled.remove(&id);
@@ -1222,7 +1231,7 @@ impl Supervisor {
         Ok(result)
     }
 
-    async fn disable(&self, id: String) -> Result<bool> {
+    pub async fn disable(&self, id: String) -> Result<bool> {
         info!("disabling daemon: {id}");
         let mut state_file = self.state_file.lock().await;
         let result = state_file.disabled.insert(id);

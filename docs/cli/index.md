@@ -28,7 +28,7 @@
 - [`pitchfork status <ID>`](/cli/status.md)
 - [`pitchfork stop [ID]…`](/cli/stop.md)
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
-- [`pitchfork supervisor run [-f --force] [--boot]`](/cli/supervisor/run.md)
+- [`pitchfork supervisor run [FLAGS]`](/cli/supervisor/run.md)
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
 - [`pitchfork supervisor status`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)

@@ -14,6 +14,7 @@ mod state_file;
 mod supervisor;
 mod ui;
 mod watch_files;
+mod web;
 
 pub use miette::Result;
 use tokio::signal;

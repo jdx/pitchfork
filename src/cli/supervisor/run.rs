@@ -13,6 +13,9 @@ pub struct Run {
     /// run as boot start (auto-start boot_start daemons)
     #[clap(long)]
     boot: bool,
+    /// Enable web UI on this port (e.g., 9876)
+    #[clap(long, env = "PITCHFORK_WEB_PORT")]
+    web_port: Option<u16>,
 }
 
 impl Run {
@@ -26,6 +29,6 @@ impl Run {
             }
         }
 
-        SUPERVISOR.start(self.boot).await
+        SUPERVISOR.start(self.boot, self.web_port).await
     }
 }

@@ -14,5 +14,6 @@ pub mod state_file;
 pub mod supervisor;
 pub mod ui;
 pub mod watch_files;
+pub mod web;
 
 pub use miette::Result;
