@@ -8,6 +8,9 @@ use std::net::SocketAddr;
 use super::routes;
 use super::static_files::static_handler;
 
+/// Number of ports to try before giving up
+const PORT_ATTEMPTS: u16 = 10;
+
 pub async fn serve(port: u16) -> Result<()> {
     let app = Router::new()
         // Dashboard
@@ -37,16 +40,34 @@ pub async fn serve(port: u16) -> Result<()> {
         // Static files
         .route("/static/{*path}", get(static_handler));
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| miette::miette!("Failed to bind web server to {}: {}", addr, e))?;
+    // Try up to PORT_ATTEMPTS ports starting from the given port
+    let mut last_error = None;
+    for offset in 0..PORT_ATTEMPTS {
+        let try_port = port.saturating_add(offset);
+        let addr = SocketAddr::from(([127, 0, 0, 1], try_port));
 
-    info!("Web UI listening on http://{}", addr);
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => {
+                if offset > 0 {
+                    info!("Port {} was in use, using port {} instead", port, try_port);
+                }
+                info!("Web UI listening on http://{}", addr);
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| miette::miette!("Web server error: {}", e))?;
+                return axum::serve(listener, app)
+                    .await
+                    .map_err(|e| miette::miette!("Web server error: {}", e));
+            }
+            Err(e) => {
+                debug!("Port {} unavailable: {}", try_port, e);
+                last_error = Some(e);
+            }
+        }
+    }
 
-    Ok(())
+    Err(miette::miette!(
+        "Failed to bind web server: tried ports {}-{}, all in use. Last error: {}",
+        port,
+        port.saturating_add(PORT_ATTEMPTS - 1),
+        last_error.map(|e| e.to_string()).unwrap_or_default()
+    ))
 }

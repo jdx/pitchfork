@@ -10,6 +10,28 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
 
+/// Validate daemon ID to prevent path traversal and XSS attacks
+fn is_valid_daemon_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains("..")
+        && id != "."
+        && !id.contains('<')
+        && !id.contains('>')
+        && !id.contains('&')
+        && !id.contains('"')
+        && !id.contains('\'')
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 fn base_html(title: &str, content: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -39,6 +61,7 @@ fn base_html(title: &str, content: &str) -> String {
 }
 
 fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
+    let safe_id = html_escape(id);
     let status_class = match &d.status {
         crate::daemon_status::DaemonStatus::Running => "running",
         crate::daemon_status::DaemonStatus::Stopped => "stopped",
@@ -52,7 +75,7 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         .pid
         .map(|p| p.to_string())
         .unwrap_or_else(|| "-".to_string());
-    let error_msg = d.status.error_message().unwrap_or_default();
+    let error_msg = html_escape(&d.status.error_message().unwrap_or_default());
     let disabled_badge = if is_disabled {
         r#"<span class="badge disabled">disabled</span>"#
     } else {
@@ -62,35 +85,35 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{id}/stop" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
-            <button hx-post="/daemons/{id}/restart" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
+            <button hx-post="/daemons/{safe_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
+            <button hx-post="/daemons/{safe_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
         "##
         )
     } else {
         format!(
             r##"
-            <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+            <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
         "##
         )
     };
 
     let toggle_btn = if is_disabled {
         format!(
-            r##"<button hx-post="/daemons/{id}/enable" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
+            r##"<button hx-post="/daemons/{safe_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{id}/disable" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
+            r##"<button hx-post="/daemons/{safe_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
         )
     };
 
     format!(
-        r#"<tr id="daemon-{id}">
-        <td><a href="/daemons/{id}">{id}</a> {disabled_badge}</td>
+        r#"<tr id="daemon-{safe_id}">
+        <td><a href="/daemons/{safe_id}">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td class="error-msg">{error_msg}</td>
-        <td class="actions">{actions} {toggle_btn} <a href="/logs/{id}" class="btn btn-sm">Logs</a></td>
+        <td class="actions">{actions} {toggle_btn} <a href="/logs/{safe_id}" class="btn btn-sm">Logs</a></td>
     </tr>"#,
         d.status
     )
@@ -120,13 +143,14 @@ async fn list_content() -> String {
     // Show daemons from config that aren't in state yet
     for id in pt.daemons.keys() {
         if !state.daemons.contains_key(id) {
-            rows.push_str(&format!(r##"<tr id="daemon-{id}">
-                <td><a href="/daemons/{id}">{id}</a> <span class="badge">not started</span></td>
+            let safe_id = html_escape(id);
+            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}">
+                <td><a href="/daemons/{safe_id}">{safe_id}</a> <span class="badge">not started</span></td>
                 <td>-</td>
                 <td><span class="status stopped">not started</span></td>
                 <td></td>
                 <td class="actions">
-                    <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                    <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
                 </td>
             </tr>"##));
         }
@@ -179,13 +203,14 @@ pub async fn list_partial() -> Html<String> {
 
     for id in pt.daemons.keys() {
         if !state.daemons.contains_key(id) {
-            rows.push_str(&format!(r##"<tr id="daemon-{id}">
-                <td><a href="/daemons/{id}">{id}</a> <span class="badge">not started</span></td>
+            let safe_id = html_escape(id);
+            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}">
+                <td><a href="/daemons/{safe_id}">{safe_id}</a> <span class="badge">not started</span></td>
                 <td>-</td>
                 <td><span class="status stopped">not started</span></td>
                 <td></td>
                 <td class="actions">
-                    <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                    <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
                 </td>
             </tr>"##));
         }
@@ -199,6 +224,13 @@ pub async fn list_partial() -> Html<String> {
 }
 
 pub async fn show(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID
+    if !is_valid_daemon_id(&id) {
+        let content = r#"<h1>Error</h1><p class="error">Invalid daemon ID.</p><a href="/" class="btn">Back</a>"#;
+        return Html(base_html("Error", content));
+    }
+
+    let safe_id = html_escape(&id);
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
     let pt = PitchforkToml::all_merged();
@@ -226,13 +258,13 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                     <dt>Ready HTTP</dt><dd>{}</dd>
                 </dl>
             "#,
-                cfg.run,
+                html_escape(&cfg.run),
                 cfg.retry,
                 cfg.ready_delay
                     .map(|d| format!("{}s", d))
                     .unwrap_or_else(|| "-".into()),
-                cfg.ready_output.as_deref().unwrap_or("-"),
-                cfg.ready_http.as_deref().unwrap_or("-"),
+                html_escape(cfg.ready_output.as_deref().unwrap_or("-")),
+                html_escape(cfg.ready_http.as_deref().unwrap_or("-")),
             )
         } else {
             String::new()
@@ -240,7 +272,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 
         format!(
             r#"
-            <h1>Daemon: {id}</h1>
+            <h1>Daemon: {safe_id}</h1>
             <div class="daemon-detail">
                 <h2>Status</h2>
                 <dl>
@@ -252,17 +284,19 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                 </dl>
                 {config_section}
                 <div class="actions">
-                    <a href="/logs/{id}" class="btn">View Logs</a>
-                    <a href="/daemons" class="btn">Back to List</a>
+                    <a href="/logs/{safe_id}" class="btn">View Logs</a>
+                    <a href="/" class="btn">Back to List</a>
                 </div>
             </div>
         "#,
             d.status,
             d.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-            d.dir
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "-".into()),
+            html_escape(
+                &d.dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "-".into())
+            ),
             if is_disabled { "Yes" } else { "No" },
             d.retry_count,
             d.retry,
@@ -270,11 +304,11 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     } else if config_info.is_some() {
         format!(
             r##"
-            <h1>Daemon: {id}</h1>
+            <h1>Daemon: {safe_id}</h1>
             <p>This daemon is configured but has not been started yet.</p>
             <div class="actions">
-                <button hx-post="/daemons/{id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
-                <a href="/daemons" class="btn">Back to List</a>
+                <button hx-post="/daemons/{safe_id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
+                <a href="/" class="btn">Back to List</a>
             </div>
             <div id="start-result"></div>
         "##
@@ -283,13 +317,13 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         format!(
             r#"
             <h1>Daemon Not Found</h1>
-            <p>No daemon with ID "{id}" exists.</p>
-            <a href="/daemons" class="btn">Back to List</a>
+            <p>No daemon with ID "{safe_id}" exists.</p>
+            <a href="/" class="btn">Back to List</a>
         "#
         )
     };
 
-    Html(base_html(&format!("Daemon: {}", id), &content))
+    Html(base_html(&format!("Daemon: {}", safe_id), &content))
 }
 
 #[derive(Deserialize, Default)]
@@ -299,6 +333,12 @@ pub struct StartQuery {
 }
 
 pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> Html<String> {
+    // Validate daemon ID
+    if !is_valid_daemon_id(&id) {
+        return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
+    }
+
+    let safe_id = html_escape(&id);
     let pt = PitchforkToml::all_merged();
     let from_detail = query.from.as_deref() == Some("detail");
 
@@ -343,7 +383,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
     // Return different content based on context
     if from_detail {
         if let Some(err) = start_error {
-            Html(format!(r#"<div class="error">{err}</div>"#))
+            Html(format!(r#"<div class="error">{}</div>"#, html_escape(&err)))
         } else if let Some(daemon) = state.daemons.get(&id) {
             let status = &daemon.status;
             Html(format!(
@@ -359,17 +399,24 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
             Html(daemon_row(&id, daemon, is_disabled))
         } else if let Some(err) = start_error {
             Html(format!(
-                r#"<tr id="daemon-{id}"><td colspan="5" class="error">{err}</td></tr>"#
+                r#"<tr id="daemon-{safe_id}"><td colspan="5" class="error">{}</td></tr>"#,
+                html_escape(&err)
             ))
         } else {
             Html(format!(
-                r#"<tr id="daemon-{id}"><td colspan="5">Starting {id}...</td></tr>"#
+                r#"<tr id="daemon-{safe_id}"><td colspan="5">Starting {safe_id}...</td></tr>"#
             ))
         }
     }
 }
 
 pub async fn stop(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID
+    if !is_valid_daemon_id(&id) {
+        return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
+    }
+
+    let safe_id = html_escape(&id);
     let _ = SUPERVISOR.stop(&id).await;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -381,18 +428,29 @@ pub async fn stop(Path(id): Path<String>) -> Html<String> {
         Html(daemon_row(&id, daemon, is_disabled))
     } else {
         Html(format!(
-            r#"<tr id="daemon-{id}"><td colspan="5">Stopped</td></tr>"#
+            r#"<tr id="daemon-{safe_id}"><td colspan="5">Stopped</td></tr>"#
         ))
     }
 }
 
 pub async fn restart(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID
+    if !is_valid_daemon_id(&id) {
+        return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
+    }
+
     let _ = SUPERVISOR.stop(&id).await;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     start(Path(id), Query(StartQuery::default())).await
 }
 
 pub async fn enable(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID
+    if !is_valid_daemon_id(&id) {
+        return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
+    }
+
+    let safe_id = html_escape(&id);
     let _ = SUPERVISOR.enable(id.clone()).await;
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
@@ -402,12 +460,18 @@ pub async fn enable(Path(id): Path<String>) -> Html<String> {
         Html(daemon_row(&id, daemon, is_disabled))
     } else {
         Html(format!(
-            r#"<tr id="daemon-{id}"><td colspan="5">Enabled</td></tr>"#
+            r#"<tr id="daemon-{safe_id}"><td colspan="5">Enabled</td></tr>"#
         ))
     }
 }
 
 pub async fn disable(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID
+    if !is_valid_daemon_id(&id) {
+        return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
+    }
+
+    let safe_id = html_escape(&id);
     let _ = SUPERVISOR.disable(id.clone()).await;
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
@@ -417,7 +481,7 @@ pub async fn disable(Path(id): Path<String>) -> Html<String> {
         Html(daemon_row(&id, daemon, is_disabled))
     } else {
         Html(format!(
-            r#"<tr id="daemon-{id}"><td colspan="5">Disabled</td></tr>"#
+            r#"<tr id="daemon-{safe_id}"><td colspan="5">Disabled</td></tr>"#
         ))
     }
 }

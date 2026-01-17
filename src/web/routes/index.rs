@@ -5,7 +5,16 @@ use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
+    let safe_id = html_escape(id);
     let status_class = match &d.status {
         crate::daemon_status::DaemonStatus::Running => "running",
         crate::daemon_status::DaemonStatus::Stopped => "stopped",
@@ -19,7 +28,7 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         .pid
         .map(|p| p.to_string())
         .unwrap_or_else(|| "-".to_string());
-    let error_msg = d.status.error_message().unwrap_or_default();
+    let error_msg = html_escape(&d.status.error_message().unwrap_or_default());
     let disabled_badge = if is_disabled {
         r#"<span class="badge disabled">disabled</span>"#
     } else {
@@ -29,35 +38,35 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{id}/stop" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
-            <button hx-post="/daemons/{id}/restart" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
+            <button hx-post="/daemons/{safe_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
+            <button hx-post="/daemons/{safe_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
         "##
         )
     } else {
         format!(
             r##"
-            <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+            <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
         "##
         )
     };
 
     let toggle_btn = if is_disabled {
         format!(
-            r##"<button hx-post="/daemons/{id}/enable" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
+            r##"<button hx-post="/daemons/{safe_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{id}/disable" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
+            r##"<button hx-post="/daemons/{safe_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
         )
     };
 
     format!(
-        r#"<tr id="daemon-{id}">
-        <td><a href="/daemons/{id}">{id}</a> {disabled_badge}</td>
+        r#"<tr id="daemon-{safe_id}">
+        <td><a href="/daemons/{safe_id}">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td class="error-msg">{error_msg}</td>
-        <td class="actions">{actions} {toggle_btn} <a href="/logs/{id}" class="btn btn-sm">Logs</a></td>
+        <td class="actions">{actions} {toggle_btn} <a href="/logs/{safe_id}" class="btn btn-sm">Logs</a></td>
     </tr>"#,
         d.status
     )
@@ -164,14 +173,15 @@ pub async fn index() -> Html<String> {
     // Add configured-but-not-started daemons
     for id in pt.daemons.keys() {
         if !state.daemons.contains_key(id) {
+            let safe_id = html_escape(id);
             rows.push_str(&format!(
-                r##"<tr id="daemon-{id}">
-                <td><a href="/daemons/{id}">{id}</a> <span class="badge">not started</span></td>
+                r##"<tr id="daemon-{safe_id}">
+                <td><a href="/daemons/{safe_id}">{safe_id}</a> <span class="badge">not started</span></td>
                 <td>-</td>
                 <td><span class="status stopped">not started</span></td>
                 <td></td>
                 <td class="actions">
-                    <button hx-post="/daemons/{id}/start" hx-target="#daemon-{id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                    <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
                 </td>
             </tr>"##
             ));

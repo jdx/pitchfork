@@ -12,6 +12,11 @@ use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 
+/// Validate daemon ID to prevent path traversal attacks
+fn is_valid_daemon_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/') && !id.contains('\\') && !id.contains("..") && id != "."
+}
+
 fn base_html(title: &str, content: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -65,9 +70,10 @@ pub async fn index() -> Html<String> {
     ids.sort();
 
     for id in ids {
+        let safe_id = html_escape(&id);
         daemon_list.push_str(&format!(
             r#"
-            <li><a href="/logs/{id}">{id}</a></li>
+            <li><a href="/logs/{safe_id}">{safe_id}</a></li>
         "#
         ));
     }
@@ -90,6 +96,13 @@ pub async fn index() -> Html<String> {
 }
 
 pub async fn show(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID to prevent path traversal
+    if !is_valid_daemon_id(&id) {
+        let content = r#"<h1>Error</h1><p class="error">Invalid daemon ID.</p><a href="/logs" class="btn">Back</a>"#;
+        return Html(base_html("Error", content));
+    }
+
+    let safe_id = html_escape(&id);
     let log_path = env::PITCHFORK_LOGS_DIR
         .join(&id)
         .join(format!("{}.log", id));
@@ -115,15 +128,15 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     let content = format!(
         r#"
         <div class="page-header">
-            <h1>Logs: {id}</h1>
+            <h1>Logs: {safe_id}</h1>
             <div class="header-actions">
-                <button hx-post="/logs/{id}/clear" hx-swap="none" class="btn btn-sm"
+                <button hx-post="/logs/{safe_id}/clear" hx-swap="none" class="btn btn-sm"
                     hx-confirm="Are you sure you want to clear the logs?">Clear Logs</button>
                 <a href="/logs" class="btn btn-sm">Back</a>
             </div>
         </div>
         <div class="log-viewer">
-            <pre id="log-output" hx-ext="sse" sse-connect="/logs/{id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
+            <pre id="log-output" hx-ext="sse" sse-connect="/logs/{safe_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
         </div>
         <script>
             // Auto-scroll to bottom on load
@@ -132,10 +145,15 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     "#
     );
 
-    Html(base_html(&format!("Logs: {}", id), &content))
+    Html(base_html(&format!("Logs: {}", safe_id), &content))
 }
 
 pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID to prevent path traversal
+    if !is_valid_daemon_id(&id) {
+        return Html(String::new());
+    }
+
     let log_path = env::PITCHFORK_LOGS_DIR
         .join(&id)
         .join(format!("{}.log", id));
@@ -163,9 +181,17 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
 pub async fn stream_sse(
     Path(id): Path<String>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
-    let log_path = env::PITCHFORK_LOGS_DIR
-        .join(&id)
-        .join(format!("{}.log", id));
+    // Validate daemon ID to prevent path traversal
+    let valid_id = is_valid_daemon_id(&id);
+
+    let log_path = if valid_id {
+        env::PITCHFORK_LOGS_DIR
+            .join(&id)
+            .join(format!("{}.log", id))
+    } else {
+        // Return a dummy path that won't exist - stream will just be empty
+        std::path::PathBuf::from("/dev/null/invalid")
+    };
 
     // Track file position
     let initial_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
@@ -189,10 +215,11 @@ pub async fn stream_sse(
                             if file.read_to_string(&mut new_content).is_ok() && !new_content.is_empty() {
                                 let escaped = html_escape(&new_content);
                                 yield Ok(Event::default().event("message").data(escaped));
+                                // Only update last_size after successful read and yield
+                                last_size = current_size;
                             }
                         }
                     }
-                    last_size = current_size;
                 } else if current_size < last_size {
                     // File was truncated (cleared), reset
                     last_size = current_size;
@@ -205,6 +232,11 @@ pub async fn stream_sse(
 }
 
 pub async fn clear(Path(id): Path<String>) -> Html<String> {
+    // Validate daemon ID to prevent path traversal
+    if !is_valid_daemon_id(&id) {
+        return Html("".to_string());
+    }
+
     let log_path = env::PITCHFORK_LOGS_DIR
         .join(&id)
         .join(format!("{}.log", id));
