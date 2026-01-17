@@ -12,16 +12,10 @@ dir = "docs"
 run = "bun i && exec bun run docs:dev"
 
 [tasks.lint]
-run = [
-  "cargo fmt --check",
-  "cargo clippy --all-targets --all-features -- -D warnings",
-]
+run = "hk check"
 
 [tasks.lint-fix]
-run = [
-  "cargo fmt --all",
-  "cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features --allow-no-vcs -- -D warnings",
-]
+run = "hk fix"
 
 [tasks.build]
 run = "cargo build"
