@@ -17,7 +17,7 @@ pub struct Run {
     #[clap(long, env = "PITCHFORK_WEB_PORT", default_value = "19876")]
     web_port: u16,
     /// Disable the web UI
-    #[clap(long)]
+    #[clap(long, env = "PITCHFORK_NO_WEB")]
     no_web: bool,
 }
 

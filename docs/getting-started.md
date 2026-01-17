@@ -119,6 +119,8 @@ To disable the web UI entirely:
 
 ```bash
 pitchfork supervisor run --no-web
+# or via environment variable
+PITCHFORK_NO_WEB=true pitchfork supervisor start --force
 ```
 
 ## Logs
