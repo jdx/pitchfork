@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Devil face -->
+  <circle cx="50" cy="55" r="35" fill="#e63946"/>
+
+  <!-- Left horn -->
+  <path d="M20 45 Q15 20 25 15 Q30 25 30 40" fill="#e63946"/>
+
+  <!-- Right horn -->
+  <path d="M80 45 Q85 20 75 15 Q70 25 70 40" fill="#e63946"/>
+
+  <!-- Left eye -->
+  <ellipse cx="38" cy="50" rx="6" ry="8" fill="#1d1d1d"/>
+
+  <!-- Right eye -->
+  <ellipse cx="62" cy="50" rx="6" ry="8" fill="#1d1d1d"/>
+
+  <!-- Smirk -->
+  <path d="M35 70 Q50 82 65 70" stroke="#1d1d1d" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+  <!-- Eyebrows - angled for mischievous look -->
+  <path d="M30 38 L46 42" stroke="#1d1d1d" stroke-width="3" stroke-linecap="round"/>
+  <path d="M70 38 L54 42" stroke="#1d1d1d" stroke-width="3" stroke-linecap="round"/>
+</svg>
