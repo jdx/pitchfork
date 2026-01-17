@@ -20,6 +20,7 @@ pub struct IpcClient {
 const CONNECT_ATTEMPTS: u32 = 5;
 const CONNECT_MIN_DELAY: Duration = Duration::from_millis(100);
 const CONNECT_MAX_DELAY: Duration = Duration::from_secs(1);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl IpcClient {
     pub async fn connect(autostart: bool) -> Result<Self> {
@@ -79,32 +80,27 @@ impl IpcClient {
         Ok(())
     }
 
-    pub async fn read(&self) -> Option<IpcResponse> {
+    async fn read(&self, timeout: Duration) -> Result<IpcResponse> {
         let mut recv = self.recv.lock().await;
         let mut bytes = Vec::new();
-        if let Err(err) = recv.read_until(0, &mut bytes).await.into_diagnostic() {
-            warn!("Failed to read IPC message: {}", err);
+        match tokio::time::timeout(timeout, recv.read_until(0, &mut bytes)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => bail!("failed to read IPC message: {}", err),
+            Err(_) => bail!("IPC read timed out after {:?}", timeout),
         }
         if bytes.is_empty() {
-            None
-        } else {
-            match deserialize(&bytes) {
-                Ok(msg) => Some(msg),
-                Err(err) => {
-                    warn!("Failed to deserialize IPC message: {}", err);
-                    None
-                }
-            }
+            bail!("IPC connection closed unexpectedly");
         }
+        deserialize(&bytes)
     }
 
     async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
+        self.request_with_timeout(msg, REQUEST_TIMEOUT).await
+    }
+
+    async fn request_with_timeout(&self, msg: IpcRequest, timeout: Duration) -> Result<IpcResponse> {
         self.send(msg).await?;
-        loop {
-            if let Some(msg) = self.read().await {
-                return Ok(msg);
-            }
-        }
+        self.read(timeout).await
     }
 
     pub async fn enable(&self, id: String) -> Result<bool> {
@@ -140,7 +136,11 @@ impl IpcClient {
     pub async fn run(&self, opts: RunOptions) -> Result<(Vec<String>, Option<i32>)> {
         info!("starting daemon {}", opts.id);
         let start_time = chrono::Local::now();
-        let rsp = self.request(IpcRequest::Run(opts.clone())).await?;
+        // Use longer timeout for daemon start - ready_delay can be up to 60s+
+        let timeout = Duration::from_secs(opts.ready_delay.unwrap_or(3) + 60);
+        let rsp = self
+            .request_with_timeout(IpcRequest::Run(opts.clone()), timeout)
+            .await?;
         let mut started_daemons = vec![];
         let mut exit_code = None;
         match rsp {
