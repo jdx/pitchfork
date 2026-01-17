@@ -56,3 +56,7 @@ Wait until output matches this regex pattern before considering daemon ready
 ### `--http <HTTP>`
 
 Wait until HTTP endpoint returns 2xx status before considering daemon ready
+
+### `-q --quiet`
+
+Suppress startup log output

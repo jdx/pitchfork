@@ -340,3 +340,48 @@ pub fn print_logs_for_time_range(
 
     Ok(())
 }
+
+/// Print startup logs for a daemon after successful start
+/// Similar to print_logs_for_time_range but with "Startup logs" header
+pub fn print_startup_logs(daemon_id: &str, from: DateTime<Local>) -> Result<()> {
+    let daemon_ids = vec![daemon_id.to_string()];
+    let log_files = get_log_file_infos(&daemon_ids)?;
+
+    // Truncate 'from' to second precision to match log timestamp precision
+    let from = from
+        .with_nanosecond(0)
+        .expect("0 is always valid for nanoseconds");
+
+    let log_lines = log_files
+        .iter()
+        .flat_map(|(name, lf)| {
+            let rev = match xx::file::open(&lf.path) {
+                Ok(f) => rev_lines::RevLines::new(f),
+                Err(e) => {
+                    error!("{}: {}", lf.path.display(), e);
+                    return vec![];
+                }
+            };
+            let lines = rev.into_iter().filter_map(Result::ok).collect_vec();
+            merge_log_lines(name, lines)
+        })
+        .filter(|(date, _, _)| {
+            if let Ok(dt) = parse_datetime(date) {
+                dt >= from
+            } else {
+                true
+            }
+        })
+        .sorted_by_cached_key(|l| l.0.to_string())
+        .collect_vec();
+
+    if !log_lines.is_empty() {
+        eprintln!("\n{} {} {}", edim("==="), edim("Startup logs"), edim("==="));
+        for (date, _id, msg) in log_lines {
+            eprintln!("{} {}", edim(&date), msg);
+        }
+        eprintln!("{} {} {}\n", edim("==="), edim("End of logs"), edim("==="));
+    }
+
+    Ok(())
+}

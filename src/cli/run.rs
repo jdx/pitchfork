@@ -1,6 +1,8 @@
+use crate::cli::logs::print_startup_logs;
 use crate::daemon::RunOptions;
 use crate::ipc::client::IpcClient;
 use crate::{env, Result};
+use chrono::Local;
 use miette::bail;
 
 /// Runs a one-off daemon
@@ -49,6 +51,9 @@ pub struct Run {
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
     #[clap(long)]
     http: Option<String>,
+    /// Suppress startup log output
+    #[clap(short, long)]
+    quiet: bool,
 }
 
 impl Run {
@@ -58,6 +63,7 @@ impl Run {
         }
 
         let ipc = IpcClient::connect(true).await?;
+        let start_time = Local::now();
 
         let (_started, exit_code) = ipc
             .run(RunOptions {
@@ -81,6 +87,14 @@ impl Run {
         if exit_code.is_some() {
             std::process::exit(1);
         }
+
+        // Show startup logs on success (unless --quiet)
+        if !self.quiet {
+            if let Err(e) = print_startup_logs(&self.id, start_time) {
+                debug!("Failed to print startup logs: {}", e);
+            }
+        }
+
         Ok(())
     }
 }

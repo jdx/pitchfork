@@ -632,6 +632,20 @@
               "double_dash": "Optional",
               "hide": false
             }
+          },
+          {
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
+            "long": [
+              "quiet"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
@@ -765,12 +779,26 @@
               "double_dash": "Optional",
               "hide": false
             }
+          },
+          {
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
+            "long": [
+              "quiet"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Starts a daemon from a pitchfork.toml file",
-        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a [daemons.<name>] section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx",
+        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx",
         "name": "start",
         "aliases": [
           "s"

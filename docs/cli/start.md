@@ -6,7 +6,7 @@
 
 Starts a daemon from a pitchfork.toml file
 
-Daemons are defined in pitchfork.toml with a [daemons.<name>] section.
+Daemons are defined in pitchfork.toml with a `[daemons.<name>]` section.
 The command waits for the daemon to be ready before returning.
 
 Examples:
@@ -47,3 +47,7 @@ Wait until output matches this regex pattern before considering daemon ready
 ### `--http <HTTP>`
 
 Wait until HTTP endpoint returns 2xx status before considering daemon ready
+
+### `-q --quiet`
+
+Suppress startup log output
