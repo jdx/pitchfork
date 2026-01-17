@@ -21,10 +21,6 @@ This project is experimental. It works in basic situations but you'll undoubtedl
 - Global configuration
 - Automatically start daemons on boot
 
-## Workflows
-
-Here's some common ways to use pitchfork.
-
 ## Installing pitchfork
 
 [mise-en-place](https://mise.jdx.dev) is the recommended way to install pitchfork.
