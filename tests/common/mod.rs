@@ -144,6 +144,43 @@ impl TestEnv {
             .join("state.toml")
     }
 
+    /// Run a pitchfork command from a specific directory
+    #[allow(dead_code)]
+    pub fn run_command_in_dir(&self, args: &[&str], dir: &PathBuf) -> std::process::Output {
+        self.run_command_in_dir_with_env(args, dir, &[])
+    }
+
+    /// Run a pitchfork command from a specific directory with extra env vars
+    #[allow(dead_code)]
+    pub fn run_command_in_dir_with_env(
+        &self,
+        args: &[&str],
+        dir: &PathBuf,
+        extra_env: &[(&str, &str)],
+    ) -> std::process::Output {
+        let mut cmd = Command::new(&self.pitchfork_bin);
+        cmd.args(args)
+            .current_dir(dir)
+            .env("HOME", &self.home_dir)
+            .env("PITCHFORK_LOG", "debug")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        for (key, val) in extra_env {
+            cmd.env(key, val);
+        }
+
+        cmd.output().expect("Failed to execute pitchfork command")
+    }
+
+    /// Create an alternate directory (for testing directory changes)
+    #[allow(dead_code)]
+    pub fn create_other_dir(&self) -> PathBuf {
+        let other_dir = self.temp_dir.path().join("other");
+        fs::create_dir_all(&other_dir).unwrap();
+        other_dir
+    }
+
     /// Get daemon status by running `pitchfork status <id>`
     #[allow(dead_code)]
     pub fn get_daemon_status(&self, daemon_id: &str) -> Option<String> {
