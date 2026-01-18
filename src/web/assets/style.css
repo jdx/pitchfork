@@ -1,10 +1,13 @@
-/* Pitchfork Web UI - Minimal CSS */
+/* Pitchfork Web UI - Devilish Theme */
 :root {
-    --color-bg: #1a1a2e;
-    --color-surface: #16213e;
-    --color-primary: #0f3460;
-    --color-accent: #e94560;
-    --color-text: #eee;
+    --color-bg: #0d0d0d;
+    --color-surface: #1a1a1a;
+    --color-primary: #2a1a1a;
+    --color-accent: #dc2626;
+    --color-accent-bright: #ef4444;
+    --color-ember: #ff4500;
+    --color-flame: #ff6b00;
+    --color-text: #f0f0f0;
     --color-text-dim: #888;
     --color-success: #4ade80;
     --color-warning: #fbbf24;
@@ -25,6 +28,10 @@ body {
     line-height: 1.6;
 }
 
+a {
+    text-decoration: none;
+}
+
 /* Navigation */
 nav {
     background: var(--color-surface);
@@ -39,6 +46,22 @@ nav {
     font-size: 1.5rem;
     font-weight: bold;
     color: var(--color-accent);
+    animation: brandGlow 4s ease-in-out infinite;
+    transition: text-shadow 0.5s ease;
+}
+
+.nav-brand:hover {
+    animation: none;
+    text-shadow: 0 0 20px rgba(220, 38, 38, 1), 0 0 40px rgba(255, 69, 0, 0.7), 0 0 60px rgba(255, 140, 0, 0.4);
+}
+
+@keyframes brandGlow {
+    0%, 100% {
+        text-shadow: 0 0 10px rgba(220, 38, 38, 0.5), 0 0 20px rgba(255, 69, 0, 0.3);
+    }
+    50% {
+        text-shadow: 0 0 15px rgba(220, 38, 38, 0.7), 0 0 30px rgba(255, 69, 0, 0.4);
+    }
 }
 
 .nav-links {
@@ -58,6 +81,7 @@ nav {
 .nav-links a.active {
     color: var(--color-text);
     background: var(--color-primary);
+    box-shadow: 0 0 10px rgba(220, 38, 38, 0.2);
 }
 
 /* Main content */
@@ -70,6 +94,7 @@ main {
 h1 {
     margin-bottom: 1.5rem;
     color: var(--color-text);
+    text-shadow: 0 0 15px rgba(220, 38, 38, 0.3), 0 0 30px rgba(255, 69, 0, 0.15);
 }
 
 h2 {
@@ -109,11 +134,19 @@ h2 {
     border-radius: var(--border-radius);
     text-align: center;
     border: 1px solid var(--color-primary);
+    transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.stat-card:hover {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 15px rgba(220, 38, 38, 0.2);
 }
 
 .stat-card.running { border-color: var(--color-success); }
+.stat-card.running:hover { box-shadow: 0 0 15px rgba(74, 222, 128, 0.3); }
 .stat-card.stopped { border-color: var(--color-text-dim); }
 .stat-card.errored { border-color: var(--color-error); }
+.stat-card.errored:hover { box-shadow: 0 0 15px rgba(239, 68, 68, 0.3); }
 
 .stat-value {
     font-size: 2.5rem;
@@ -152,10 +185,22 @@ h2 {
 
 .btn-primary {
     background: var(--color-accent);
+    animation: btnGlow 3s ease-in-out infinite;
 }
 
 .btn-primary:hover {
-    background: #ff6b6b;
+    background: var(--color-accent-bright);
+    animation: none;
+    box-shadow: 0 0 20px rgba(255, 69, 0, 0.6), 0 0 40px rgba(255, 100, 0, 0.4);
+}
+
+@keyframes btnGlow {
+    0%, 100% {
+        box-shadow: 0 0 10px rgba(255, 69, 0, 0.4), 0 0 20px rgba(255, 100, 0, 0.2);
+    }
+    50% {
+        box-shadow: 0 0 18px rgba(255, 69, 0, 0.6), 0 0 35px rgba(255, 100, 0, 0.3);
+    }
 }
 
 /* Tables */
@@ -174,12 +219,22 @@ th, td {
 }
 
 th {
-    background: var(--color-primary);
+    background: #3d2828;
     font-weight: 600;
 }
 
+/* Table links need better contrast */
+table a {
+    color: #ffb3b3;
+}
+
+table a:hover {
+    color: #ffd0d0;
+    text-shadow: 0 0 8px rgba(255, 100, 100, 0.5);
+}
+
 tr:hover {
-    background: rgba(255,255,255,0.02);
+    background: rgba(220, 38, 38, 0.05);
 }
 
 .daemon-table .actions {

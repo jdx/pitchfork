@@ -29,14 +29,14 @@ fn base_html(title: &str, content: &str) -> String {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{title} - Pitchfork</title>
+    <title>{title} - pitchfork</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand">Pitchfork</a>
+        <a href="/" class="nav-brand">pitchfork</a>
         <div class="nav-links">
             <a href="/">Dashboard</a>
             <a href="/logs" class="active">Logs</a>
