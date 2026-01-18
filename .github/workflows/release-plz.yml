@@ -32,6 +32,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Install Claude Code
+        if: ${{ steps.release-plz.outputs.releases }}
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Editorialize release notes
+        if: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          TAG="${{ fromJSON(steps.release-plz.outputs.releases)[0].tag }}"
+          if [[ -z "$TAG" ]]; then
+            echo "No tag found, skipping release notes editorialization"
+            exit 0
+          fi
+
+          # Find previous tag
+          PREV_TAG=$(git tag --sort=-v:refname | grep -A1 "^${TAG}$" | tail -1 || echo "")
+          if [[ "$PREV_TAG" == "$TAG" ]]; then
+            PREV_TAG=""
+          fi
+
+          echo "Generating editorialized release notes for $TAG (prev: ${PREV_TAG:-none})..."
+          NOTES=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG")
+
+          if [[ -n "$NOTES" ]]; then
+            echo "Updating GitHub release with editorialized notes..."
+            gh release edit "$TAG" --notes "$NOTES"
+            echo "Release notes updated successfully"
+          else
+            echo "Warning: Failed to generate editorialized notes, keeping original"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   upload-assets:
     name: Upload assets
