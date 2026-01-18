@@ -48,4 +48,5 @@ jobs:
         with:
           bin: pitchfork
           target: ${{ matrix.target }}
+          ref: ${{ inputs.tag || github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
