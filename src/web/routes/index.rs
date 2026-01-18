@@ -13,8 +13,13 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+fn url_encode(s: &str) -> String {
+    urlencoding::encode(s).into_owned()
+}
+
 fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
     let safe_id = html_escape(id);
+    let url_id = url_encode(id);
     let status_class = match &d.status {
         crate::daemon_status::DaemonStatus::Running => "running",
         crate::daemon_status::DaemonStatus::Stopped => "stopped",
@@ -38,35 +43,35 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{safe_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
-            <button hx-post="/daemons/{safe_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
+            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
+            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
         "##
         )
     } else {
         format!(
             r##"
-            <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+            <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
         "##
         )
     };
 
     let toggle_btn = if is_disabled {
         format!(
-            r##"<button hx-post="/daemons/{safe_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
+            r##"<button hx-post="/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{safe_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
+            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
         )
     };
 
     format!(
         r#"<tr id="daemon-{safe_id}">
-        <td><a href="/daemons/{safe_id}">{safe_id}</a> {disabled_badge}</td>
+        <td><a href="/daemons/{url_id}">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td class="error-msg">{error_msg}</td>
-        <td class="actions">{actions} {toggle_btn} <a href="/logs/{safe_id}" class="btn btn-sm">Logs</a></td>
+        <td class="actions">{actions} {toggle_btn} <a href="/logs/{url_id}" class="btn btn-sm">Logs</a></td>
     </tr>"#,
         d.status
     )
@@ -174,14 +179,15 @@ pub async fn index() -> Html<String> {
     for id in pt.daemons.keys() {
         if !state.daemons.contains_key(id) {
             let safe_id = html_escape(id);
+            let url_id = url_encode(id);
             rows.push_str(&format!(
                 r##"<tr id="daemon-{safe_id}">
-                <td><a href="/daemons/{safe_id}">{safe_id}</a> <span class="badge">not started</span></td>
+                <td><a href="/daemons/{url_id}">{safe_id}</a> <span class="badge">not started</span></td>
                 <td>-</td>
                 <td><span class="status stopped">not started</span></td>
                 <td></td>
                 <td class="actions">
-                    <button hx-post="/daemons/{safe_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
                 </td>
             </tr>"##
             ));

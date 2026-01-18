@@ -71,9 +71,10 @@ pub async fn index() -> Html<String> {
 
     for id in ids {
         let safe_id = html_escape(&id);
+        let url_id = url_encode(&id);
         daemon_list.push_str(&format!(
             r#"
-            <li><a href="/logs/{safe_id}">{safe_id}</a></li>
+            <li><a href="/logs/{url_id}">{safe_id}</a></li>
         "#
         ));
     }
@@ -103,6 +104,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     }
 
     let safe_id = html_escape(&id);
+    let url_id = url_encode(&id);
     let log_path = env::PITCHFORK_LOGS_DIR
         .join(&id)
         .join(format!("{}.log", id));
@@ -130,17 +132,23 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         <div class="page-header">
             <h1>Logs: {safe_id}</h1>
             <div class="header-actions">
-                <button hx-post="/logs/{safe_id}/clear" hx-swap="none" class="btn btn-sm"
+                <button hx-post="/logs/{url_id}/clear" hx-swap="none" class="btn btn-sm"
                     hx-confirm="Are you sure you want to clear the logs?">Clear Logs</button>
                 <a href="/logs" class="btn btn-sm">Back</a>
             </div>
         </div>
         <div class="log-viewer">
-            <pre id="log-output" hx-ext="sse" sse-connect="/logs/{safe_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
+            <pre id="log-output" hx-ext="sse" sse-connect="/logs/{url_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
         </div>
         <script>
             // Auto-scroll to bottom on load
             document.getElementById('log-output').scrollTop = document.getElementById('log-output').scrollHeight;
+            // Listen for clear event from SSE
+            document.body.addEventListener('htmx:sseMessage', function(e) {{
+                if (e.detail.type === 'clear') {{
+                    document.getElementById('log-output').textContent = '';
+                }}
+            }});
         </script>
     "#
     );
@@ -221,7 +229,8 @@ pub async fn stream_sse(
                         }
                     }
                 } else if current_size < last_size {
-                    // File was truncated (cleared), reset
+                    // File was truncated (cleared), send clear event and reset
+                    yield Ok(Event::default().event("clear").data(""));
                     last_size = current_size;
                 }
             }
@@ -254,4 +263,8 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn url_encode(s: &str) -> String {
+    urlencoding::encode(s).into_owned()
 }
