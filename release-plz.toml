@@ -1,0 +1,5 @@
+[workspace]
+# Create git tags for releases
+git_tag_enable = true
+# Create GitHub releases
+git_release_enable = true
