@@ -54,12 +54,34 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Install mise
+        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+        uses: jdx/mise-action@v2
+      - name: Update generated docs
+        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+        run: |
+          PR_BRANCH=$(echo '${{ steps.release-plz.outputs.pr }}' | jq -r '.head_branch')
+          git fetch origin "$PR_BRANCH"
+          git checkout "$PR_BRANCH"
+          mise run render
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "chore: update generated docs for release"
+            git push
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
