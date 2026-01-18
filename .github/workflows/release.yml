@@ -17,7 +17,40 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: jdx/mise-action@v2
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Create GitHub Release
+        run: |
+          TAG_NAME="${{ inputs.tag || github.ref_name }}"
+          PREV_TAG="$(git describe --tags --abbrev=0 "$TAG_NAME^" 2>/dev/null || echo "")"
+          # Generate rich release notes using LLM
+          if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+            ./scripts/gen-release-notes.sh "$TAG_NAME" "$PREV_TAG" > /tmp/release-notes.txt || {
+              echo "LLM generation failed, using git log"
+              git log --pretty=format:"- %s" "${PREV_TAG}..${TAG_NAME}" > /tmp/release-notes.txt
+            }
+          else
+            echo "ANTHROPIC_API_KEY not set, using git log"
+            git log --pretty=format:"- %s" "${PREV_TAG}..${TAG_NAME}" > /tmp/release-notes.txt
+          fi
+          gh release create "$TAG_NAME" \
+            --title "$TAG_NAME" \
+            --notes-file /tmp/release-notes.txt \
+            --draft || echo "Release may already exist"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
   upload-assets:
+    needs: [create-release]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
