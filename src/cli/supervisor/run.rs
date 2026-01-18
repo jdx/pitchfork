@@ -13,6 +13,12 @@ pub struct Run {
     /// run as boot start (auto-start boot_start daemons)
     #[clap(long)]
     boot: bool,
+    /// Web UI port (default: 19876, tries up to 10 ports if in use)
+    #[clap(long, env = "PITCHFORK_WEB_PORT", default_value = "19876")]
+    web_port: u16,
+    /// Disable the web UI
+    #[clap(long, env = "PITCHFORK_NO_WEB")]
+    no_web: bool,
 }
 
 impl Run {
@@ -26,6 +32,11 @@ impl Run {
             }
         }
 
-        SUPERVISOR.start(self.boot).await
+        let web_port = if self.no_web {
+            None
+        } else {
+            Some(self.web_port)
+        };
+        SUPERVISOR.start(self.boot, web_port).await
     }
 }

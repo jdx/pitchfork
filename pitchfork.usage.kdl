@@ -134,6 +134,10 @@ cmd supervisor subcommand_required=#true help="Start, stop, and check the status
     cmd run help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
         flag --boot help="run as boot start (auto-start boot_start daemons)"
+        flag --web-port help="Web UI port (default: 19876, tries up to 10 ports if in use)" default="19876" {
+            arg <WEB_PORT>
+        }
+        flag --no-web help="Disable the web UI"
     }
     cmd start help="Starts the internal pitchfork daemon in the background" {
         flag "-f --force" help="kill existing daemon"

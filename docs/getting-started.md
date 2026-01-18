@@ -94,10 +94,39 @@ run = "npm run server:api"
 auto = ["start", "stop"]
 ```
 
+## Web UI
+
+Pitchfork includes a web UI that runs by default on port 19876. Open <http://127.0.0.1:19876> to access it.
+
+If the default port is in use, pitchfork will automatically try up to 10 consecutive ports (19876-19885) until it finds an available one.
+
+The web UI provides:
+
+- **Dashboard** - Overview of all daemons with status, PID, and error messages
+- **Daemon Management** - Start, stop, restart, enable, and disable daemons
+- **Live Logs** - Real-time log streaming for each daemon
+- **Config Editing** - Edit pitchfork.toml configuration files with TOML validation
+
+To use a different port, set the `PITCHFORK_WEB_PORT` environment variable or use the `--web-port` flag:
+
+```bash
+PITCHFORK_WEB_PORT=8080 pitchfork supervisor start --force
+# or
+pitchfork supervisor run --web-port 8080
+```
+
+To disable the web UI entirely:
+
+```bash
+pitchfork supervisor run --no-web
+# or via environment variable
+PITCHFORK_NO_WEB=true pitchfork supervisor start --force
+```
+
 ## Logs
 
-Logs for daemons started with pitchfork can be viewed with [`pitchfork logs`](/cli/logs) or by viewing
-the files directly in `~/.local/state/pitchfork/logs`.
+Logs for daemons started with pitchfork can be viewed with [`pitchfork logs`](/cli/logs), via the [Web UI](#web-ui),
+or by viewing the files directly in `~/.local/state/pitchfork/logs`.
 
 ```bash
 $ pitchfork logs api

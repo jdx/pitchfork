@@ -876,7 +876,7 @@
               "supervisor",
               "run"
             ],
-            "usage": "supervisor run [-f --force] [--boot]",
+            "usage": "supervisor run [FLAGS]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -902,6 +902,40 @@
                 "short": [],
                 "long": [
                   "boot"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "web-port",
+                "usage": "--web-port <WEB_PORT>",
+                "help": "Web UI port (default: 19876, tries up to 10 ports if in use)",
+                "help_first_line": "Web UI port (default: 19876, tries up to 10 ports if in use)",
+                "short": [],
+                "long": [
+                  "web-port"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "WEB_PORT",
+                  "usage": "<WEB_PORT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                },
+                "default": [
+                  "19876"
+                ]
+              },
+              {
+                "name": "no-web",
+                "usage": "--no-web",
+                "help": "Disable the web UI",
+                "help_first_line": "Disable the web UI",
+                "short": [],
+                "long": [
+                  "no-web"
                 ],
                 "hide": false,
                 "global": false

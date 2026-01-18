@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use pitchfork_cli::*;
 use std::fs;
 use std::path::PathBuf;
