@@ -147,9 +147,19 @@
   }
 }
 
-/* Nav brand styling */
+/* Nav brand styling with subtle glow */
 .VPNavBarTitle .title {
   font-weight: 700;
+  animation: subtleNavGlow 4s ease-in-out infinite;
+}
+
+@keyframes subtleNavGlow {
+  0%, 100% {
+    text-shadow: 0 0 4px rgba(220, 38, 38, 0.15);
+  }
+  50% {
+    text-shadow: 0 0 8px rgba(255, 69, 0, 0.25);
+  }
 }
 
 /* Scrollbar styling for dark theme */
