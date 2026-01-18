@@ -44,21 +44,27 @@ jobs:
             exit 0
           fi
 
-          # Find previous tag
-          PREV_TAG=$(git tag --sort=-v:refname | grep -A1 "^${TAG}$" | tail -1 || echo "")
+          # Find previous tag (use grep -F for literal matching of semver dots)
+          PREV_TAG=$(git tag --sort=-v:refname | grep -F -A1 "${TAG}" | tail -1 || echo "")
           if [[ "$PREV_TAG" == "$TAG" ]]; then
             PREV_TAG=""
           fi
 
           echo "Generating editorialized release notes for $TAG (prev: ${PREV_TAG:-none})..."
-          NOTES=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG")
 
-          if [[ -n "$NOTES" ]]; then
+          # Capture script output and exit code separately to handle failures gracefully
+          set +e
+          NOTES=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG" 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          if [[ $EXIT_CODE -eq 0 && -n "$NOTES" ]]; then
             echo "Updating GitHub release with editorialized notes..."
             gh release edit "$TAG" --notes "$NOTES"
             echo "Release notes updated successfully"
           else
-            echo "Warning: Failed to generate editorialized notes, keeping original"
+            echo "Warning: Failed to generate editorialized notes (exit code: $EXIT_CODE), keeping original"
+            echo "Script output: $NOTES"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

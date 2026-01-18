@@ -14,10 +14,11 @@ fi
 
 # If no prev_tag provided, find the previous tag
 if [[ -z $prev_tag ]]; then
-	prev_tag=$(git tag --sort=-v:refname | grep -A1 "^${tag}$" | tail -1)
+	# Use grep -F for literal matching (dots in semver are not regex wildcards)
+	prev_tag=$(git tag --sort=-v:refname | grep -F -A1 "${tag}" | tail -1)
 	if [[ $prev_tag == "$tag" ]]; then
-		# No previous tag found, use first commit
-		prev_tag=$(git rev-list --max-parents=0 HEAD)
+		# No previous tag found, use first commit (head -1 handles multiple root commits)
+		prev_tag=$(git rev-list --max-parents=0 HEAD | head -1)
 	fi
 fi
 
