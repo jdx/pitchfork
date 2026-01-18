@@ -117,6 +117,106 @@
   border-color: var(--vp-c-brand-2);
 }
 
+/* Fire animation for hero Get Started button */
+.VPHero .VPButton.brand {
+  position: relative;
+  overflow: visible;
+  z-index: 1;
+}
+
+/* CSS-only flames rising from bottom */
+.VPHero .VPButton.brand::before,
+.VPHero .VPButton.brand::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  width: 12px;
+  height: 20px;
+  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  z-index: -1;
+  filter: blur(1px);
+}
+
+.VPHero .VPButton.brand::before {
+  left: 20%;
+  background: linear-gradient(to top, #ff0000, #ff4500, #ffa500, #ffcc00);
+  animation: flameRise1 0.4s ease-in-out infinite alternate;
+}
+
+.VPHero .VPButton.brand::after {
+  right: 20%;
+  background: linear-gradient(to top, #ff0000, #ff4500, #ffa500, #ffe066);
+  animation: flameRise2 0.5s ease-in-out infinite alternate;
+}
+
+/* Additional flames on the actions wrapper */
+.VPHero .actions {
+  position: relative;
+}
+
+.VPHero .actions::before,
+.VPHero .actions::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  width: 10px;
+  height: 16px;
+  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  pointer-events: none;
+  filter: blur(1px);
+}
+
+.VPHero .actions::before {
+  left: calc(50% - 50px);
+  background: linear-gradient(to top, #ff2200, #ff6600, #ffaa00);
+  animation: flameRise3 0.35s ease-in-out infinite alternate;
+}
+
+.VPHero .actions::after {
+  left: calc(50% + 45px);
+  background: linear-gradient(to top, #ff1100, #ff5500, #ffbb00);
+  animation: flameRise1 0.45s ease-in-out infinite alternate;
+}
+
+@keyframes flameRise1 {
+  0% {
+    height: 16px;
+    opacity: 0.8;
+    transform: scaleX(1) translateY(0);
+  }
+  100% {
+    height: 24px;
+    opacity: 1;
+    transform: scaleX(0.8) translateY(-4px);
+  }
+}
+
+@keyframes flameRise2 {
+  0% {
+    height: 14px;
+    opacity: 0.7;
+    transform: scaleX(0.9) translateY(0) rotate(-3deg);
+  }
+  100% {
+    height: 22px;
+    opacity: 0.95;
+    transform: scaleX(0.75) translateY(-5px) rotate(3deg);
+  }
+}
+
+@keyframes flameRise3 {
+  0% {
+    height: 12px;
+    opacity: 0.75;
+    transform: scaleX(1) translateY(0) rotate(2deg);
+  }
+  100% {
+    height: 18px;
+    opacity: 0.9;
+    transform: scaleX(0.85) translateY(-3px) rotate(-2deg);
+  }
+}
+
 /* Nav brand styling */
 .VPNavBarTitle .title {
   font-weight: 700;
