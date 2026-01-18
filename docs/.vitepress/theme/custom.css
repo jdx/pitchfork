@@ -124,10 +124,10 @@
 
 @keyframes subtleFireGlow {
   0%, 100% {
-    box-shadow: 0 0 8px rgba(255, 69, 0, 0.3);
+    box-shadow: 0 0 15px rgba(255, 69, 0, 0.5), 0 0 30px rgba(255, 100, 0, 0.3);
   }
   50% {
-    box-shadow: 0 0 16px rgba(255, 100, 0, 0.4);
+    box-shadow: 0 0 25px rgba(255, 69, 0, 0.7), 0 0 50px rgba(255, 100, 0, 0.4);
   }
 }
 
@@ -138,10 +138,10 @@
 
 @keyframes subtleTitleGlow {
   0%, 100% {
-    text-shadow: 0 0 15px rgba(220, 38, 38, 0.4), 0 0 30px rgba(255, 69, 0, 0.2);
+    text-shadow: 0 0 20px rgba(220, 38, 38, 0.6), 0 0 40px rgba(255, 69, 0, 0.4), 0 0 60px rgba(255, 100, 0, 0.2);
   }
   50% {
-    text-shadow: 0 0 25px rgba(220, 38, 38, 0.6), 0 0 50px rgba(255, 69, 0, 0.3);
+    text-shadow: 0 0 35px rgba(220, 38, 38, 0.8), 0 0 70px rgba(255, 69, 0, 0.5), 0 0 100px rgba(255, 100, 0, 0.3);
   }
 }
 
@@ -154,16 +154,16 @@
 
 .VPNavBarTitle:hover .title {
   animation: none;
-  text-shadow: 0 0 15px rgba(220, 38, 38, 0.8), 0 0 30px rgba(255, 69, 0, 0.5), 0 0 45px rgba(255, 140, 0, 0.3);
+  text-shadow: 0 0 20px rgba(220, 38, 38, 1), 0 0 40px rgba(255, 69, 0, 0.7), 0 0 60px rgba(255, 140, 0, 0.4);
   transition: text-shadow 0.5s ease;
 }
 
 @keyframes subtleNavGlow {
   0%, 100% {
-    text-shadow: 0 0 8px rgba(220, 38, 38, 0.4), 0 0 15px rgba(255, 69, 0, 0.2);
+    text-shadow: 0 0 12px rgba(220, 38, 38, 0.6), 0 0 25px rgba(255, 69, 0, 0.3);
   }
   50% {
-    text-shadow: 0 0 12px rgba(220, 38, 38, 0.6), 0 0 25px rgba(255, 69, 0, 0.3);
+    text-shadow: 0 0 18px rgba(220, 38, 38, 0.8), 0 0 35px rgba(255, 69, 0, 0.5);
   }
 }
 
