@@ -24,7 +24,7 @@ const commands = getCommands(spec.cmd);
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: "pitchfork",
-  description: "Daemons with DX",
+  description: "A devilishly good process manager for developers",
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
@@ -54,10 +54,31 @@ export default defineConfig({
 
     socialLinks: [{ icon: "github", link: "https://github.com/jdx/pitchfork" }],
 
-    logo: "/logo.png",
+    logo: "/img/logo.png",
+
+    footer: {
+      message: 'Released under the MIT License.',
+      copyright: 'Forged in the fires below'
+    },
+
+    editLink: {
+      pattern: 'https://github.com/jdx/pitchfork/edit/main/docs/:path',
+      text: 'Edit this page on GitHub'
+    }
   },
-  head: [["link", { rel: "icon", href: "/img/favicon.ico" }]],
+  head: [
+    ["link", { rel: "icon", href: "/img/favicon.ico" }],
+    ["meta", { name: "theme-color", content: "#dc2626" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:title", content: "pitchfork" }],
+    ["meta", { property: "og:description", content: "A devilishly good process manager for developers" }],
+  ],
   search: {
     provider: "local",
-  }
+  },
+  // Ignore localhost URLs in CLI examples
+  ignoreDeadLinks: [
+    /^http:\/\/localhost/,
+    /^http:\/\/127\.0\.0\.1/,
+  ]
 });

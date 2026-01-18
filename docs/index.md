@@ -4,23 +4,36 @@ layout: home
 
 hero:
   name: "pitchfork"
-  #text: "Daemons with DX"
-  tagline: Daemons with DX
+  text: "Summon Your Daemons"
+  tagline: A devilishly good process manager for developers
+  image:
+    src: /img/logo.png
+    alt: pitchfork logo
   actions:
     - theme: brand
-      text: Getting Started
+      text: Get Started
       link: /getting-started
     - theme: alt
       text: CLI Reference
       link: /cli
 
-# features:
-#   - title: Feature A
-#     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
-#   - title: Feature B
-#     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
-#   - title: Feature C
-#     details: Lorem ipsum dolor sit amet, consectetur adipiscing elit
+features:
+  - icon: "\U0001F525"
+    title: Raise the Dead
+    details: Start daemons only if they're not already running. No more duplicate processes haunting your system.
+  - icon: "\U0001F608"
+    title: Eternal Vigilance
+    details: Automatic restarts on failure with configurable retry limits. Your daemons will rise again.
+  - icon: "\u26A1"
+    title: Ready When Summoned
+    details: Smart ready checks via delay, output patterns, or HTTP endpoints. Know when your daemon is truly alive.
+  - icon: "\U0001F3E0"
+    title: Shell Possession
+    details: Auto-start daemons when entering a project directory, auto-stop when leaving. Seamless possession.
+  - icon: "\u23F0"
+    title: Unholy Schedules
+    details: Cron-style scheduling for periodic tasks. Summon your daemons on a schedule from the underworld.
+  - icon: "\U0001F310"
+    title: Web Portal
+    details: Built-in web UI for monitoring and control. A window into the inferno of your running processes.
 ---
-
-<img src="/img/logo.png" alt="pitchfork logo" width="400" />

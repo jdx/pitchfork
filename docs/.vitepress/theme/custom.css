@@ -1,0 +1,157 @@
+/**
+ * Pitchfork Theme - Devilishly good daemon management
+ *
+ * A fiery red theme with dark undertones
+ */
+
+:root {
+  /* Brand colors - Hellfire red */
+  --vp-c-brand-1: #dc2626;
+  --vp-c-brand-2: #b91c1c;
+  --vp-c-brand-3: #991b1b;
+  --vp-c-brand-soft: rgba(220, 38, 38, 0.14);
+
+  /* Accent - Ember orange */
+  --vp-c-tip-1: #ea580c;
+  --vp-c-tip-2: #c2410c;
+  --vp-c-tip-3: #9a3412;
+  --vp-c-tip-soft: rgba(234, 88, 12, 0.14);
+
+  /* Warning - Brimstone yellow */
+  --vp-c-warning-1: #ca8a04;
+  --vp-c-warning-2: #a16207;
+  --vp-c-warning-3: #854d0e;
+  --vp-c-warning-soft: rgba(202, 138, 4, 0.14);
+
+  /* Home hero gradient */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: -webkit-linear-gradient(
+    120deg,
+    #dc2626 30%,
+    #ea580c 70%
+  );
+
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    #dc262650 50%,
+    #ea580c50 50%
+  );
+  --vp-home-hero-image-filter: blur(44px);
+}
+
+/* Dark mode overrides */
+.dark {
+  --vp-c-brand-1: #ef4444;
+  --vp-c-brand-2: #dc2626;
+  --vp-c-brand-3: #b91c1c;
+  --vp-c-brand-soft: rgba(239, 68, 68, 0.16);
+
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    #ef444450 50%,
+    #f9731650 50%
+  );
+}
+
+/* Hero section styling */
+.VPHero .name {
+  font-weight: 800;
+}
+
+.VPHero .tagline {
+  color: var(--vp-c-text-2);
+}
+
+/* Feature cards with subtle fire glow */
+.VPFeature {
+  transition: all 0.3s ease;
+  border: 1px solid var(--vp-c-divider);
+}
+
+.VPFeature:hover {
+  border-color: var(--vp-c-brand-1);
+  box-shadow: 0 0 20px rgba(220, 38, 38, 0.15);
+}
+
+.dark .VPFeature:hover {
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+}
+
+/* Feature icons - make them pop */
+.VPFeature .icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Sidebar active item */
+.VPSidebarItem.is-active > .item > .link > .text {
+  color: var(--vp-c-brand-1);
+}
+
+/* Code blocks with subtle warmth */
+.vp-code-group .tabs label.active {
+  color: var(--vp-c-brand-1);
+}
+
+/* Custom container styling */
+.custom-block.tip {
+  border-color: var(--vp-c-tip-1);
+}
+
+.custom-block.warning {
+  border-color: var(--vp-c-warning-1);
+}
+
+.custom-block.danger {
+  border-color: var(--vp-c-brand-1);
+}
+
+/* Button styling */
+.VPButton.brand {
+  background-color: var(--vp-c-brand-1);
+  border-color: var(--vp-c-brand-1);
+}
+
+.VPButton.brand:hover {
+  background-color: var(--vp-c-brand-2);
+  border-color: var(--vp-c-brand-2);
+}
+
+/* Nav brand styling */
+.VPNavBarTitle .title {
+  font-weight: 700;
+}
+
+/* Scrollbar styling for dark theme */
+.dark ::-webkit-scrollbar-thumb {
+  background-color: var(--vp-c-brand-soft);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--vp-c-brand-1);
+}
+
+/* Badge styling */
+.VPBadge {
+  background-color: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+}
+
+/* Footer links */
+.VPFooter a:hover {
+  color: var(--vp-c-brand-1);
+}
+
+/* Search highlight */
+.DocSearch-Hit-source {
+  color: var(--vp-c-brand-1);
+}
+
+/* Table styling */
+table {
+  border-color: var(--vp-c-divider);
+}
+
+th {
+  background-color: var(--vp-c-brand-soft);
+}
