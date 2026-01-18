@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate rich release notes for GitHub releases using Claude Code
-# Usage: ./scripts/gen-release-notes.sh <tag> [prev_tag]
+# Generate concise changelog entry using Claude Code
+# Usage: ./scripts/gen-release-summary.sh <tag> [prev_tag]
 
 tag="${1:-}"
 prev_tag="${2:-}"
@@ -40,20 +40,23 @@ prompt=$(
 	printf '%s\n' "$changelog"
 	printf '\n'
 	cat <<'INSTRUCTIONS'
-Write user-friendly release notes:
+Write a brief changelog entry:
 
-1. Start with 1-2 paragraphs summarizing key changes
-2. Organize into ### sections (Highlights, Bug Fixes, etc.)
-3. Explain WHY changes matter to users
-4. Include PR links and documentation links (https://pitchfork.jdx.dev/)
-5. Include contributor usernames (@username)
-6. Skip internal changes
+1. One short paragraph (2-3 sentences) summarizing the release
+2. Categorized bullet points (### Features, ### Bug Fixes, etc.)
+3. One line per change, no explanations
+4. Skip minor/internal changes
+5. Include PR links for significant changes
+6. Include contributor usernames (@username)
+7. Link to relevant documentation at https://pitchfork.jdx.dev/ where applicable
 
-Output ONLY the release notes, no preamble.
+IMPORTANT: Use only ### for section headers. NEVER use "## [" as this pattern is reserved for version headers.
+
+Output ONLY the brief changelog, no preamble.
 INSTRUCTIONS
 )
 
-# Use Claude Code to generate the release notes
+# Use Claude Code to generate the changelog entry
 # Sandboxed: only read-only tools allowed (no Bash, Edit, Write)
 output=$(
 	printf '%s' "$prompt" | claude -p \
@@ -61,5 +64,11 @@ output=$(
 		--output-format text \
 		--allowedTools "Read,Grep,Glob"
 )
+
+# Validate output doesn't contain patterns that would corrupt changelog processing
+if echo "$output" | grep -qE '^## \['; then
+	echo "Error: LLM output contains '## [' pattern which would corrupt processing" >&2
+	exit 1
+fi
 
 echo "$output"
