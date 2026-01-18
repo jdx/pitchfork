@@ -1,5 +1,9 @@
 use crate::Result;
 use axum::{
+    body::Body,
+    http::{Method, Request, StatusCode},
+    middleware::{self, Next},
+    response::Response,
     routing::{get, post},
     Router,
 };
@@ -7,6 +11,19 @@ use std::net::SocketAddr;
 
 use super::routes;
 use super::static_files::static_handler;
+
+/// CSRF protection middleware - requires HX-Request header on POST requests.
+/// This prevents cross-origin form submissions since custom headers trigger CORS preflight.
+async fn csrf_protection(request: Request<Body>, next: Next) -> Result<Response, StatusCode> {
+    if request.method() == Method::POST {
+        // htmx automatically sends HX-Request header on all requests
+        // Cross-origin form submissions cannot set custom headers
+        if !request.headers().contains_key("hx-request") {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+    Ok(next.run(request).await)
+}
 
 /// Number of ports to try before giving up
 const PORT_ATTEMPTS: u16 = 10;
@@ -38,7 +55,9 @@ pub async fn serve(port: u16) -> Result<()> {
         .route("/config/validate", post(routes::config::validate))
         .route("/config/save", post(routes::config::save))
         // Static files
-        .route("/static/{*path}", get(static_handler));
+        .route("/static/{*path}", get(static_handler))
+        // CSRF protection for all POST endpoints
+        .layer(middleware::from_fn(csrf_protection));
 
     // Try up to PORT_ATTEMPTS ports starting from the given port
     let mut last_error = None;
