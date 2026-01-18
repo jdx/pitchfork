@@ -54,7 +54,7 @@ export default defineConfig({
 
     socialLinks: [{ icon: "github", link: "https://github.com/jdx/pitchfork" }],
 
-    logo: "/img/logo.png",
+    logo: "/img/android-chrome-192x192.png",
 
     footer: {
       message: 'Released under the MIT License.',
