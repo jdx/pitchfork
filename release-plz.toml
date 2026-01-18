@@ -3,3 +3,5 @@
 git_tag_enable = true
 # Create GitHub releases
 git_release_enable = true
+# Skip semver check (this is a CLI binary, not a library)
+semver_check = false
