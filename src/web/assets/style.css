@@ -28,6 +28,10 @@ body {
     line-height: 1.6;
 }
 
+a {
+    text-decoration: none;
+}
+
 /* Navigation */
 nav {
     background: var(--color-surface);
@@ -215,8 +219,18 @@ th, td {
 }
 
 th {
-    background: var(--color-primary);
+    background: #3d2828;
     font-weight: 600;
+}
+
+/* Table links need better contrast */
+table a {
+    color: #ffb3b3;
+}
+
+table a:hover {
+    color: #ffd0d0;
+    text-shadow: 0 0 8px rgba(255, 100, 100, 0.5);
 }
 
 tr:hover {
