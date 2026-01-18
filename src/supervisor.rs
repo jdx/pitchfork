@@ -800,6 +800,11 @@ impl Supervisor {
     }
 
     pub async fn stop(&self, id: &str) -> Result<IpcResponse> {
+        if id == "pitchfork" {
+            return Ok(IpcResponse::Error(
+                "Cannot stop supervisor via stop command".into(),
+            ));
+        }
         info!("stopping daemon: {id}");
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
@@ -1163,7 +1168,7 @@ impl Supervisor {
             .await
             .daemons
             .values()
-            .filter(|d| d.pid.is_some())
+            .filter(|d| d.pid.is_some() && d.id != "pitchfork")
             .cloned()
             .collect()
     }
