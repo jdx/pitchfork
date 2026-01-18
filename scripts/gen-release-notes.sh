@@ -30,21 +30,16 @@ if [[ -z $changelog ]]; then
 	exit 1
 fi
 
-# Use Claude Code to editorialize the release notes
-# Sandboxed: only read-only tools allowed (no Bash, Edit, Write)
-output=$(
-	claude -p \
-		--model claude-opus-4-20250514 \
-		--output-format text \
-		--allowedTools "Read,Grep,Glob" \
-		<<EOF
-You are writing release notes for pitchfork version ${tag}.
-
-Pitchfork is a daemon supervisor CLI for developers. It manages background processes with features like auto-start/stop, cron scheduling, retry logic, and HTTP ready checks.
-
-Here are the commits in this release:
-${changelog}
-
+# Build prompt safely using printf to avoid command substitution on backticks in changelog
+prompt=$(
+	printf '%s\n' "You are writing release notes for pitchfork version ${tag}."
+	printf '\n'
+	printf '%s\n' "Pitchfork is a daemon supervisor CLI for developers. It manages background processes with features like auto-start/stop, cron scheduling, retry logic, and HTTP ready checks."
+	printf '\n'
+	printf '%s\n' "Here are the commits in this release:"
+	printf '%s\n' "$changelog"
+	printf '\n'
+	cat <<'INSTRUCTIONS'
 Write user-friendly release notes. The format should be:
 
 1. Start with 1-2 paragraphs summarizing the most important changes
@@ -54,13 +49,24 @@ Write user-friendly release notes. The format should be:
 5. Group related changes together logically
 6. Skip minor/internal changes that don't affect users
 7. Include contributor attribution where appropriate (@username)
+8. Include links to PRs (e.g., [#123](https://github.com/jdx/pitchfork/pull/123)) for significant changes
+9. Where applicable, link to relevant documentation at https://pitchfork.jdx.dev/
 
 IMPORTANT: Use only ### for section headers. NEVER use "## [" as this pattern is reserved for version headers.
 
 Keep the tone professional but approachable. Focus on what users care about.
 
 Output ONLY the editorialized release notes, no preamble.
-EOF
+INSTRUCTIONS
+)
+
+# Use Claude Code to editorialize the release notes
+# Sandboxed: only read-only tools allowed (no Bash, Edit, Write)
+output=$(
+	printf '%s' "$prompt" | claude -p \
+		--model claude-opus-4-20250514 \
+		--output-format text \
+		--allowedTools "Read,Grep,Glob"
 )
 
 # Validate output doesn't contain patterns that would corrupt changelog processing
