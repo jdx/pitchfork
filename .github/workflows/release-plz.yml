@@ -74,7 +74,7 @@ jobs:
           git fetch origin "$PR_BRANCH"
           git checkout "$PR_BRANCH"
           mise run render
-          if git diff --quiet; then
+          if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git config user.name "github-actions[bot]"
