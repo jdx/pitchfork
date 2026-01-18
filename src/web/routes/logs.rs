@@ -115,8 +115,10 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         .join(format!("{}.log", id));
 
     let initial_logs = if log_path.exists() {
-        match std::fs::read_to_string(&log_path) {
-            Ok(content) => {
+        match std::fs::read(&log_path) {
+            Ok(bytes) => {
+                // Use lossy conversion to handle invalid UTF-8
+                let content = String::from_utf8_lossy(&bytes);
                 // Get last 100 lines
                 let lines: Vec<&str> = content.lines().collect();
                 let start = if lines.len() > 100 {
@@ -171,8 +173,10 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
         .join(format!("{}.log", id));
 
     let logs = if log_path.exists() {
-        match std::fs::read_to_string(&log_path) {
-            Ok(content) => {
+        match std::fs::read(&log_path) {
+            Ok(bytes) => {
+                // Use lossy conversion to handle invalid UTF-8
+                let content = String::from_utf8_lossy(&bytes);
                 let lines: Vec<&str> = content.lines().collect();
                 let start = if lines.len() > 100 {
                     lines.len() - 100
@@ -218,18 +222,20 @@ pub async fn stream_sse(
                 let current_size = metadata.len();
 
                 if current_size > last_size {
-                    // Read new content
+                    // Read new content as bytes to handle invalid UTF-8
                     if let Ok(file) = std::fs::File::open(&log_path) {
                         use std::io::{Read, Seek, SeekFrom};
                         let mut file = file;
                         if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                            let mut new_content = String::new();
-                            if file.read_to_string(&mut new_content).is_ok() && !new_content.is_empty() {
+                            let mut buffer = Vec::new();
+                            if file.read_to_end(&mut buffer).is_ok() && !buffer.is_empty() {
+                                // Use lossy conversion to handle invalid UTF-8 gracefully
+                                let new_content = String::from_utf8_lossy(&buffer);
                                 let escaped = html_escape(&new_content);
                                 yield Ok(Event::default().event("message").data(escaped));
-                                // Only update last_size after successful read and yield
-                                last_size = current_size;
                             }
+                            // Always update last_size to avoid stalling on invalid content
+                            last_size = current_size;
                         }
                     }
                 } else if current_size < last_size {
