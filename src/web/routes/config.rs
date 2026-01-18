@@ -153,7 +153,7 @@ pub async fn validate(Form(form): Form<ConfigForm>) -> Html<String> {
     match toml::from_str::<PitchforkToml>(&form.content) {
         Ok(config) => {
             let daemon_count = config.daemons.len();
-            let daemon_names: Vec<&String> = config.daemons.keys().collect();
+            let daemon_names: Vec<String> = config.daemons.keys().map(|s| html_escape(s)).collect();
             Html(format!(
                 r#"
                 <div class="validation-success">
@@ -161,11 +161,7 @@ pub async fn validate(Form(form): Form<ConfigForm>) -> Html<String> {
                     <p>Found {daemon_count} daemon(s): {}</p>
                 </div>
             "#,
-                daemon_names
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                daemon_names.join(", ")
             ))
         }
         Err(e) => Html(format!(

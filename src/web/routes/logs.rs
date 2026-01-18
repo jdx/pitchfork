@@ -12,9 +12,14 @@ use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 
-/// Validate daemon ID to prevent path traversal attacks
+/// Validate daemon ID to prevent path traversal attacks and CSS selector issues
 fn is_valid_daemon_id(id: &str) -> bool {
-    !id.is_empty() && !id.contains('/') && !id.contains('\\') && !id.contains("..") && id != "."
+    !id.is_empty()
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains("..")
+        && !id.contains(' ')
+        && id != "."
 }
 
 fn base_html(title: &str, content: &str) -> String {
@@ -143,11 +148,10 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         <script>
             // Auto-scroll to bottom on load
             document.getElementById('log-output').scrollTop = document.getElementById('log-output').scrollHeight;
-            // Listen for clear event from SSE
-            document.body.addEventListener('htmx:sseMessage', function(e) {{
-                if (e.detail.type === 'clear') {{
-                    document.getElementById('log-output').textContent = '';
-                }}
+            // Listen for clear event using native EventSource (htmx-ext-sse only handles 'message' events)
+            var clearSource = new EventSource('/logs/{url_id}/stream');
+            clearSource.addEventListener('clear', function(e) {{
+                document.getElementById('log-output').textContent = '';
             }});
         </script>
     "#
