@@ -134,12 +134,6 @@
 /* Subtle glow for hero title */
 .VPHero .name {
   animation: subtleTitleGlow 4s ease-in-out infinite;
-  transition: text-shadow 0.3s ease;
-}
-
-.VPHero .name:hover {
-  animation: none;
-  text-shadow: 0 0 30px rgba(220, 38, 38, 0.8), 0 0 60px rgba(255, 69, 0, 0.5), 0 0 90px rgba(255, 140, 0, 0.3);
 }
 
 @keyframes subtleTitleGlow {
@@ -155,12 +149,13 @@
 .VPNavBarTitle .title {
   font-weight: 700;
   animation: subtleNavGlow 4s ease-in-out infinite;
-  transition: text-shadow 0.3s ease;
+  transition: text-shadow 0.5s ease;
 }
 
 .VPNavBarTitle:hover .title {
   animation: none;
   text-shadow: 0 0 15px rgba(220, 38, 38, 0.8), 0 0 30px rgba(255, 69, 0, 0.5), 0 0 45px rgba(255, 140, 0, 0.3);
+  transition: text-shadow 0.5s ease;
 }
 
 @keyframes subtleNavGlow {
