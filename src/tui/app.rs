@@ -520,6 +520,7 @@ impl App {
                         autostop: false,
                         cron_schedule: None,
                         cron_retrigger: None,
+                        last_cron_triggered: None,
                         last_exit_success: None,
                         retry: 0,
                         retry_count: 0,

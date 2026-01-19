@@ -24,7 +24,7 @@ path = "src/lib.rs"
 
 [dependencies]
 auto-launcher = "0.6.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_usage = "2"
 comfy-table = "7.1.3"

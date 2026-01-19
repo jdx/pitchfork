@@ -1085,9 +1085,8 @@ impl Supervisor {
 
     fn cron_watch(&self) -> Result<()> {
         tokio::spawn(async move {
-            // Check every minute for cron schedules
-            // FIXME: need a better logic, what if the schedule gap is very short (30s, 1min)?
-            let mut interval = time::interval(Duration::from_secs(60));
+            // Check every 10 seconds to support sub-minute cron schedules
+            let mut interval = time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
                 if let Err(err) = SUPERVISOR.check_cron_schedules().await {
@@ -1137,14 +1136,31 @@ impl Supervisor {
                     }
                 };
 
-                // Check if we should trigger now
-                let should_trigger = schedule.upcoming(chrono::Local).take(1).any(|next| {
-                    // If the next execution is within the next minute, trigger it
-                    let diff = next.signed_duration_since(now);
-                    diff.num_seconds() < 60 && diff.num_seconds() >= 0
-                });
+                // Check if we should trigger: look for a scheduled time that has passed
+                // since our last trigger (or last 10 seconds if never triggered)
+                let check_since = daemon
+                    .last_cron_triggered
+                    .unwrap_or_else(|| now - chrono::Duration::seconds(10));
+
+                // Find if there's a scheduled time between check_since and now
+                let should_trigger = schedule
+                    .after(&check_since)
+                    .take_while(|t| *t <= now)
+                    .next()
+                    .is_some();
 
                 if should_trigger {
+                    // Update last_cron_triggered to prevent re-triggering the same event
+                    {
+                        let mut state_file = self.state_file.lock().await;
+                        if let Some(d) = state_file.daemons.get_mut(&id) {
+                            d.last_cron_triggered = Some(now);
+                        }
+                        if let Err(e) = state_file.write() {
+                            error!("failed to update cron trigger time: {e}");
+                        }
+                    }
+
                     let should_run = match retrigger {
                         crate::pitchfork_toml::CronRetrigger::Finish => {
                             // Run if not currently running
@@ -1380,6 +1396,7 @@ impl Supervisor {
             cron_retrigger: opts
                 .cron_retrigger
                 .or(existing.and_then(|d| d.cron_retrigger)),
+            last_cron_triggered: existing.and_then(|d| d.last_cron_triggered),
             last_exit_success: opts
                 .last_exit_success
                 .or(existing.and_then(|d| d.last_exit_success)),
