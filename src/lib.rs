@@ -12,6 +12,7 @@ pub mod pitchfork_toml;
 pub mod procs;
 pub mod state_file;
 pub mod supervisor;
+pub mod tui;
 pub mod ui;
 pub mod watch_files;
 pub mod web;

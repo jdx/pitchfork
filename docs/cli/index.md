@@ -32,4 +32,5 @@
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
 - [`pitchfork supervisor status`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
+- [`pitchfork tui`](/cli/tui.md)
 - [`pitchfork wait <ID>`](/cli/wait.md)

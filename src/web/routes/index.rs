@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::procs::PROCS;
 use crate::state_file::StateFile;
 
 fn html_escape(s: &str) -> String {
@@ -33,6 +34,19 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         .pid
         .map(|p| p.to_string())
         .unwrap_or_else(|| "-".to_string());
+
+    // Get process stats (CPU, memory, uptime)
+    let stats = d.pid.and_then(|pid| PROCS.get_stats(pid));
+    let cpu_display = stats
+        .map(|s| s.cpu_display())
+        .unwrap_or_else(|| "-".to_string());
+    let mem_display = stats
+        .map(|s| s.memory_display())
+        .unwrap_or_else(|| "-".to_string());
+    let uptime_display = stats
+        .map(|s| s.uptime_display())
+        .unwrap_or_else(|| "-".to_string());
+
     let error_msg = html_escape(&d.status.error_message().unwrap_or_default());
     let disabled_badge = if is_disabled {
         r#"<span class="badge disabled">disabled</span>"#
@@ -43,8 +57,8 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Stop</button>
-            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Restart</button>
+            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm">Stop</button>
+            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm">Restart</button>
         "##
         )
     } else {
@@ -61,7 +75,7 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Disable</button>"##
+            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm">Disable</button>"##
         )
     };
 
@@ -70,6 +84,9 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         <td><a href="/daemons/{url_id}">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
+        <td>{cpu_display}</td>
+        <td>{mem_display}</td>
+        <td>{uptime_display}</td>
         <td class="error-msg">{error_msg}</td>
         <td class="actions">{actions} {toggle_btn} <a href="/logs/{url_id}" class="btn btn-sm">Logs</a></td>
     </tr>"#,
@@ -134,6 +151,9 @@ pub async fn stats_partial() -> Html<String> {
 }
 
 pub async fn index() -> Html<String> {
+    // Refresh process info for accurate CPU/memory stats
+    PROCS.refresh_processes();
+
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
     let pt = PitchforkToml::all_merged();
@@ -185,6 +205,9 @@ pub async fn index() -> Html<String> {
                 <td><a href="/daemons/{url_id}">{safe_id}</a> <span class="badge">not started</span></td>
                 <td>-</td>
                 <td><span class="status stopped">not started</span></td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
                 <td></td>
                 <td class="actions">
                     <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
@@ -195,7 +218,7 @@ pub async fn index() -> Html<String> {
     }
 
     if rows.is_empty() {
-        rows = r#"<tr><td colspan="5" class="empty">No daemons configured. Add some to pitchfork.toml</td></tr>"#.to_string();
+        rows = r#"<tr><td colspan="8" class="empty">No daemons configured. Add some to pitchfork.toml</td></tr>"#.to_string();
     }
 
     let html = format!(
@@ -243,6 +266,9 @@ pub async fn index() -> Html<String> {
                     <th>Name</th>
                     <th>PID</th>
                     <th>Status</th>
+                    <th>CPU</th>
+                    <th>Mem</th>
+                    <th>Uptime</th>
                     <th>Error</th>
                     <th>Actions</th>
                 </tr>
