@@ -1,6 +1,6 @@
 use crate::daemon::{Daemon, RunOptions, validate_daemon_id};
 use crate::daemon_status::DaemonStatus;
-use crate::ipc::server::IpcServer;
+use crate::ipc::server::{IpcServer, IpcServerHandle};
 use crate::ipc::{IpcRequest, IpcResponse};
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
@@ -54,6 +54,8 @@ pub struct Supervisor {
     last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
     pending_autostops: Mutex<HashMap<String, time::Instant>>,
+    /// Handle for graceful IPC server shutdown
+    ipc_shutdown: Mutex<Option<IpcServerHandle>>,
 }
 
 fn interval_duration() -> Duration {
@@ -91,6 +93,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
+            ipc_shutdown: Mutex::new(None),
         })
     }
 
@@ -126,7 +129,8 @@ impl Supervisor {
             });
         }
 
-        let ipc = IpcServer::new()?;
+        let (ipc, ipc_handle) = IpcServer::new()?;
+        *self.ipc_shutdown.lock().await = Some(ipc_handle);
         self.conn_watch(ipc).await
     }
 
@@ -1314,8 +1318,13 @@ impl Supervisor {
             }
         }
         let _ = self.remove_daemon("pitchfork").await;
+
+        // Signal IPC server to shut down gracefully
+        if let Some(mut handle) = self.ipc_shutdown.lock().await.take() {
+            handle.shutdown();
+        }
+
         let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);
-        // TODO: cleanly stop ipc server
     }
 
     async fn add_notification(&self, level: log::LevelFilter, message: String) {
