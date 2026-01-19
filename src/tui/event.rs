@@ -610,8 +610,7 @@ fn handle_config_editor_event(
         // Cancel/Exit
         KeyCode::Esc | KeyCode::Char('q') => {
             if editor.unsaved_changes {
-                app.pending_action = Some(PendingAction::DiscardEditorChanges);
-                app.view = View::Confirm;
+                app.confirm_action(PendingAction::DiscardEditorChanges);
             } else {
                 app.close_editor();
             }

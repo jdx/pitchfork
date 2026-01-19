@@ -159,8 +159,7 @@ async fn run_app<B: Backend>(
                     }
                 }
                 event::Action::DeleteDaemon { id, config_path } => {
-                    app.pending_action = Some(app::PendingAction::DeleteDaemon { id, config_path });
-                    app.view = app::View::Confirm;
+                    app.confirm_action(app::PendingAction::DeleteDaemon { id, config_path });
                 }
                 event::Action::ConfirmPending => {
                     if let Some(pending) = app.take_pending_action() {

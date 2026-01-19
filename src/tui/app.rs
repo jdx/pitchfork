@@ -496,7 +496,12 @@ impl EditorState {
         if let Some(field) = self.fields.get_mut(self.focused_field) {
             field.editing = false;
         }
-        self.daemon_id_editing = false;
+
+        // When leaving daemon_id editing, don't increment - just move to first form field
+        if self.daemon_id_editing {
+            self.daemon_id_editing = false;
+            return;
+        }
 
         if self.focused_field < self.fields.len() - 1 {
             self.focused_field += 1;
