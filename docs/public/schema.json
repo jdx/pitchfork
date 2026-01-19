@@ -157,6 +157,12 @@
           "examples": [
             "exec node server.js"
           ]
+        },
+        "watch": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [

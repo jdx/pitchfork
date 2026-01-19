@@ -1210,7 +1210,7 @@ impl Supervisor {
             autostop,
             cron_schedule: daemon_config.cron.as_ref().map(|c| c.schedule.clone()),
             cron_retrigger: daemon_config.cron.as_ref().map(|c| c.retrigger),
-            retry: daemon_config.retry,
+            retry: daemon_config.retry.count(),
             retry_count: 0,
             ready_delay: daemon_config.ready_delay,
             ready_output: daemon_config.ready_output.clone(),

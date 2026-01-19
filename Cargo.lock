@@ -1893,6 +1893,7 @@ dependencies = [
  "exponential-backoff",
  "fuzzy-matcher",
  "glob",
+ "globset",
  "indexmap",
  "interprocess",
  "itertools 0.14.0",

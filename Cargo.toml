@@ -66,6 +66,7 @@ ratatui = "0.29"
 crossterm = "0.28"
 fuzzy-matcher = "0.3.7"
 glob = "0.3"
+globset = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"

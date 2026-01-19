@@ -138,6 +138,7 @@ fn normalize_path_for_glob(path: &str) -> String {
 }
 
 /// Check if a changed path matches any of the watch patterns.
+/// Uses globset which properly supports ** for recursive directory matching.
 pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir: &Path) -> bool {
     // Normalize the changed path to use forward slashes for consistent matching
     let changed_path_str = normalize_path_for_glob(&changed_path.to_string_lossy());
@@ -150,17 +151,15 @@ pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir:
             normalize_path_for_glob(&base_dir.join(pattern).to_string_lossy())
         };
 
-        if let Ok(glob_pattern) = glob::Pattern::new(&full_pattern) {
-            // Use matches() with the normalized string path instead of matches_path()
-            // to ensure consistent forward-slash matching
-            let match_options = glob::MatchOptions {
-                case_sensitive: cfg!(not(target_os = "windows")),
-                // require_literal_separator: true ensures * only matches within a directory
-                // (standard glob behavior where * doesn't match /, use ** for recursive)
-                require_literal_separator: true,
-                require_literal_leading_dot: false,
-            };
-            if glob_pattern.matches_with(&changed_path_str, match_options) {
+        // Use globset which properly supports ** for recursive matching
+        let glob = globset::GlobBuilder::new(&full_pattern)
+            .case_insensitive(cfg!(target_os = "windows"))
+            .literal_separator(true) // * doesn't match /, use ** for recursive
+            .build();
+
+        if let Ok(glob) = glob {
+            let matcher = glob.compile_matcher();
+            if matcher.is_match(&changed_path_str) {
                 return true;
             }
         }
