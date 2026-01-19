@@ -33,7 +33,9 @@ pub struct Supervisor {
     pending_autostops: Mutex<HashMap<String, time::Instant>>,
 }
 
-const INTERVAL: Duration = Duration::from_secs(10);
+fn interval_duration() -> Duration {
+    Duration::from_secs(*env::PITCHFORK_INTERVAL_SECS)
+}
 
 pub static SUPERVISOR: Lazy<Supervisor> =
     Lazy::new(|| Supervisor::new().expect("Error creating supervisor"));
@@ -941,10 +943,10 @@ impl Supervisor {
 
     fn interval_watch(&self) -> Result<()> {
         tokio::spawn(async move {
-            let mut interval = time::interval(INTERVAL);
+            let mut interval = time::interval(interval_duration());
             loop {
                 interval.tick().await;
-                if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > INTERVAL {
+                if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > interval_duration() {
                     if let Err(err) = SUPERVISOR.refresh().await {
                         error!("failed to refresh: {err}");
                     }
