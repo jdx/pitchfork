@@ -17,6 +17,7 @@ pub enum View {
     Help,
     Confirm,
     Loading,
+    Details,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,51 @@ pub enum PendingAction {
     Stop(String),
     Restart(String),
     Disable(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortColumn {
+    #[default]
+    Name,
+    Status,
+    Cpu,
+    Memory,
+    Uptime,
+}
+
+impl SortColumn {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Name => Self::Status,
+            Self::Status => Self::Cpu,
+            Self::Cpu => Self::Memory,
+            Self::Memory => Self::Uptime,
+            Self::Uptime => Self::Name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortOrder {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+impl SortOrder {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Ascending => Self::Descending,
+            Self::Descending => Self::Ascending,
+        }
+    }
+
+    pub fn indicator(self) -> &'static str {
+        match self {
+            Self::Ascending => "↑",
+            Self::Descending => "↓",
+        }
+    }
 }
 
 pub struct App {
@@ -43,6 +89,16 @@ pub struct App {
     pub loading_text: Option<String>,
     pub search_query: String,
     pub search_active: bool,
+    // Sorting
+    pub sort_column: SortColumn,
+    pub sort_order: SortOrder,
+    // Log search
+    pub log_search_query: String,
+    pub log_search_active: bool,
+    pub log_search_matches: Vec<usize>, // Line indices that match
+    pub log_search_current: usize,      // Current match index
+    // Details view
+    pub details_daemon_id: Option<String>,
 }
 
 impl App {
@@ -64,6 +120,13 @@ impl App {
             loading_text: None,
             search_query: String::new(),
             search_active: false,
+            sort_column: SortColumn::default(),
+            sort_order: SortOrder::default(),
+            log_search_query: String::new(),
+            log_search_active: false,
+            log_search_matches: Vec::new(),
+            log_search_current: 0,
+            details_daemon_id: None,
         }
     }
 
@@ -120,7 +183,7 @@ impl App {
     }
 
     pub fn filtered_daemons(&self) -> Vec<&Daemon> {
-        if self.search_query.is_empty() {
+        let mut filtered: Vec<&Daemon> = if self.search_query.is_empty() {
             self.daemons.iter().collect()
         } else {
             let query = self.search_query.to_lowercase();
@@ -128,7 +191,84 @@ impl App {
                 .iter()
                 .filter(|d| d.id.to_lowercase().contains(&query))
                 .collect()
-        }
+        };
+
+        // Sort the filtered list
+        filtered.sort_by(|a, b| {
+            let cmp = match self.sort_column {
+                SortColumn::Name => a.id.to_lowercase().cmp(&b.id.to_lowercase()),
+                SortColumn::Status => {
+                    let status_order = |d: &Daemon| match &d.status {
+                        crate::daemon_status::DaemonStatus::Running => 0,
+                        crate::daemon_status::DaemonStatus::Waiting => 1,
+                        crate::daemon_status::DaemonStatus::Stopping => 2,
+                        crate::daemon_status::DaemonStatus::Stopped => 3,
+                        crate::daemon_status::DaemonStatus::Errored(_) => 4,
+                        crate::daemon_status::DaemonStatus::Failed(_) => 5,
+                    };
+                    status_order(a).cmp(&status_order(b))
+                }
+                SortColumn::Cpu => {
+                    let cpu_a = a
+                        .pid
+                        .and_then(|p| self.get_stats(p))
+                        .map(|s| s.cpu_percent)
+                        .unwrap_or(0.0);
+                    let cpu_b = b
+                        .pid
+                        .and_then(|p| self.get_stats(p))
+                        .map(|s| s.cpu_percent)
+                        .unwrap_or(0.0);
+                    cpu_a
+                        .partial_cmp(&cpu_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }
+                SortColumn::Memory => {
+                    let mem_a = a
+                        .pid
+                        .and_then(|p| self.get_stats(p))
+                        .map(|s| s.memory_bytes)
+                        .unwrap_or(0);
+                    let mem_b = b
+                        .pid
+                        .and_then(|p| self.get_stats(p))
+                        .map(|s| s.memory_bytes)
+                        .unwrap_or(0);
+                    mem_a.cmp(&mem_b)
+                }
+                SortColumn::Uptime => {
+                    let up_a = a
+                        .pid
+                        .and_then(|p| self.get_stats(p))
+                        .map(|s| s.uptime_secs)
+                        .unwrap_or(0);
+                    let up_b = b
+                        .pid
+                        .and_then(|p| self.get_stats(p))
+                        .map(|s| s.uptime_secs)
+                        .unwrap_or(0);
+                    up_a.cmp(&up_b)
+                }
+            };
+            match self.sort_order {
+                SortOrder::Ascending => cmp,
+                SortOrder::Descending => cmp.reverse(),
+            }
+        });
+
+        filtered
+    }
+
+    // Sorting
+    pub fn cycle_sort(&mut self) {
+        // If clicking the same column, toggle order; otherwise switch column
+        self.sort_column = self.sort_column.next();
+        self.selected = 0;
+    }
+
+    pub fn toggle_sort_order(&mut self) {
+        self.sort_order = self.sort_order.toggle();
+        self.selected = 0;
     }
 
     pub fn selected_daemon(&self) -> Option<&Daemon> {
@@ -225,6 +365,105 @@ impl App {
 
     pub fn scroll_logs_up(&mut self) {
         self.log_scroll = self.log_scroll.saturating_sub(1);
+    }
+
+    /// Scroll down by half page (Ctrl+D)
+    pub fn scroll_logs_page_down(&mut self, visible_lines: usize) {
+        let half_page = visible_lines / 2;
+        if self.log_content.len() > visible_lines {
+            let max_scroll = self.log_content.len().saturating_sub(visible_lines);
+            self.log_scroll = (self.log_scroll + half_page).min(max_scroll);
+        }
+    }
+
+    /// Scroll up by half page (Ctrl+U)
+    pub fn scroll_logs_page_up(&mut self, visible_lines: usize) {
+        let half_page = visible_lines / 2;
+        self.log_scroll = self.log_scroll.saturating_sub(half_page);
+    }
+
+    // Log search
+    pub fn start_log_search(&mut self) {
+        self.log_search_active = true;
+        self.log_search_query.clear();
+        self.log_search_matches.clear();
+        self.log_search_current = 0;
+    }
+
+    pub fn end_log_search(&mut self) {
+        self.log_search_active = false;
+    }
+
+    pub fn clear_log_search(&mut self) {
+        self.log_search_query.clear();
+        self.log_search_active = false;
+        self.log_search_matches.clear();
+        self.log_search_current = 0;
+    }
+
+    pub fn log_search_push(&mut self, c: char) {
+        self.log_search_query.push(c);
+        self.update_log_search_matches();
+    }
+
+    pub fn log_search_pop(&mut self) {
+        self.log_search_query.pop();
+        self.update_log_search_matches();
+    }
+
+    fn update_log_search_matches(&mut self) {
+        self.log_search_matches.clear();
+        if !self.log_search_query.is_empty() {
+            let query = self.log_search_query.to_lowercase();
+            for (i, line) in self.log_content.iter().enumerate() {
+                if line.to_lowercase().contains(&query) {
+                    self.log_search_matches.push(i);
+                }
+            }
+            // Jump to first match if any
+            if !self.log_search_matches.is_empty() {
+                self.log_search_current = 0;
+                self.jump_to_log_match();
+            }
+        }
+    }
+
+    pub fn log_search_next(&mut self) {
+        if !self.log_search_matches.is_empty() {
+            self.log_search_current = (self.log_search_current + 1) % self.log_search_matches.len();
+            self.jump_to_log_match();
+        }
+    }
+
+    pub fn log_search_prev(&mut self) {
+        if !self.log_search_matches.is_empty() {
+            self.log_search_current = self
+                .log_search_current
+                .checked_sub(1)
+                .unwrap_or(self.log_search_matches.len() - 1);
+            self.jump_to_log_match();
+        }
+    }
+
+    fn jump_to_log_match(&mut self) {
+        if let Some(&line_idx) = self.log_search_matches.get(self.log_search_current) {
+            // Scroll so the match is visible (center it if possible)
+            let half_page = 10; // Assume ~20 visible lines
+            self.log_scroll = line_idx.saturating_sub(half_page);
+            self.log_follow = false;
+        }
+    }
+
+    // Details view
+    pub fn show_details(&mut self, daemon_id: &str) {
+        self.details_daemon_id = Some(daemon_id.to_string());
+        self.prev_view = self.view;
+        self.view = View::Details;
+    }
+
+    pub fn hide_details(&mut self) {
+        self.details_daemon_id = None;
+        self.view = View::Dashboard;
     }
 
     pub fn view_logs(&mut self, daemon_id: &str) {

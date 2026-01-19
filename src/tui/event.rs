@@ -19,10 +19,11 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
         }
 
         match app.view {
-            View::Dashboard => handle_dashboard_event(app, key.code),
-            View::Logs => handle_logs_event(app, key.code),
+            View::Dashboard => handle_dashboard_event(app, key.code, key.modifiers),
+            View::Logs => handle_logs_event(app, key.code, key.modifiers),
             View::Help => handle_help_event(app, key.code),
             View::Confirm => handle_confirm_event(app, key.code),
+            View::Details => handle_details_event(app, key.code),
             View::Loading => Ok(None), // Ignore input during loading
         }
     } else {
@@ -30,7 +31,11 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
     }
 }
 
-fn handle_dashboard_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+fn handle_dashboard_event(
+    app: &mut App,
+    key: KeyCode,
+    _modifiers: KeyModifiers,
+) -> Result<Option<Action>> {
     // Handle search input mode first
     if app.search_active {
         return handle_search_input(app, key);
@@ -66,6 +71,23 @@ fn handle_dashboard_event(app: &mut App, key: KeyCode) -> Result<Option<Action>>
         }
         KeyCode::Char('k') | KeyCode::Up => {
             app.select_prev();
+            Ok(None)
+        }
+        // Sort: 'S' cycles columns, 'o' toggles order
+        KeyCode::Char('S') => {
+            app.cycle_sort();
+            Ok(None)
+        }
+        KeyCode::Char('o') => {
+            app.toggle_sort_order();
+            Ok(None)
+        }
+        // Details view
+        KeyCode::Char('i') => {
+            if let Some(daemon) = app.selected_daemon() {
+                let id = daemon.id.clone();
+                app.show_details(&id);
+            }
             Ok(None)
         }
         KeyCode::Char('s') => {
@@ -155,10 +177,60 @@ fn handle_search_input(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
     }
 }
 
-fn handle_logs_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+fn handle_logs_event(
+    app: &mut App,
+    key: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<Option<Action>> {
+    // Handle log search input mode first
+    if app.log_search_active {
+        return handle_log_search_input(app, key);
+    }
+
+    // Handle Ctrl+D/U for page scrolling
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        match key {
+            KeyCode::Char('d') => {
+                app.log_follow = false;
+                app.scroll_logs_page_down(20);
+                return Ok(None);
+            }
+            KeyCode::Char('u') => {
+                app.log_follow = false;
+                app.scroll_logs_page_up(20);
+                return Ok(None);
+            }
+            _ => {}
+        }
+    }
+
     match key {
-        KeyCode::Char('q') | KeyCode::Esc => {
-            app.back_to_dashboard();
+        KeyCode::Char('q') => {
+            if !app.log_search_query.is_empty() {
+                app.clear_log_search();
+            } else {
+                app.back_to_dashboard();
+            }
+            Ok(None)
+        }
+        KeyCode::Esc => {
+            if !app.log_search_query.is_empty() {
+                app.clear_log_search();
+            } else {
+                app.back_to_dashboard();
+            }
+            Ok(None)
+        }
+        KeyCode::Char('/') => {
+            app.start_log_search();
+            Ok(None)
+        }
+        KeyCode::Char('n') => {
+            app.log_search_next();
+            Ok(None)
+        }
+        KeyCode::Char('N') => {
+            app.log_search_prev();
             Ok(None)
         }
         KeyCode::Char('f') => {
@@ -166,13 +238,23 @@ fn handle_logs_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
             Ok(None)
         }
         KeyCode::Char('j') | KeyCode::Down => {
-            app.log_follow = false; // Disable follow when manually scrolling
+            app.log_follow = false;
             app.scroll_logs_down();
             Ok(None)
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.log_follow = false; // Disable follow when manually scrolling
+            app.log_follow = false;
             app.scroll_logs_up();
+            Ok(None)
+        }
+        KeyCode::PageDown => {
+            app.log_follow = false;
+            app.scroll_logs_page_down(20);
+            Ok(None)
+        }
+        KeyCode::PageUp => {
+            app.log_follow = false;
+            app.scroll_logs_page_up(20);
             Ok(None)
         }
         KeyCode::Char('g') => {
@@ -181,10 +263,46 @@ fn handle_logs_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
             Ok(None)
         }
         KeyCode::Char('G') => {
-            app.log_follow = true; // Jump to bottom enables follow
+            app.log_follow = true;
             if app.log_content.len() > 20 {
                 app.log_scroll = app.log_content.len().saturating_sub(20);
             }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_log_search_input(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+    match key {
+        KeyCode::Esc => {
+            app.clear_log_search();
+            Ok(None)
+        }
+        KeyCode::Enter => {
+            app.end_log_search();
+            Ok(None)
+        }
+        KeyCode::Backspace => {
+            if app.log_search_query.is_empty() {
+                app.end_log_search();
+            } else {
+                app.log_search_pop();
+            }
+            Ok(None)
+        }
+        KeyCode::Char(c) => {
+            app.log_search_push(c);
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_details_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+    match key {
+        KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('i') => {
+            app.hide_details();
             Ok(None)
         }
         _ => Ok(None),

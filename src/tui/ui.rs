@@ -1,5 +1,6 @@
 use crate::daemon_status::DaemonStatus;
-use crate::tui::app::{App, PendingAction, View};
+use crate::pitchfork_toml::PitchforkToml;
+use crate::tui::app::{App, PendingAction, SortColumn, View};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
@@ -40,6 +41,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Help => draw_help_overlay(f),
         View::Confirm => draw_confirm_overlay(f, app),
         View::Loading => draw_loading_overlay(f, app),
+        View::Details => draw_details_overlay(f, app),
         _ => {}
     }
 }
@@ -90,7 +92,9 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     match app.view {
-        View::Dashboard | View::Confirm | View::Loading => draw_daemon_table(f, area, app),
+        View::Dashboard | View::Confirm | View::Loading | View::Details => {
+            draw_daemon_table(f, area, app)
+        }
         View::Logs => draw_logs(f, area, app),
         View::Help => draw_daemon_table(f, area, app), // Help is an overlay
     }
@@ -135,9 +139,24 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let header_cells = ["Name", "PID", "Status", "CPU", "Mem", "Uptime", "Error"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(ORANGE).bold()));
+    // Build header with sort indicator
+    let header_columns = [
+        ("Name", Some(SortColumn::Name)),
+        ("PID", None),
+        ("Status", Some(SortColumn::Status)),
+        ("CPU", Some(SortColumn::Cpu)),
+        ("Mem", Some(SortColumn::Memory)),
+        ("Uptime", Some(SortColumn::Uptime)),
+        ("Error", None),
+    ];
+    let header_cells = header_columns.iter().map(|(name, sort_col)| {
+        let text = if *sort_col == Some(app.sort_column) {
+            format!("{} {}", name, app.sort_order.indicator())
+        } else {
+            (*name).to_string()
+        };
+        Cell::from(text).style(Style::default().fg(ORANGE).bold())
+    });
     let header = Row::new(header_cells).height(1);
 
     let rows = filtered.iter().enumerate().map(|(i, daemon)| {
@@ -345,16 +364,49 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
 }
 
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
+    // Split area for search bar if active
+    let (search_area, log_area) = if app.log_search_active || !app.log_search_query.is_empty() {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(area);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, area)
+    };
+
+    // Draw log search bar if present
+    if let Some(search_area) = search_area {
+        draw_log_search_bar(f, search_area, app);
+    }
+
     let daemon_name = app.log_daemon_id.as_deref().unwrap_or("unknown");
     let follow_indicator = if app.log_follow { " [follow]" } else { "" };
-    let title = format!(" Logs: {}{} ", daemon_name, follow_indicator);
+    let search_indicator = if !app.log_search_matches.is_empty() {
+        format!(
+            " [{}/{}]",
+            app.log_search_current + 1,
+            app.log_search_matches.len()
+        )
+    } else {
+        String::new()
+    };
+    let title = format!(
+        " Logs: {}{}{} ",
+        daemon_name, follow_indicator, search_indicator
+    );
 
+    let visible_height = log_area.height.saturating_sub(2) as usize;
     let visible_lines: Vec<Line> = app
         .log_content
         .iter()
+        .enumerate()
         .skip(app.log_scroll)
-        .take(area.height.saturating_sub(2) as usize)
-        .map(|line| Line::from(line.as_str()))
+        .take(visible_height)
+        .map(|(line_idx, line)| {
+            // Highlight log lines with syntax coloring and search matches
+            highlight_log_line(line, line_idx, app)
+        })
         .collect();
 
     let logs = Paragraph::new(visible_lines)
@@ -367,7 +419,107 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         )
         .wrap(Wrap { trim: false });
 
-    f.render_widget(logs, area);
+    f.render_widget(logs, log_area);
+}
+
+fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
+    let search_text = if app.log_search_active {
+        format!("/{}_", app.log_search_query)
+    } else {
+        format!("/{}", app.log_search_query)
+    };
+
+    let match_info = if !app.log_search_matches.is_empty() {
+        format!(" ({} matches)", app.log_search_matches.len())
+    } else if !app.log_search_query.is_empty() {
+        " (no matches)".to_string()
+    } else {
+        String::new()
+    };
+
+    let search_bar = Paragraph::new(format!("{}{}", search_text, match_info))
+        .style(if app.log_search_active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(GRAY)
+        })
+        .block(
+            Block::default()
+                .title(" Search Logs ")
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(if app.log_search_active {
+                    Style::default().fg(ORANGE)
+                } else {
+                    Style::default().fg(GRAY)
+                }),
+        );
+    f.render_widget(search_bar, area);
+}
+
+/// Highlight a log line with syntax coloring and search match highlighting
+fn highlight_log_line(line: &str, line_idx: usize, app: &App) -> Line<'static> {
+    let is_match = app.log_search_matches.contains(&line_idx);
+    let is_current_match = app
+        .log_search_matches
+        .get(app.log_search_current)
+        .map(|&idx| idx == line_idx)
+        .unwrap_or(false);
+
+    // Determine base style based on log level
+    let line_lower = line.to_lowercase();
+    let base_style = if line_lower.contains("error")
+        || line_lower.contains("fatal")
+        || line_lower.contains("panic")
+    {
+        Style::default().fg(RED)
+    } else if line_lower.contains("warn") {
+        Style::default().fg(YELLOW)
+    } else if line_lower.contains("debug") || line_lower.contains("trace") {
+        Style::default().fg(DARK_GRAY)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    // Apply search highlight
+    let style = if is_current_match {
+        base_style.bg(Color::Rgb(100, 60, 0)) // Orange-ish background for current match
+    } else if is_match {
+        base_style.bg(Color::Rgb(50, 40, 0)) // Dim yellow background for other matches
+    } else {
+        base_style
+    };
+
+    // Highlight timestamps (common patterns like 2024-01-15 or HH:MM:SS)
+    let mut spans = Vec::new();
+    let mut remaining = line.to_string();
+
+    // Simple timestamp detection at start of line
+    if remaining.len() >= 10 {
+        let potential_date = &remaining[..10];
+        if potential_date.chars().filter(|c| *c == '-').count() == 2
+            && potential_date
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .count()
+                == 8
+        {
+            spans.push(Span::styled(
+                potential_date.to_string(),
+                Style::default().fg(GRAY),
+            ));
+            remaining = remaining[10..].to_string();
+        }
+    }
+
+    // Add the rest of the line
+    if !remaining.is_empty() {
+        spans.push(Span::styled(remaining, style));
+    } else if spans.is_empty() {
+        spans.push(Span::styled(line.to_string(), style));
+    }
+
+    Line::from(spans)
 }
 
 fn draw_message_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -383,15 +535,20 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.view {
         View::Dashboard if app.search_active => "Type to search  Enter:finish  Esc:clear",
         View::Dashboard if !app.search_query.is_empty() => {
-            "/:search  q/Esc:clear  j/k:navigate  s:start  x:stop  r:restart  l:logs  ?:help"
+            "/:search  q/Esc:clear  j/k:nav  S:sort  i:info  s:start  x:stop  l:logs  ?:help"
         }
         View::Dashboard => {
-            "/:search  q:quit  j/k:navigate  s:start  x:stop  r:restart  l:logs  ?:help"
+            "/:search  q:quit  j/k:nav  S:sort  o:order  i:info  s:start  x:stop  l:logs  ?:help"
         }
-        View::Logs => "q/Esc:back  j/k:scroll  f:follow  g:top  G:bottom",
+        View::Logs if app.log_search_active => "Type to search  Enter:finish  Esc:clear",
+        View::Logs if !app.log_search_query.is_empty() => {
+            "/:search  n/N:next/prev  q/Esc:clear  Ctrl+D/U:page  f:follow  ?:help"
+        }
+        View::Logs => "/:search  q/Esc:back  j/k:scroll  Ctrl+D/U:page  f:follow  g:top  G:bottom",
         View::Help => "q/Esc/?:close",
         View::Confirm => "y/Enter:confirm  n/Esc:cancel",
         View::Loading => "Please wait...",
+        View::Details => "q/Esc/i:close",
     };
 
     let footer = Paragraph::new(help_text)
@@ -419,7 +576,10 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from("  j / Down    Move selection down"),
         Line::from("  k / Up      Move selection up"),
         Line::from("  l / Enter   View logs for selected daemon"),
+        Line::from("  i           View daemon details"),
         Line::from("  /           Search/filter daemons"),
+        Line::from("  S           Cycle sort column"),
+        Line::from("  o           Toggle sort order"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Actions",
@@ -445,9 +605,11 @@ fn draw_help_overlay(f: &mut Frame) {
             Style::default().fg(RED).bold(),
         )]),
         Line::from("  j / k       Scroll up/down"),
+        Line::from("  Ctrl+D/U    Page down/up"),
+        Line::from("  /           Search in logs"),
+        Line::from("  n / N       Next/prev match"),
         Line::from("  f           Toggle follow mode"),
-        Line::from("  g           Go to top"),
-        Line::from("  G           Go to bottom (enables follow)"),
+        Line::from("  g / G       Go to top/bottom"),
         Line::from("  q / Esc     Return to dashboard"),
     ];
 
@@ -537,6 +699,163 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         .style(Style::default().bg(Color::Rgb(30, 20, 20)));
 
     f.render_widget(confirm, area);
+}
+
+fn draw_details_overlay(f: &mut Frame, app: &App) {
+    let area = centered_rect(70, 80, f.area());
+
+    // Clear the background
+    f.render_widget(Clear, area);
+
+    let daemon_id = app.details_daemon_id.as_deref().unwrap_or("unknown");
+
+    // Get daemon info
+    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+    let config = PitchforkToml::all_merged();
+    let daemon_config = config.daemons.get(daemon_id);
+
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            daemon_id,
+            Style::default().fg(ORANGE).bold(),
+        )]),
+        Line::from(""),
+    ];
+
+    // Status info
+    if let Some(d) = daemon {
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(GRAY)),
+            Span::styled(
+                format!("{:?}", d.status),
+                Style::default().fg(match &d.status {
+                    crate::daemon_status::DaemonStatus::Running => GREEN,
+                    crate::daemon_status::DaemonStatus::Stopped => GRAY,
+                    crate::daemon_status::DaemonStatus::Waiting => YELLOW,
+                    crate::daemon_status::DaemonStatus::Stopping => YELLOW,
+                    _ => RED,
+                }),
+            ),
+        ]));
+
+        if let Some(pid) = d.pid {
+            lines.push(Line::from(vec![
+                Span::styled("PID: ", Style::default().fg(GRAY)),
+                Span::styled(pid.to_string(), Style::default().fg(Color::White)),
+            ]));
+
+            if let Some(stats) = app.get_stats(pid) {
+                lines.push(Line::from(vec![
+                    Span::styled("CPU: ", Style::default().fg(GRAY)),
+                    Span::styled(stats.cpu_display(), Style::default().fg(Color::White)),
+                    Span::raw("  "),
+                    Span::styled("Memory: ", Style::default().fg(GRAY)),
+                    Span::styled(stats.memory_display(), Style::default().fg(Color::White)),
+                    Span::raw("  "),
+                    Span::styled("Uptime: ", Style::default().fg(GRAY)),
+                    Span::styled(stats.uptime_display(), Style::default().fg(Color::White)),
+                ]));
+            }
+        }
+
+        if let Some(err) = d.status.error_message() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Error: ", Style::default().fg(RED)),
+                Span::styled(err, Style::default().fg(RED)),
+            ]));
+        }
+    }
+
+    // Config info
+    if let Some(cfg) = daemon_config {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "Configuration",
+            Style::default().fg(RED).bold(),
+        )]));
+
+        lines.push(Line::from(vec![
+            Span::styled("Command: ", Style::default().fg(GRAY)),
+            Span::styled(cfg.run.clone(), Style::default().fg(Color::White)),
+        ]));
+
+        if let Some(cron) = &cfg.cron {
+            lines.push(Line::from(vec![
+                Span::styled("Cron: ", Style::default().fg(GRAY)),
+                Span::styled(&cron.schedule, Style::default().fg(Color::White)),
+                Span::raw(" (retrigger: "),
+                Span::styled(
+                    format!("{:?}", cron.retrigger),
+                    Style::default().fg(Color::White),
+                ),
+                Span::raw(")"),
+            ]));
+        }
+
+        if cfg.retry > 0 {
+            lines.push(Line::from(vec![
+                Span::styled("Retry: ", Style::default().fg(GRAY)),
+                Span::styled(cfg.retry.to_string(), Style::default().fg(Color::White)),
+                Span::raw(" attempts"),
+            ]));
+        }
+
+        if let Some(delay) = cfg.ready_delay {
+            lines.push(Line::from(vec![
+                Span::styled("Ready delay: ", Style::default().fg(GRAY)),
+                Span::styled(format!("{}s", delay), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if let Some(output) = &cfg.ready_output {
+            lines.push(Line::from(vec![
+                Span::styled("Ready output: ", Style::default().fg(GRAY)),
+                Span::styled(output.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if let Some(http) = &cfg.ready_http {
+            lines.push(Line::from(vec![
+                Span::styled("Ready HTTP: ", Style::default().fg(GRAY)),
+                Span::styled(http.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if cfg.boot_start.unwrap_or(false) {
+            lines.push(Line::from(vec![
+                Span::styled("Boot start: ", Style::default().fg(GRAY)),
+                Span::styled("enabled", Style::default().fg(GREEN)),
+            ]));
+        }
+    } else {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "No configuration found in pitchfork.toml",
+            Style::default().fg(GRAY).italic(),
+        )]));
+    }
+
+    // Disabled status
+    if app.is_disabled(daemon_id) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "This daemon is DISABLED",
+            Style::default().fg(RED).bold(),
+        )]));
+    }
+
+    let details = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Daemon Details ")
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(RED)),
+        )
+        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+
+    f.render_widget(details, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
