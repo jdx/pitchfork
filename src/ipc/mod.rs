@@ -2,7 +2,7 @@ use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::env;
 use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
-use miette::IntoDiagnostic;
+use miette::{Context, IntoDiagnostic};
 use std::path::PathBuf;
 
 pub(crate) mod client;
@@ -60,22 +60,29 @@ fn fs_name(name: &str) -> Result<Name<'_>> {
 }
 
 fn serialize<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>> {
-    let msg = if *env::IPC_JSON {
-        serde_json::to_vec(msg).into_diagnostic()?
+    if *env::IPC_JSON {
+        serde_json::to_vec(msg)
+            .into_diagnostic()
+            .wrap_err("failed to serialize IPC message as JSON")
     } else {
-        rmp_serde::to_vec(msg).into_diagnostic()?
-    };
-    Ok(msg)
+        rmp_serde::to_vec(msg)
+            .into_diagnostic()
+            .wrap_err("failed to serialize IPC message as MessagePack")
+    }
 }
 
 fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     let mut bytes = bytes.to_vec();
     bytes.pop();
-    trace!("msg: {:?}", std::str::from_utf8(&bytes).unwrap_or_default());
-    let msg = if *env::IPC_JSON {
-        serde_json::from_slice(&bytes).into_diagnostic()?
+    let preview = std::str::from_utf8(&bytes).unwrap_or("<binary>");
+    trace!("msg: {:?}", preview);
+    if *env::IPC_JSON {
+        serde_json::from_slice(&bytes)
+            .into_diagnostic()
+            .wrap_err("failed to deserialize IPC JSON response")
     } else {
-        rmp_serde::from_slice(&bytes).into_diagnostic()?
-    };
-    Ok(msg)
+        rmp_serde::from_slice(&bytes)
+            .into_diagnostic()
+            .wrap_err("failed to deserialize IPC MessagePack response")
+    }
 }
