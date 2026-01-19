@@ -3,6 +3,7 @@
  *
  * A fiery red theme with dark undertones
  */
+@import url('https://fonts.googleapis.com/css2?family=Creepster&display=swap');
 
 :root {
   /* Brand colors - Hellfire red */
@@ -55,7 +56,9 @@
 
 /* Hero section styling */
 .VPHero .name {
-  font-weight: 800;
+  font-family: 'Creepster', cursive !important;
+  font-size: 4rem !important;
+  font-weight: 400 !important;
 }
 
 .VPHero .tagline {
@@ -147,7 +150,10 @@
 
 /* Nav brand styling with subtle glow */
 .VPNavBarTitle .title {
-  font-weight: 700;
+  font-family: 'Creepster', cursive;
+  font-size: 1.5rem;
+  font-weight: 400;
+  color: var(--vp-c-brand-1) !important;
   animation: subtleNavGlow 4s ease-in-out infinite;
   transition: text-shadow 0.5s ease;
 }
