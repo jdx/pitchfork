@@ -30,6 +30,8 @@ pub struct Daemon {
     pub ready_http: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<u16>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub depends: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -49,6 +51,8 @@ pub struct RunOptions {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub wait_ready: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub depends: Vec<String>,
 }
 
 impl Display for Daemon {

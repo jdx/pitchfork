@@ -1,11 +1,11 @@
+use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::env::PITCHFORK_LOGS_DIR;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
-use crate::procs::{ProcessStats, PROCS};
-use crate::Result;
-use fuzzy_matcher::skim::SkimMatcherV2;
+use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use miette::bail;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -433,11 +433,11 @@ impl App {
     }
 
     pub fn clear_stale_message(&mut self) {
-        if let Some(time) = self.message_time {
-            if time.elapsed().as_secs() >= 3 {
-                self.message = None;
-                self.message_time = None;
-            }
+        if let Some(time) = self.message_time
+            && time.elapsed().as_secs() >= 3
+        {
+            self.message = None;
+            self.message_time = None;
         }
     }
 
@@ -449,13 +449,13 @@ impl App {
         PROCS.refresh_processes();
         self.process_stats.clear();
         for daemon in &self.daemons {
-            if let Some(pid) = daemon.pid {
-                if let Some(stats) = PROCS.get_stats(pid) {
-                    self.process_stats.insert(pid, stats);
-                    // Record history for this daemon
-                    let history = self.stats_history.entry(daemon.id.clone()).or_default();
-                    history.push(StatsSnapshot::from(&stats));
-                }
+            if let Some(pid) = daemon.pid
+                && let Some(stats) = PROCS.get_stats(pid)
+            {
+                self.process_stats.insert(pid, stats);
+                // Record history for this daemon
+                let history = self.stats_history.entry(daemon.id.clone()).or_default();
+                history.push(StatsSnapshot::from(&stats));
             }
         }
     }
@@ -487,10 +487,10 @@ impl App {
         }
 
         // Refresh logs if viewing
-        if self.view == View::Logs {
-            if let Some(id) = self.log_daemon_id.clone() {
-                self.load_logs(&id);
-            }
+        if self.view == View::Logs
+            && let Some(id) = self.log_daemon_id.clone()
+        {
+            self.load_logs(&id);
         }
 
         Ok(())
@@ -527,6 +527,7 @@ impl App {
                         ready_output: None,
                         ready_http: None,
                         ready_port: None,
+                        depends: vec![],
                     };
                     self.daemons.push(placeholder);
                 }
@@ -778,6 +779,7 @@ impl App {
             ready_http: daemon_config.ready_http.clone(),
             ready_port: daemon_config.ready_port,
             wait_ready: false,
+            depends: daemon_config.depends.clone(),
         };
 
         client.run(opts).await?;

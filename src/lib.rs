@@ -5,6 +5,7 @@ pub mod boot_manager;
 pub mod cli;
 pub mod daemon;
 pub mod daemon_status;
+pub mod deps;
 pub mod env;
 pub mod ipc;
 pub mod logger;

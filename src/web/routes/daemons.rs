@@ -423,6 +423,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
             ready_http: daemon_config.ready_http.clone(),
             ready_port: daemon_config.ready_port,
             wait_ready: false, // Don't block web request
+            depends: daemon_config.depends.clone(),
         };
 
         match SUPERVISOR.run(opts).await {

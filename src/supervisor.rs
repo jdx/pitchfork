@@ -186,6 +186,7 @@ impl Supervisor {
                     ready_http: daemon.ready_http.clone(),
                     ready_port: daemon.ready_port,
                     wait_ready: false,
+                    depends: daemon.depends.clone(),
                 };
                 if let Err(e) = self.run(retry_opts).await {
                     error!("failed to retry daemon {}: {}", id, e);
@@ -362,6 +363,7 @@ impl Supervisor {
                 ready_http: daemon.ready_http.clone(),
                 ready_port: daemon.ready_port,
                 wait_ready: false, // Don't block on boot daemons
+                depends: daemon.depends.clone(),
             };
 
             match self.run(run_opts).await {
@@ -516,6 +518,7 @@ impl Supervisor {
                 ready_output: opts.ready_output.clone(),
                 ready_http: opts.ready_http.clone(),
                 ready_port: opts.ready_port,
+                depends: Some(opts.depends.clone()),
             })
             .await?;
 
@@ -1099,6 +1102,7 @@ impl Supervisor {
                                 ready_http: daemon.ready_http.clone(),
                                 ready_port: daemon.ready_port,
                                 wait_ready: false,
+                                depends: daemon.depends.clone(),
                             };
                             if let Err(e) = self.run(opts).await {
                                 error!("failed to run cron daemon {id}: {e}");
@@ -1277,6 +1281,9 @@ impl Supervisor {
                 .ready_http
                 .or(existing.and_then(|d| d.ready_http.clone())),
             ready_port: opts.ready_port.or(existing.and_then(|d| d.ready_port)),
+            depends: opts
+                .depends
+                .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),
         };
         state_file
             .daemons
@@ -1372,6 +1379,7 @@ struct UpsertDaemonOpts {
     ready_output: Option<String>,
     ready_http: Option<String>,
     ready_port: Option<u16>,
+    depends: Option<Vec<String>>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -1392,6 +1400,7 @@ impl Default for UpsertDaemonOpts {
             ready_output: None,
             ready_http: None,
             ready_port: None,
+            depends: None,
         }
     }
 }
