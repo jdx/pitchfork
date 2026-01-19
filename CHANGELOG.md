@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0](https://github.com/jdx/pitchfork/releases/tag/v1.0.0) - 2026-01-19
+
+### Added
+
+- implement daemon dependency resolution ([#135](https://github.com/jdx/pitchfork/pull/135))
+- add restart command to CLI ([#134](https://github.com/jdx/pitchfork/pull/134))
+
+### Fixed
+
+- restart command preserves daemon dependency configuration ([#142](https://github.com/jdx/pitchfork/pull/142))
+- add missing depends field to restart command ([#136](https://github.com/jdx/pitchfork/pull/136))
+- set IPC socket permissions to 0600 for security ([#133](https://github.com/jdx/pitchfork/pull/133))
+- handle shell command parsing errors instead of silently failing ([#132](https://github.com/jdx/pitchfork/pull/132))
+
+### Other
+
+- bump version to 1.0.0 ([#147](https://github.com/jdx/pitchfork/pull/147))
+- release v0.3.1 ([#121](https://github.com/jdx/pitchfork/pull/121))
+- reduce unnecessary daemon cloning in loops ([#144](https://github.com/jdx/pitchfork/pull/144))
+- use periodic log flushing instead of per-line ([#139](https://github.com/jdx/pitchfork/pull/139))
+- refresh only tracked PIDs instead of all processes ([#141](https://github.com/jdx/pitchfork/pull/141))
+- cache compiled regex patterns ([#143](https://github.com/jdx/pitchfork/pull/143))
+
+### Security
+
+- add rate limiting to IPC server ([#137](https://github.com/jdx/pitchfork/pull/137))
+- canonicalize config paths to prevent symlink exploitation ([#138](https://github.com/jdx/pitchfork/pull/138))
+- add centralized daemon ID validation ([#140](https://github.com/jdx/pitchfork/pull/140))
+
 ## [0.3.1](https://github.com/jdx/pitchfork/compare/v0.3.0...v0.3.1) - 2026-01-19
 
 ### Added
