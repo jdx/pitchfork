@@ -39,6 +39,7 @@ impl Add {
                 ready_delay: None,
                 ready_output: None,
                 ready_http: None,
+                ready_port: None,
                 boot_start: None,
                 path: None,
             },

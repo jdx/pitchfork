@@ -75,6 +75,33 @@ ready_http = "http://localhost:3000/ready"
 The HTTP check polls every 500ms with a 5 second timeout per request.
 :::
 
+## Port Check
+
+Wait until the daemon is listening on a TCP port.
+
+**CLI:**
+```bash
+pitchfork run myapp --port 8080 -- node server.js
+pitchfork start myapp --port 3000
+```
+
+**Config:**
+```toml
+[daemons.api]
+run = "node server.js"
+ready_port = 3000
+
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+ready_port = 5432
+```
+
+**Best for:** Services that listen on a known port but don't have a health endpoint.
+
+::: tip
+The port check polls every 500ms by attempting a TCP connection to 127.0.0.1:port.
+:::
+
 ## Behaviors
 
 | Check Type | Ready When |
@@ -82,6 +109,7 @@ The HTTP check polls every 500ms with a 5 second timeout per request.
 | Delay | Daemon runs for N seconds without crashing |
 | Output | Pattern matches stdout/stderr |
 | HTTP | Endpoint returns 2xx status |
+| Port | TCP connection to port succeeds |
 
 - If multiple checks are configured, the first one to succeed marks the daemon as ready
 - If the daemon exits with a non-zero code before becoming ready, `pitchfork start/run` exits with that same code

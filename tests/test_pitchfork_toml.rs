@@ -75,6 +75,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             ready_delay: None,
             ready_output: None,
             ready_http: None,
+            ready_port: None,
             boot_start: None,
             path: Some(toml_path.clone()),
         },

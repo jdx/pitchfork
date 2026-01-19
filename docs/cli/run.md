@@ -22,6 +22,8 @@ Examples:
                                 Wait for output pattern before ready
   pitchfork run api --http http://localhost:8080/health -- ./server
                                 Wait for HTTP endpoint to return 2xx
+  pitchfork run api --port 8080 -- ./server
+                                Wait for TCP port to be listening
 
 ## Arguments
 
@@ -56,6 +58,10 @@ Wait until output matches this regex pattern before considering daemon ready
 ### `--http <HTTP>`
 
 Wait until HTTP endpoint returns 2xx status before considering daemon ready
+
+### `--port <PORT>`
+
+Wait until TCP port is listening before considering daemon ready
 
 ### `-q --quiet`
 

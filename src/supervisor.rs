@@ -168,6 +168,7 @@ impl Supervisor {
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
                     ready_http: daemon.ready_http.clone(),
+                    ready_port: daemon.ready_port,
                     wait_ready: false,
                 };
                 if let Err(e) = self.run(retry_opts).await {
@@ -336,6 +337,7 @@ impl Supervisor {
                 ready_delay: daemon.ready_delay,
                 ready_output: daemon.ready_output.clone(),
                 ready_http: daemon.ready_http.clone(),
+                ready_port: daemon.ready_port,
                 wait_ready: false, // Don't block on boot daemons
             };
 
@@ -489,6 +491,7 @@ impl Supervisor {
                 ready_delay: opts.ready_delay,
                 ready_output: opts.ready_output.clone(),
                 ready_http: opts.ready_http.clone(),
+                ready_port: opts.ready_port,
             })
             .await?;
 
@@ -496,6 +499,7 @@ impl Supervisor {
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
+        let ready_port = opts.ready_port;
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -559,6 +563,10 @@ impl Supervisor {
                     .build()
                     .unwrap_or_default()
             });
+
+            // Setup TCP port readiness check interval (poll every 500ms)
+            let mut port_check_interval =
+                ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
@@ -681,13 +689,37 @@ impl Supervisor {
                         }
                     }
                     _ = async {
+                        if let Some(ref mut interval) = port_check_interval {
+                            interval.tick().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_port.is_some() => {
+                        if let Some(port) = ready_port {
+                            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                                Ok(_) => {
+                                    info!("daemon {id} ready: TCP port {port} is listening");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    // Stop checking once ready
+                                    port_check_interval = None;
+                                }
+                                Err(_) => {
+                                    trace!("daemon {id} port check: port {port} not listening yet");
+                                }
+                            }
+                        }
+                    }
+                    _ = async {
                         if let Some(ref mut timer) = delay_timer {
                             timer.await;
                         } else {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() {
+                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
                             if let Some(tx) = ready_tx.take() {
@@ -1039,6 +1071,7 @@ impl Supervisor {
                                     ready_delay: daemon.ready_delay,
                                     ready_output: daemon.ready_output.clone(),
                                     ready_http: daemon.ready_http.clone(),
+                                    ready_port: daemon.ready_port,
                                     wait_ready: false,
                                 };
                                 if let Err(e) = self.run(opts).await {
@@ -1218,6 +1251,7 @@ impl Supervisor {
             ready_http: opts
                 .ready_http
                 .or(existing.and_then(|d| d.ready_http.clone())),
+            ready_port: opts.ready_port.or(existing.and_then(|d| d.ready_port)),
         };
         state_file
             .daemons
@@ -1312,6 +1346,7 @@ struct UpsertDaemonOpts {
     ready_delay: Option<u64>,
     ready_output: Option<String>,
     ready_http: Option<String>,
+    ready_port: Option<u16>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -1331,6 +1366,7 @@ impl Default for UpsertDaemonOpts {
             ready_delay: None,
             ready_output: None,
             ready_http: None,
+            ready_port: None,
         }
     }
 }
