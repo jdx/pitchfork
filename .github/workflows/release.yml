@@ -31,16 +31,7 @@ jobs:
         run: |
           TAG_NAME="${{ inputs.tag || github.ref_name }}"
           PREV_TAG="$(git describe --tags --abbrev=0 "$TAG_NAME^" 2>/dev/null || echo "")"
-          # Generate rich release notes using LLM
-          if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-            ./scripts/gen-release-notes.sh "$TAG_NAME" "$PREV_TAG" > /tmp/release-notes.txt || {
-              echo "LLM generation failed, using git log"
-              git log --pretty=format:"- %s" "${PREV_TAG}..${TAG_NAME}" > /tmp/release-notes.txt
-            }
-          else
-            echo "ANTHROPIC_API_KEY not set, using git log"
-            git log --pretty=format:"- %s" "${PREV_TAG}..${TAG_NAME}" > /tmp/release-notes.txt
-          fi
+          ./scripts/gen-release-notes.sh "$TAG_NAME" "$PREV_TAG" > /tmp/release-notes.txt
           gh release create "$TAG_NAME" \
             --title "$TAG_NAME" \
             --notes-file /tmp/release-notes.txt \
