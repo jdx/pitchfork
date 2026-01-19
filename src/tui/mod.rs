@@ -132,6 +132,28 @@ async fn run_app<B: Backend>(
                     app.refresh(client).await?;
                     app.stop_loading();
                 }
+                event::Action::OpenEditorNew => {
+                    app.open_file_selector();
+                }
+                event::Action::OpenEditorEdit(id) => {
+                    app.open_editor_edit(&id);
+                }
+                event::Action::SaveConfig => {
+                    app.start_loading("Saving...");
+                    terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
+                    if let Err(e) = app.save_editor_config() {
+                        app.stop_loading();
+                        app.set_message(format!("Save failed: {}", e));
+                    } else {
+                        app.stop_loading();
+                        app.close_editor();
+                        app.refresh(client).await?;
+                    }
+                }
+                event::Action::DeleteDaemon { id, config_path } => {
+                    app.pending_action = Some(app::PendingAction::DeleteDaemon { id, config_path });
+                    app.view = app::View::Confirm;
+                }
                 event::Action::ConfirmPending => {
                     if let Some(pending) = app.take_pending_action() {
                         match pending {
@@ -207,6 +229,21 @@ async fn run_app<B: Backend>(
                                 app.stop_loading();
                                 app.clear_selection();
                                 app.set_message(format!("Disabled {} daemons", count));
+                            }
+                            app::PendingAction::DeleteDaemon { id, config_path } => {
+                                app.start_loading(format!("Deleting {}...", id));
+                                terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
+                                if let Err(e) = app.delete_daemon_from_config(&id, &config_path) {
+                                    app.stop_loading();
+                                    app.set_message(format!("Delete failed: {}", e));
+                                } else {
+                                    app.stop_loading();
+                                    app.close_editor();
+                                    app.set_message(format!("Deleted {}", id));
+                                }
+                            }
+                            app::PendingAction::DiscardEditorChanges => {
+                                app.close_editor();
                             }
                         }
                         app.refresh(client).await?;

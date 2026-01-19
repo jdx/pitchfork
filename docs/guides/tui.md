@@ -20,6 +20,13 @@ The TUI connects to the supervisor automatically, starting it if needed.
 - Multi-select for batch operations
 - Sortable columns
 
+### Config Editor
+
+- Create new daemons with a form-based interface
+- Edit existing daemon configurations
+- Delete daemons from config files
+- Validation for required fields and formats
+
 ### Log Viewer
 
 - Real-time log streaming
@@ -54,8 +61,22 @@ The TUI uses familiar vim keybindings for efficient navigation.
 | `S` | Cycle sort column |
 | `o` | Toggle sort order |
 | `R` | Refresh |
+| `n` | Create new daemon |
+| `E` | Edit selected daemon config |
 | `?` | Show help |
 | `q` / `Esc` | Quit |
+
+### Config Editor
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `j` / `↓` | Next field |
+| `Shift+Tab` / `k` / `↑` | Previous field |
+| `Enter` | Edit text field |
+| `Space` | Toggle checkbox / cycle option |
+| `Ctrl+s` | Save configuration |
+| `D` | Delete daemon (edit mode only) |
+| `q` / `Esc` | Cancel (confirms if unsaved changes) |
 
 ### Log Viewer
 
@@ -77,15 +98,3 @@ The TUI uses familiar vim keybindings for efficient navigation.
 ## Multi-Select Operations
 
 Select multiple daemons with `Space`, then use `s`, `x`, `r`, `e`, or `d` to perform batch operations on all selected daemons.
-
-## TUI vs Web UI
-
-| Feature | TUI | Web UI |
-|---------|-----|--------|
-| Access | Terminal | Browser |
-| Keybindings | Vim-style | Point and click |
-| Log search | Built-in | Scroll only |
-| Config editing | No | Yes |
-| Best for | Terminal power users | Quick visual checks |
-
-Both interfaces connect to the same supervisor, so changes in one are reflected in the other.

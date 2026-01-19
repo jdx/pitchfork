@@ -2,7 +2,9 @@ use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::env::PITCHFORK_LOGS_DIR;
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::{
+    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
+};
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -74,6 +76,579 @@ pub enum View {
     Confirm,
     Loading,
     Details,
+    ConfigEditor,
+    ConfigFileSelect,
+}
+
+/// Edit mode for the config editor
+#[derive(Debug, Clone, PartialEq)]
+pub enum EditMode {
+    Create,
+    Edit { original_id: String },
+}
+
+/// Form field value types
+#[derive(Debug, Clone)]
+pub enum FormFieldValue {
+    Text(String),
+    OptionalText(Option<String>),
+    Number(u32),
+    OptionalNumber(Option<u64>),
+    OptionalPort(Option<u16>),
+    #[allow(dead_code)]
+    Boolean(bool),
+    OptionalBoolean(Option<bool>),
+    AutoBehavior(Vec<PitchforkTomlAuto>),
+    Retrigger(CronRetrigger),
+    StringList(Vec<String>),
+}
+
+/// A form field with metadata
+#[derive(Debug, Clone)]
+pub struct FormField {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub value: FormFieldValue,
+    pub required: bool,
+    #[allow(dead_code)]
+    pub help_text: &'static str,
+    pub error: Option<String>,
+    pub editing: bool,
+    pub cursor: usize,
+}
+
+impl FormField {
+    fn text(name: &'static str, label: &'static str, help: &'static str, required: bool) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::Text(String::new()),
+            required,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn optional_text(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::OptionalText(None),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn number(name: &'static str, label: &'static str, help: &'static str, default: u32) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::Number(default),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn optional_number(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::OptionalNumber(None),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn optional_port(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::OptionalPort(None),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn optional_bool(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::OptionalBoolean(None),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn auto_behavior(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::AutoBehavior(vec![]),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn retrigger(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::Retrigger(CronRetrigger::Finish),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    fn string_list(name: &'static str, label: &'static str, help: &'static str) -> Self {
+        Self {
+            name,
+            label,
+            value: FormFieldValue::StringList(vec![]),
+            required: false,
+            help_text: help,
+            error: None,
+            editing: false,
+            cursor: 0,
+        }
+    }
+
+    pub fn get_text(&self) -> String {
+        match &self.value {
+            FormFieldValue::Text(s) => s.clone(),
+            FormFieldValue::OptionalText(Some(s)) => s.clone(),
+            FormFieldValue::OptionalText(None) => String::new(),
+            FormFieldValue::Number(n) => n.to_string(),
+            FormFieldValue::OptionalNumber(Some(n)) => n.to_string(),
+            FormFieldValue::OptionalNumber(None) => String::new(),
+            FormFieldValue::OptionalPort(Some(p)) => p.to_string(),
+            FormFieldValue::OptionalPort(None) => String::new(),
+            FormFieldValue::StringList(v) => v.join(", "),
+            _ => String::new(),
+        }
+    }
+
+    pub fn set_text(&mut self, text: String) {
+        match &mut self.value {
+            FormFieldValue::Text(s) => *s = text,
+            FormFieldValue::OptionalText(opt) => {
+                *opt = if text.is_empty() { None } else { Some(text) };
+            }
+            FormFieldValue::Number(n) => {
+                *n = text.parse().unwrap_or(0);
+            }
+            FormFieldValue::OptionalNumber(opt) => {
+                *opt = text.parse().ok();
+            }
+            FormFieldValue::OptionalPort(opt) => {
+                *opt = text.parse().ok();
+            }
+            FormFieldValue::StringList(v) => {
+                *v = text
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn is_text_editable(&self) -> bool {
+        matches!(
+            self.value,
+            FormFieldValue::Text(_)
+                | FormFieldValue::OptionalText(_)
+                | FormFieldValue::Number(_)
+                | FormFieldValue::OptionalNumber(_)
+                | FormFieldValue::OptionalPort(_)
+                | FormFieldValue::StringList(_)
+        )
+    }
+}
+
+/// State for the daemon config editor
+#[derive(Debug, Clone)]
+pub struct EditorState {
+    pub mode: EditMode,
+    pub daemon_id: String,
+    pub daemon_id_editing: bool,
+    pub daemon_id_cursor: usize,
+    pub fields: Vec<FormField>,
+    pub focused_field: usize,
+    pub config_path: PathBuf,
+    pub unsaved_changes: bool,
+    #[allow(dead_code)]
+    pub scroll_offset: usize,
+}
+
+impl EditorState {
+    pub fn new_create(config_path: PathBuf) -> Self {
+        Self {
+            mode: EditMode::Create,
+            daemon_id: String::new(),
+            daemon_id_editing: true,
+            daemon_id_cursor: 0,
+            fields: Self::default_fields(),
+            focused_field: 0,
+            config_path,
+            unsaved_changes: false,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn new_edit(daemon_id: String, config: &PitchforkTomlDaemon, config_path: PathBuf) -> Self {
+        Self {
+            mode: EditMode::Edit {
+                original_id: daemon_id.clone(),
+            },
+            daemon_id,
+            daemon_id_editing: false,
+            daemon_id_cursor: 0,
+            fields: Self::fields_from_config(config),
+            focused_field: 0,
+            config_path,
+            unsaved_changes: false,
+            scroll_offset: 0,
+        }
+    }
+
+    fn default_fields() -> Vec<FormField> {
+        vec![
+            FormField::text(
+                "run",
+                "Run Command",
+                "Command to execute. Prepend 'exec' to avoid shell overhead.",
+                true,
+            ),
+            FormField::auto_behavior(
+                "auto",
+                "Auto Behavior",
+                "Auto start/stop based on directory hooks.",
+            ),
+            FormField::number(
+                "retry",
+                "Retry Count",
+                "Number of retry attempts on failure (0 = no retries).",
+                0,
+            ),
+            FormField::optional_number(
+                "ready_delay",
+                "Ready Delay (ms)",
+                "Milliseconds to wait before considering daemon ready.",
+            ),
+            FormField::optional_text(
+                "ready_output",
+                "Ready Output Pattern",
+                "Regex pattern in stdout/stderr indicating readiness.",
+            ),
+            FormField::optional_text(
+                "ready_http",
+                "Ready HTTP URL",
+                "HTTP URL to poll for readiness (expects 2xx).",
+            ),
+            FormField::optional_port(
+                "ready_port",
+                "Ready Port",
+                "TCP port to check for readiness (1-65535).",
+            ),
+            FormField::optional_bool(
+                "boot_start",
+                "Start on Boot",
+                "Automatically start this daemon on system boot.",
+            ),
+            FormField::string_list(
+                "depends",
+                "Dependencies",
+                "Comma-separated daemon names that must start first.",
+            ),
+            FormField::optional_text(
+                "cron_schedule",
+                "Cron Schedule",
+                "Cron expression (e.g., '*/5 * * * *' for every 5 minutes).",
+            ),
+            FormField::retrigger(
+                "cron_retrigger",
+                "Cron Retrigger",
+                "Behavior when cron triggers while previous run is active.",
+            ),
+        ]
+    }
+
+    fn fields_from_config(config: &PitchforkTomlDaemon) -> Vec<FormField> {
+        let mut fields = Self::default_fields();
+
+        for field in &mut fields {
+            match field.name {
+                "run" => field.value = FormFieldValue::Text(config.run.clone()),
+                "auto" => field.value = FormFieldValue::AutoBehavior(config.auto.clone()),
+                "retry" => field.value = FormFieldValue::Number(config.retry),
+                "ready_delay" => field.value = FormFieldValue::OptionalNumber(config.ready_delay),
+                "ready_output" => {
+                    field.value = FormFieldValue::OptionalText(config.ready_output.clone())
+                }
+                "ready_http" => {
+                    field.value = FormFieldValue::OptionalText(config.ready_http.clone())
+                }
+                "ready_port" => field.value = FormFieldValue::OptionalPort(config.ready_port),
+                "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
+                "depends" => field.value = FormFieldValue::StringList(config.depends.clone()),
+                "cron_schedule" => {
+                    field.value = FormFieldValue::OptionalText(
+                        config.cron.as_ref().map(|c| c.schedule.clone()),
+                    );
+                }
+                "cron_retrigger" => {
+                    field.value = FormFieldValue::Retrigger(
+                        config
+                            .cron
+                            .as_ref()
+                            .map(|c| c.retrigger)
+                            .unwrap_or(CronRetrigger::Finish),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        fields
+    }
+
+    pub fn to_daemon_config(&self) -> PitchforkTomlDaemon {
+        let mut config = PitchforkTomlDaemon {
+            run: String::new(),
+            auto: vec![],
+            cron: None,
+            retry: 0,
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            boot_start: None,
+            depends: vec![],
+            path: Some(self.config_path.clone()),
+        };
+
+        let mut cron_schedule: Option<String> = None;
+        let mut cron_retrigger = CronRetrigger::Finish;
+
+        for field in &self.fields {
+            match (field.name, &field.value) {
+                ("run", FormFieldValue::Text(s)) => config.run = s.clone(),
+                ("auto", FormFieldValue::AutoBehavior(v)) => config.auto = v.clone(),
+                ("retry", FormFieldValue::Number(n)) => config.retry = *n,
+                ("ready_delay", FormFieldValue::OptionalNumber(n)) => config.ready_delay = *n,
+                ("ready_output", FormFieldValue::OptionalText(s)) => {
+                    config.ready_output = s.clone()
+                }
+                ("ready_http", FormFieldValue::OptionalText(s)) => config.ready_http = s.clone(),
+                ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = *p,
+                ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
+                ("depends", FormFieldValue::StringList(v)) => config.depends = v.clone(),
+                ("cron_schedule", FormFieldValue::OptionalText(s)) => cron_schedule = s.clone(),
+                ("cron_retrigger", FormFieldValue::Retrigger(r)) => cron_retrigger = *r,
+                _ => {}
+            }
+        }
+
+        if let Some(schedule) = cron_schedule {
+            config.cron = Some(PitchforkTomlCron {
+                schedule,
+                retrigger: cron_retrigger,
+            });
+        }
+
+        config
+    }
+
+    pub fn next_field(&mut self) {
+        // Stop editing current field if text editing
+        if let Some(field) = self.fields.get_mut(self.focused_field) {
+            field.editing = false;
+        }
+        self.daemon_id_editing = false;
+
+        if self.focused_field < self.fields.len() - 1 {
+            self.focused_field += 1;
+        }
+    }
+
+    pub fn prev_field(&mut self) {
+        // Stop editing current field if text editing
+        if let Some(field) = self.fields.get_mut(self.focused_field) {
+            field.editing = false;
+        }
+        self.daemon_id_editing = false;
+
+        if self.focused_field > 0 {
+            self.focused_field -= 1;
+        }
+    }
+
+    pub fn toggle_current_field(&mut self) {
+        if let Some(field) = self.fields.get_mut(self.focused_field) {
+            match &mut field.value {
+                FormFieldValue::Boolean(b) => *b = !*b,
+                FormFieldValue::OptionalBoolean(opt) => {
+                    *opt = match opt {
+                        None => Some(true),
+                        Some(true) => Some(false),
+                        Some(false) => None,
+                    };
+                }
+                FormFieldValue::AutoBehavior(v) => {
+                    // Cycle through: [] -> [Start] -> [Stop] -> [Start, Stop] -> []
+                    let has_start = v.contains(&PitchforkTomlAuto::Start);
+                    let has_stop = v.contains(&PitchforkTomlAuto::Stop);
+                    *v = match (has_start, has_stop) {
+                        (false, false) => vec![PitchforkTomlAuto::Start],
+                        (true, false) => vec![PitchforkTomlAuto::Stop],
+                        (false, true) => vec![PitchforkTomlAuto::Start, PitchforkTomlAuto::Stop],
+                        (true, true) => vec![],
+                    };
+                }
+                FormFieldValue::Retrigger(r) => {
+                    *r = match r {
+                        CronRetrigger::Finish => CronRetrigger::Always,
+                        CronRetrigger::Always => CronRetrigger::Success,
+                        CronRetrigger::Success => CronRetrigger::Fail,
+                        CronRetrigger::Fail => CronRetrigger::Finish,
+                    };
+                }
+                _ => {}
+            }
+            self.unsaved_changes = true;
+        }
+    }
+
+    pub fn start_editing(&mut self) {
+        if let Some(field) = self.fields.get_mut(self.focused_field) {
+            if field.is_text_editable() {
+                field.editing = true;
+                field.cursor = field.get_text().len();
+            } else {
+                // For non-text fields, toggle them
+                self.toggle_current_field();
+            }
+        }
+    }
+
+    pub fn stop_editing(&mut self) {
+        if let Some(field) = self.fields.get_mut(self.focused_field) {
+            field.editing = false;
+        }
+        self.daemon_id_editing = false;
+    }
+
+    pub fn is_editing(&self) -> bool {
+        self.daemon_id_editing
+            || self
+                .fields
+                .get(self.focused_field)
+                .map(|f| f.editing)
+                .unwrap_or(false)
+    }
+
+    pub fn text_push(&mut self, c: char) {
+        if self.daemon_id_editing {
+            self.daemon_id.insert(self.daemon_id_cursor, c);
+            self.daemon_id_cursor += 1;
+            self.unsaved_changes = true;
+        } else if let Some(field) = self.fields.get_mut(self.focused_field)
+            && field.editing
+        {
+            let mut text = field.get_text();
+            text.insert(field.cursor, c);
+            field.cursor += 1;
+            field.set_text(text);
+            self.unsaved_changes = true;
+        }
+    }
+
+    pub fn text_pop(&mut self) {
+        if self.daemon_id_editing && self.daemon_id_cursor > 0 {
+            self.daemon_id_cursor -= 1;
+            self.daemon_id.remove(self.daemon_id_cursor);
+            self.unsaved_changes = true;
+        } else if let Some(field) = self.fields.get_mut(self.focused_field)
+            && field.editing
+            && field.cursor > 0
+        {
+            let mut text = field.get_text();
+            field.cursor -= 1;
+            text.remove(field.cursor);
+            field.set_text(text);
+            self.unsaved_changes = true;
+        }
+    }
+
+    pub fn validate(&mut self) -> bool {
+        let mut valid = true;
+
+        // Validate daemon ID
+        if self.daemon_id.is_empty()
+            || !self
+                .daemon_id
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            valid = false;
+        }
+
+        // Validate fields
+        for field in &mut self.fields {
+            field.error = None;
+
+            match (field.name, &field.value) {
+                ("run", FormFieldValue::Text(s)) if s.is_empty() => {
+                    field.error = Some("Required".to_string());
+                    valid = false;
+                }
+                ("ready_port", FormFieldValue::OptionalPort(Some(p))) if *p == 0 => {
+                    field.error = Some("Port must be 1-65535".to_string());
+                    valid = false;
+                }
+                ("ready_http", FormFieldValue::OptionalText(Some(url)))
+                    if !url.starts_with("http") =>
+                {
+                    field.error = Some("Must be a valid HTTP URL".to_string());
+                    valid = false;
+                }
+                _ => {}
+            }
+        }
+
+        valid
+    }
+}
+
+/// State for config file selection
+#[derive(Debug, Clone)]
+pub struct ConfigFileSelector {
+    pub files: Vec<PathBuf>,
+    pub selected: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +660,9 @@ pub enum PendingAction {
     BatchStop(Vec<String>),
     BatchRestart(Vec<String>),
     BatchDisable(Vec<String>),
+    // Config editor actions
+    DeleteDaemon { id: String, config_path: PathBuf },
+    DiscardEditorChanges,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -168,6 +746,10 @@ pub struct App {
     pub config_daemon_ids: HashSet<String>,
     // Whether to show config-only daemons in the list
     pub show_available: bool,
+    // Config editor state
+    pub editor_state: Option<EditorState>,
+    // Config file selector state
+    pub file_selector: Option<ConfigFileSelector>,
 }
 
 impl App {
@@ -201,6 +783,8 @@ impl App {
             multi_select: HashSet::new(),
             config_daemon_ids: HashSet::new(),
             show_available: true, // Show available daemons by default
+            editor_state: None,
+            file_selector: None,
         }
     }
 
@@ -785,6 +1369,123 @@ impl App {
 
         client.run(opts).await?;
         self.set_message(format!("Started {}", daemon_id));
+        Ok(())
+    }
+
+    // Config editor methods
+
+    /// Get list of available config file paths
+    pub fn get_config_files(&self) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = PitchforkToml::list_paths()
+            .into_iter()
+            .filter(|p| p.exists())
+            .collect();
+
+        // Add option to create in current directory if not present
+        let cwd_config = crate::env::CWD.join("pitchfork.toml");
+        if !files.contains(&cwd_config) {
+            files.push(cwd_config);
+        }
+
+        files
+    }
+
+    /// Open file selector for creating a new daemon
+    pub fn open_file_selector(&mut self) {
+        let files = self.get_config_files();
+        self.file_selector = Some(ConfigFileSelector { files, selected: 0 });
+        self.view = View::ConfigFileSelect;
+    }
+
+    /// Open editor for a new daemon with the selected config file
+    pub fn open_editor_create(&mut self, config_path: PathBuf) {
+        self.editor_state = Some(EditorState::new_create(config_path));
+        self.file_selector = None;
+        self.view = View::ConfigEditor;
+    }
+
+    /// Open editor for an existing daemon
+    pub fn open_editor_edit(&mut self, daemon_id: &str) {
+        let config = PitchforkToml::all_merged();
+        if let Some(daemon_config) = config.daemons.get(daemon_id) {
+            let config_path = daemon_config
+                .path
+                .clone()
+                .unwrap_or_else(|| crate::env::CWD.join("pitchfork.toml"));
+            self.editor_state = Some(EditorState::new_edit(
+                daemon_id.to_string(),
+                daemon_config,
+                config_path,
+            ));
+            self.view = View::ConfigEditor;
+        } else {
+            self.set_message(format!("Daemon '{}' not found in config", daemon_id));
+        }
+    }
+
+    /// Close the editor and return to dashboard
+    pub fn close_editor(&mut self) {
+        self.editor_state = None;
+        self.file_selector = None;
+        self.view = View::Dashboard;
+    }
+
+    /// Save the current editor state to config file
+    pub fn save_editor_config(&mut self) -> Result<()> {
+        let editor = self
+            .editor_state
+            .as_mut()
+            .ok_or_else(|| miette::miette!("No editor state"))?;
+
+        // Validate
+        if !editor.validate() {
+            self.set_message("Please fix validation errors before saving");
+            return Ok(());
+        }
+
+        // Build daemon config
+        let daemon_config = editor.to_daemon_config();
+
+        // Read existing config (or create new)
+        let mut config = PitchforkToml::read(&editor.config_path)?;
+
+        // Handle rename case
+        if let EditMode::Edit { original_id } = &editor.mode
+            && original_id != &editor.daemon_id
+        {
+            config.daemons.shift_remove(original_id);
+        }
+
+        // Insert/update daemon
+        config
+            .daemons
+            .insert(editor.daemon_id.clone(), daemon_config);
+
+        // Write back
+        config.write()?;
+
+        editor.unsaved_changes = false;
+        let daemon_id = editor.daemon_id.clone();
+        self.set_message(format!("Saved daemon '{}'", daemon_id));
+
+        Ok(())
+    }
+
+    /// Delete a daemon from the config file
+    pub fn delete_daemon_from_config(
+        &mut self,
+        id: &str,
+        config_path: &std::path::Path,
+    ) -> Result<()> {
+        let mut config = PitchforkToml::read(config_path)?;
+
+        if config.daemons.shift_remove(id).is_some() {
+            config.write()?;
+            self.set_message(format!("Deleted daemon '{}'", id));
+        } else {
+            self.set_message(format!("Daemon '{}' not found in config", id));
+        }
+
         Ok(())
     }
 }
