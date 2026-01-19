@@ -25,7 +25,7 @@ ready_delay = 1
     let shell_pid = std::process::id().to_string();
 
     // First, register the shell in the project directory
-    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=5
+    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=5 and fast interval
     println!("=== test_autostop_delay ===");
     println!("Project dir: {:?}", env.project_dir());
     println!("Other dir: {:?}", other_dir);
@@ -33,7 +33,10 @@ ready_delay = 1
 
     let cd1_output = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
-        &[("PITCHFORK_AUTOSTOP_DELAY", "5")],
+        &[
+            ("PITCHFORK_AUTOSTOP_DELAY", "5"),
+            ("PITCHFORK_INTERVAL_SECS", "2"),
+        ],
     );
     println!(
         "Initial cd stderr: {}",
@@ -74,10 +77,8 @@ ready_delay = 1
         "Daemon should still be running within delay period"
     );
 
-    // Wait for the delay to pass plus buffer for the 10s refresh interval
-    // The interval timer only refreshes if elapsed() > 10s since last refresh
-    // So we need to wait more than 10 seconds after the cd command
-    env.sleep(Duration::from_secs(25));
+    // Wait for the autostop delay (5s) plus buffer for the 2s refresh interval
+    env.sleep(Duration::from_secs(10));
 
     // Force a refresh by running list
     let _ = env.run_command(&["list"]);
@@ -117,10 +118,13 @@ ready_delay = 1
     let shell_pid = std::process::id().to_string();
 
     // First, register the shell in the project directory
-    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=10
+    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=10 and fast interval
     let _ = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
-        &[("PITCHFORK_AUTOSTOP_DELAY", "10")],
+        &[
+            ("PITCHFORK_AUTOSTOP_DELAY", "10"),
+            ("PITCHFORK_INTERVAL_SECS", "2"),
+        ],
     );
 
     // Start the daemon
@@ -152,8 +156,8 @@ ready_delay = 1
     // Return to the project directory - this should cancel the pending autostop
     let _ = env.run_command(&["cd", "--shell-pid", &shell_pid]);
 
-    // Wait longer than the original delay plus refresh interval
-    env.sleep(Duration::from_secs(20));
+    // Wait longer than the original delay (10s) plus refresh interval (2s)
+    env.sleep(Duration::from_secs(14));
 
     // Force a refresh
     let _ = env.run_command(&["list"]);
@@ -193,13 +197,16 @@ ready_delay = 1
     let shell_pid = std::process::id().to_string();
 
     // First, register the shell in the project directory
-    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=0
+    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=0 and fast interval
     println!("Project dir: {:?}", env.project_dir());
     println!("Other dir: {:?}", other_dir);
 
     let cd_output = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
-        &[("PITCHFORK_AUTOSTOP_DELAY", "0")],
+        &[
+            ("PITCHFORK_AUTOSTOP_DELAY", "0"),
+            ("PITCHFORK_INTERVAL_SECS", "2"),
+        ],
     );
     println!(
         "Initial cd output: {}",
