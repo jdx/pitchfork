@@ -265,7 +265,22 @@ impl FormField {
                 *opt = if text.is_empty() { None } else { Some(text) };
             }
             FormFieldValue::Number(n) => {
-                *n = text.parse().unwrap_or(0);
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    *n = 0;
+                    self.error = None;
+                } else {
+                    match trimmed.parse() {
+                        Ok(value) => {
+                            *n = value;
+                            self.error = None;
+                        }
+                        Err(_) => {
+                            *n = 0;
+                            self.error = Some("Invalid number".to_string());
+                        }
+                    }
+                }
             }
             FormFieldValue::OptionalNumber(opt) => {
                 *opt = text.parse().ok();
