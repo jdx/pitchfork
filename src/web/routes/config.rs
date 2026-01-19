@@ -36,9 +36,40 @@ fn get_allowed_paths() -> Vec<PathBuf> {
     PitchforkToml::list_paths()
 }
 
+/// Canonicalize a path, handling both existing and non-existing files.
+/// For non-existing files, canonicalizes the parent directory and appends the filename.
+fn safe_canonicalize(path: &PathBuf) -> Option<PathBuf> {
+    // First try to canonicalize the full path (works for existing files)
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return Some(canonical);
+    }
+
+    // For non-existing files, canonicalize the parent and append the filename
+    let parent = path.parent()?;
+    let filename = path.file_name()?;
+
+    // Try to canonicalize the parent directory
+    let canonical_parent = std::fs::canonicalize(parent).ok()?;
+    Some(canonical_parent.join(filename))
+}
+
+/// Check if a path is in the allowed list, using canonicalization to prevent
+/// symlink-based path traversal attacks.
 fn is_path_allowed(path: &PathBuf) -> bool {
     let allowed = get_allowed_paths();
-    allowed.iter().any(|p| p == path)
+
+    // Canonicalize the input path
+    let canonical_input = match safe_canonicalize(path) {
+        Some(p) => p,
+        None => return false, // Can't resolve path, reject it
+    };
+
+    // Check against canonicalized allowed paths
+    allowed.iter().any(|allowed_path| {
+        safe_canonicalize(allowed_path)
+            .map(|canonical_allowed| canonical_allowed == canonical_input)
+            .unwrap_or(false)
+    })
 }
 
 pub async fn list() -> Html<String> {
