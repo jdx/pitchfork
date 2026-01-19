@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pitchfork.dev/schema.json",
+  "title": "Pitchfork Configuration",
+  "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files",
+  "type": "object",
+  "properties": {
+    "daemons": {
+      "type": "object",
+      "description": "Map of daemon names to their configurations",
+      "additionalProperties": {
+        "$ref": "#/$defs/daemon"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "daemon": {
+      "type": "object",
+      "description": "Configuration for a single daemon",
+      "required": ["run"],
+      "properties": {
+        "run": {
+          "type": "string",
+          "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
+          "examples": ["exec node server.js", "python -m http.server 8000"]
+        },
+        "auto": {
+          "type": "array",
+          "description": "Automatic start/stop behavior based on shell hooks",
+          "items": {
+            "$ref": "#/$defs/auto"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "cron": {
+          "$ref": "#/$defs/cron",
+          "description": "Cron scheduling configuration for periodic execution"
+        },
+        "retry": {
+          "type": "integer",
+          "description": "Number of times to retry if the daemon fails (0 = no retries)",
+          "minimum": 0,
+          "default": 0
+        },
+        "ready_delay": {
+          "type": "integer",
+          "description": "Delay in milliseconds before considering the daemon ready",
+          "minimum": 0
+        },
+        "ready_output": {
+          "type": "string",
+          "description": "Regex pattern to match in stdout/stderr to determine readiness",
+          "examples": ["Server listening", "Ready to accept connections"]
+        },
+        "ready_http": {
+          "type": "string",
+          "description": "HTTP URL to poll for readiness (expects 2xx response)",
+          "format": "uri",
+          "examples": ["http://localhost:3000/health"]
+        },
+        "ready_port": {
+          "type": "integer",
+          "description": "TCP port to check for readiness (connection success = ready)",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "boot_start": {
+          "type": "boolean",
+          "description": "Whether to start this daemon automatically on system boot"
+        },
+        "depends": {
+          "type": "array",
+          "description": "List of daemon names that must be started before this one",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
+    "auto": {
+      "type": "string",
+      "description": "Automatic behavior triggered by shell hooks",
+      "enum": ["start", "stop"]
+    },
+    "cron": {
+      "type": "object",
+      "description": "Cron scheduling configuration",
+      "required": ["schedule"],
+      "properties": {
+        "schedule": {
+          "type": "string",
+          "description": "Cron expression (e.g., '0 * * * *' for hourly, '*/5 * * * *' for every 5 minutes)",
+          "examples": ["0 * * * *", "*/5 * * * *", "0 0 * * *"]
+        },
+        "retrigger": {
+          "$ref": "#/$defs/retrigger",
+          "description": "Behavior when cron triggers while previous run is still active",
+          "default": "finish"
+        }
+      },
+      "additionalProperties": false
+    },
+    "retrigger": {
+      "type": "string",
+      "description": "Retrigger behavior for cron-scheduled daemons",
+      "enum": ["finish", "always", "success", "fail"],
+      "enumDescriptions": [
+        "Retrigger only if the previous run has finished (success or error)",
+        "Always retrigger, stopping the previous run if still active",
+        "Retrigger only if the previous run succeeded",
+        "Retrigger only if the previous run failed"
+      ]
+    }
+  }
+}

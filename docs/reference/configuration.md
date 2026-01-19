@@ -10,6 +10,25 @@ Pitchfork loads configuration files in order, with later files overriding earlie
 2. **User-level:** `~/.config/pitchfork/config.toml`
 3. **Project-level:** `pitchfork.toml` files from filesystem root to current directory
 
+## JSON Schema
+
+A JSON Schema is available for editor autocompletion and validation:
+
+**URL:** [`https://pitchfork.dev/schema.json`](/schema.json)
+
+### Editor Setup
+
+**VS Code** with [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml):
+
+```toml
+#:schema https://pitchfork.dev/schema.json
+
+[daemons.api]
+run = "npm run server"
+```
+
+**JetBrains IDEs**: Add the schema URL in Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings.
+
 ## File Format
 
 All configuration uses TOML format:
