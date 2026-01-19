@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod daemon_status;
 pub mod deps;
 pub mod env;
+pub mod error;
 pub mod ipc;
 pub mod logger;
 pub mod pitchfork_toml;

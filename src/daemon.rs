@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::daemon_status::DaemonStatus;
+use crate::error::DaemonIdError;
 use crate::pitchfork_toml::CronRetrigger;
-use miette::ensure;
 use std::fmt::Display;
 use std::path::PathBuf;
 
@@ -27,20 +27,30 @@ pub fn is_valid_daemon_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii() && !c.is_ascii_control())
 }
 
-/// Validates a daemon ID and returns a miette error with context if invalid.
+/// Validates a daemon ID and returns a diagnostic error with context if invalid.
 pub fn validate_daemon_id(id: &str) -> Result<()> {
-    ensure!(!id.is_empty(), "daemon ID cannot be empty");
-    ensure!(
-        !id.contains('/') && !id.contains('\\'),
-        "daemon ID cannot contain path separators (/ or \\)"
-    );
-    ensure!(!id.contains(".."), "daemon ID cannot contain '..'");
-    ensure!(!id.contains(' '), "daemon ID cannot contain spaces");
-    ensure!(id != ".", "daemon ID cannot be '.'");
-    ensure!(
-        id.chars().all(|c| c.is_ascii() && !c.is_ascii_control()),
-        "daemon ID must contain only printable ASCII characters"
-    );
+    if id.is_empty() {
+        return Err(DaemonIdError::Empty.into());
+    }
+    if let Some(sep) = id.chars().find(|&c| c == '/' || c == '\\') {
+        return Err(DaemonIdError::PathSeparator {
+            id: id.to_string(),
+            sep,
+        }
+        .into());
+    }
+    if id.contains("..") {
+        return Err(DaemonIdError::ParentDirRef { id: id.to_string() }.into());
+    }
+    if id.contains(' ') {
+        return Err(DaemonIdError::ContainsSpace { id: id.to_string() }.into());
+    }
+    if id == "." {
+        return Err(DaemonIdError::CurrentDir.into());
+    }
+    if !id.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
+        return Err(DaemonIdError::InvalidChars { id: id.to_string() }.into());
+    }
     Ok(())
 }
 
@@ -165,25 +175,25 @@ mod tests {
             validate_daemon_id("foo/bar")
                 .unwrap_err()
                 .to_string()
-                .contains("daemon ID cannot contain path separators")
+                .contains("contains path separator")
         );
         assert!(
             validate_daemon_id("foo\\bar")
                 .unwrap_err()
                 .to_string()
-                .contains("daemon ID cannot contain path separators")
+                .contains("contains path separator")
         );
         assert!(
             validate_daemon_id("..")
                 .unwrap_err()
                 .to_string()
-                .contains("daemon ID cannot contain '..'")
+                .contains("contains parent directory reference")
         );
         assert!(
             validate_daemon_id("my app")
                 .unwrap_err()
                 .to_string()
-                .contains("daemon ID cannot contain spaces")
+                .contains("contains spaces")
         );
         assert!(
             validate_daemon_id(".")
@@ -195,7 +205,7 @@ mod tests {
             validate_daemon_id("my\x00app")
                 .unwrap_err()
                 .to_string()
-                .contains("daemon ID must contain only printable ASCII characters")
+                .contains("non-printable or non-ASCII")
         );
     }
 }
