@@ -380,6 +380,15 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
     let from_detail = query.from.as_deref() == Some("detail");
 
     let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
+        let cmd = match shell_words::split(&daemon_config.run) {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                return Html(format!(
+                    r#"<div class="error">Failed to parse command: {}</div>"#,
+                    html_escape(&e.to_string())
+                ));
+            }
+        };
         let dir = daemon_config
             .path
             .as_ref()
@@ -389,7 +398,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
 
         let opts = RunOptions {
             id: id.clone(),
-            cmd: shell_words::split(&daemon_config.run).unwrap_or_default(),
+            cmd,
             force: false,
             shell_pid: None,
             dir,
