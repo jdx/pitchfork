@@ -1,5 +1,5 @@
-use crate::tui::app::{App, PendingAction, View};
 use crate::Result;
+use crate::tui::app::{App, PendingAction, View};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use miette::IntoDiagnostic;
 
@@ -146,13 +146,12 @@ fn handle_dashboard_event(
                 if !ids.is_empty() {
                     return Ok(Some(Action::BatchStart(ids)));
                 }
-            } else if let Some(daemon) = app.selected_daemon() {
-                if daemon.status.is_stopped()
+            } else if let Some(daemon) = app.selected_daemon()
+                && (daemon.status.is_stopped()
                     || daemon.status.is_errored()
-                    || daemon.status.is_failed()
-                {
-                    return Ok(Some(Action::Start(daemon.id.clone())));
-                }
+                    || daemon.status.is_failed())
+            {
+                return Ok(Some(Action::Start(daemon.id.clone())));
             }
             Ok(None)
         }
@@ -173,10 +172,10 @@ fn handle_dashboard_event(
                 if !ids.is_empty() {
                     app.confirm_action(PendingAction::BatchStop(ids));
                 }
-            } else if let Some(daemon) = app.selected_daemon() {
-                if daemon.status.is_running() || daemon.status.is_waiting() {
-                    app.confirm_action(PendingAction::Stop(daemon.id.clone()));
-                }
+            } else if let Some(daemon) = app.selected_daemon()
+                && (daemon.status.is_running() || daemon.status.is_waiting())
+            {
+                app.confirm_action(PendingAction::Stop(daemon.id.clone()));
             }
             Ok(None)
         }
@@ -220,10 +219,10 @@ fn handle_dashboard_event(
                 if !ids.is_empty() {
                     return Ok(Some(Action::BatchEnable(ids)));
                 }
-            } else if let Some(daemon) = app.selected_daemon() {
-                if app.is_disabled(&daemon.id) {
-                    return Ok(Some(Action::Enable(daemon.id.clone())));
-                }
+            } else if let Some(daemon) = app.selected_daemon()
+                && app.is_disabled(&daemon.id)
+            {
+                return Ok(Some(Action::Enable(daemon.id.clone())));
             }
             Ok(None)
         }
@@ -238,10 +237,10 @@ fn handle_dashboard_event(
                 if !ids.is_empty() {
                     app.confirm_action(PendingAction::BatchDisable(ids));
                 }
-            } else if let Some(daemon) = app.selected_daemon() {
-                if !app.is_disabled(&daemon.id) {
-                    app.confirm_action(PendingAction::Disable(daemon.id.clone()));
-                }
+            } else if let Some(daemon) = app.selected_daemon()
+                && !app.is_disabled(&daemon.id)
+            {
+                app.confirm_action(PendingAction::Disable(daemon.id.clone()));
             }
             Ok(None)
         }

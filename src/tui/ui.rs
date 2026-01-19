@@ -599,18 +599,18 @@ fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &
         spans.push(Span::raw("  "));
         spans.push(Span::styled(status_text, Style::default().fg(status_color)));
 
-        if let Some(pid) = d.pid {
-            if let Some(stats) = app.get_stats(pid) {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled(
-                    format!(
-                        "CPU: {:.1}%  Mem: {}",
-                        stats.cpu_percent,
-                        stats.memory_display()
-                    ),
-                    Style::default().fg(GRAY),
-                ));
-            }
+        if let Some(pid) = d.pid
+            && let Some(stats) = app.get_stats(pid)
+        {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                format!(
+                    "CPU: {:.1}%  Mem: {}",
+                    stats.cpu_percent,
+                    stats.memory_display()
+                ),
+                Style::default().fg(GRAY),
+            ));
         }
     }
 
@@ -661,11 +661,13 @@ fn draw_cpu_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
         .map(|(i, &v)| (i as f64, v as f64))
         .collect();
 
-    let datasets = vec![Dataset::default()
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color))
-        .data(&data)];
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(color))
+            .data(&data),
+    ];
 
     let x_max = data.len().max(1) as f64;
 
@@ -706,11 +708,13 @@ fn draw_memory_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) 
         .map(|(i, &v)| (i as f64, v as f64 / (1024.0 * 1024.0)))
         .collect();
 
-    let datasets = vec![Dataset::default()
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color))
-        .data(&data)];
+    let datasets = vec![
+        Dataset::default()
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(color))
+            .data(&data),
+    ];
 
     let x_max = data.len().max(1) as f64;
     let y_max = (max_val / (1024.0 * 1024.0)).max(1.0);

@@ -77,6 +77,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             ready_http: None,
             ready_port: None,
             boot_start: None,
+            depends: vec![],
             path: Some(toml_path.clone()),
         },
     );
@@ -499,6 +500,67 @@ run = "echo 'second updated'"
         merged.daemons.get("second").unwrap().run,
         "echo 'second updated'"
     );
+
+    Ok(())
+}
+
+/// Test daemon with depends configuration
+#[test]
+fn test_daemon_with_depends() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.postgres]
+run = "postgres -D /data"
+
+[daemons.redis]
+run = "redis-server"
+
+[daemons.api]
+run = "npm run server"
+depends = ["postgres", "redis"]
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+
+    // Check postgres has no dependencies
+    let postgres = pt.daemons.get("postgres").unwrap();
+    assert!(postgres.depends.is_empty());
+
+    // Check redis has no dependencies
+    let redis = pt.daemons.get("redis").unwrap();
+    assert!(redis.depends.is_empty());
+
+    // Check api has correct dependencies
+    let api = pt.daemons.get("api").unwrap();
+    assert_eq!(api.depends.len(), 2);
+    assert!(api.depends.contains(&"postgres".to_string()));
+    assert!(api.depends.contains(&"redis".to_string()));
+
+    Ok(())
+}
+
+/// Test empty depends array
+#[test]
+fn test_daemon_with_empty_depends() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.standalone]
+run = "echo 'standalone'"
+depends = []
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("standalone").unwrap();
+
+    assert!(daemon.depends.is_empty());
 
     Ok(())
 }

@@ -1,10 +1,12 @@
 use crate::Result;
 use crate::cli::logs::print_startup_logs;
 use crate::daemon::RunOptions;
+use crate::deps::resolve_dependencies;
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
 use chrono::{DateTime, Local};
 use miette::ensure;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Starts a daemon from a pitchfork.toml file
@@ -68,141 +70,123 @@ impl Start {
         let pt = PitchforkToml::all_merged();
         let ipc = Arc::new(IpcClient::connect(true).await?);
         let disabled_daemons = ipc.get_disabled_daemons().await?;
-        let ids = if self.all {
+
+        // Get requested daemon IDs
+        let requested_ids: Vec<String> = if self.all {
             pt.daemons.keys().cloned().collect()
         } else {
             self.id.clone()
         };
-        // launch all tasks concurrently
-        let mut tasks = Vec::new();
 
-        for id in ids {
-            if disabled_daemons.contains(&id) {
-                warn!("Daemon {} is disabled", id);
-                continue;
-            }
-
-            let daemon_data = match pt.daemons.get(&id) {
-                Some(d) => {
-                    let run = d.run.clone();
-                    let auto_stop = d
-                        .auto
-                        .contains(&crate::pitchfork_toml::PitchforkTomlAuto::Stop);
-                    let dir = d
-                        .path
-                        .as_ref()
-                        .and_then(|p| p.parent())
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_default();
-                    let cron_schedule = d.cron.as_ref().map(|c| c.schedule.clone());
-                    let cron_retrigger = d.cron.as_ref().map(|c| c.retrigger);
-                    let retry = d.retry;
-                    let ready_delay = d.ready_delay;
-                    let ready_output = d.ready_output.clone();
-                    let ready_http = d.ready_http.clone();
-                    let ready_port = d.ready_port;
-
-                    (
-                        run,
-                        auto_stop,
-                        dir,
-                        cron_schedule,
-                        cron_retrigger,
-                        retry,
-                        ready_delay,
-                        ready_output,
-                        ready_http,
-                        ready_port,
-                    )
+        // Filter out disabled daemons from the requested list
+        let requested_ids: Vec<String> = requested_ids
+            .into_iter()
+            .filter(|id| {
+                if disabled_daemons.contains(id) {
+                    warn!("Daemon {} is disabled", id);
+                    false
+                } else {
+                    true
                 }
-                None => {
-                    warn!("Daemon {} not found", id);
-                    continue;
-                }
-            };
+            })
+            .collect();
 
-            let (
-                run,
-                auto_stop,
-                dir,
-                cron_schedule,
-                cron_retrigger,
-                retry,
-                ready_delay,
-                ready_output,
-                ready_http,
-                ready_port,
-            ) = daemon_data;
-
-            let ipc_clone = ipc.clone();
-            let shell_pid = self.shell_pid;
-            let force = self.force;
-            let delay = self.delay;
-            let output = self.output.clone();
-            let http = self.http.clone();
-            let port = self.port;
-
-            let task = tokio::spawn(async move {
-                let cmd = match shell_words::split(&run) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to parse command for daemon {}: {}", id, e);
-                        return (id, None, Some(1));
-                    }
-                };
-
-                let start_time = Local::now();
-
-                let exit_code = match ipc_clone
-                    .run(RunOptions {
-                        id: id.clone(),
-                        cmd,
-                        shell_pid,
-                        force,
-                        autostop: auto_stop,
-                        dir,
-                        cron_schedule,
-                        cron_retrigger,
-                        retry,
-                        retry_count: 0,
-                        ready_delay: delay.or(ready_delay).or(Some(3)),
-                        ready_output: output.or(ready_output),
-                        ready_http: http.or(ready_http),
-                        ready_port: port.or(ready_port),
-                        wait_ready: true,
-                    })
-                    .await
-                {
-                    Ok((_started, exit_code)) => exit_code,
-                    Err(e) => {
-                        error!("Failed to start daemon {}: {}", id, e);
-                        Some(1)
-                    }
-                };
-
-                (id, Some(start_time), exit_code)
-            });
-
-            tasks.push(task);
+        if requested_ids.is_empty() {
+            return Ok(());
         }
 
-        // wait for all tasks to complete
+        // Resolve dependencies to get start order (levels)
+        let dep_order = resolve_dependencies(&requested_ids, &pt.daemons)?;
+
+        // Get currently running daemons
+        let running_daemons: HashSet<String> = ipc
+            .active_daemons()
+            .await?
+            .iter()
+            .filter(|d| d.status.is_running() || d.status.is_waiting())
+            .map(|d| d.id.clone())
+            .collect();
+
+        // Collect set of explicitly requested IDs for force restart check
+        let explicitly_requested: HashSet<String> = if self.all {
+            // When --all is used, all daemons are explicitly requested
+            pt.daemons.keys().cloned().collect()
+        } else {
+            self.id.iter().cloned().collect()
+        };
+
+        // Start daemons level by level
         let mut any_failed = false;
         let mut successful_daemons: Vec<(String, DateTime<Local>)> = Vec::new();
 
-        for task in tasks {
-            match task.await {
-                Ok((id, start_time, exit_code)) => {
-                    if exit_code.is_some() {
+        for level in dep_order.levels {
+            // Filter daemons to start in this level
+            let to_start: Vec<String> = level
+                .into_iter()
+                .filter(|id| {
+                    // Skip disabled daemons (dependencies might be disabled)
+                    if disabled_daemons.contains(id) {
+                        debug!("Skipping disabled dependency: {}", id);
+                        return false;
+                    }
+
+                    // Skip already running daemons unless force is set AND they were explicitly requested
+                    if running_daemons.contains(id) {
+                        // Only force restart if --force was used AND this daemon was explicitly requested
+                        if self.force && explicitly_requested.contains(id) {
+                            debug!("Force restarting explicitly requested daemon: {}", id);
+                            return true;
+                        }
+                        debug!("Daemon {} is already running, skipping", id);
+                        return false;
+                    }
+
+                    true
+                })
+                .collect();
+
+            if to_start.is_empty() {
+                continue;
+            }
+
+            // Start all daemons in this level concurrently
+            let mut tasks = Vec::new();
+            for id in to_start {
+                let daemon_config = match pt.daemons.get(&id) {
+                    Some(d) => d,
+                    None => {
+                        warn!("Daemon {} not found", id);
+                        continue;
+                    }
+                };
+
+                let is_explicit = explicitly_requested.contains(&id);
+                let task = self.spawn_daemon_task(&ipc, id, daemon_config, is_explicit);
+                tasks.push(task);
+            }
+
+            // Wait for all daemons in this level to complete before moving to next level
+            for task in tasks {
+                match task.await {
+                    Ok((id, start_time, exit_code)) => {
+                        if exit_code.is_some() {
+                            any_failed = true;
+                            error!("Daemon {} failed to start", id);
+                        } else if let Some(start_time) = start_time {
+                            successful_daemons.push((id, start_time));
+                        }
+                    }
+                    Err(e) => {
+                        error!("Task panicked: {}", e);
                         any_failed = true;
-                    } else if let Some(start_time) = start_time {
-                        successful_daemons.push((id, start_time));
                     }
                 }
-                Err(e) => {
-                    error!("Task panicked: {}", e);
-                    any_failed = true;
-                }
+            }
+
+            // If any daemon in this level failed, abort starting dependents
+            if any_failed {
+                error!("Dependency failed, aborting remaining starts");
+                break;
             }
         }
 
@@ -219,5 +203,83 @@ impl Start {
             std::process::exit(1);
         }
         Ok(())
+    }
+
+    fn spawn_daemon_task(
+        &self,
+        ipc: &Arc<IpcClient>,
+        id: String,
+        daemon_config: &PitchforkTomlDaemon,
+        is_explicitly_requested: bool,
+    ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>)> {
+        let run = daemon_config.run.clone();
+        let auto_stop = daemon_config
+            .auto
+            .contains(&crate::pitchfork_toml::PitchforkTomlAuto::Stop);
+        let dir = daemon_config
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let cron_schedule = daemon_config.cron.as_ref().map(|c| c.schedule.clone());
+        let cron_retrigger = daemon_config.cron.as_ref().map(|c| c.retrigger);
+        let retry = daemon_config.retry;
+        let ready_delay = daemon_config.ready_delay;
+        let ready_output = daemon_config.ready_output.clone();
+        let ready_http = daemon_config.ready_http.clone();
+        let ready_port = daemon_config.ready_port;
+        let depends = daemon_config.depends.clone();
+
+        let ipc_clone = ipc.clone();
+        let shell_pid = self.shell_pid;
+        // Only force restart if explicitly requested
+        let force = self.force && is_explicitly_requested;
+        let delay = self.delay;
+        let output = self.output.clone();
+        let http = self.http.clone();
+        let port = self.port;
+
+        tokio::spawn(async move {
+            let cmd = match shell_words::split(&run) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Failed to parse command for daemon {}: {}", id, e);
+                    return (id, None, Some(1));
+                }
+            };
+
+            let start_time = Local::now();
+
+            let exit_code = match ipc_clone
+                .run(RunOptions {
+                    id: id.clone(),
+                    cmd,
+                    shell_pid,
+                    force,
+                    autostop: auto_stop,
+                    dir,
+                    cron_schedule,
+                    cron_retrigger,
+                    retry,
+                    retry_count: 0,
+                    ready_delay: delay.or(ready_delay).or(Some(3)),
+                    ready_output: output.or(ready_output),
+                    ready_http: http.or(ready_http),
+                    ready_port: port.or(ready_port),
+                    wait_ready: true,
+                    depends,
+                })
+                .await
+            {
+                Ok((_started, exit_code)) => exit_code,
+                Err(e) => {
+                    error!("Failed to start daemon {}: {}", id, e);
+                    Some(1)
+                }
+            };
+
+            (id, Some(start_time), exit_code)
+        })
     }
 }

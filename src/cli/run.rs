@@ -87,6 +87,7 @@ impl Run {
                 ready_http: self.http.clone(),
                 ready_port: self.port,
                 wait_ready: true,
+                depends: vec![],
             })
             .await?;
 

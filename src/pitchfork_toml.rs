@@ -90,6 +90,8 @@ pub struct PitchforkTomlDaemon {
     pub ready_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub depends: Vec<String>,
     #[serde(skip)]
     pub path: Option<PathBuf>,
 }

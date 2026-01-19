@@ -41,6 +41,7 @@ impl Add {
                 ready_http: None,
                 ready_port: None,
                 boot_start: None,
+                depends: vec![],
                 path: None,
             },
         );
