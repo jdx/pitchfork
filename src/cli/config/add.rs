@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto, PitchforkTomlDaemon};
+use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto, PitchforkTomlDaemon, Retry};
 
 /// Add a new daemon to ./pitchfork.toml
 #[derive(Debug, clap::Args)]
@@ -35,7 +35,7 @@ impl Add {
                 run: shell_words::join(&self.args),
                 auto,
                 cron: None,
-                retry: 0,
+                retry: Retry::default(),
                 ready_delay: None,
                 ready_output: None,
                 ready_http: None,

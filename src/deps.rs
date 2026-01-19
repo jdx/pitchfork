@@ -134,7 +134,7 @@ pub fn resolve_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pitchfork_toml::PitchforkTomlDaemon;
+    use crate::pitchfork_toml::{PitchforkTomlDaemon, Retry};
     use indexmap::IndexMap;
 
     fn make_daemon(depends: Vec<&str>) -> PitchforkTomlDaemon {
@@ -142,7 +142,7 @@ mod tests {
             run: "echo test".to_string(),
             auto: vec![],
             cron: None,
-            retry: 0,
+            retry: Retry::default(),
             ready_delay: None,
             ready_output: None,
             ready_http: None,

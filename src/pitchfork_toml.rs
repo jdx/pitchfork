@@ -2,6 +2,7 @@ use crate::{Result, env};
 use indexmap::IndexMap;
 use miette::{IntoDiagnostic, bail};
 use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files
@@ -89,9 +90,10 @@ pub struct PitchforkTomlDaemon {
     /// Cron scheduling configuration for periodic execution
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cron: Option<PitchforkTomlCron>,
-    /// Number of times to retry if the daemon fails (0 = no retries)
+    /// Number of times to retry if the daemon fails.
+    /// Can be a number (e.g., `3`) or `true` for infinite retries.
     #[serde(default)]
-    pub retry: u32,
+    pub retry: Retry,
     /// Delay in milliseconds before considering the daemon ready
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
@@ -161,4 +163,111 @@ pub enum PitchforkTomlAuto {
     Start,
     /// Automatically stop when leaving the directory
     Stop,
+}
+
+/// Retry configuration that accepts either a boolean or a count.
+/// - `true` means retry indefinitely (u32::MAX)
+/// - `false` or `0` means no retries
+/// - A number means retry that many times
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+pub struct Retry(pub u32);
+
+impl std::fmt::Display for Retry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_infinite() {
+            write!(f, "infinite")
+        } else {
+            write!(f, "{}", self.0)
+        }
+    }
+}
+
+impl Retry {
+    pub const INFINITE: Retry = Retry(u32::MAX);
+
+    pub fn count(&self) -> u32 {
+        self.0
+    }
+
+    pub fn is_infinite(&self) -> bool {
+        self.0 == u32::MAX
+    }
+}
+
+impl From<u32> for Retry {
+    fn from(n: u32) -> Self {
+        Retry(n)
+    }
+}
+
+impl From<bool> for Retry {
+    fn from(b: bool) -> Self {
+        if b { Retry::INFINITE } else { Retry(0) }
+    }
+}
+
+impl Serialize for Retry {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize infinite as true, otherwise as number
+        if self.is_infinite() {
+            serializer.serialize_bool(true)
+        } else {
+            serializer.serialize_u32(self.0)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Retry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{self, Visitor};
+
+        struct RetryVisitor;
+
+        impl Visitor<'_> for RetryVisitor {
+            type Value = Retry;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a boolean or non-negative integer")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(Retry::from(v))
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v < 0 {
+                    Err(de::Error::custom("retry count cannot be negative"))
+                } else if v > u32::MAX as i64 {
+                    Ok(Retry::INFINITE)
+                } else {
+                    Ok(Retry(v as u32))
+                }
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v > u32::MAX as u64 {
+                    Ok(Retry::INFINITE)
+                } else {
+                    Ok(Retry(v as u32))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(RetryVisitor)
+    }
 }

@@ -147,11 +147,9 @@
           "minimum": 1
         },
         "retry": {
-          "description": "Number of times to retry if the daemon fails (0 = no retries)",
-          "type": "integer",
-          "format": "uint32",
-          "default": 0,
-          "minimum": 0
+          "description": "Number of times to retry if the daemon fails.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
+          "$ref": "#/$defs/Retry",
+          "default": 0
         },
         "run": {
           "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
@@ -164,6 +162,12 @@
       "required": [
         "run"
       ]
+    },
+    "Retry": {
+      "description": "Retry configuration that accepts either a boolean or a count.\n- `true` means retry indefinitely (u32::MAX)\n- `false` or `0` means no retries\n- A number means retry that many times",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
     }
   }
 }
