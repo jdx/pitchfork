@@ -20,7 +20,24 @@ impl IpcServer {
         let opts = ListenerOptions::new().name(fs_name("main")?);
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let listener = opts.create_tokio().into_diagnostic()?;
+
+        // Set restrictive umask before creating socket to avoid TOCTOU race condition.
+        // This ensures the socket is created with 0600 permissions from the start.
+        // Note: IpcServer::new() is called during supervisor startup before other async
+        // tasks are spawned, so the brief umask change won't affect concurrent operations.
+        #[cfg(unix)]
+        let old_umask = unsafe { libc::umask(0o077) };
+
+        let listener_result = opts.create_tokio();
+
+        // Always restore original umask, even if socket creation failed
+        #[cfg(unix)]
+        unsafe {
+            libc::umask(old_umask);
+        }
+
+        let listener = listener_result.into_diagnostic()?;
+
         tokio::spawn(async move {
             loop {
                 if let Err(err) = Self::listen(&listener, tx.clone()).await {
