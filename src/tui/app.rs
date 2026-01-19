@@ -853,7 +853,7 @@ impl App {
     }
 
     pub fn take_pending_action(&mut self) -> Option<PendingAction> {
-        self.view = View::Dashboard;
+        self.view = self.prev_view;
         self.pending_action.take()
     }
 
