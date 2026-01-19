@@ -4,7 +4,7 @@ use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
-use miette::{IntoDiagnostic, bail, ensure};
+use miette::{Context, IntoDiagnostic, bail, ensure};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -76,7 +76,10 @@ impl IpcClient {
         }
         msg.push(0);
         let mut send = self.send.lock().await;
-        send.write_all(&msg).await.into_diagnostic()?;
+        send.write_all(&msg)
+            .await
+            .into_diagnostic()
+            .wrap_err("failed to send IPC message")?;
         Ok(())
     }
 
@@ -85,13 +88,13 @@ impl IpcClient {
         let mut bytes = Vec::new();
         match tokio::time::timeout(timeout, recv.read_until(0, &mut bytes)).await {
             Ok(Ok(_)) => {}
-            Ok(Err(err)) => bail!("failed to read IPC message: {}", err),
-            Err(_) => bail!("IPC read timed out after {:?}", timeout),
+            Ok(Err(err)) => bail!("failed to read IPC message: {err}"),
+            Err(_) => bail!("IPC read timed out after {timeout:?}"),
         }
         if bytes.is_empty() {
-            bail!("IPC connection closed unexpectedly");
+            bail!("IPC connection closed unexpectedly (supervisor may have stopped)");
         }
-        deserialize(&bytes)
+        deserialize(&bytes).wrap_err("failed to deserialize IPC response")
     }
 
     async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {

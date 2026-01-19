@@ -41,19 +41,19 @@ impl Supervisor {
             }
             IpcRequest::Stop { id } => {
                 if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e));
+                    return Ok(IpcResponse::Error(e.to_string()));
                 }
                 self.stop(&id).await?
             }
             IpcRequest::Run(opts) => {
                 if let Err(e) = validate_daemon_id(&opts.id) {
-                    return Ok(IpcResponse::Error(e));
+                    return Ok(IpcResponse::Error(e.to_string()));
                 }
                 self.run(opts).await?
             }
             IpcRequest::Enable { id } => {
                 if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e));
+                    return Ok(IpcResponse::Error(e.to_string()));
                 }
                 if self.enable(id).await? {
                     IpcResponse::Yes
@@ -63,7 +63,7 @@ impl Supervisor {
             }
             IpcRequest::Disable { id } => {
                 if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e));
+                    return Ok(IpcResponse::Error(e.to_string()));
                 }
                 if self.disable(id).await? {
                     IpcResponse::Yes
