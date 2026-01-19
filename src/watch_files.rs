@@ -155,7 +155,9 @@ pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir:
             // to ensure consistent forward-slash matching
             let match_options = glob::MatchOptions {
                 case_sensitive: cfg!(not(target_os = "windows")),
-                require_literal_separator: false,
+                // require_literal_separator: true ensures * only matches within a directory
+                // (standard glob behavior where * doesn't match /, use ** for recursive)
+                require_literal_separator: true,
                 require_literal_leading_dot: false,
             };
             if glob_pattern.matches_with(&changed_path_str, match_options) {
