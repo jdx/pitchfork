@@ -1467,7 +1467,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
     let id_display = if editor.daemon_id_editing {
         format!("Name: {}█", editor.daemon_id)
     } else if editor.daemon_id.is_empty() {
-        "Name: (press 'i' to edit)".to_string()
+        "Name: (press 'i' to edit name)".to_string()
     } else {
         format!("Name: {}", editor.daemon_id)
     };

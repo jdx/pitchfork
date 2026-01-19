@@ -590,7 +590,7 @@ fn handle_config_editor_event(
         // Edit daemon ID (when focused at top)
         KeyCode::Char('i') => {
             editor.daemon_id_editing = true;
-            editor.daemon_id_cursor = editor.daemon_id.len();
+            editor.daemon_id_cursor = editor.daemon_id.chars().count();
             Ok(None)
         }
 

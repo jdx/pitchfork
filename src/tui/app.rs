@@ -17,6 +17,14 @@ use std::time::Instant;
 /// Maximum number of stat samples to keep for each daemon (e.g., 60 samples at 2s intervals = 2 minutes)
 const MAX_STAT_HISTORY: usize = 60;
 
+/// Convert character index to byte index for UTF-8 strings
+fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
 /// A snapshot of stats at a point in time
 #[derive(Debug, Clone, Copy)]
 pub struct StatsSnapshot {
@@ -573,14 +581,16 @@ impl EditorState {
 
     pub fn text_push(&mut self, c: char) {
         if self.daemon_id_editing {
-            self.daemon_id.insert(self.daemon_id_cursor, c);
+            let byte_idx = char_to_byte_index(&self.daemon_id, self.daemon_id_cursor);
+            self.daemon_id.insert(byte_idx, c);
             self.daemon_id_cursor += 1;
             self.unsaved_changes = true;
         } else if let Some(field) = self.fields.get_mut(self.focused_field)
             && field.editing
         {
             let mut text = field.get_text();
-            text.insert(field.cursor, c);
+            let byte_idx = char_to_byte_index(&text, field.cursor);
+            text.insert(byte_idx, c);
             field.cursor += 1;
             field.set_text(text);
             self.unsaved_changes = true;
@@ -590,7 +600,8 @@ impl EditorState {
     pub fn text_pop(&mut self) {
         if self.daemon_id_editing && self.daemon_id_cursor > 0 {
             self.daemon_id_cursor -= 1;
-            self.daemon_id.remove(self.daemon_id_cursor);
+            let byte_idx = char_to_byte_index(&self.daemon_id, self.daemon_id_cursor);
+            self.daemon_id.remove(byte_idx);
             self.unsaved_changes = true;
         } else if let Some(field) = self.fields.get_mut(self.focused_field)
             && field.editing
@@ -598,7 +609,8 @@ impl EditorState {
         {
             let mut text = field.get_text();
             field.cursor -= 1;
-            text.remove(field.cursor);
+            let byte_idx = char_to_byte_index(&text, field.cursor);
+            text.remove(byte_idx);
             field.set_text(text);
             self.unsaved_changes = true;
         }
@@ -631,9 +643,9 @@ impl EditorState {
                     valid = false;
                 }
                 ("ready_http", FormFieldValue::OptionalText(Some(url)))
-                    if !url.starts_with("http") =>
+                    if !(url.starts_with("http://") || url.starts_with("https://")) =>
                 {
-                    field.error = Some("Must be a valid HTTP URL".to_string());
+                    field.error = Some("Must start with http:// or https://".to_string());
                     valid = false;
                 }
                 _ => {}
@@ -1471,22 +1483,20 @@ impl App {
         Ok(())
     }
 
-    /// Delete a daemon from the config file
+    /// Delete a daemon from the config file. Returns Ok(true) if deleted, Ok(false) if not found.
     pub fn delete_daemon_from_config(
         &mut self,
         id: &str,
         config_path: &std::path::Path,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut config = PitchforkToml::read(config_path)?;
 
         if config.daemons.shift_remove(id).is_some() {
             config.write()?;
-            self.set_message(format!("Deleted daemon '{}'", id));
+            Ok(true)
         } else {
-            self.set_message(format!("Daemon '{}' not found in config", id));
+            Ok(false)
         }
-
-        Ok(())
     }
 }
 

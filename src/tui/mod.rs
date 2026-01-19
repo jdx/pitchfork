@@ -233,13 +233,23 @@ async fn run_app<B: Backend>(
                             app::PendingAction::DeleteDaemon { id, config_path } => {
                                 app.start_loading(format!("Deleting {}...", id));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                if let Err(e) = app.delete_daemon_from_config(&id, &config_path) {
-                                    app.stop_loading();
-                                    app.set_message(format!("Delete failed: {}", e));
-                                } else {
-                                    app.stop_loading();
-                                    app.close_editor();
-                                    app.set_message(format!("Deleted {}", id));
+                                match app.delete_daemon_from_config(&id, &config_path) {
+                                    Ok(true) => {
+                                        app.stop_loading();
+                                        app.close_editor();
+                                        app.set_message(format!("Deleted {}", id));
+                                    }
+                                    Ok(false) => {
+                                        app.stop_loading();
+                                        app.set_message(format!(
+                                            "Daemon '{}' not found in config",
+                                            id
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        app.stop_loading();
+                                        app.set_message(format!("Delete failed: {}", e));
+                                    }
                                 }
                             }
                             app::PendingAction::DiscardEditorChanges => {
