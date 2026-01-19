@@ -391,7 +391,6 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
     let daemon_id = app.log_daemon_id.as_deref().unwrap_or("unknown");
 
-    // Layout: daemon info (3) | charts (8) | current stats (3) | search bar (optional 3) | logs (rest)
     let search_height = if app.log_search_active || !app.log_search_query.is_empty() {
         3
     } else {
@@ -420,31 +419,117 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
 
         draw_log_panel(f, logs_area, app, daemon_id);
     } else {
-        // Normal mode: header + charts + stats + search + logs
+        // Normal mode: stats panel on left, charts on right, logs below
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),             // Daemon header
-                Constraint::Length(8),             // Charts
-                Constraint::Length(3),             // Current stats
+                Constraint::Length(10),            // Stats + Charts row
                 Constraint::Length(search_height), // Search bar (if active)
                 Constraint::Min(5),                // Logs
             ])
             .split(area);
 
-        draw_daemon_header(f, chunks[0], app, daemon_id);
-        draw_charts(f, chunks[1], app, daemon_id);
-        draw_current_stats(f, chunks[2], app, daemon_id);
+        // Split top row: stats panel (left) | charts (right)
+        let top_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(24), // Stats panel (fixed width)
+                Constraint::Min(30),    // Charts (fills remaining)
+            ])
+            .split(chunks[0]);
+
+        draw_stats_panel(f, top_chunks[0], app, daemon_id);
+        draw_charts(f, top_chunks[1], app, daemon_id);
 
         let logs_area = if search_height > 0 {
-            draw_log_search_bar(f, chunks[3], app);
-            chunks[4]
+            draw_log_search_bar(f, chunks[1], app);
+            chunks[2]
         } else {
-            chunks[4]
+            chunks[2]
         };
 
         draw_log_panel(f, logs_area, app, daemon_id);
     }
+}
+
+/// Draw stats panel on the left side of details view
+fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
+    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+    let stats = daemon
+        .and_then(|d| d.pid)
+        .and_then(|pid| app.get_stats(pid));
+
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            daemon_id,
+            Style::default().fg(ORANGE).bold(),
+        )]),
+        Line::from(""),
+    ];
+
+    // Status
+    if let Some(d) = daemon {
+        let (status_text, status_color) = status_display(&d.status);
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", Style::default().fg(GRAY)),
+            Span::styled(status_text, Style::default().fg(status_color)),
+        ]));
+
+        if let Some(pid) = d.pid {
+            lines.push(Line::from(vec![
+                Span::styled("PID:    ", Style::default().fg(GRAY)),
+                Span::styled(pid.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+
+    // Stats from process
+    if let Some(stats) = stats {
+        lines.push(Line::from(vec![
+            Span::styled("Uptime: ", Style::default().fg(GRAY)),
+            Span::styled(stats.uptime_display(), Style::default().fg(Color::White)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("CPU:    ", Style::default().fg(GRAY)),
+            Span::styled(
+                format!("{:.1}%", stats.cpu_percent),
+                Style::default().fg(cpu_color(stats.cpu_percent)),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Memory: ", Style::default().fg(GRAY)),
+            Span::styled(
+                stats.memory_display(),
+                Style::default().fg(memory_color(stats.memory_bytes)),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Disk R: ", Style::default().fg(GRAY)),
+            Span::styled(stats.disk_read_display(), Style::default().fg(GREEN)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled("Disk W: ", Style::default().fg(GRAY)),
+            Span::styled(stats.disk_write_display(), Style::default().fg(YELLOW)),
+        ]));
+    }
+
+    // Disabled indicator
+    if app.is_disabled(daemon_id) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![Span::styled(
+            "DISABLED",
+            Style::default().fg(RED).bold(),
+        )]));
+    }
+
+    let panel = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Info ")
+            .title_style(Style::default().fg(ORANGE).bold())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(DARK_GRAY)),
+    );
+    f.render_widget(panel, area);
 }
 
 /// Draw compact daemon header (for expanded logs mode)
@@ -478,53 +563,6 @@ fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &
         "[expanded]",
         Style::default().fg(DARK_GRAY).italic(),
     ));
-
-    let header = Paragraph::new(Line::from(spans))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(DARK_GRAY)),
-        );
-    f.render_widget(header, area);
-}
-
-/// Draw daemon header with name and status
-fn draw_daemon_header(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
-    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
-
-    let mut spans = vec![Span::styled(daemon_id, Style::default().fg(ORANGE).bold())];
-
-    if let Some(d) = daemon {
-        let (status_text, status_color) = status_display(&d.status);
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(status_text, Style::default().fg(status_color)));
-
-        if let Some(pid) = d.pid {
-            spans.push(Span::raw("  "));
-            spans.push(Span::styled("PID: ", Style::default().fg(GRAY)));
-            spans.push(Span::styled(
-                pid.to_string(),
-                Style::default().fg(Color::White),
-            ));
-        }
-
-        if let Some(pid) = d.pid {
-            if let Some(stats) = app.get_stats(pid) {
-                spans.push(Span::raw("  "));
-                spans.push(Span::styled("Uptime: ", Style::default().fg(GRAY)));
-                spans.push(Span::styled(
-                    stats.uptime_display(),
-                    Style::default().fg(Color::White),
-                ));
-            }
-        }
-    }
-
-    if app.is_disabled(daemon_id) {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled("[DISABLED]", Style::default().fg(RED).bold()));
-    }
 
     let header = Paragraph::new(Line::from(spans))
         .alignment(Alignment::Center)
@@ -725,43 +763,6 @@ fn draw_disk_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
 }
 
 /// Draw current stats summary
-fn draw_current_stats(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
-    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
-    let stats = daemon
-        .and_then(|d| d.pid)
-        .and_then(|pid| app.get_stats(pid));
-
-    let content = if let Some(stats) = stats {
-        Line::from(vec![
-            Span::styled("CPU: ", Style::default().fg(GRAY)),
-            Span::styled(
-                format!("{:.1}%", stats.cpu_percent),
-                Style::default().fg(cpu_color(stats.cpu_percent)),
-            ),
-            Span::raw("   "),
-            Span::styled("Memory: ", Style::default().fg(GRAY)),
-            Span::styled(
-                stats.memory_display(),
-                Style::default().fg(memory_color(stats.memory_bytes)),
-            ),
-            Span::raw("   "),
-            Span::styled("Disk Read: ", Style::default().fg(GRAY)),
-            Span::styled(stats.disk_read_display(), Style::default().fg(GREEN)),
-            Span::raw("   "),
-            Span::styled("Disk Write: ", Style::default().fg(GRAY)),
-            Span::styled(stats.disk_write_display(), Style::default().fg(YELLOW)),
-        ])
-    } else {
-        Line::from(vec![Span::styled(
-            "No process stats available",
-            Style::default().fg(GRAY).italic(),
-        )])
-    };
-
-    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-    f.render_widget(paragraph, area);
-}
-
 /// Draw the logs panel
 fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     let follow_indicator = if app.log_follow { " [follow]" } else { "" };
