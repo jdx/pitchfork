@@ -1,6 +1,7 @@
-use crate::error::FileError;
+use crate::error::{ConfigParseError, FileError};
 use crate::{Result, env};
 use indexmap::IndexMap;
+use miette::Context;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
@@ -50,15 +51,14 @@ impl PitchforkToml {
         if !path.exists() {
             return Ok(Self::new(path.to_path_buf()));
         }
-        let _lock = xx::fslock::get(path, false)?;
-        let raw = xx::file::read_to_string(path).map_err(|e| FileError::ReadError {
+        let _lock = xx::fslock::get(path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", path.display()))?;
+        let raw = std::fs::read_to_string(path).map_err(|e| FileError::ReadError {
             path: path.to_path_buf(),
-            details: Some(e.to_string()),
+            source: e,
         })?;
-        let mut pt: Self = toml::from_str(&raw).map_err(|e| FileError::ParseError {
-            path: path.to_path_buf(),
-            details: Some(e.to_string()),
-        })?;
+        let mut pt: Self = toml::from_str(&raw)
+            .map_err(|e| ConfigParseError::from_toml_error(path, raw.clone(), e))?;
         pt.path = Some(path.to_path_buf());
         for (_id, d) in pt.daemons.iter_mut() {
             d.path = pt.path.clone();
@@ -68,12 +68,13 @@ impl PitchforkToml {
 
     pub fn write(&self) -> Result<()> {
         if let Some(path) = &self.path {
-            let _lock = xx::fslock::get(path, false)?;
-            let raw = toml::to_string(self).map_err(|e| FileError::WriteError {
+            let _lock = xx::fslock::get(path, false)
+                .wrap_err_with(|| format!("failed to acquire lock on {}", path.display()))?;
+            let raw = toml::to_string(self).map_err(|e| FileError::SerializeError {
                 path: path.clone(),
-                details: Some(format!("serialization failed: {}", e)),
+                source: e,
             })?;
-            xx::file::write(path, raw).map_err(|e| FileError::WriteError {
+            xx::file::write(path, &raw).map_err(|e| FileError::WriteError {
                 path: path.clone(),
                 details: Some(e.to_string()),
             })?;

@@ -67,9 +67,10 @@ impl IpcClient {
                     } else {
                         return Err(IpcError::ConnectionFailed {
                             attempts: CONNECT_ATTEMPTS,
-                            details: Some(format!(
-                                "{err}\nensure the supervisor is running with: pitchfork supervisor start"
-                            )),
+                            source: Some(err),
+                            help:
+                                "ensure the supervisor is running with: pitchfork supervisor start"
+                                    .to_string(),
                         }
                         .into());
                     }
@@ -78,9 +79,8 @@ impl IpcClient {
         }
         Err(IpcError::ConnectionFailed {
             attempts: CONNECT_ATTEMPTS,
-            details: Some(
-                "ensure the supervisor is running with: pitchfork supervisor start".to_string(),
-            ),
+            source: None,
+            help: "ensure the supervisor is running with: pitchfork supervisor start".to_string(),
         }
         .into())
     }
@@ -89,7 +89,7 @@ impl IpcClient {
         let mut msg = serialize(&msg)?;
         if msg.contains(&0) {
             return Err(IpcError::InvalidMessage {
-                details: Some("message contains null byte".to_string()),
+                reason: "message contains null byte".to_string(),
             }
             .into());
         }
@@ -97,9 +97,7 @@ impl IpcClient {
         let mut send = self.send.lock().await;
         send.write_all(&msg)
             .await
-            .map_err(|e| IpcError::SendFailed {
-                details: Some(e.to_string()),
-            })?;
+            .map_err(|e| IpcError::SendFailed { source: e })?;
         Ok(())
     }
 
@@ -109,10 +107,7 @@ impl IpcClient {
         match tokio::time::timeout(timeout, recv.read_until(0, &mut bytes)).await {
             Ok(Ok(_)) => {}
             Ok(Err(err)) => {
-                return Err(IpcError::ReadFailed {
-                    details: Some(err.to_string()),
-                }
-                .into());
+                return Err(IpcError::ReadFailed { source: err }.into());
             }
             Err(_) => {
                 return Err(IpcError::Timeout {
