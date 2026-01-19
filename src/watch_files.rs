@@ -100,9 +100,14 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
                 }
                 base = base.join(part);
             }
-            if base.is_dir() {
-                dirs_to_watch.insert(base);
-            }
+            // Watch the base directory if it exists, otherwise fall back to base_dir
+            // This ensures we can detect when the directory is created
+            let dir_to_watch = if base.is_dir() {
+                base
+            } else {
+                base_dir.to_path_buf()
+            };
+            dirs_to_watch.insert(dir_to_watch);
         } else {
             // Non-wildcard pattern (specific file like "package.json")
             // Always watch the parent directory, even if file doesn't exist yet
