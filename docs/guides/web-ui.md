@@ -2,11 +2,22 @@
 
 Pitchfork includes a built-in web interface for monitoring and managing daemons.
 
-## Access the Web UI
+## Enable the Web UI
 
-Open http://127.0.0.1:19876 in your browser.
+The web UI is disabled by default. To enable it, specify a port:
 
-The Web UI starts automatically when the supervisor runs.
+```bash
+# Via environment variable
+export PITCHFORK_WEB_PORT=19876
+pitchfork supervisor start --force
+
+# Via command line
+pitchfork supervisor run --web-port 19876
+```
+
+Then open http://127.0.0.1:19876 in your browser.
+
+If the specified port is in use, pitchfork tries the next 10 ports automatically.
 
 ## Features
 
@@ -37,29 +48,3 @@ Real-time log streaming for each daemon:
 Edit `pitchfork.toml` files with:
 - TOML syntax validation
 - Save changes directly from the UI
-
-## Configure the Port
-
-If port 19876 is in use, pitchfork tries ports 19877-19885 automatically.
-
-To specify a port:
-
-```bash
-# Via environment variable
-PITCHFORK_WEB_PORT=8080 pitchfork supervisor start --force
-
-# Via command line
-pitchfork supervisor run --web-port 8080
-```
-
-## Disable the Web UI
-
-If you don't need the web interface:
-
-```bash
-# Via environment variable
-PITCHFORK_NO_WEB=true pitchfork supervisor start --force
-
-# Via command line
-pitchfork supervisor run --no-web
-```

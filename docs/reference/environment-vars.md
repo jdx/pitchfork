@@ -19,32 +19,20 @@ The supervisor only reads this variable at startup. Use `--force` to restart the
 
 ## `PITCHFORK_WEB_PORT`
 
-Sets the port for the web UI.
-
-**Default:** `19876`
+Enables the web UI on the specified port. The web UI is disabled by default.
 
 ```bash
-PITCHFORK_WEB_PORT=8080 pitchfork supervisor start --force
+PITCHFORK_WEB_PORT=19876 pitchfork supervisor start --force
 ```
 
 If the specified port is in use, pitchfork tries up to 10 consecutive ports.
 
-## `PITCHFORK_NO_WEB`
-
-Disables the web UI entirely.
-
-**Values:** `true`, `1`, `yes`
-
-```bash
-PITCHFORK_NO_WEB=true pitchfork supervisor start --force
-```
-
 ## Example: Debug Setup
 
-Start the supervisor with debug logging and custom port:
+Start the supervisor with debug logging and web UI enabled:
 
 ```bash
-PITCHFORK_LOG=debug PITCHFORK_WEB_PORT=8080 pitchfork supervisor start --force
+PITCHFORK_LOG=debug PITCHFORK_WEB_PORT=19876 pitchfork supervisor start --force
 
 # View supervisor logs
 pitchfork logs pitchfork
