@@ -595,8 +595,8 @@ impl Supervisor {
             let mut port_check_interval =
                 ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
 
-            // Setup periodic log flush interval (every 1 second instead of per-line)
-            let mut log_flush_interval = tokio::time::interval(Duration::from_secs(1));
+            // Setup periodic log flush interval (every 500ms - balances I/O reduction with responsiveness)
+            let mut log_flush_interval = tokio::time::interval(Duration::from_millis(500));
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
@@ -613,6 +613,8 @@ impl Supervisor {
                 let _ = exit_tx.send(result).await;
             });
 
+            #[allow(unused_assignments)]
+            // Initial None is a safety net; loop only exits via exit_rx.recv() which sets it
             let mut exit_status = None;
 
             loop {
@@ -630,6 +632,8 @@ impl Supervisor {
                                 && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
+                                    // Flush logs before notifying so clients see logs immediately
+                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -648,6 +652,8 @@ impl Supervisor {
                                 && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
+                                    // Flush logs before notifying so clients see logs immediately
+                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -657,6 +663,8 @@ impl Supervisor {
                         // Process exited - save exit status and notify if not ready yet
                         exit_status = Some(result);
                         debug!("daemon {id} process exited, exit_status: {:?}", exit_status);
+                        // Flush logs before notifying so clients see logs immediately
+                        let _ = log_appender.flush().await;
                         if !ready_notified {
                             if let Some(tx) = ready_tx.take() {
                                 // Check if process exited successfully
@@ -693,6 +701,8 @@ impl Supervisor {
                                 Ok(response) if response.status().is_success() => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
+                                    // Flush logs before notifying so clients see logs immediately
+                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -720,6 +730,8 @@ impl Supervisor {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
+                                    // Flush logs before notifying so clients see logs immediately
+                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -742,6 +754,8 @@ impl Supervisor {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
+                            // Flush logs before notifying so clients see logs immediately
+                            let _ = log_appender.flush().await;
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
@@ -755,7 +769,8 @@ impl Supervisor {
                             error!("Failed to flush log for daemon {id}: {e}");
                         }
                     }
-                    else => break,
+                    // Note: No `else => break` because log_flush_interval.tick() is always available,
+                    // making the else branch unreachable. The loop exits via the exit_rx.recv() branch.
                 }
             }
 
