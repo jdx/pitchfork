@@ -17,6 +17,7 @@ const GREEN: Color = Color::Rgb(34, 197, 94);
 const YELLOW: Color = Color::Rgb(234, 179, 8);
 const GRAY: Color = Color::Rgb(107, 114, 128);
 const DARK_GRAY: Color = Color::Rgb(55, 55, 55);
+const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-only daemons
 
 // Unicode block characters for bar rendering
 const BAR_FULL: char = '█';
@@ -74,9 +75,9 @@ fn draw_header(f: &mut Frame, area: Rect) {
 }
 
 fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
-    let (total, running, stopped, errored) = app.stats();
+    let (total, running, stopped, errored, available) = app.stats();
 
-    let stats = Line::from(vec![
+    let mut spans = vec![
         Span::styled("Total: ", Style::default().fg(Color::White)),
         Span::styled(total.to_string(), Style::default().fg(Color::White).bold()),
         Span::raw("  "),
@@ -88,8 +89,19 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled("Errored: ", Style::default().fg(RED)),
         Span::styled(errored.to_string(), Style::default().fg(RED).bold()),
-    ]);
+    ];
 
+    // Show available count if there are config-only daemons
+    if available > 0 {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("Available: ", Style::default().fg(CYAN)));
+        spans.push(Span::styled(
+            available.to_string(),
+            Style::default().fg(CYAN).bold(),
+        ));
+    }
+
+    let stats = Line::from(spans);
     let stats_widget = Paragraph::new(stats).alignment(Alignment::Center);
     f.render_widget(stats_widget, area);
 }
@@ -143,7 +155,8 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Build header with sort indicator
+    // Build header with sort indicator (include checkbox column if multi-select is active)
+    let show_checkbox = app.has_selection();
     let header_columns = [
         ("Name", Some(SortColumn::Name)),
         ("PID", None),
@@ -153,23 +166,32 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         ("Uptime", Some(SortColumn::Uptime)),
         ("Error", None),
     ];
-    let header_cells = header_columns.iter().map(|(name, sort_col)| {
+    let mut header_cells: Vec<Cell> = if show_checkbox {
+        vec![Cell::from("☐").style(Style::default().fg(ORANGE).bold())]
+    } else {
+        vec![]
+    };
+    header_cells.extend(header_columns.iter().map(|(name, sort_col)| {
         let text = if *sort_col == Some(app.sort_column) {
             format!("{} {}", name, app.sort_order.indicator())
         } else {
             (*name).to_string()
         };
         Cell::from(text).style(Style::default().fg(ORANGE).bold())
-    });
+    }));
     let header = Row::new(header_cells).height(1);
 
     let rows = filtered.iter().enumerate().map(|(i, daemon)| {
-        let selected = i == app.selected;
+        let cursor_here = i == app.selected;
+        let is_multi_selected = app.is_selected(&daemon.id);
         let disabled = app.is_disabled(&daemon.id);
+        let is_config_only = app.is_config_only(&daemon.id);
 
-        let name_style = if disabled {
+        let name_style = if is_config_only {
+            Style::default().fg(CYAN).italic() // Cyan for available/config-only
+        } else if disabled {
             Style::default().fg(GRAY).italic()
-        } else if selected {
+        } else if cursor_here {
             Style::default().fg(Color::White).bold()
         } else {
             Style::default().fg(Color::White)
@@ -186,7 +208,12 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             .map(|p| p.to_string())
             .unwrap_or_else(|| "-".to_string());
 
-        let (status_text, status_color) = status_display(&daemon.status);
+        // Show "available" for config-only daemons instead of "stopped"
+        let (status_text, status_color) = if is_config_only {
+            ("available".to_string(), CYAN)
+        } else {
+            status_display(&daemon.status)
+        };
 
         let stats = daemon.pid.and_then(|pid| app.get_stats(pid));
 
@@ -206,13 +233,26 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
 
         let error = daemon.status.error_message().unwrap_or_default();
 
-        let row_style = if selected {
+        let row_style = if is_multi_selected {
+            Style::default().bg(Color::Rgb(40, 40, 20)) // Yellow-ish for multi-select
+        } else if cursor_here {
             Style::default().bg(Color::Rgb(50, 20, 20))
         } else {
             Style::default()
         };
 
-        Row::new(vec![
+        // Build row cells
+        let mut cells = vec![];
+        if show_checkbox {
+            let checkbox = if is_multi_selected { "☑" } else { "☐" };
+            let checkbox_style = if is_multi_selected {
+                Style::default().fg(GREEN)
+            } else {
+                Style::default().fg(GRAY)
+            };
+            cells.push(Cell::from(checkbox).style(checkbox_style));
+        }
+        cells.extend(vec![
             Cell::from(name).style(name_style),
             Cell::from(pid),
             Cell::from(status_text).style(Style::default().fg(status_color)),
@@ -220,22 +260,38 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             mem_cell,
             Cell::from(uptime).style(Style::default().fg(GRAY)),
             Cell::from(error).style(Style::default().fg(RED)),
-        ])
-        .style(row_style)
-        .height(1)
+        ]);
+
+        Row::new(cells).style(row_style).height(1)
     });
 
-    let widths = [
-        Constraint::Percentage(18), // Name
-        Constraint::Length(8),      // PID
-        Constraint::Length(10),     // Status
-        Constraint::Length(11),     // CPU bar
-        Constraint::Length(12),     // Mem bar
-        Constraint::Length(10),     // Uptime
-        Constraint::Percentage(20), // Error
-    ];
+    let widths: Vec<Constraint> = if show_checkbox {
+        vec![
+            Constraint::Length(2),      // Checkbox
+            Constraint::Percentage(18), // Name
+            Constraint::Length(8),      // PID
+            Constraint::Length(10),     // Status
+            Constraint::Length(11),     // CPU bar
+            Constraint::Length(12),     // Mem bar
+            Constraint::Length(10),     // Uptime
+            Constraint::Percentage(18), // Error (slightly smaller to fit checkbox)
+        ]
+    } else {
+        vec![
+            Constraint::Percentage(18), // Name
+            Constraint::Length(8),      // PID
+            Constraint::Length(10),     // Status
+            Constraint::Length(11),     // CPU bar
+            Constraint::Length(12),     // Mem bar
+            Constraint::Length(10),     // Uptime
+            Constraint::Percentage(20), // Error
+        ]
+    };
 
-    let title = if !app.search_query.is_empty() {
+    let selection_count = app.multi_select.len();
+    let title = if selection_count > 0 {
+        format!(" Daemons ({} selected) ", selection_count)
+    } else if !app.search_query.is_empty() {
         format!(" Daemons ({} of {}) ", filtered.len(), app.daemons.len())
     } else {
         " Daemons ".to_string()
@@ -983,11 +1039,14 @@ fn draw_message_bar(f: &mut Frame, area: Rect, app: &App) {
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.view {
         View::Dashboard if app.search_active => "Type to search  Enter:finish  Esc:clear",
+        View::Dashboard if app.has_selection() => {
+            "Space:toggle  Ctrl+A:all  c:clear  s:start  x:stop  r:restart  d:disable  e:enable"
+        }
         View::Dashboard if !app.search_query.is_empty() => {
-            "/:search  q/Esc:clear  j/k:nav  S:sort  i:info  s:start  x:stop  l:details  ?:help"
+            "/:search  q/Esc:clear  j/k:nav  Space:select  s:start  a:toggle-avail  ?:help"
         }
         View::Dashboard => {
-            "/:search  q/Esc:quit  j/k:nav  S:sort  o:order  i:info  s:start  x:stop  l:details  ?:help"
+            "/:search  q/Esc:quit  j/k:nav  Space:select  s:start  a:toggle-avail  ?:help"
         }
         View::Logs if app.log_search_active => "Type to search  Enter:finish  Esc:clear",
         View::Logs if !app.log_search_query.is_empty() => {
@@ -1034,16 +1093,25 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from("  /           Search/filter daemons"),
         Line::from("  S           Cycle sort column"),
         Line::from("  o           Toggle sort order"),
+        Line::from("  a           Toggle available daemons"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Multi-select",
+            Style::default().fg(RED).bold(),
+        )]),
+        Line::from("  Space       Toggle selection"),
+        Line::from("  Ctrl+A      Select all visible"),
+        Line::from("  c           Clear selection"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Actions",
             Style::default().fg(RED).bold(),
         )]),
-        Line::from("  s           Start stopped daemon"),
-        Line::from("  x           Stop running daemon"),
-        Line::from("  r           Restart daemon"),
-        Line::from("  e           Enable disabled daemon"),
-        Line::from("  d           Disable daemon"),
+        Line::from("  s           Start stopped daemon(s)"),
+        Line::from("  x           Stop running daemon(s)"),
+        Line::from("  r           Restart daemon(s)"),
+        Line::from("  e           Enable disabled daemon(s)"),
+        Line::from("  d           Disable daemon(s)"),
         Line::from("  R           Force refresh"),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -1113,19 +1181,22 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
     // Clear the background
     f.render_widget(Clear, area);
 
-    let (action_text, daemon_id) = match &app.pending_action {
-        Some(PendingAction::Stop(id)) => ("Stop", id.as_str()),
-        Some(PendingAction::Restart(id)) => ("Restart", id.as_str()),
-        Some(PendingAction::Disable(id)) => ("Disable", id.as_str()),
-        None => ("Unknown", "unknown"),
+    let (action_text, target_text) = match &app.pending_action {
+        Some(PendingAction::Stop(id)) => ("Stop", format!("daemon '{}'", id)),
+        Some(PendingAction::Restart(id)) => ("Restart", format!("daemon '{}'", id)),
+        Some(PendingAction::Disable(id)) => ("Disable", format!("daemon '{}'", id)),
+        Some(PendingAction::BatchStop(ids)) => ("Stop", format!("{} daemons", ids.len())),
+        Some(PendingAction::BatchRestart(ids)) => ("Restart", format!("{} daemons", ids.len())),
+        Some(PendingAction::BatchDisable(ids)) => ("Disable", format!("{} daemons", ids.len())),
+        None => ("Unknown", "unknown".to_string()),
     };
 
     let text = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled(action_text, Style::default().fg(ORANGE).bold()),
-            Span::raw(" daemon "),
-            Span::styled(daemon_id, Style::default().fg(Color::White).bold()),
+            Span::raw(" "),
+            Span::styled(target_text, Style::default().fg(Color::White).bold()),
             Span::raw("?"),
         ]),
         Line::from(""),

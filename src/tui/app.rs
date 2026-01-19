@@ -4,8 +4,10 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::{ProcessStats, PROCS};
 use crate::Result;
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 use miette::bail;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -79,6 +81,10 @@ pub enum PendingAction {
     Stop(String),
     Restart(String),
     Disable(String),
+    // Batch operations
+    BatchStop(Vec<String>),
+    BatchRestart(Vec<String>),
+    BatchDisable(Vec<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -156,6 +162,12 @@ pub struct App {
     pub details_daemon_id: Option<String>,
     // Whether logs are expanded to fill the screen (hides charts)
     pub logs_expanded: bool,
+    // Multi-select state
+    pub multi_select: HashSet<String>,
+    // Config-only daemons (defined in pitchfork.toml but not currently active)
+    pub config_daemon_ids: HashSet<String>,
+    // Whether to show config-only daemons in the list
+    pub show_available: bool,
 }
 
 impl App {
@@ -186,6 +198,9 @@ impl App {
             log_search_current: 0,
             details_daemon_id: None,
             logs_expanded: false,
+            multi_select: HashSet::new(),
+            config_daemon_ids: HashSet::new(),
+            show_available: true, // Show available daemons by default
         }
     }
 
@@ -245,11 +260,20 @@ impl App {
         let mut filtered: Vec<&Daemon> = if self.search_query.is_empty() {
             self.daemons.iter().collect()
         } else {
-            let query = self.search_query.to_lowercase();
-            self.daemons
+            // Use fuzzy matching with SkimMatcherV2
+            let matcher = SkimMatcherV2::default();
+            let mut scored: Vec<_> = self
+                .daemons
                 .iter()
-                .filter(|d| d.id.to_lowercase().contains(&query))
-                .collect()
+                .filter_map(|d| {
+                    matcher
+                        .fuzzy_match(&d.id, &self.search_query)
+                        .map(|score| (d, score))
+                })
+                .collect();
+            // Sort by score descending (best matches first)
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.into_iter().map(|(d, _)| d).collect()
         };
 
         // Sort the filtered list
@@ -363,6 +387,46 @@ impl App {
         self.logs_expanded = !self.logs_expanded;
     }
 
+    // Multi-select methods
+    pub fn toggle_select(&mut self) {
+        if let Some(daemon) = self.selected_daemon() {
+            let id = daemon.id.clone();
+            if self.multi_select.contains(&id) {
+                self.multi_select.remove(&id);
+            } else {
+                self.multi_select.insert(id);
+            }
+        }
+    }
+
+    pub fn select_all_visible(&mut self) {
+        // Collect IDs first to avoid borrow conflict
+        let ids: Vec<String> = self
+            .filtered_daemons()
+            .iter()
+            .map(|d| d.id.clone())
+            .collect();
+        for id in ids {
+            self.multi_select.insert(id);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.multi_select.clear();
+    }
+
+    pub fn is_selected(&self, daemon_id: &str) -> bool {
+        self.multi_select.contains(daemon_id)
+    }
+
+    pub fn has_selection(&self) -> bool {
+        !self.multi_select.is_empty()
+    }
+
+    pub fn selected_daemon_ids(&self) -> Vec<String> {
+        self.multi_select.iter().cloned().collect()
+    }
+
     pub fn set_message(&mut self, msg: impl Into<String>) {
         self.message = Some(msg.into());
         self.message_time = Some(Instant::now());
@@ -407,6 +471,9 @@ impl App {
         self.daemons.retain(|d| d.id != "pitchfork");
         self.disabled = client.get_disabled_daemons().await?;
 
+        // Load config daemons and add placeholder entries for ones not currently active
+        self.refresh_config_daemons();
+
         // Refresh process stats (CPU, memory, uptime)
         self.refresh_process_stats();
 
@@ -414,8 +481,9 @@ impl App {
         self.clear_stale_message();
 
         // Keep selection in bounds
-        if !self.daemons.is_empty() && self.selected >= self.daemons.len() {
-            self.selected = self.daemons.len() - 1;
+        let total_count = self.total_daemon_count();
+        if total_count > 0 && self.selected >= total_count {
+            self.selected = total_count - 1;
         }
 
         // Refresh logs if viewing
@@ -426,6 +494,59 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn refresh_config_daemons(&mut self) {
+        use crate::daemon_status::DaemonStatus;
+
+        let config = PitchforkToml::all_merged();
+        let active_ids: HashSet<String> = self.daemons.iter().map(|d| d.id.clone()).collect();
+
+        // Find daemons in config that aren't currently active
+        self.config_daemon_ids.clear();
+        for daemon_id in config.daemons.keys() {
+            if !active_ids.contains(daemon_id) && daemon_id != "pitchfork" {
+                self.config_daemon_ids.insert(daemon_id.clone());
+
+                // Add a placeholder daemon entry if show_available is enabled
+                if self.show_available {
+                    let placeholder = Daemon {
+                        id: daemon_id.clone(),
+                        title: None,
+                        pid: None,
+                        shell_pid: None,
+                        status: DaemonStatus::Stopped,
+                        dir: None,
+                        autostop: false,
+                        cron_schedule: None,
+                        cron_retrigger: None,
+                        last_exit_success: None,
+                        retry: 0,
+                        retry_count: 0,
+                        ready_delay: None,
+                        ready_output: None,
+                        ready_http: None,
+                        ready_port: None,
+                    };
+                    self.daemons.push(placeholder);
+                }
+            }
+        }
+    }
+
+    /// Check if a daemon is from config only (not currently active)
+    pub fn is_config_only(&self, daemon_id: &str) -> bool {
+        self.config_daemon_ids.contains(daemon_id)
+    }
+
+    /// Toggle showing available daemons from config
+    pub fn toggle_show_available(&mut self) {
+        self.show_available = !self.show_available;
+    }
+
+    /// Get total daemon count (for selection bounds)
+    fn total_daemon_count(&self) -> usize {
+        self.filtered_daemons().len()
     }
 
     pub fn scroll_logs_down(&mut self) {
@@ -593,24 +714,27 @@ impl App {
         self.log_scroll = 0;
     }
 
-    pub fn stats(&self) -> (usize, usize, usize, usize) {
+    /// Returns (total, running, stopped, errored, available)
+    pub fn stats(&self) -> (usize, usize, usize, usize, usize) {
+        let available = self.config_daemon_ids.len();
         let total = self.daemons.len();
         let running = self
             .daemons
             .iter()
             .filter(|d| d.status.is_running())
             .count();
+        // Don't count config-only daemons as stopped
         let stopped = self
             .daemons
             .iter()
-            .filter(|d| d.status.is_stopped())
+            .filter(|d| d.status.is_stopped() && !self.config_daemon_ids.contains(&d.id))
             .count();
         let errored = self
             .daemons
             .iter()
             .filter(|d| d.status.is_errored() || d.status.is_failed())
             .count();
-        (total, running, stopped, errored)
+        (total, running, stopped, errored, available)
     }
 
     pub fn is_disabled(&self, daemon_id: &str) -> bool {
@@ -652,6 +776,7 @@ impl App {
             ready_delay: daemon_config.ready_delay,
             ready_output: daemon_config.ready_output.clone(),
             ready_http: daemon_config.ready_http.clone(),
+            ready_port: daemon_config.ready_port,
             wait_ready: false,
         };
 

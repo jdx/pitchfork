@@ -9,6 +9,9 @@ pub enum Action {
     Enable(String),
     Refresh,
     ConfirmPending,
+    // Batch actions (operate on multi-select)
+    BatchStart(Vec<String>),
+    BatchEnable(Vec<String>),
 }
 
 pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
@@ -58,11 +61,17 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
 fn handle_dashboard_event(
     app: &mut App,
     key: KeyCode,
-    _modifiers: KeyModifiers,
+    modifiers: KeyModifiers,
 ) -> Result<Option<Action>> {
     // Handle search input mode first
     if app.search_active {
         return handle_search_input(app, key);
+    }
+
+    // Ctrl+A to select all visible daemons
+    if modifiers.contains(KeyModifiers::CONTROL) && key == KeyCode::Char('a') {
+        app.select_all_visible();
+        return Ok(None);
     }
 
     match key {
@@ -117,7 +126,27 @@ fn handle_dashboard_event(
             Ok(None)
         }
         KeyCode::Char('s') => {
-            if let Some(daemon) = app.selected_daemon() {
+            // Batch start if multi-select is active
+            if app.has_selection() {
+                let ids: Vec<String> = app
+                    .selected_daemon_ids()
+                    .into_iter()
+                    .filter(|id| {
+                        app.daemons
+                            .iter()
+                            .find(|d| &d.id == id)
+                            .map(|d| {
+                                d.status.is_stopped()
+                                    || d.status.is_errored()
+                                    || d.status.is_failed()
+                            })
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                if !ids.is_empty() {
+                    return Ok(Some(Action::BatchStart(ids)));
+                }
+            } else if let Some(daemon) = app.selected_daemon() {
                 if daemon.status.is_stopped()
                     || daemon.status.is_errored()
                     || daemon.status.is_failed()
@@ -129,7 +158,22 @@ fn handle_dashboard_event(
         }
         KeyCode::Char('x') => {
             // Stop requires confirmation
-            if let Some(daemon) = app.selected_daemon() {
+            if app.has_selection() {
+                let ids: Vec<String> = app
+                    .selected_daemon_ids()
+                    .into_iter()
+                    .filter(|id| {
+                        app.daemons
+                            .iter()
+                            .find(|d| &d.id == id)
+                            .map(|d| d.status.is_running() || d.status.is_waiting())
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                if !ids.is_empty() {
+                    app.confirm_action(PendingAction::BatchStop(ids));
+                }
+            } else if let Some(daemon) = app.selected_daemon() {
                 if daemon.status.is_running() || daemon.status.is_waiting() {
                     app.confirm_action(PendingAction::Stop(daemon.id.clone()));
                 }
@@ -137,8 +181,26 @@ fn handle_dashboard_event(
             Ok(None)
         }
         KeyCode::Char('r') => {
-            // Restart requires confirmation
-            if let Some(daemon) = app.selected_daemon() {
+            // Restart requires confirmation (for running daemons)
+            if app.has_selection() {
+                let mut to_restart = Vec::new();
+                let mut to_start = Vec::new();
+                for id in app.selected_daemon_ids() {
+                    if let Some(d) = app.daemons.iter().find(|d| d.id == id) {
+                        if d.status.is_running() || d.status.is_waiting() {
+                            to_restart.push(id);
+                        } else {
+                            to_start.push(id);
+                        }
+                    }
+                }
+
+                if !to_restart.is_empty() {
+                    app.confirm_action(PendingAction::BatchRestart(to_restart));
+                } else if !to_start.is_empty() {
+                    return Ok(Some(Action::BatchStart(to_start)));
+                }
+            } else if let Some(daemon) = app.selected_daemon() {
                 if daemon.status.is_running() || daemon.status.is_waiting() {
                     app.confirm_action(PendingAction::Restart(daemon.id.clone()));
                 } else {
@@ -149,7 +211,16 @@ fn handle_dashboard_event(
             Ok(None)
         }
         KeyCode::Char('e') => {
-            if let Some(daemon) = app.selected_daemon() {
+            if app.has_selection() {
+                let ids: Vec<String> = app
+                    .selected_daemon_ids()
+                    .into_iter()
+                    .filter(|id| app.is_disabled(id))
+                    .collect();
+                if !ids.is_empty() {
+                    return Ok(Some(Action::BatchEnable(ids)));
+                }
+            } else if let Some(daemon) = app.selected_daemon() {
                 if app.is_disabled(&daemon.id) {
                     return Ok(Some(Action::Enable(daemon.id.clone())));
                 }
@@ -158,7 +229,16 @@ fn handle_dashboard_event(
         }
         KeyCode::Char('d') => {
             // Disable requires confirmation
-            if let Some(daemon) = app.selected_daemon() {
+            if app.has_selection() {
+                let ids: Vec<String> = app
+                    .selected_daemon_ids()
+                    .into_iter()
+                    .filter(|id| !app.is_disabled(id))
+                    .collect();
+                if !ids.is_empty() {
+                    app.confirm_action(PendingAction::BatchDisable(ids));
+                }
+            } else if let Some(daemon) = app.selected_daemon() {
                 if !app.is_disabled(&daemon.id) {
                     app.confirm_action(PendingAction::Disable(daemon.id.clone()));
                 }
@@ -173,6 +253,25 @@ fn handle_dashboard_event(
             Ok(None)
         }
         KeyCode::Char('R') => Ok(Some(Action::Refresh)),
+        // Toggle showing available (config-only) daemons
+        KeyCode::Char('a') => {
+            app.toggle_show_available();
+            Ok(Some(Action::Refresh)) // Refresh to update the list
+        }
+        // Space to toggle selection for multi-select
+        KeyCode::Char(' ') => {
+            app.toggle_select();
+            // Move to next item after selecting (like file managers)
+            app.select_next();
+            Ok(None)
+        }
+        // Escape clears selection if there is one
+        KeyCode::Char('c') => {
+            if app.has_selection() {
+                app.clear_selection();
+            }
+            Ok(None)
+        }
         _ => Ok(None),
     }
 }
