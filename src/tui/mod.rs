@@ -132,6 +132,35 @@ async fn run_app<B: Backend>(
                     app.refresh(client).await?;
                     app.stop_loading();
                 }
+                event::Action::OpenEditorNew => {
+                    app.open_file_selector();
+                }
+                event::Action::OpenEditorEdit(id) => {
+                    app.open_editor_edit(&id);
+                }
+                event::Action::SaveConfig => {
+                    app.start_loading("Saving...");
+                    terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
+                    match app.save_editor_config() {
+                        Ok(true) => {
+                            // Successfully saved
+                            app.stop_loading();
+                            app.close_editor();
+                            app.refresh(client).await?;
+                        }
+                        Ok(false) => {
+                            // Validation or duplicate error - don't close editor
+                            app.stop_loading();
+                        }
+                        Err(e) => {
+                            app.stop_loading();
+                            app.set_message(format!("Save failed: {}", e));
+                        }
+                    }
+                }
+                event::Action::DeleteDaemon { id, config_path } => {
+                    app.confirm_action(app::PendingAction::DeleteDaemon { id, config_path });
+                }
                 event::Action::ConfirmPending => {
                     if let Some(pending) = app.take_pending_action() {
                         match pending {
@@ -207,6 +236,31 @@ async fn run_app<B: Backend>(
                                 app.stop_loading();
                                 app.clear_selection();
                                 app.set_message(format!("Disabled {} daemons", count));
+                            }
+                            app::PendingAction::DeleteDaemon { id, config_path } => {
+                                app.start_loading(format!("Deleting {}...", id));
+                                terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
+                                match app.delete_daemon_from_config(&id, &config_path) {
+                                    Ok(true) => {
+                                        app.stop_loading();
+                                        app.close_editor();
+                                        app.set_message(format!("Deleted {}", id));
+                                    }
+                                    Ok(false) => {
+                                        app.stop_loading();
+                                        app.set_message(format!(
+                                            "Daemon '{}' not found in config",
+                                            id
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        app.stop_loading();
+                                        app.set_message(format!("Delete failed: {}", e));
+                                    }
+                                }
+                            }
+                            app::PendingAction::DiscardEditorChanges => {
+                                app.close_editor();
                             }
                         }
                         app.refresh(client).await?;

@@ -1,6 +1,8 @@
 use crate::daemon_status::DaemonStatus;
-use crate::pitchfork_toml::PitchforkToml;
-use crate::tui::app::{App, PendingAction, SortColumn, StatsHistory, View};
+use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
+use crate::tui::app::{
+    App, EditMode, FormFieldValue, PendingAction, SortColumn, StatsHistory, View,
+};
 use ratatui::{
     prelude::*,
     symbols,
@@ -22,6 +24,19 @@ const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-
 // Unicode block characters for bar rendering
 const BAR_FULL: char = '█';
 const BAR_EMPTY: char = '░';
+
+/// UTF-8 safe string truncation from the end, returning "...{suffix}" if too long.
+/// Uses character count instead of byte length to avoid panics on non-ASCII.
+fn truncate_path_end(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let suffix_len = max_chars.saturating_sub(3); // Account for "..."
+        let suffix: String = s.chars().skip(char_count - suffix_len).collect();
+        format!("...{}", suffix)
+    }
+}
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -47,6 +62,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Confirm => draw_confirm_overlay(f, app),
         View::Loading => draw_loading_overlay(f, app),
         View::Details => draw_details_overlay(f, app),
+        View::ConfigEditor => draw_config_editor_overlay(f, app),
+        View::ConfigFileSelect => draw_file_select_overlay(f, app),
         _ => {}
     }
 }
@@ -108,9 +125,12 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_main(f: &mut Frame, area: Rect, app: &App) {
     match app.view {
-        View::Dashboard | View::Confirm | View::Loading | View::Details => {
-            draw_daemon_table(f, area, app)
-        }
+        View::Dashboard
+        | View::Confirm
+        | View::Loading
+        | View::Details
+        | View::ConfigEditor
+        | View::ConfigFileSelect => draw_daemon_table(f, area, app),
         View::Logs => draw_logs(f, area, app),
         View::Help => draw_daemon_table(f, area, app), // Help is an overlay
     }
@@ -1066,6 +1086,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         View::Confirm => "y/Enter:confirm  n/Esc:cancel",
         View::Loading => "Please wait...",
         View::Details => "q/Esc/i:close",
+        View::ConfigEditor => "Tab/j/k:nav  Enter:edit  Ctrl+S:save  Esc:cancel  D:delete",
+        View::ConfigFileSelect => "j/k:nav  Enter:select  Esc:cancel",
     };
 
     let footer = Paragraph::new(help_text)
@@ -1117,6 +1139,13 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from("  e           Enable disabled daemon(s)"),
         Line::from("  d           Disable daemon(s)"),
         Line::from("  R           Force refresh"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Config Editor",
+            Style::default().fg(RED).bold(),
+        )]),
+        Line::from("  n           New daemon"),
+        Line::from("  E           Edit selected daemon config"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "General",
@@ -1192,6 +1221,10 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         Some(PendingAction::BatchStop(ids)) => ("Stop", format!("{} daemons", ids.len())),
         Some(PendingAction::BatchRestart(ids)) => ("Restart", format!("{} daemons", ids.len())),
         Some(PendingAction::BatchDisable(ids)) => ("Disable", format!("{} daemons", ids.len())),
+        Some(PendingAction::DeleteDaemon { id, .. }) => {
+            ("Delete", format!("daemon '{}' from config", id))
+        }
+        Some(PendingAction::DiscardEditorChanges) => ("Discard", "unsaved changes".to_string()),
         None => ("Unknown", "unknown".to_string()),
     };
 
@@ -1410,4 +1443,341 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
+    let editor = match &app.editor_state {
+        Some(e) => e,
+        None => return,
+    };
+
+    let area = centered_rect(70, 85, f.area());
+    f.render_widget(Clear, area);
+
+    let title = match &editor.mode {
+        EditMode::Create => " New Daemon ",
+        EditMode::Edit { .. } => " Edit Daemon ",
+    };
+
+    // Split into header and body
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Daemon ID
+            Constraint::Length(1), // Config path
+            Constraint::Min(0),    // Form fields
+            Constraint::Length(2), // Footer
+        ])
+        .split(area);
+
+    // Daemon ID header
+    let id_style = if editor.daemon_id_editing {
+        Style::default().fg(ORANGE).bold()
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let id_display = if editor.daemon_id_editing {
+        format!("Name: {}█", editor.daemon_id)
+    } else if editor.daemon_id.is_empty() {
+        "Name: (press 'i' to edit name)".to_string()
+    } else {
+        format!("Name: {}", editor.daemon_id)
+    };
+
+    // Append error if present
+    let id_display = if let Some(err) = &editor.daemon_id_error {
+        format!("{} [{}]", id_display, err)
+    } else {
+        id_display
+    };
+
+    let id_style = if editor.daemon_id_error.is_some() {
+        Style::default().fg(RED).bold()
+    } else {
+        id_style
+    };
+
+    let header = Paragraph::new(id_display)
+        .style(id_style)
+        .block(
+            Block::default()
+                .title(title)
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(RED)),
+        )
+        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+    f.render_widget(header, chunks[0]);
+
+    // Config path
+    let path_str = editor.config_path.display().to_string();
+    let path_display = truncate_path_end(&path_str, 60);
+    let path_line = Paragraph::new(format!("  Config: {}", path_display))
+        .style(Style::default().fg(GRAY).bg(Color::Rgb(20, 20, 20)));
+    f.render_widget(path_line, chunks[1]);
+
+    // Form fields
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, field) in editor.fields.iter().enumerate() {
+        let is_focused = i == editor.focused_field && !editor.daemon_id_editing;
+
+        // Field label
+        let focus_indicator = if is_focused { "▶ " } else { "  " };
+        let required_marker = if field.required { "*" } else { "" };
+        let label_style = if is_focused {
+            Style::default().fg(ORANGE).bold()
+        } else {
+            Style::default().fg(GRAY)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(focus_indicator, Style::default().fg(ORANGE)),
+            Span::styled(field.label, label_style),
+            Span::styled(required_marker, Style::default().fg(RED)),
+        ]));
+
+        // Field value
+        let value_line = render_field_value(field, is_focused && field.editing);
+        lines.push(value_line);
+
+        // Error message if any
+        if let Some(error) = &field.error {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(format!("⚠ {}", error), Style::default().fg(RED)),
+            ]));
+        }
+
+        // Add spacing between fields
+        lines.push(Line::from(""));
+    }
+
+    let form = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Configuration ")
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(DARK_GRAY)),
+        )
+        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+    f.render_widget(form, chunks[2]);
+
+    // Footer with keybindings
+    let footer_text = if editor.is_editing() {
+        "Enter: Confirm | Esc: Cancel editing"
+    } else {
+        match &editor.mode {
+            EditMode::Create => {
+                "Tab/j/k: Navigate | Enter: Edit | Space: Toggle | Ctrl+S: Save | q: Cancel"
+            }
+            EditMode::Edit { .. } => {
+                "Tab/j/k: Navigate | Enter: Edit | Space: Toggle | Ctrl+S: Save | D: Delete | q: Cancel"
+            }
+        }
+    };
+
+    let footer = Paragraph::new(footer_text)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(GRAY).bg(Color::Rgb(20, 20, 20)));
+    f.render_widget(footer, chunks[3]);
+}
+
+fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> Line<'static> {
+    let cursor = if is_editing { "█" } else { "" };
+
+    match &field.value {
+        FormFieldValue::Text(s) => {
+            let display = if s.is_empty() && !is_editing {
+                Span::styled("(empty)", Style::default().fg(DARK_GRAY).italic())
+            } else {
+                Span::styled(
+                    format!("{}{}", s, cursor),
+                    Style::default().fg(Color::White),
+                )
+            };
+            Line::from(vec![Span::raw("    "), display])
+        }
+        FormFieldValue::OptionalText(opt) => {
+            let display = match opt {
+                Some(s) => Span::styled(
+                    format!("{}{}", s, cursor),
+                    Style::default().fg(Color::White),
+                ),
+                None if is_editing => {
+                    Span::styled(cursor.to_string(), Style::default().fg(Color::White))
+                }
+                None => Span::styled("(not set)", Style::default().fg(DARK_GRAY).italic()),
+            };
+            Line::from(vec![Span::raw("    "), display])
+        }
+        FormFieldValue::Number(n) => {
+            let display = if is_editing {
+                Span::styled(
+                    format!("{}{}", n, cursor),
+                    Style::default().fg(Color::White),
+                )
+            } else {
+                Span::styled(n.to_string(), Style::default().fg(Color::White))
+            };
+            Line::from(vec![Span::raw("    "), display])
+        }
+        FormFieldValue::OptionalNumber(opt) => {
+            let display = match opt {
+                Some(n) => Span::styled(
+                    format!("{}{}", n, cursor),
+                    Style::default().fg(Color::White),
+                ),
+                None if is_editing => {
+                    Span::styled(cursor.to_string(), Style::default().fg(Color::White))
+                }
+                None => Span::styled("(not set)", Style::default().fg(DARK_GRAY).italic()),
+            };
+            Line::from(vec![Span::raw("    "), display])
+        }
+        FormFieldValue::OptionalPort(opt) => {
+            let display = match opt {
+                Some(p) => Span::styled(
+                    format!("{}{}", p, cursor),
+                    Style::default().fg(Color::White),
+                ),
+                None if is_editing => {
+                    Span::styled(cursor.to_string(), Style::default().fg(Color::White))
+                }
+                None => Span::styled("(not set)", Style::default().fg(DARK_GRAY).italic()),
+            };
+            Line::from(vec![Span::raw("    "), display])
+        }
+        FormFieldValue::Boolean(b) => {
+            let checkbox = if *b { "[x]" } else { "[ ]" };
+            let color = if *b { GREEN } else { GRAY };
+            Line::from(vec![
+                Span::raw("    "),
+                Span::styled(checkbox, Style::default().fg(color)),
+            ])
+        }
+        FormFieldValue::OptionalBoolean(opt) => {
+            let (checkbox, color) = match opt {
+                Some(true) => ("[x] Yes", GREEN),
+                Some(false) => ("[ ] No", GRAY),
+                None => ("[-] (not set)", DARK_GRAY),
+            };
+            Line::from(vec![
+                Span::raw("    "),
+                Span::styled(checkbox, Style::default().fg(color)),
+            ])
+        }
+        FormFieldValue::AutoBehavior(v) => {
+            let has_start = v.contains(&PitchforkTomlAuto::Start);
+            let has_stop = v.contains(&PitchforkTomlAuto::Stop);
+
+            let start_box = if has_start { "[x]" } else { "[ ]" };
+            let stop_box = if has_stop { "[x]" } else { "[ ]" };
+
+            Line::from(vec![
+                Span::raw("    "),
+                Span::styled(
+                    start_box,
+                    Style::default().fg(if has_start { GREEN } else { GRAY }),
+                ),
+                Span::raw(" Start  "),
+                Span::styled(
+                    stop_box,
+                    Style::default().fg(if has_stop { GREEN } else { GRAY }),
+                ),
+                Span::raw(" Stop"),
+            ])
+        }
+        FormFieldValue::Retrigger(r) => {
+            let options = [
+                ("Finish", CronRetrigger::Finish),
+                ("Always", CronRetrigger::Always),
+                ("Success", CronRetrigger::Success),
+                ("Fail", CronRetrigger::Fail),
+            ];
+
+            let mut spans = vec![Span::raw("    ")];
+            for (name, val) in &options {
+                let style = if r == val {
+                    Style::default().fg(GREEN).bold()
+                } else {
+                    Style::default().fg(GRAY)
+                };
+                spans.push(Span::styled(format!("{} ", name), style));
+            }
+            Line::from(spans)
+        }
+        FormFieldValue::StringList(v) => {
+            let display = if v.is_empty() && !is_editing {
+                Span::styled("(none)", Style::default().fg(DARK_GRAY).italic())
+            } else {
+                let text = v.join(", ");
+                Span::styled(
+                    format!("{}{}", text, cursor),
+                    Style::default().fg(Color::White),
+                )
+            };
+            Line::from(vec![Span::raw("    "), display])
+        }
+    }
+}
+
+fn draw_file_select_overlay(f: &mut Frame, app: &App) {
+    let selector = match &app.file_selector {
+        Some(s) => s,
+        None => return,
+    };
+
+    let area = centered_rect(60, 50, f.area());
+    f.render_widget(Clear, area);
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![Span::styled(
+            "Select a config file for the new daemon:",
+            Style::default().fg(ORANGE),
+        )]),
+        Line::from(""),
+    ];
+
+    for (i, path) in selector.files.iter().enumerate() {
+        let is_selected = i == selector.selected;
+        let indicator = if is_selected { "▶ " } else { "  " };
+
+        let path_str = path.display().to_string();
+        let display_path = truncate_path_end(&path_str, 50);
+
+        let exists_marker = if path.exists() { "" } else { " (new)" };
+
+        let style = if is_selected {
+            Style::default().fg(ORANGE).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(indicator, Style::default().fg(ORANGE)),
+            Span::styled(display_path, style),
+            Span::styled(exists_marker, Style::default().fg(CYAN)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "j/k: Navigate | Enter: Select | q: Cancel",
+        Style::default().fg(GRAY),
+    )]));
+
+    let popup = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Select Config File ")
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(RED)),
+        )
+        .style(Style::default().bg(Color::Rgb(20, 20, 20)));
+
+    f.render_widget(popup, area);
 }

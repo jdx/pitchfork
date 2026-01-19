@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::tui::app::{App, PendingAction, View};
+use crate::tui::app::{App, EditMode, PendingAction, View};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use miette::IntoDiagnostic;
 
@@ -12,6 +12,14 @@ pub enum Action {
     // Batch actions (operate on multi-select)
     BatchStart(Vec<String>),
     BatchEnable(Vec<String>),
+    // Config editor actions
+    OpenEditorNew,
+    OpenEditorEdit(String),
+    SaveConfig,
+    DeleteDaemon {
+        id: String,
+        config_path: std::path::PathBuf,
+    },
 }
 
 pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
@@ -31,6 +39,8 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
                 View::Confirm => handle_confirm_event(app, key.code),
                 View::Details => handle_details_event(app, key.code),
                 View::Loading => Ok(None), // Ignore input during loading
+                View::ConfigEditor => handle_config_editor_event(app, key.code, key.modifiers),
+                View::ConfigFileSelect => handle_file_select_event(app, key.code),
             }
         }
         Event::Mouse(mouse) => {
@@ -51,7 +61,7 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
                     }
                     Ok(None)
                 }
-                View::Loading => Ok(None),
+                View::Loading | View::ConfigEditor | View::ConfigFileSelect => Ok(None),
             }
         }
         _ => Ok(None),
@@ -252,6 +262,18 @@ fn handle_dashboard_event(
             Ok(None)
         }
         KeyCode::Char('R') => Ok(Some(Action::Refresh)),
+        // Config editor
+        KeyCode::Char('n') => {
+            // Create new daemon
+            Ok(Some(Action::OpenEditorNew))
+        }
+        KeyCode::Char('E') => {
+            // Edit selected daemon config
+            if let Some(daemon) = app.selected_daemon() {
+                return Ok(Some(Action::OpenEditorEdit(daemon.id.clone())));
+            }
+            Ok(None)
+        }
         // Toggle showing available (config-only) daemons
         KeyCode::Char('a') => {
             app.toggle_show_available();
@@ -513,6 +535,140 @@ fn handle_logs_mouse(app: &mut App, kind: MouseEventKind) -> Result<Option<Actio
             app.scroll_logs_up();
             app.scroll_logs_up();
             app.scroll_logs_up();
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_config_editor_event(
+    app: &mut App,
+    key: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<Option<Action>> {
+    let editor = match &mut app.editor_state {
+        Some(e) => e,
+        None => return Ok(None),
+    };
+
+    // Ctrl+S to save (check before editing mode so it works while typing)
+    if modifiers.contains(KeyModifiers::CONTROL) && key == KeyCode::Char('s') {
+        return Ok(Some(Action::SaveConfig));
+    }
+
+    // Handle text input mode
+    if editor.is_editing() {
+        return handle_editor_text_input(app, key);
+    }
+
+    match key {
+        // Navigation
+        KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
+            editor.next_field();
+            Ok(None)
+        }
+        KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
+            editor.prev_field();
+            Ok(None)
+        }
+
+        // Edit field
+        KeyCode::Enter => {
+            if editor.daemon_id_editing {
+                // Move to first field
+                editor.daemon_id_editing = false;
+            } else {
+                editor.start_editing();
+            }
+            Ok(None)
+        }
+        KeyCode::Char(' ') => {
+            editor.toggle_current_field();
+            Ok(None)
+        }
+
+        // Edit daemon ID (when focused at top)
+        KeyCode::Char('i') => {
+            editor.daemon_id_editing = true;
+            editor.daemon_id_cursor = editor.daemon_id.chars().count();
+            Ok(None)
+        }
+
+        // Delete daemon (edit mode only)
+        KeyCode::Char('D') if matches!(editor.mode, EditMode::Edit { .. }) => {
+            if let EditMode::Edit { original_id } = &editor.mode {
+                let id = original_id.clone();
+                let path = editor.config_path.clone();
+                return Ok(Some(Action::DeleteDaemon {
+                    id,
+                    config_path: path,
+                }));
+            }
+            Ok(None)
+        }
+
+        // Cancel/Exit
+        KeyCode::Esc | KeyCode::Char('q') => {
+            if editor.unsaved_changes {
+                app.confirm_action(PendingAction::DiscardEditorChanges);
+            } else {
+                app.close_editor();
+            }
+            Ok(None)
+        }
+
+        _ => Ok(None),
+    }
+}
+
+fn handle_editor_text_input(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+    let editor = app.editor_state.as_mut().unwrap();
+
+    match key {
+        KeyCode::Esc | KeyCode::Enter => {
+            editor.stop_editing();
+            Ok(None)
+        }
+        KeyCode::Backspace => {
+            editor.text_pop();
+            Ok(None)
+        }
+        KeyCode::Char(c) => {
+            editor.text_push(c);
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_file_select_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+    let selector = match &mut app.file_selector {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    match key {
+        KeyCode::Down | KeyCode::Char('j') => {
+            if selector.selected < selector.files.len().saturating_sub(1) {
+                selector.selected += 1;
+            }
+            Ok(None)
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if selector.selected > 0 {
+                selector.selected -= 1;
+            }
+            Ok(None)
+        }
+        KeyCode::Enter => {
+            if let Some(path) = selector.files.get(selector.selected).cloned() {
+                app.open_editor_create(path);
+            }
+            Ok(None)
+        }
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.file_selector = None;
+            app.view = View::Dashboard;
             Ok(None)
         }
         _ => Ok(None),
