@@ -1020,8 +1020,8 @@
               {
                 "name": "web-port",
                 "usage": "--web-port <WEB_PORT>",
-                "help": "Web UI port (default: 19876, tries up to 10 ports if in use)",
-                "help_first_line": "Web UI port (default: 19876, tries up to 10 ports if in use)",
+                "help": "Enable web UI on specified port (tries up to 10 ports if in use)",
+                "help_first_line": "Enable web UI on specified port (tries up to 10 ports if in use)",
                 "short": [],
                 "long": [
                   "web-port"
@@ -1034,22 +1034,7 @@
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false
-                },
-                "default": [
-                  "19876"
-                ]
-              },
-              {
-                "name": "no-web",
-                "usage": "--no-web",
-                "help": "Disable the web UI",
-                "help_first_line": "Disable the web UI",
-                "short": [],
-                "long": [
-                  "no-web"
-                ],
-                "hide": false,
-                "global": false
+                }
               }
             ],
             "mounts": [],

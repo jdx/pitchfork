@@ -17,10 +17,4 @@ run as boot start (auto-start boot_start daemons)
 
 ### `--web-port <WEB_PORT>`
 
-Web UI port (default: 19876, tries up to 10 ports if in use)
-
-**Default:** `19876`
-
-### `--no-web`
-
-Disable the web UI
+Enable web UI on specified port (tries up to 10 ports if in use)

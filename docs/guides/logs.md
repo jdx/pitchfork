@@ -81,6 +81,6 @@ Logs are stored in `~/.local/state/pitchfork/logs/<daemon-name>/`.
 
 Each daemon has its own log file that persists across restarts.
 
-## Web UI
+## TUI and Web UI
 
-You can also view logs in real-time through the [Web UI](/guides/web-ui) at http://127.0.0.1:19876.
+You can also view logs in real-time through the [TUI](/guides/tui) (`pitchfork tui`) or [Web UI](/guides/web-ui) (if enabled).

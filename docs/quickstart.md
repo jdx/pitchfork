@@ -50,17 +50,15 @@ Or follow logs in real-time:
 pitchfork logs myserver --tail
 ```
 
-## Interactive Dashboards
+## Interactive Dashboard
 
-For a richer monitoring experience:
+For a richer monitoring experience, launch the terminal UI:
 
 ```bash
-# Terminal UI with vim keybindings
 pitchfork tui
-
-# Or open the web dashboard
-open http://127.0.0.1:19876
 ```
+
+The TUI features vim-style keybindings, fuzzy search, and a built-in config editor.
 
 ## Stop the Daemon
 
