@@ -159,9 +159,10 @@ impl Supervisor {
                     Ok(cmd) => cmd,
                     Err(e) => {
                         error!("failed to parse command for daemon {}: {}", id, e);
-                        // Mark as exhausted to prevent infinite retry loop
+                        // Mark as exhausted to prevent infinite retry loop, preserving error status
                         self.upsert_daemon(UpsertDaemonOpts {
                             id,
+                            status: daemon.status.clone(),
                             retry_count: Some(daemon.retry),
                             ..Default::default()
                         })
