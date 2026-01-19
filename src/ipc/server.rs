@@ -100,13 +100,14 @@ impl IpcServer {
         Ok(())
     }
 
-    async fn read_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<IpcRequest>> {
+    /// Read raw bytes from socket until null terminator (without deserializing)
+    async fn read_raw_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<Vec<u8>>> {
         let mut bytes = Vec::new();
         recv.read_until(0, &mut bytes).await.into_diagnostic()?;
         if bytes.is_empty() {
             return Ok(None);
         }
-        Ok(Some(deserialize(&bytes)?))
+        Ok(Some(bytes))
     }
 
     fn read_messages_chan(recv: RecvHalf) -> Receiver<IpcRequest> {
@@ -118,26 +119,43 @@ impl IpcServer {
             let mut rate_limiter = RateLimiter::new(100, 1);
 
             loop {
-                let msg = match Self::read_message(&mut recv).await {
-                    Ok(Some(msg)) => {
-                        trace!("Received message: {:?}", msg);
-                        msg
-                    }
+                // Check rate limit BEFORE reading to avoid wasting CPU on deserialization
+                // when rate limited. We still need to drain the socket to prevent buffer
+                // buildup, but we skip the costly deserialization step.
+                let is_rate_limited = !rate_limiter.check();
+
+                // Read raw bytes from socket
+                let bytes = match Self::read_raw_message(&mut recv).await {
+                    Ok(Some(bytes)) => bytes,
                     Ok(None) => {
                         trace!("Client disconnected");
                         break;
                     }
                     Err(err) => {
+                        // I/O errors are not rate-limited (they indicate connection issues)
+                        error!("Failed to read from socket: {:?}", err);
+                        break;
+                    }
+                };
+
+                // If rate limited, drop the message without deserializing
+                if is_rate_limited {
+                    warn!("IPC client rate limited, dropping message");
+                    continue;
+                }
+
+                // Deserialize the message
+                let msg = match deserialize(&bytes) {
+                    Ok(msg) => {
+                        trace!("Received message: {:?}", msg);
+                        msg
+                    }
+                    Err(err) => {
+                        // Deserialization errors still count towards rate limit (already counted above)
                         error!("Failed to deserialize message: {:?}", err);
                         continue;
                     }
                 };
-
-                // Check rate limit before processing
-                if !rate_limiter.check() {
-                    warn!("IPC client rate limited, dropping message");
-                    continue;
-                }
 
                 if let Err(err) = tx.send(msg).await {
                     warn!("Failed to emit message: {:?}", err);
