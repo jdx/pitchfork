@@ -181,6 +181,7 @@ impl Restart {
                         ready_http,
                         ready_port,
                         wait_ready: true,
+                        depends: vec![],
                     })
                     .await
                 {
