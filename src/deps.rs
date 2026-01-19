@@ -64,11 +64,20 @@ pub fn resolve_dependencies(
     }
 
     for id in &to_start {
-        let daemon = all_daemons.get(id).unwrap();
+        let daemon = all_daemons.get(id).ok_or_else(|| {
+            miette::miette!("Internal error: daemon '{}' missing from configuration", id)
+        })?;
         for dep in &daemon.depends {
             if to_start.contains(dep) {
-                *in_degree.get_mut(id).unwrap() += 1;
-                dependents.get_mut(dep).unwrap().push(id.clone());
+                *in_degree.get_mut(id).ok_or_else(|| {
+                    miette::miette!("Internal error: in_degree missing for daemon '{}'", id)
+                })? += 1;
+                dependents
+                    .get_mut(dep)
+                    .ok_or_else(|| {
+                        miette::miette!("Internal error: dependents missing for daemon '{}'", dep)
+                    })?
+                    .push(id.clone());
             }
         }
     }
@@ -91,8 +100,16 @@ pub fn resolve_dependencies(
         for id in &current_level {
             processed.insert(id.clone());
 
-            for dependent in &dependents[id] {
-                let deg = in_degree.get_mut(dependent).unwrap();
+            let deps = dependents.get(id).ok_or_else(|| {
+                miette::miette!("Internal error: dependents missing for daemon '{}'", id)
+            })?;
+            for dependent in deps {
+                let deg = in_degree.get_mut(dependent).ok_or_else(|| {
+                    miette::miette!(
+                        "Internal error: in_degree missing for daemon '{}'",
+                        dependent
+                    )
+                })?;
                 *deg -= 1;
                 if *deg == 0 {
                     next_level.push(dependent.clone());
