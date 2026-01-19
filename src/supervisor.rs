@@ -133,19 +133,32 @@ impl Supervisor {
     }
 
     async fn check_retry(&self) -> Result<()> {
-        let state_file = self.state_file.lock().await;
-        let daemons_to_retry: Vec<(String, Daemon)> = state_file
-            .daemons
-            .iter()
-            .filter(|(_id, d)| {
-                // Daemon is errored, not currently running, and has retries remaining
-                d.status.is_errored() && d.pid.is_none() && d.retry > 0 && d.retry_count < d.retry
-            })
-            .map(|(id, d)| (id.clone(), d.clone()))
-            .collect();
-        drop(state_file);
+        // Collect only IDs of daemons that need retrying (avoids cloning entire Daemon structs)
+        let ids_to_retry: Vec<String> = {
+            let state_file = self.state_file.lock().await;
+            state_file
+                .daemons
+                .iter()
+                .filter(|(_id, d)| {
+                    // Daemon is errored, not currently running, and has retries remaining
+                    d.status.is_errored()
+                        && d.pid.is_none()
+                        && d.retry > 0
+                        && d.retry_count < d.retry
+                })
+                .map(|(id, _d)| id.clone())
+                .collect()
+        };
 
-        for (id, daemon) in daemons_to_retry {
+        for id in ids_to_retry {
+            // Look up daemon when needed (it may have changed since we collected IDs)
+            let daemon = {
+                let state_file = self.state_file.lock().await;
+                match state_file.daemons.get(&id) {
+                    Some(d) => d.clone(),
+                    None => continue, // Daemon was removed
+                }
+            };
             info!(
                 "retrying daemon {} ({}/{} attempts)",
                 id,
@@ -1029,9 +1042,28 @@ impl Supervisor {
         use std::str::FromStr;
 
         let now = chrono::Local::now();
-        let daemons = self.state_file.lock().await.daemons.clone();
 
-        for (id, daemon) in daemons {
+        // Collect only IDs of daemons with cron schedules (avoids cloning entire HashMap)
+        let cron_daemon_ids: Vec<String> = {
+            let state_file = self.state_file.lock().await;
+            state_file
+                .daemons
+                .iter()
+                .filter(|(_id, d)| d.cron_schedule.is_some() && d.cron_retrigger.is_some())
+                .map(|(id, _d)| id.clone())
+                .collect()
+        };
+
+        for id in cron_daemon_ids {
+            // Look up daemon when needed
+            let daemon = {
+                let state_file = self.state_file.lock().await;
+                match state_file.daemons.get(&id) {
+                    Some(d) => d.clone(),
+                    None => continue,
+                }
+            };
+
             if let Some(schedule_str) = &daemon.cron_schedule
                 && let Some(retrigger) = daemon.cron_retrigger
             {
