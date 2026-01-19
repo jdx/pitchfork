@@ -517,14 +517,18 @@ impl EditorState {
 
     pub fn toggle_current_field(&mut self) {
         if let Some(field) = self.fields.get_mut(self.focused_field) {
-            match &mut field.value {
-                FormFieldValue::Boolean(b) => *b = !*b,
+            let toggled = match &mut field.value {
+                FormFieldValue::Boolean(b) => {
+                    *b = !*b;
+                    true
+                }
                 FormFieldValue::OptionalBoolean(opt) => {
                     *opt = match opt {
                         None => Some(true),
                         Some(true) => Some(false),
                         Some(false) => None,
                     };
+                    true
                 }
                 FormFieldValue::AutoBehavior(v) => {
                     // Cycle through: [] -> [Start] -> [Stop] -> [Start, Stop] -> []
@@ -536,6 +540,7 @@ impl EditorState {
                         (false, true) => vec![PitchforkTomlAuto::Start, PitchforkTomlAuto::Stop],
                         (true, true) => vec![],
                     };
+                    true
                 }
                 FormFieldValue::Retrigger(r) => {
                     *r = match r {
@@ -544,10 +549,13 @@ impl EditorState {
                         CronRetrigger::Success => CronRetrigger::Fail,
                         CronRetrigger::Fail => CronRetrigger::Finish,
                     };
+                    true
                 }
-                _ => {}
+                _ => false,
+            };
+            if toggled {
+                self.unsaved_changes = true;
             }
-            self.unsaved_changes = true;
         }
     }
 
@@ -1448,8 +1456,9 @@ impl App {
         self.view = View::Dashboard;
     }
 
-    /// Save the current editor state to config file
-    pub fn save_editor_config(&mut self) -> Result<()> {
+    /// Save the current editor state to config file.
+    /// Returns Ok(true) if saved successfully, Ok(false) if validation/duplicate error (don't close editor).
+    pub fn save_editor_config(&mut self) -> Result<bool> {
         let editor = self
             .editor_state
             .as_mut()
@@ -1458,7 +1467,7 @@ impl App {
         // Validate
         if !editor.validate() {
             self.set_message("Please fix validation errors before saving");
-            return Ok(());
+            return Ok(false);
         }
 
         // Build daemon config
@@ -1479,7 +1488,7 @@ impl App {
         if is_duplicate {
             let daemon_id = editor.daemon_id.clone();
             self.set_message(format!("A daemon named '{}' already exists", daemon_id));
-            return Ok(());
+            return Ok(false);
         }
 
         // Handle rename case
@@ -1501,7 +1510,7 @@ impl App {
         let daemon_id = editor.daemon_id.clone();
         self.set_message(format!("Saved daemon '{}'", daemon_id));
 
-        Ok(())
+        Ok(true)
     }
 
     /// Delete a daemon from the config file. Returns Ok(true) if deleted, Ok(false) if not found.

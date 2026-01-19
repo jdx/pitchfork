@@ -141,13 +141,21 @@ async fn run_app<B: Backend>(
                 event::Action::SaveConfig => {
                     app.start_loading("Saving...");
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                    if let Err(e) = app.save_editor_config() {
-                        app.stop_loading();
-                        app.set_message(format!("Save failed: {}", e));
-                    } else {
-                        app.stop_loading();
-                        app.close_editor();
-                        app.refresh(client).await?;
+                    match app.save_editor_config() {
+                        Ok(true) => {
+                            // Successfully saved
+                            app.stop_loading();
+                            app.close_editor();
+                            app.refresh(client).await?;
+                        }
+                        Ok(false) => {
+                            // Validation or duplicate error - don't close editor
+                            app.stop_loading();
+                        }
+                        Err(e) => {
+                            app.stop_loading();
+                            app.set_message(format!("Save failed: {}", e));
+                        }
                     }
                 }
                 event::Action::DeleteDaemon { id, config_path } => {
