@@ -33,7 +33,7 @@ features:
   - icon: "\u23F0"
     title: Unholy Schedules
     details: Cron-style scheduling for periodic tasks. Summon your daemons on a schedule from the underworld.
-  - icon: "\U0001F310"
-    title: Web Portal
-    details: Built-in web UI for monitoring and control. A window into the inferno of your running processes.
+  - icon: "\U0001F52E"
+    title: Scrying Portals
+    details: Peer into the abyss with a terminal TUI or web dashboard. Vim keybindings for the devoted, browser for the casual summoner.
 ---
