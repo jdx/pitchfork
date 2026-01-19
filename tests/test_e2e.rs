@@ -495,7 +495,7 @@ fn test_retry_success_on_third() {
         r#"
 [daemons.retry_success]
 run = "bun run {}"
-ready_delay = 1  
+ready_delay = 1
 retry = 2  # totally 3 attempts
 "#,
         success_script.display()
@@ -749,6 +749,49 @@ run = "echo 'Daemon 3' && sleep 10"
 
     // Stop all
     env.run_command(&["stop", "--all"]);
+}
+
+#[test]
+fn test_stop_all() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let script = get_script_path("slowly_output.ts");
+
+    let toml_content = format!(
+        r#"
+[daemons.db]
+run = "bun run {} 1 60"
+
+[daemons.web]
+run = "bun run {} 1 60"
+"#,
+        script.display(),
+        script.display(),
+    );
+    env.create_toml(&toml_content);
+
+    env.run_command(&["start", "--all"]);
+    env.sleep(Duration::from_secs(2));
+
+    env.run_command(&["stop", "--all"]);
+    env.sleep(Duration::from_secs(1));
+
+    // Check status of all daemons
+    let db_status = env.get_daemon_status("db").unwrap();
+    let web_status = env.get_daemon_status("web").unwrap();
+
+    // Should change to stopping or stopped without errors
+    assert!(
+        db_status == "stopped" || db_status == "stopping",
+        "DB daemon should be stopping or stopped, but was: {}",
+        db_status
+    );
+    assert!(
+        web_status == "stopped" || web_status == "stopping",
+        "Web daemon should be stopping or stopped, but was: {}",
+        web_status
+    );
 }
 
 #[test]
