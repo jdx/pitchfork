@@ -118,6 +118,7 @@ impl Restart {
                     let ready_output = d.ready_output.clone();
                     let ready_http = d.ready_http.clone();
                     let ready_port = d.ready_port;
+                    let depends = d.depends.clone();
 
                     (
                         run,
@@ -130,6 +131,7 @@ impl Restart {
                         ready_output,
                         ready_http,
                         ready_port,
+                        depends,
                     )
                 }
                 None => {
@@ -149,6 +151,7 @@ impl Restart {
                 ready_output,
                 ready_http,
                 ready_port,
+                depends,
             ) = daemon_data;
 
             let ipc_clone = ipc.clone();
@@ -181,7 +184,7 @@ impl Restart {
                         ready_http,
                         ready_port,
                         wait_ready: true,
-                        depends: vec![],
+                        depends,
                     })
                     .await
                 {
