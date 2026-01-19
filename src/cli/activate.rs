@@ -1,4 +1,5 @@
 use crate::{Result, env};
+use miette::bail;
 
 /// Activate pitchfork in your shell session
 ///
@@ -64,7 +65,7 @@ end
 __pitchfork
 "#,
             ),
-            _ => unimplemented!(),
+            shell => bail!("unsupported shell: {shell}. Supported shells: bash, zsh, fish"),
         };
         println!("{}", s.trim());
         Ok(())

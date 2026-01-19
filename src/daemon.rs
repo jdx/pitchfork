@@ -1,5 +1,7 @@
+use crate::Result;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::CronRetrigger;
+use miette::ensure;
 use std::fmt::Display;
 use std::path::PathBuf;
 
@@ -25,26 +27,20 @@ pub fn is_valid_daemon_id(id: &str) -> bool {
         && id.chars().all(|c| c.is_ascii() && !c.is_ascii_control())
 }
 
-/// Returns an error message explaining why a daemon ID is invalid.
-pub fn validate_daemon_id(id: &str) -> Result<(), String> {
-    if id.is_empty() {
-        return Err("daemon ID cannot be empty".to_string());
-    }
-    if id.contains('/') || id.contains('\\') {
-        return Err("daemon ID cannot contain path separators (/ or \\)".to_string());
-    }
-    if id.contains("..") {
-        return Err("daemon ID cannot contain '..'".to_string());
-    }
-    if id.contains(' ') {
-        return Err("daemon ID cannot contain spaces".to_string());
-    }
-    if id == "." {
-        return Err("daemon ID cannot be '.'".to_string());
-    }
-    if !id.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
-        return Err("daemon ID must contain only printable ASCII characters".to_string());
-    }
+/// Validates a daemon ID and returns a miette error with context if invalid.
+pub fn validate_daemon_id(id: &str) -> Result<()> {
+    ensure!(!id.is_empty(), "daemon ID cannot be empty");
+    ensure!(
+        !id.contains('/') && !id.contains('\\'),
+        "daemon ID cannot contain path separators (/ or \\)"
+    );
+    ensure!(!id.contains(".."), "daemon ID cannot contain '..'");
+    ensure!(!id.contains(' '), "daemon ID cannot contain spaces");
+    ensure!(id != ".", "daemon ID cannot be '.'");
+    ensure!(
+        id.chars().all(|c| c.is_ascii() && !c.is_ascii_control()),
+        "daemon ID must contain only printable ASCII characters"
+    );
     Ok(())
 }
 
@@ -159,33 +155,47 @@ mod tests {
     fn test_validate_daemon_id_error_messages() {
         assert!(validate_daemon_id("myapp").is_ok());
 
-        assert_eq!(
-            validate_daemon_id("").unwrap_err(),
-            "daemon ID cannot be empty"
+        assert!(
+            validate_daemon_id("")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot be empty")
         );
-        assert_eq!(
-            validate_daemon_id("foo/bar").unwrap_err(),
-            "daemon ID cannot contain path separators (/ or \\)"
+        assert!(
+            validate_daemon_id("foo/bar")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot contain path separators")
         );
-        assert_eq!(
-            validate_daemon_id("foo\\bar").unwrap_err(),
-            "daemon ID cannot contain path separators (/ or \\)"
+        assert!(
+            validate_daemon_id("foo\\bar")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot contain path separators")
         );
-        assert_eq!(
-            validate_daemon_id("..").unwrap_err(),
-            "daemon ID cannot contain '..'"
+        assert!(
+            validate_daemon_id("..")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot contain '..'")
         );
-        assert_eq!(
-            validate_daemon_id("my app").unwrap_err(),
-            "daemon ID cannot contain spaces"
+        assert!(
+            validate_daemon_id("my app")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot contain spaces")
         );
-        assert_eq!(
-            validate_daemon_id(".").unwrap_err(),
-            "daemon ID cannot be '.'"
+        assert!(
+            validate_daemon_id(".")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot be '.'")
         );
-        assert_eq!(
-            validate_daemon_id("my\x00app").unwrap_err(),
-            "daemon ID must contain only printable ASCII characters"
+        assert!(
+            validate_daemon_id("my\x00app")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID must contain only printable ASCII characters")
         );
     }
 }
