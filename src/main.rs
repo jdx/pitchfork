@@ -7,6 +7,7 @@ mod daemon;
 mod daemon_status;
 mod deps;
 mod env;
+mod error;
 mod ipc;
 mod logger;
 mod pitchfork_toml;

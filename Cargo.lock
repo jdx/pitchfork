@@ -1917,6 +1917,7 @@ dependencies = [
  "strum 0.27.2",
  "sysinfo",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "toml",

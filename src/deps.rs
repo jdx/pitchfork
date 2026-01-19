@@ -1,7 +1,7 @@
 use crate::Result;
+use crate::error::{DependencyError, find_similar_daemon};
 use crate::pitchfork_toml::PitchforkTomlDaemon;
 use indexmap::IndexMap;
-use miette::bail;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Result of dependency resolution
@@ -33,20 +33,24 @@ pub fn resolve_dependencies(
             continue;
         }
 
-        let daemon = all_daemons
-            .get(&id)
-            .ok_or_else(|| miette::miette!("Daemon '{}' not found in configuration", id))?;
+        let daemon = all_daemons.get(&id).ok_or_else(|| {
+            let suggestion = find_similar_daemon(&id, all_daemons.keys().map(|s| s.as_str()));
+            DependencyError::DaemonNotFound {
+                name: id.clone(),
+                suggestion,
+            }
+        })?;
 
         to_start.insert(id.clone());
 
         // Add dependencies to queue
         for dep in &daemon.depends {
             if !all_daemons.contains_key(dep) {
-                bail!(
-                    "Daemon '{}' depends on '{}' which is not defined in configuration",
-                    id,
-                    dep
-                );
+                return Err(DependencyError::MissingDependency {
+                    daemon: id.clone(),
+                    dependency: dep.clone(),
+                }
+                .into());
             }
             if !to_start.contains(dep) {
                 queue.push_back(dep.clone());
@@ -124,8 +128,9 @@ pub fn resolve_dependencies(
 
     // 4. Check for cycles
     if processed.len() != to_start.len() {
-        let remaining: Vec<_> = to_start.difference(&processed).cloned().collect::<Vec<_>>();
-        bail!("Circular dependency detected involving: {:?}", remaining);
+        let mut involved: Vec<_> = to_start.difference(&processed).cloned().collect();
+        involved.sort(); // Deterministic output
+        return Err(DependencyError::CircularDependency { involved }.into());
     }
 
     Ok(DependencyOrder { levels })
@@ -238,7 +243,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Circular dependency"));
+        assert!(err.contains("circular dependency"));
     }
 
     #[test]
