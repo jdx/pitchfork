@@ -42,14 +42,13 @@ prompt=$(
 	cat <<'INSTRUCTIONS'
 Write user-friendly release notes:
 
-1. Start with 1-2 paragraphs summarizing key changes
-2. Organize into ### sections (Highlights, Bug Fixes, etc.)
-3. Explain WHY changes matter to users
-4. Include PR links and documentation links (https://pitchfork.jdx.dev/)
-5. Include contributor usernames (@username)
-6. Skip internal changes
-
-Output ONLY the release notes, no preamble.
+1. Start with a single "# <pithy title>" heading - a short, catchy title summarizing this release (will become the GitHub release title)
+2. Follow with 1-2 paragraphs summarizing key changes
+3. Organize into ### sections (Highlights, Bug Fixes, etc.)
+4. Explain WHY changes matter to users
+5. Include PR links and documentation links (https://pitchfork.jdx.dev/)
+6. Include contributor usernames (@username)
+7. Skip internal changes
 INSTRUCTIONS
 )
 
@@ -76,11 +75,22 @@ if ! output=$(
 	exit 1
 fi
 
+# Extract title from "# ..." heading and separate from body
+title=""
+body="$output"
+if echo "$output" | grep -q "^# "; then
+	title=$(echo "$output" | grep "^# " | head -1 | sed 's/^# //')
+	body=$(echo "$output" | sed "1,/^# /d")
+fi
+
 # Validate we got non-empty output
-if [[ -z $output ]]; then
+if [[ -z $body ]]; then
 	echo "Error: Claude returned empty output" >&2
 	cat "$stderr_file" >&2
 	exit 1
 fi
 
-echo "$output"
+# Output format: title on first line, separator, then body
+echo "$title"
+echo "---"
+echo "$body"

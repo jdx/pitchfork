@@ -54,8 +54,17 @@ jobs:
           fi
 
           echo "Generating editorialized release notes for $TAG (prev: ${PREV_TAG:-none})..."
-          NOTES=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG")
-          gh release edit "$TAG" --notes "$NOTES"
+          OUTPUT=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG")
+
+          # Parse title (first line) and body (after ---)
+          TITLE=$(echo "$OUTPUT" | head -1)
+          NOTES=$(echo "$OUTPUT" | sed '1,/^---$/d')
+
+          if [[ -n "$TITLE" ]]; then
+            gh release edit "$TAG" --title "$TAG: $TITLE" --notes "$NOTES"
+          else
+            gh release edit "$TAG" --notes "$NOTES"
+          fi
           echo "Release notes updated successfully"
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
