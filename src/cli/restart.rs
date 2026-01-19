@@ -45,11 +45,12 @@ impl Restart {
 
         // Determine which daemons to restart
         let ids: Vec<String> = if self.all {
-            // Get all running daemons
+            // Get all running daemons that are in config
+            // (ad-hoc daemons started via `pitchfork run` cannot be restarted from config)
             let active = ipc.active_daemons().await?;
             active
                 .into_iter()
-                .filter(|d| d.pid.is_some())
+                .filter(|d| d.pid.is_some() && pt.daemons.contains_key(&d.id))
                 .map(|d| d.id)
                 .collect()
         } else {
@@ -146,7 +147,7 @@ impl Restart {
 
                 let start_time = Local::now();
 
-                let exit_code = match ipc_clone
+                let (actually_started, exit_code) = match ipc_clone
                     .run(RunOptions {
                         id: id.clone(),
                         cmd,
@@ -166,12 +167,18 @@ impl Restart {
                     })
                     .await
                 {
-                    Ok((_started, exit_code)) => exit_code,
+                    Ok((started, exit_code)) => (!started.is_empty(), exit_code),
                     Err(e) => {
                         error!("Failed to start daemon {}: {}", id, e);
-                        Some(1)
+                        (false, Some(1))
                     }
                 };
+
+                // Only report success if daemon was actually started
+                if !actually_started {
+                    warn!("Daemon {} was not restarted (may still be running)", id);
+                    return (id, None, Some(1));
+                }
 
                 (id, Some(start_time), exit_code)
             });
