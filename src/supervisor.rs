@@ -10,6 +10,7 @@ use itertools::Itertools;
 use log::LevelFilter::Info;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 use std::iter::once;
@@ -24,6 +25,28 @@ use tokio::signal::unix::SignalKind;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::{select, signal, time};
+
+/// Cache for compiled regex patterns to avoid recompilation on daemon restarts
+static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Get or compile a regex pattern, caching the result for future use
+fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
+    let mut cache = REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(re) = cache.get(pattern) {
+        return Some(re.clone());
+    }
+    match Regex::new(pattern) {
+        Ok(re) => {
+            cache.insert(pattern.to_string(), re.clone());
+            Some(re)
+        }
+        Err(e) => {
+            error!("invalid regex pattern '{}': {}", pattern, e);
+            None
+        }
+    }
+}
 
 pub struct Supervisor {
     state_file: Mutex<StateFile>,
@@ -566,16 +589,7 @@ impl Supervisor {
             // Setup readiness checking
             let mut ready_notified = false;
             let mut ready_tx = ready_tx;
-            let ready_pattern =
-                ready_output
-                    .as_ref()
-                    .and_then(|pattern| match regex::Regex::new(pattern) {
-                        Ok(re) => Some(re),
-                        Err(e) => {
-                            error!("invalid regex pattern for daemon {id}: {e}");
-                            None
-                        }
-                    });
+            let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
 
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
