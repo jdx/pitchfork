@@ -36,7 +36,8 @@ impl WatchFiles {
                             .unique()
                             .collect_vec();
                         if !paths.is_empty() {
-                            tx.send(paths).await.unwrap();
+                            // Ignore send errors - receiver may be dropped during shutdown
+                            let _ = tx.send(paths).await;
                         }
                     }
                 });
