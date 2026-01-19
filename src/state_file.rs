@@ -1,6 +1,6 @@
 use crate::daemon::Daemon;
+use crate::error::ConfigError;
 use crate::{Result, env};
-use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -59,8 +59,14 @@ impl StateFile {
 
     pub fn write(&self) -> Result<()> {
         let _lock = xx::fslock::get(&self.path, false)?;
-        let raw = toml::to_string(self).into_diagnostic()?;
-        xx::file::write(&self.path, raw)?;
+        let raw = toml::to_string(self).map_err(|e| ConfigError::WriteError {
+            path: self.path.clone(),
+            details: Some(format!("serialization failed: {}", e)),
+        })?;
+        xx::file::write(&self.path, &raw).map_err(|e| ConfigError::WriteError {
+            path: self.path.clone(),
+            details: Some(e.to_string()),
+        })?;
         Ok(())
     }
 }
