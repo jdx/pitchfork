@@ -48,6 +48,7 @@ export default defineConfig({
         items: [
           { text: "Shell Hook (Auto Start/Stop)", link: "/guides/shell-hook" },
           { text: "Ready Checks", link: "/guides/ready-checks" },
+          { text: "File Watching", link: "/guides/file-watching" },
           { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
           { text: "Cron Scheduling", link: "/guides/scheduling" },
           { text: "Start on Boot", link: "/guides/boot-start" },
