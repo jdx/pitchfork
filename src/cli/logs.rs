@@ -199,13 +199,17 @@ fn get_log_file_infos(names: &[String]) -> Result<BTreeMap<String, LogFile>> {
                 .join(format!("{n}.log"))
                 .canonicalize()
                 .into_diagnostic()?;
+            let mut file = xx::file::open(&path)?;
+            // Seek to end and get position atomically to avoid race condition
+            // where content is written between metadata check and file open
+            file.seek(SeekFrom::End(0)).into_diagnostic()?;
+            let cur = file.stream_position().into_diagnostic()?;
             Ok((
                 n.clone(),
                 LogFile {
                     _name: n,
-                    file: xx::file::open(&path)?,
-                    // TODO: might be better to build the length when reading the file so we don't have gaps
-                    cur: xx::file::metadata(&path).into_diagnostic()?.len(),
+                    file,
+                    cur,
                     path,
                 },
             ))
@@ -243,7 +247,9 @@ pub async fn tail_logs(names: &[String]) -> Result<()> {
                 .into_diagnostic()?;
             let reader = BufReader::new(&info.file);
             let lines = reader.lines().map_while(Result::ok).collect_vec();
-            info.cur += lines.iter().fold(0, |acc, l| acc + l.len() as u64);
+            // Use stream_position to get accurate file position after reading,
+            // avoiding manual calculation that missed newline characters
+            info.cur = info.file.stream_position().into_diagnostic()?;
             out.extend(merge_log_lines(name, lines));
         }
         let out = out
