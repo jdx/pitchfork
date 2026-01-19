@@ -1199,7 +1199,7 @@
   "config": {
     "props": {}
   },
-  "version": "0.3.1",
+  "version": "1.0.0",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
