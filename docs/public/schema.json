@@ -1,51 +1,43 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pitchfork Configuration",
   "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files",
   "type": "object",
-  "required": [
-    "daemons"
-  ],
   "properties": {
     "daemons": {
       "description": "Map of daemon names to their configurations",
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/PitchforkTomlDaemon"
+        "$ref": "#/$defs/PitchforkTomlDaemon"
       }
     }
   },
-  "definitions": {
+  "required": [
+    "daemons"
+  ],
+  "$defs": {
     "CronRetrigger": {
       "description": "Retrigger behavior for cron-scheduled daemons",
       "oneOf": [
         {
           "description": "Retrigger only if the previous run has finished (success or error)",
           "type": "string",
-          "enum": [
-            "finish"
-          ]
+          "const": "finish"
         },
         {
           "description": "Always retrigger, stopping the previous run if still active",
           "type": "string",
-          "enum": [
-            "always"
-          ]
+          "const": "always"
         },
         {
           "description": "Retrigger only if the previous run succeeded",
           "type": "string",
-          "enum": [
-            "success"
-          ]
+          "const": "success"
         },
         {
           "description": "Retrigger only if the previous run failed",
           "type": "string",
-          "enum": [
-            "fail"
-          ]
+          "const": "fail"
         }
       ]
     },
@@ -55,56 +47,45 @@
         {
           "description": "Automatically start when entering the directory",
           "type": "string",
-          "enum": [
-            "start"
-          ]
+          "const": "start"
         },
         {
           "description": "Automatically stop when leaving the directory",
           "type": "string",
-          "enum": [
-            "stop"
-          ]
+          "const": "stop"
         }
       ]
     },
     "PitchforkTomlCron": {
       "description": "Cron scheduling configuration",
       "type": "object",
-      "required": [
-        "schedule"
-      ],
       "properties": {
         "retrigger": {
           "description": "Behavior when cron triggers while previous run is still active",
-          "default": "finish",
-          "allOf": [
-            {
-              "$ref": "#/definitions/CronRetrigger"
-            }
-          ]
+          "$ref": "#/$defs/CronRetrigger",
+          "default": "finish"
         },
         "schedule": {
           "description": "Cron expression (e.g., '0 * * * *' for hourly, '*/5 * * * *' for every 5 minutes)",
+          "type": "string",
           "examples": [
             "0 * * * *"
-          ],
-          "type": "string"
+          ]
         }
-      }
+      },
+      "required": [
+        "schedule"
+      ]
     },
     "PitchforkTomlDaemon": {
       "description": "Configuration for a single daemon",
       "type": "object",
-      "required": [
-        "run"
-      ],
       "properties": {
         "auto": {
           "description": "Automatic start/stop behavior based on shell hooks",
           "type": "array",
           "items": {
-            "$ref": "#/definitions/PitchforkTomlAuto"
+            "$ref": "#/$defs/PitchforkTomlAuto"
           }
         },
         "boot_start": {
@@ -118,7 +99,7 @@
           "description": "Cron scheduling configuration for periodic execution",
           "anyOf": [
             {
-              "$ref": "#/definitions/PitchforkTomlCron"
+              "$ref": "#/$defs/PitchforkTomlCron"
             },
             {
               "type": "null"
@@ -139,7 +120,7 @@
             "null"
           ],
           "format": "uint64",
-          "minimum": 0.0
+          "minimum": 0
         },
         "ready_http": {
           "description": "HTTP URL to poll for readiness (expects 2xx response)",
@@ -162,24 +143,27 @@
             "null"
           ],
           "format": "uint16",
-          "maximum": 65535.0,
-          "minimum": 1.0
+          "maximum": 65535,
+          "minimum": 1
         },
         "retry": {
           "description": "Number of times to retry if the daemon fails (0 = no retries)",
-          "default": 0,
           "type": "integer",
           "format": "uint32",
-          "minimum": 0.0
+          "default": 0,
+          "minimum": 0
         },
         "run": {
           "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
+          "type": "string",
           "examples": [
             "exec node server.js"
-          ],
-          "type": "string"
+          ]
         }
-      }
+      },
+      "required": [
+        "run"
+      ]
     }
   }
 }

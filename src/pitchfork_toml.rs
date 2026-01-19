@@ -81,7 +81,7 @@ impl PitchforkToml {
 #[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct PitchforkTomlDaemon {
     /// The command to run. Prepend with 'exec' to avoid shell process overhead.
-    #[schemars(example = "example_run_command")]
+    #[schemars(example = example_run_command())]
     pub run: String,
     /// Automatic start/stop behavior based on shell hooks
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -124,7 +124,7 @@ fn example_run_command() -> &'static str {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct PitchforkTomlCron {
     /// Cron expression (e.g., '0 * * * *' for hourly, '*/5 * * * *' for every 5 minutes)
-    #[schemars(example = "example_cron_schedule")]
+    #[schemars(example = example_cron_schedule())]
     pub schedule: String,
     /// Behavior when cron triggers while previous run is still active
     #[serde(default = "default_retrigger")]
