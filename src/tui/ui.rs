@@ -11,6 +11,11 @@ const ORANGE: Color = Color::Rgb(255, 107, 0); // #ff6b00
 const GREEN: Color = Color::Rgb(34, 197, 94);
 const YELLOW: Color = Color::Rgb(234, 179, 8);
 const GRAY: Color = Color::Rgb(107, 114, 128);
+const DARK_GRAY: Color = Color::Rgb(55, 55, 55);
+
+// Unicode block characters for bar rendering
+const BAR_FULL: char = '█';
+const BAR_EMPTY: char = '░';
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -161,12 +166,17 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         let (status_text, status_color) = status_display(&daemon.status);
 
         let stats = daemon.pid.and_then(|pid| app.get_stats(pid));
-        let cpu = stats
-            .map(|s| s.cpu_display())
-            .unwrap_or_else(|| "-".to_string());
-        let mem = stats
-            .map(|s| s.memory_display())
-            .unwrap_or_else(|| "-".to_string());
+
+        // CPU bar (5 chars wide)
+        let cpu_cell = stats
+            .map(|s| Cell::from(render_bar(s.cpu_percent, 5)))
+            .unwrap_or_else(|| Cell::from("-").style(Style::default().fg(GRAY)));
+
+        // Memory bar (5 chars wide)
+        let mem_cell = stats
+            .map(|s| Cell::from(render_memory_bar(s.memory_bytes, 5)))
+            .unwrap_or_else(|| Cell::from("-").style(Style::default().fg(GRAY)));
+
         let uptime = stats
             .map(|s| s.uptime_display())
             .unwrap_or_else(|| "-".to_string());
@@ -183,8 +193,8 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             Cell::from(name).style(name_style),
             Cell::from(pid),
             Cell::from(status_text).style(Style::default().fg(status_color)),
-            Cell::from(cpu).style(Style::default().fg(GRAY)),
-            Cell::from(mem).style(Style::default().fg(GRAY)),
+            cpu_cell,
+            mem_cell,
             Cell::from(uptime).style(Style::default().fg(GRAY)),
             Cell::from(error).style(Style::default().fg(RED)),
         ])
@@ -193,13 +203,13 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
     });
 
     let widths = [
-        Constraint::Percentage(20),
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Length(7),
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Percentage(25),
+        Constraint::Percentage(18), // Name
+        Constraint::Length(8),      // PID
+        Constraint::Length(10),     // Status
+        Constraint::Length(11),     // CPU bar
+        Constraint::Length(12),     // Mem bar
+        Constraint::Length(10),     // Uptime
+        Constraint::Percentage(20), // Error
     ];
 
     let title = if !app.search_query.is_empty() {
@@ -263,6 +273,75 @@ fn status_display(status: &DaemonStatus) -> (String, Color) {
             (text, RED)
         }
     }
+}
+
+/// Render a usage bar with percentage and visual indicator
+fn render_bar(percent: f32, width: usize) -> Line<'static> {
+    let clamped = percent.clamp(0.0, 100.0);
+    let filled = ((clamped / 100.0) * width as f32).round() as usize;
+    let empty = width.saturating_sub(filled);
+
+    // Color based on usage level
+    let bar_color = if clamped >= 90.0 {
+        RED
+    } else if clamped >= 70.0 {
+        ORANGE
+    } else if clamped >= 50.0 {
+        YELLOW
+    } else {
+        GREEN
+    };
+
+    let filled_str: String = std::iter::repeat_n(BAR_FULL, filled).collect();
+    let empty_str: String = std::iter::repeat_n(BAR_EMPTY, empty).collect();
+    let pct_str = format!("{:>3.0}%", clamped);
+
+    Line::from(vec![
+        Span::styled(filled_str, Style::default().fg(bar_color)),
+        Span::styled(empty_str, Style::default().fg(DARK_GRAY)),
+        Span::raw(" "),
+        Span::styled(pct_str, Style::default().fg(GRAY)),
+    ])
+}
+
+/// Render memory bar with size display
+fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
+    // Estimate percentage - assume 8GB max for coloring purposes
+    let max_bytes: u64 = 8 * 1024 * 1024 * 1024; // 8GB
+    let percent = ((bytes as f64 / max_bytes as f64) * 100.0) as f32;
+    let clamped = percent.clamp(0.0, 100.0);
+    let filled = ((clamped / 100.0) * width as f32).round() as usize;
+    let empty = width.saturating_sub(filled);
+
+    // Color based on usage level
+    let bar_color = if bytes > 2 * 1024 * 1024 * 1024 {
+        RED // > 2GB
+    } else if bytes > 1024 * 1024 * 1024 {
+        ORANGE // > 1GB
+    } else if bytes > 512 * 1024 * 1024 {
+        YELLOW // > 512MB
+    } else {
+        GREEN
+    };
+
+    let filled_str: String = std::iter::repeat_n(BAR_FULL, filled).collect();
+    let empty_str: String = std::iter::repeat_n(BAR_EMPTY, empty).collect();
+
+    // Format memory size
+    let size_str = if bytes < 1024 * 1024 {
+        format!("{:.0}K", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.0}M", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    };
+
+    Line::from(vec![
+        Span::styled(filled_str, Style::default().fg(bar_color)),
+        Span::styled(empty_str, Style::default().fg(DARK_GRAY)),
+        Span::raw(" "),
+        Span::styled(format!("{:>5}", size_str), Style::default().fg(GRAY)),
+    ])
 }
 
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
