@@ -151,12 +151,20 @@ impl Supervisor {
         };
 
         for id in ids_to_retry {
-            // Look up daemon when needed (it may have changed since we collected IDs)
+            // Look up daemon when needed and re-verify retry criteria
+            // (state may have changed since we collected IDs)
             let daemon = {
                 let state_file = self.state_file.lock().await;
                 match state_file.daemons.get(&id) {
-                    Some(d) => d.clone(),
-                    None => continue, // Daemon was removed
+                    Some(d)
+                        if d.status.is_errored()
+                            && d.pid.is_none()
+                            && d.retry > 0
+                            && d.retry_count < d.retry =>
+                    {
+                        d.clone()
+                    }
+                    _ => continue, // Daemon was removed or no longer needs retry
                 }
             };
             info!(
