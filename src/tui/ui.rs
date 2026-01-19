@@ -3,7 +3,10 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::tui::app::{App, PendingAction, SortColumn, View};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
+    widgets::{
+        Block, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table, Wrap,
+    },
 };
 
 // Theme colors matching the web UI's "devilish" theme
@@ -249,6 +252,26 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         .row_highlight_style(Style::default().bg(Color::Rgb(50, 20, 20)));
 
     f.render_widget(table, table_area);
+
+    // Render scrollbar if there are more items than visible
+    let visible_rows = table_area.height.saturating_sub(3) as usize; // -3 for borders and header
+    if filtered.len() > visible_rows {
+        let mut scrollbar_state = ScrollbarState::new(filtered.len()).position(app.selected);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .style(Style::default().fg(GRAY));
+        f.render_stateful_widget(
+            scrollbar,
+            table_area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn draw_search_bar(f: &mut Frame, area: Rect, app: &App) {
@@ -420,6 +443,27 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         .wrap(Wrap { trim: false });
 
     f.render_widget(logs, log_area);
+
+    // Render scrollbar if there are more lines than visible
+    let total_lines = app.log_content.len();
+    if total_lines > visible_height {
+        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(visible_height))
+            .position(app.log_scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .track_symbol(Some("│"))
+            .thumb_symbol("█")
+            .style(Style::default().fg(GRAY));
+        f.render_stateful_widget(
+            scrollbar,
+            log_area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
