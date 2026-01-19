@@ -86,6 +86,41 @@ pub enum DependencyError {
     },
 }
 
+/// Errors related to file operations (config and state files).
+#[derive(Debug, Error, Diagnostic)]
+pub enum FileError {
+    #[error("failed to parse file: {}", path.display())]
+    #[diagnostic(code(pitchfork::file::parse_error))]
+    ParseError {
+        path: std::path::PathBuf,
+        #[help]
+        details: Option<String>,
+    },
+
+    #[error("failed to read file: {}", path.display())]
+    #[diagnostic(code(pitchfork::file::read_error))]
+    ReadError {
+        path: std::path::PathBuf,
+        #[help]
+        details: Option<String>,
+    },
+
+    #[error("failed to write file: {}", path.display())]
+    #[diagnostic(code(pitchfork::file::write_error))]
+    WriteError {
+        path: std::path::PathBuf,
+        #[help]
+        details: Option<String>,
+    },
+
+    #[error("no file path specified")]
+    #[diagnostic(
+        code(pitchfork::file::no_path),
+        help("ensure a pitchfork.toml file exists in your project or specify a path")
+    )]
+    NoPath,
+}
+
 /// Find the most similar daemon name for suggestions.
 pub fn find_similar_daemon<'a>(
     name: &str,
@@ -168,5 +203,18 @@ mod tests {
         // No reasonable match
         let suggestion = find_similar_daemon("xyz123", daemons.iter().copied());
         assert!(suggestion.is_none());
+    }
+
+    #[test]
+    fn test_file_error_display() {
+        let err = FileError::ParseError {
+            path: std::path::PathBuf::from("/path/to/config.toml"),
+            details: Some("invalid key".to_string()),
+        };
+        assert!(err.to_string().contains("failed to parse file"));
+        assert!(err.to_string().contains("config.toml"));
+
+        let err = FileError::NoPath;
+        assert!(err.to_string().contains("no file path"));
     }
 }

@@ -1,6 +1,6 @@
+use crate::error::FileError;
 use crate::{Result, env};
 use indexmap::IndexMap;
-use miette::{IntoDiagnostic, bail};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
@@ -51,8 +51,14 @@ impl PitchforkToml {
             return Ok(Self::new(path.to_path_buf()));
         }
         let _lock = xx::fslock::get(path, false)?;
-        let raw = xx::file::read_to_string(path)?;
-        let mut pt: Self = toml::from_str(&raw).into_diagnostic()?;
+        let raw = xx::file::read_to_string(path).map_err(|e| FileError::ReadError {
+            path: path.to_path_buf(),
+            details: Some(e.to_string()),
+        })?;
+        let mut pt: Self = toml::from_str(&raw).map_err(|e| FileError::ParseError {
+            path: path.to_path_buf(),
+            details: Some(e.to_string()),
+        })?;
         pt.path = Some(path.to_path_buf());
         for (_id, d) in pt.daemons.iter_mut() {
             d.path = pt.path.clone();
@@ -63,11 +69,17 @@ impl PitchforkToml {
     pub fn write(&self) -> Result<()> {
         if let Some(path) = &self.path {
             let _lock = xx::fslock::get(path, false)?;
-            let raw = toml::to_string(self).into_diagnostic()?;
-            xx::file::write(path, raw)?;
+            let raw = toml::to_string(self).map_err(|e| FileError::WriteError {
+                path: path.clone(),
+                details: Some(format!("serialization failed: {}", e)),
+            })?;
+            xx::file::write(path, raw).map_err(|e| FileError::WriteError {
+                path: path.clone(),
+                details: Some(e.to_string()),
+            })?;
             Ok(())
         } else {
-            bail!("no path to write to");
+            Err(FileError::NoPath.into())
         }
     }
 
