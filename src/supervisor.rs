@@ -132,11 +132,23 @@ impl Supervisor {
 
     async fn refresh(&self) -> Result<()> {
         trace!("refreshing");
-        PROCS.refresh_processes();
+
+        // Collect PIDs we need to check (shell PIDs only)
+        // This is more efficient than refreshing all processes on the system
+        let dirs_with_pids = self.get_dirs_with_shell_pids().await;
+        let pids_to_check: Vec<u32> = dirs_with_pids.values().flatten().copied().collect();
+
+        if pids_to_check.is_empty() {
+            // No PIDs to check, skip the expensive refresh
+            trace!("no shell PIDs to check, skipping process refresh");
+        } else {
+            PROCS.refresh_pids(&pids_to_check);
+        }
+
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
 
-        for (dir, pids) in self.get_dirs_with_shell_pids().await {
+        for (dir, pids) in dirs_with_pids {
             let to_remove = pids
                 .iter()
                 .filter(|pid| !PROCS.is_running(**pid))

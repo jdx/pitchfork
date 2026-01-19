@@ -92,6 +92,15 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::All, true);
     }
 
+    /// Refresh only specific PIDs instead of all processes.
+    /// More efficient when you only need to check a small set of known PIDs.
+    pub(crate) fn refresh_pids(&self, pids: &[u32]) {
+        let sysinfo_pids: Vec<sysinfo::Pid> =
+            pids.iter().map(|p| sysinfo::Pid::from_u32(*p)).collect();
+        self.lock_system()
+            .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
+    }
+
     /// Get process stats (cpu%, memory bytes, uptime secs, disk I/O) for a given PID
     pub fn get_stats(&self, pid: u32) -> Option<ProcessStats> {
         let system = self.lock_system();
