@@ -87,8 +87,9 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
             }
         }
 
-        // Also watch the base directories for patterns with wildcards
-        // This ensures we catch new files in watched directories
+        // For patterns with wildcards, watch the base directory (before the wildcard)
+        // For non-wildcard patterns, watch the parent directory of the specific file
+        // This ensures we catch new files even if they don't exist at startup
         if pattern.contains('*') {
             // Find the first directory without wildcards
             let parts: Vec<&str> = pattern.split('/').collect();
@@ -101,6 +102,23 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
             }
             if base.is_dir() {
                 dirs_to_watch.insert(base);
+            }
+        } else {
+            // Non-wildcard pattern (specific file like "package.json")
+            // Always watch the parent directory, even if file doesn't exist yet
+            let full_path = if Path::new(pattern).is_absolute() {
+                PathBuf::from(pattern)
+            } else {
+                base_dir.join(pattern)
+            };
+            if let Some(parent) = full_path.parent() {
+                // Watch the parent if it exists (or base_dir as fallback)
+                let dir_to_watch = if parent.is_dir() {
+                    parent.to_path_buf()
+                } else {
+                    base_dir.to_path_buf()
+                };
+                dirs_to_watch.insert(dir_to_watch);
             }
         }
     }
