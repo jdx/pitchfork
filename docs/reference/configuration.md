@@ -93,13 +93,46 @@ ready_port = 3000
 
 ### `depends`
 
-List of daemon names that must be started first.
+List of daemon names that must be started before this daemon. When you start a daemon, its dependencies are automatically started first in the correct order.
 
 ```toml
 [daemons.api]
 run = "npm run server"
 depends = ["postgres", "redis"]
 ```
+
+**Behavior:**
+
+- **Auto-start**: Running `pitchfork start api` will automatically start `postgres` and `redis` first
+- **Transitive dependencies**: If `postgres` depends on `storage`, that will be started too
+- **Parallel starting**: Dependencies at the same level start in parallel for faster startup
+- **Skip running**: Already-running dependencies are skipped (not restarted)
+- **Circular detection**: Circular dependencies are detected and reported as errors
+- **Force flag**: Using `-f` only restarts the explicitly requested daemon, not its dependencies
+
+**Example with chained dependencies:**
+
+```toml
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+ready_port = 5432
+
+[daemons.cache]
+run = "redis-server"
+ready_port = 6379
+
+[daemons.api]
+run = "npm run server"
+depends = ["database", "cache"]
+
+[daemons.worker]
+run = "npm run worker"
+depends = ["database"]
+```
+
+Running `pitchfork start api worker` starts daemons in this order:
+1. `database` and `cache` (in parallel, no dependencies)
+2. `api` and `worker` (in parallel, after their dependencies are ready)
 
 ### `boot_start`
 
