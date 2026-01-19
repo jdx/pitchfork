@@ -4,9 +4,6 @@ permissions:
   contents: write
 
 on:
-  push:
-    tags:
-      - v[0-9]+.*
   workflow_call:
     inputs:
       tag:
@@ -17,31 +14,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: jdx/mise-action@v2
-      - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
-      - name: Create GitHub Release
-        run: |
-          TAG_NAME="${{ inputs.tag || github.ref_name }}"
-          PREV_TAG="$(git describe --tags --abbrev=0 "$TAG_NAME^" 2>/dev/null || echo "")"
-          ./scripts/gen-release-notes.sh "$TAG_NAME" "$PREV_TAG" > /tmp/release-notes.txt
-          gh release create "$TAG_NAME" \
-            --title "$TAG_NAME" \
-            --notes-file /tmp/release-notes.txt \
-            --draft || echo "Release may already exist"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
   upload-assets:
-    needs: [create-release]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -60,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: refs/tags/${{ inputs.tag }}
       - name: Install cross-compilation tools
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
@@ -72,5 +45,16 @@ jobs:
         with:
           bin: pitchfork
           target: ${{ matrix.target }}
-          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-release:
+    needs: [upload-assets]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        run: |
+          echo "Publishing release ${{ inputs.tag }}..."
+          gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
