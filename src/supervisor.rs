@@ -1166,6 +1166,13 @@ impl Supervisor {
             return Ok(());
         }
 
+        // Check if daemon is disabled
+        let is_disabled = self.state_file.lock().await.disabled.contains(id);
+        if is_disabled {
+            debug!("Daemon {} is disabled, skipping restart on file change", id);
+            return Ok(());
+        }
+
         info!("Restarting daemon {} due to file change", id);
 
         // Get the daemon config to rebuild RunOptions
