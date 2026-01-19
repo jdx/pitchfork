@@ -121,6 +121,63 @@ pub enum FileError {
     NoPath,
 }
 
+/// Errors related to IPC communication with the supervisor.
+#[derive(Debug, Error, Diagnostic)]
+pub enum IpcError {
+    #[error("failed to connect to supervisor after {attempts} attempts")]
+    #[diagnostic(
+        code(pitchfork::ipc::connection_failed),
+        help("ensure the supervisor is running with: pitchfork supervisor start")
+    )]
+    ConnectionFailed { attempts: u32 },
+
+    #[error("IPC request timed out after {seconds}s")]
+    #[diagnostic(
+        code(pitchfork::ipc::timeout),
+        help(
+            "the supervisor may be unresponsive or overloaded.\nCheck supervisor status: pitchfork supervisor status\nView logs: pitchfork logs"
+        )
+    )]
+    Timeout { seconds: u64 },
+
+    #[error("IPC connection closed unexpectedly")]
+    #[diagnostic(
+        code(pitchfork::ipc::connection_closed),
+        help(
+            "the supervisor may have crashed or been stopped.\nRestart with: pitchfork supervisor start"
+        )
+    )]
+    ConnectionClosed,
+
+    #[error("failed to read IPC response")]
+    #[diagnostic(code(pitchfork::ipc::read_failed))]
+    ReadFailed {
+        #[help]
+        details: Option<String>,
+    },
+
+    #[error("failed to send IPC request")]
+    #[diagnostic(code(pitchfork::ipc::send_failed))]
+    SendFailed {
+        #[help]
+        details: Option<String>,
+    },
+
+    #[error("unexpected response from supervisor: expected {expected}, got {actual}")]
+    #[diagnostic(
+        code(pitchfork::ipc::unexpected_response),
+        help("this may indicate a version mismatch between the CLI and supervisor")
+    )]
+    UnexpectedResponse { expected: String, actual: String },
+
+    #[error("IPC message contains invalid data")]
+    #[diagnostic(code(pitchfork::ipc::invalid_message))]
+    InvalidMessage {
+        #[help]
+        details: Option<String>,
+    },
+}
+
 /// Find the most similar daemon name for suggestions.
 pub fn find_similar_daemon<'a>(
     name: &str,
@@ -216,5 +273,24 @@ mod tests {
 
         let err = FileError::NoPath;
         assert!(err.to_string().contains("no file path"));
+    }
+
+    #[test]
+    fn test_ipc_error_display() {
+        let err = IpcError::ConnectionFailed { attempts: 5 };
+        assert!(err.to_string().contains("failed to connect"));
+        assert!(err.to_string().contains("5 attempts"));
+
+        let err = IpcError::Timeout { seconds: 30 };
+        assert!(err.to_string().contains("timed out"));
+        assert!(err.to_string().contains("30s"));
+
+        let err = IpcError::UnexpectedResponse {
+            expected: "Ok".to_string(),
+            actual: "Error".to_string(),
+        };
+        assert!(err.to_string().contains("unexpected response"));
+        assert!(err.to_string().contains("Ok"));
+        assert!(err.to_string().contains("Error"));
     }
 }

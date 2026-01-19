@@ -1,10 +1,11 @@
 use crate::daemon::{Daemon, RunOptions};
+use crate::error::IpcError;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
 use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
-use miette::{Context, IntoDiagnostic, bail, ensure};
+use miette::Context;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -31,7 +32,13 @@ impl IpcClient {
         let client = Self::connect_(&id, "main").await?;
         trace!("Connected to IPC socket");
         let rsp = client.request(IpcRequest::Connect).await?;
-        ensure!(rsp.is_ok(), "Failed to connect to IPC main");
+        if !rsp.is_ok() {
+            return Err(IpcError::UnexpectedResponse {
+                expected: "Ok".to_string(),
+                actual: format!("{:?}", rsp),
+            }
+            .into());
+        }
         debug!("Connected to IPC main");
         Ok(client)
     }
@@ -58,28 +65,35 @@ impl IpcClient {
                         tokio::time::sleep(duration).await;
                         continue;
                     } else {
-                        bail!("Failed to connect to IPC socket: {:?}", err);
+                        return Err(IpcError::ConnectionFailed {
+                            attempts: CONNECT_ATTEMPTS,
+                        }
+                        .into());
                     }
                 }
             }
         }
-        bail!(
-            "failed to connect to IPC socket after {} attempts",
-            CONNECT_ATTEMPTS
-        )
+        Err(IpcError::ConnectionFailed {
+            attempts: CONNECT_ATTEMPTS,
+        }
+        .into())
     }
 
     pub async fn send(&self, msg: IpcRequest) -> Result<()> {
         let mut msg = serialize(&msg)?;
         if msg.contains(&0) {
-            bail!("IPC message contains null byte");
+            return Err(IpcError::InvalidMessage {
+                details: Some("message contains null byte".to_string()),
+            }
+            .into());
         }
         msg.push(0);
         let mut send = self.send.lock().await;
         send.write_all(&msg)
             .await
-            .into_diagnostic()
-            .wrap_err("failed to send IPC message")?;
+            .map_err(|e| IpcError::SendFailed {
+                details: Some(e.to_string()),
+            })?;
         Ok(())
     }
 
@@ -88,17 +102,34 @@ impl IpcClient {
         let mut bytes = Vec::new();
         match tokio::time::timeout(timeout, recv.read_until(0, &mut bytes)).await {
             Ok(Ok(_)) => {}
-            Ok(Err(err)) => bail!("failed to read IPC message: {err}"),
-            Err(_) => bail!("IPC read timed out after {timeout:?}"),
+            Ok(Err(err)) => {
+                return Err(IpcError::ReadFailed {
+                    details: Some(err.to_string()),
+                }
+                .into());
+            }
+            Err(_) => {
+                return Err(IpcError::Timeout {
+                    seconds: timeout.as_secs(),
+                }
+                .into());
+            }
         }
         if bytes.is_empty() {
-            bail!("IPC connection closed unexpectedly (supervisor may have stopped)");
+            return Err(IpcError::ConnectionClosed.into());
         }
         deserialize(&bytes).wrap_err("failed to deserialize IPC response")
     }
 
     async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
         self.request_with_timeout(msg, REQUEST_TIMEOUT).await
+    }
+
+    fn unexpected_response(expected: &str, actual: &IpcResponse) -> IpcError {
+        IpcError::UnexpectedResponse {
+            expected: expected.to_string(),
+            actual: format!("{:?}", actual),
+        }
     }
 
     async fn request_with_timeout(
@@ -121,7 +152,7 @@ impl IpcClient {
                 info!("daemon {} already enabled", id);
                 Ok(false)
             }
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => Err(Self::unexpected_response("Yes or No", &rsp).into()),
         }
     }
 
@@ -136,7 +167,7 @@ impl IpcClient {
                 info!("daemon {} already disabled", id);
                 Ok(false)
             }
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => Err(Self::unexpected_response("Yes or No", &rsp).into()),
         }
     }
 
@@ -185,7 +216,9 @@ impl IpcClient {
                     error!("Failed to print logs: {}", e);
                 }
             }
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => {
+                return Err(Self::unexpected_response("DaemonStart or DaemonReady", &rsp).into());
+            }
         }
         Ok((started_daemons, exit_code))
     }
@@ -194,7 +227,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetActiveDaemons).await?;
         match rsp {
             IpcResponse::ActiveDaemons(daemons) => Ok(daemons),
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => Err(Self::unexpected_response("ActiveDaemons", &rsp).into()),
         }
     }
 
@@ -209,7 +242,7 @@ impl IpcClient {
             IpcResponse::Ok => {
                 trace!("updated shell dir for pid {shell_pid} to {}", dir.display());
             }
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => return Err(Self::unexpected_response("Ok", &rsp).into()),
         }
         Ok(())
     }
@@ -220,7 +253,7 @@ impl IpcClient {
             IpcResponse::Ok => {
                 trace!("cleaned");
             }
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => return Err(Self::unexpected_response("Ok", &rsp).into()),
         }
         Ok(())
     }
@@ -229,7 +262,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {
             IpcResponse::DisabledDaemons(daemons) => Ok(daemons),
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => Err(Self::unexpected_response("DisabledDaemons", &rsp).into()),
         }
     }
 
@@ -237,7 +270,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::GetNotifications).await?;
         match rsp {
             IpcResponse::Notifications(notifications) => Ok(notifications),
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => Err(Self::unexpected_response("Notifications", &rsp).into()),
         }
     }
 
@@ -252,7 +285,7 @@ impl IpcClient {
                 warn!("daemon {} is not running", id);
                 Ok(())
             }
-            rsp => bail!("unexpected IPC response: {rsp:?}"),
+            rsp => Err(Self::unexpected_response("Ok or DaemonAlreadyStopped", &rsp).into()),
         }
     }
 }
