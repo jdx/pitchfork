@@ -508,6 +508,63 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "restart": {
+        "full_cmd": [
+          "restart"
+        ],
+        "usage": "restart [-a --all] [-q --quiet] [ID]…",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "[ID]…",
+            "help": "ID of the daemon(s) to restart",
+            "help_first_line": "ID of the daemon(s) to restart",
+            "required": false,
+            "double_dash": "Optional",
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "all",
+            "usage": "-a --all",
+            "help": "Restart all running daemons",
+            "help_first_line": "Restart all running daemons",
+            "short": [
+              "a"
+            ],
+            "long": [
+              "all"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
+            "long": [
+              "quiet"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Restarts a daemon (stops then starts it)",
+        "help_long": "Restarts a daemon (stops then starts it)\n\nSends SIGTERM to stop the daemon, then starts it again from the\npitchfork.toml configuration.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons",
+        "name": "restart",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "run": {
         "full_cmd": [
           "run"

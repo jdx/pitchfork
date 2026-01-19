@@ -79,6 +79,12 @@ cmd logs help="Displays logs for daemon(s)" {
     }
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
+cmd restart help="Restarts a daemon (stops then starts it)" {
+    long_help "Restarts a daemon (stops then starts it)\n\nSends SIGTERM to stop the daemon, then starts it again from the\npitchfork.toml configuration.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons"
+    flag "-a --all" help="Restart all running daemons"
+    flag "-q --quiet" help="Suppress startup log output"
+    arg "[ID]…" help="ID of the daemon(s) to restart" required=#false var=#true
+}
 cmd run help="Runs a one-off daemon" {
     alias r
     long_help "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork run api --port 8080 -- ./server\n                                Wait for TCP port to be listening"
