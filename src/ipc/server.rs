@@ -8,6 +8,7 @@ use miette::{IntoDiagnostic, bail, miette};
 use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::oneshot;
 
 /// Rate limiter for IPC connections to prevent local DoS attacks.
 /// Uses a sliding window algorithm to limit requests per second.
@@ -51,13 +52,28 @@ pub struct IpcServer {
     rx: Receiver<(IpcRequest, Sender<IpcResponse>)>,
 }
 
+/// Handle for triggering graceful shutdown of the IPC server
+pub struct IpcServerHandle {
+    shutdown_tx: Option<oneshot::Sender<()>>,
+}
+
+impl IpcServerHandle {
+    /// Signal the IPC server to shut down gracefully
+    pub fn shutdown(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
 impl IpcServer {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<(Self, IpcServerHandle)> {
         xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
         let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
         let opts = ListenerOptions::new().name(fs_name("main")?);
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
         // Set restrictive umask before creating socket to avoid TOCTOU race condition.
         // This ensures the socket is created with 0600 permissions from the start.
@@ -78,14 +94,44 @@ impl IpcServer {
 
         tokio::spawn(async move {
             loop {
-                if let Err(err) = Self::listen(&listener, tx.clone()).await {
-                    error!("ipc server {:?}", err);
-                    continue;
+                tokio::select! {
+                    biased;
+                    _ = &mut shutdown_rx => {
+                        debug!("IPC server received shutdown signal");
+                        break;
+                    }
+                    result = listener.accept() => {
+                        match result {
+                            Ok(stream) => {
+                                trace!("Client accepted");
+                                let (recv, send) = stream.split();
+                                let mut incoming_chan = Self::read_messages_chan(recv);
+                                let outgoing_chan = Self::send_messages_chan(send);
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    while let Some(req) = incoming_chan.recv().await {
+                                        if let Err(err) = tx.send((req, outgoing_chan.clone())).await {
+                                            debug!("Failed to send message: {:?}", err);
+                                        }
+                                    }
+                                });
+                            }
+                            Err(err) => {
+                                error!("ipc server accept error: {:?}", err);
+                            }
+                        }
+                    }
                 }
             }
+            // Clean up socket file on graceful shutdown
+            let _ = std::fs::remove_file(&*env::IPC_SOCK_MAIN);
+            debug!("IPC server shut down cleanly");
         });
         let server = Self { rx };
-        Ok(server)
+        let handle = IpcServerHandle {
+            shutdown_tx: Some(shutdown_tx),
+        };
+        Ok((server, handle))
     }
 
     async fn send(send: &mut SendHalf, msg: IpcResponse) -> Result<()> {
@@ -192,25 +238,6 @@ impl IpcServer {
             .recv()
             .await
             .ok_or_else(|| miette!("IPC channel closed"))
-    }
-
-    async fn listen(
-        listener: &interprocess::local_socket::tokio::Listener,
-        tx: Sender<(IpcRequest, Sender<IpcResponse>)>,
-    ) -> Result<()> {
-        let stream = listener.accept().await.into_diagnostic()?;
-        trace!("Client accepted");
-        let (recv, send) = stream.split();
-        let mut incoming_chan = Self::read_messages_chan(recv);
-        let outgoing_chan = Self::send_messages_chan(send);
-        tokio::spawn(async move {
-            while let Some(req) = incoming_chan.recv().await {
-                if let Err(err) = tx.send((req, outgoing_chan.clone())).await {
-                    debug!("Failed to send message: {:?}", err);
-                }
-            }
-        });
-        Ok(())
     }
 
     pub fn close(&self) {
