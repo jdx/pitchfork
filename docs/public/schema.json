@@ -1,120 +1,185 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pitchfork.dev/schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Pitchfork Configuration",
   "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files",
   "type": "object",
+  "required": [
+    "daemons"
+  ],
   "properties": {
     "daemons": {
-      "type": "object",
       "description": "Map of daemon names to their configurations",
+      "type": "object",
       "additionalProperties": {
-        "$ref": "#/$defs/daemon"
+        "$ref": "#/definitions/PitchforkTomlDaemon"
       }
     }
   },
-  "additionalProperties": false,
-  "$defs": {
-    "daemon": {
+  "definitions": {
+    "CronRetrigger": {
+      "description": "Retrigger behavior for cron-scheduled daemons",
+      "oneOf": [
+        {
+          "description": "Retrigger only if the previous run has finished (success or error)",
+          "type": "string",
+          "enum": [
+            "finish"
+          ]
+        },
+        {
+          "description": "Always retrigger, stopping the previous run if still active",
+          "type": "string",
+          "enum": [
+            "always"
+          ]
+        },
+        {
+          "description": "Retrigger only if the previous run succeeded",
+          "type": "string",
+          "enum": [
+            "success"
+          ]
+        },
+        {
+          "description": "Retrigger only if the previous run failed",
+          "type": "string",
+          "enum": [
+            "fail"
+          ]
+        }
+      ]
+    },
+    "PitchforkTomlAuto": {
+      "description": "Automatic behavior triggered by shell hooks",
+      "oneOf": [
+        {
+          "description": "Automatically start when entering the directory",
+          "type": "string",
+          "enum": [
+            "start"
+          ]
+        },
+        {
+          "description": "Automatically stop when leaving the directory",
+          "type": "string",
+          "enum": [
+            "stop"
+          ]
+        }
+      ]
+    },
+    "PitchforkTomlCron": {
+      "description": "Cron scheduling configuration",
       "type": "object",
-      "description": "Configuration for a single daemon",
-      "required": ["run"],
+      "required": [
+        "schedule"
+      ],
       "properties": {
-        "run": {
-          "type": "string",
-          "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
-          "examples": ["exec node server.js", "python -m http.server 8000"]
+        "retrigger": {
+          "description": "Behavior when cron triggers while previous run is still active",
+          "default": "finish",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CronRetrigger"
+            }
+          ]
         },
+        "schedule": {
+          "description": "Cron expression (e.g., '0 * * * *' for hourly, '*/5 * * * *' for every 5 minutes)",
+          "examples": [
+            "0 * * * *"
+          ],
+          "type": "string"
+        }
+      }
+    },
+    "PitchforkTomlDaemon": {
+      "description": "Configuration for a single daemon",
+      "type": "object",
+      "required": [
+        "run"
+      ],
+      "properties": {
         "auto": {
-          "type": "array",
           "description": "Automatic start/stop behavior based on shell hooks",
+          "type": "array",
           "items": {
-            "$ref": "#/$defs/auto"
-          },
-          "uniqueItems": true,
-          "default": []
-        },
-        "cron": {
-          "$ref": "#/$defs/cron",
-          "description": "Cron scheduling configuration for periodic execution"
-        },
-        "retry": {
-          "type": "integer",
-          "description": "Number of times to retry if the daemon fails (0 = no retries)",
-          "minimum": 0,
-          "default": 0
-        },
-        "ready_delay": {
-          "type": "integer",
-          "description": "Delay in milliseconds before considering the daemon ready",
-          "minimum": 0
-        },
-        "ready_output": {
-          "type": "string",
-          "description": "Regex pattern to match in stdout/stderr to determine readiness",
-          "examples": ["Server listening", "Ready to accept connections"]
-        },
-        "ready_http": {
-          "type": "string",
-          "description": "HTTP URL to poll for readiness (expects 2xx response)",
-          "format": "uri",
-          "examples": ["http://localhost:3000/health"]
-        },
-        "ready_port": {
-          "type": "integer",
-          "description": "TCP port to check for readiness (connection success = ready)",
-          "minimum": 1,
-          "maximum": 65535
+            "$ref": "#/definitions/PitchforkTomlAuto"
+          }
         },
         "boot_start": {
-          "type": "boolean",
-          "description": "Whether to start this daemon automatically on system boot"
+          "description": "Whether to start this daemon automatically on system boot",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cron": {
+          "description": "Cron scheduling configuration for periodic execution",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PitchforkTomlCron"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "depends": {
-          "type": "array",
           "description": "List of daemon names that must be started before this one",
+          "type": "array",
           "items": {
             "type": "string"
-          },
-          "uniqueItems": true,
-          "default": []
-        }
-      },
-      "additionalProperties": false
-    },
-    "auto": {
-      "type": "string",
-      "description": "Automatic behavior triggered by shell hooks",
-      "enum": ["start", "stop"]
-    },
-    "cron": {
-      "type": "object",
-      "description": "Cron scheduling configuration",
-      "required": ["schedule"],
-      "properties": {
-        "schedule": {
-          "type": "string",
-          "description": "Cron expression (e.g., '0 * * * *' for hourly, '*/5 * * * *' for every 5 minutes)",
-          "examples": ["0 * * * *", "*/5 * * * *", "0 0 * * *"]
+          }
         },
-        "retrigger": {
-          "$ref": "#/$defs/retrigger",
-          "description": "Behavior when cron triggers while previous run is still active",
-          "default": "finish"
+        "ready_delay": {
+          "description": "Delay in milliseconds before considering the daemon ready",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "ready_http": {
+          "description": "HTTP URL to poll for readiness (expects 2xx response)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready_output": {
+          "description": "Regex pattern to match in stdout/stderr to determine readiness",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready_port": {
+          "description": "TCP port to check for readiness (connection success = ready)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535.0,
+          "minimum": 1.0
+        },
+        "retry": {
+          "description": "Number of times to retry if the daemon fails (0 = no retries)",
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "run": {
+          "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
+          "examples": [
+            "exec node server.js"
+          ],
+          "type": "string"
         }
-      },
-      "additionalProperties": false
-    },
-    "retrigger": {
-      "type": "string",
-      "description": "Retrigger behavior for cron-scheduled daemons",
-      "enum": ["finish", "always", "success", "fail"],
-      "enumDescriptions": [
-        "Retrigger only if the previous run has finished (success or error)",
-        "Always retrigger, stopping the previous run if still active",
-        "Retrigger only if the previous run succeeded",
-        "Retrigger only if the previous run failed"
-      ]
+      }
     }
   }
 }

@@ -1,11 +1,17 @@
 use crate::{Result, env};
 use indexmap::IndexMap;
 use miette::{IntoDiagnostic, bail};
+use schemars::JsonSchema;
 use std::path::{Path, PathBuf};
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+
+/// Configuration schema for pitchfork.toml daemon supervisor configuration files
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, JsonSchema)]
+#[schemars(title = "Pitchfork Configuration")]
 pub struct PitchforkToml {
+    /// Map of daemon names to their configurations
     pub daemons: IndexMap<String, PitchforkTomlDaemon>,
     #[serde(skip)]
+    #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
 
@@ -71,34 +77,56 @@ impl PitchforkToml {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+/// Configuration for a single daemon
+#[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct PitchforkTomlDaemon {
+    /// The command to run. Prepend with 'exec' to avoid shell process overhead.
+    #[schemars(example = "example_run_command")]
     pub run: String,
+    /// Automatic start/stop behavior based on shell hooks
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub auto: Vec<PitchforkTomlAuto>,
+    /// Cron scheduling configuration for periodic execution
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cron: Option<PitchforkTomlCron>,
+    /// Number of times to retry if the daemon fails (0 = no retries)
     #[serde(default)]
     pub retry: u32,
+    /// Delay in milliseconds before considering the daemon ready
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
+    /// Regex pattern to match in stdout/stderr to determine readiness
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
+    /// HTTP URL to poll for readiness (expects 2xx response)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<String>,
+    /// TCP port to check for readiness (connection success = ready)
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(range(min = 1, max = 65535))]
     pub ready_port: Option<u16>,
+    /// Whether to start this daemon automatically on system boot
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
+    /// List of daemon names that must be started before this one
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<String>,
     #[serde(skip)]
+    #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+fn example_run_command() -> &'static str {
+    "exec node server.js"
+}
+
+/// Cron scheduling configuration
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct PitchforkTomlCron {
+    /// Cron expression (e.g., '0 * * * *' for hourly, '*/5 * * * *' for every 5 minutes)
+    #[schemars(example = "example_cron_schedule")]
     pub schedule: String,
+    /// Behavior when cron triggers while previous run is still active
     #[serde(default = "default_retrigger")]
     pub retrigger: CronRetrigger,
 }
@@ -107,23 +135,30 @@ fn default_retrigger() -> CronRetrigger {
     CronRetrigger::Finish
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq)]
+fn example_cron_schedule() -> &'static str {
+    "0 * * * *"
+}
+
+/// Retrigger behavior for cron-scheduled daemons
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CronRetrigger {
-    /// Retrigger if the previous command is finished (success or error)
+    /// Retrigger only if the previous run has finished (success or error)
     Finish,
-    /// Always retrigger, stop the previous command if running
+    /// Always retrigger, stopping the previous run if still active
     Always,
-    /// Retrigger only if the previous command succeeded
+    /// Retrigger only if the previous run succeeded
     Success,
-    /// Retrigger only if the previous command failed
+    /// Retrigger only if the previous run failed
     Fail,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+/// Automatic behavior triggered by shell hooks
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-#[derive(PartialEq)]
 pub enum PitchforkTomlAuto {
+    /// Automatically start when entering the directory
     Start,
+    /// Automatically stop when leaving the directory
     Stop,
 }

@@ -108,6 +108,7 @@ cmd run help="Runs a one-off daemon" {
     arg <ID> help="Name of the daemon to run"
     arg "[-- RUN]…" help="Command and arguments to run (after --)" required=#false var=#true
 }
+cmd schema hide=#true help="Generate JSON Schema for pitchfork.toml configuration"
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s
     long_help "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --all         Start all daemons in pitchfork.toml\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening"

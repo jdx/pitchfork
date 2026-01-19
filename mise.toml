@@ -27,6 +27,7 @@ run = [
   "rm -rf docs/cli && mkdir -p docs/cli",
   "usage g markdown -mf pitchfork.usage.kdl --out-dir docs/cli --url-prefix /cli",
   "usage g json -f pitchfork.usage.kdl > docs/cli/commands.json",
+  "pitchfork schema > docs/public/schema.json",
   "git add pitchfork.usage.kdl docs",
 ]
 

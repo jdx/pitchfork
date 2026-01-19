@@ -52,6 +52,7 @@ async-stream = "0.3"
 urlencoding = "2"
 mime_guess = "2"
 rmp-serde = "1"
+schemars = { version = "0.8", features = ["indexmap2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["indexmap"] }
 shell-words = "1.1.0"

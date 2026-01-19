@@ -13,6 +13,7 @@ mod list;
 pub mod logs;
 mod restart;
 mod run;
+mod schema;
 mod start;
 mod status;
 mod stop;
@@ -42,6 +43,7 @@ enum Commands {
     Logs(logs::Logs),
     Restart(restart::Restart),
     Run(run::Run),
+    Schema(schema::Schema),
     Start(start::Start),
     Status(status::Status),
     Stop(stop::Stop),
@@ -66,6 +68,7 @@ pub async fn run() -> Result<()> {
         Commands::Logs(logs) => logs.run().await,
         Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
+        Commands::Schema(schema) => schema.run().await,
         Commands::Start(start) => start.run().await,
         Commands::Status(status) => status.run().await,
         Commands::Stop(stop) => stop.run().await,
