@@ -44,6 +44,7 @@ impl Restart {
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
         // Determine which daemons to restart
+        let disabled_daemons = ipc.get_disabled_daemons().await?;
         let ids: Vec<String> = if self.all {
             // Get all running daemons that are in config
             // (ad-hoc daemons started via `pitchfork run` cannot be restarted from config)
@@ -54,7 +55,24 @@ impl Restart {
                 .map(|d| d.id)
                 .collect()
         } else {
-            self.id.clone()
+            // Validate all specified daemons BEFORE stopping any of them
+            // to avoid terminating daemons that cannot be restarted
+            let mut valid_ids = Vec::new();
+            for id in &self.id {
+                if !pt.daemons.contains_key(id) {
+                    warn!(
+                        "Daemon {} not found in config (ad-hoc daemons cannot be restarted), skipping",
+                        id
+                    );
+                    continue;
+                }
+                if disabled_daemons.contains(id) {
+                    warn!("Daemon {} is disabled, skipping", id);
+                    continue;
+                }
+                valid_ids.push(id.clone());
+            }
+            valid_ids
         };
 
         if ids.is_empty() {
@@ -62,7 +80,7 @@ impl Restart {
             return Ok(());
         }
 
-        // Stop all daemons first
+        // Stop all daemons first (all have been validated as restartable)
         for id in &ids {
             if let Err(e) = ipc.stop(id.clone()).await {
                 warn!("Failed to stop daemon {}: {}", id, e);
@@ -73,12 +91,11 @@ impl Restart {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // Start all daemons
-        let disabled_daemons = ipc.get_disabled_daemons().await?;
         let mut tasks = Vec::new();
 
         for id in ids {
-            if disabled_daemons.contains(&id) {
-                warn!("Daemon {} is disabled, skipping start", id);
+            // Already validated above, but --all path still needs this check
+            if self.all && disabled_daemons.contains(&id) {
                 continue;
             }
 
