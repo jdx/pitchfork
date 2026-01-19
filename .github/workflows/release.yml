@@ -34,6 +34,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refs/tags/${{ inputs.tag }}
+      - name: Import codesign certs
+        if: startsWith(matrix.os, 'macos')
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
+          p12-password: ${{ secrets.CERTIFICATES_P12_PASS }}
       - name: Install cross-compilation tools
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
@@ -41,7 +47,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-${{ matrix.target }}
-      - uses: taiki-e/upload-rust-binary-action@v1
+      - name: Upload binary (macOS signed)
+        if: startsWith(matrix.os, 'macos')
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: pitchfork
+          target: ${{ matrix.target }}
+          ref: refs/tags/${{ inputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          codesign: "Developer ID Application: Jeffrey Dickey (4993Y37DX6)"
+          codesign_prefix: dev.jdx.
+      - name: Upload binary (non-macOS)
+        if: ${{ !startsWith(matrix.os, 'macos') }}
+        uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: pitchfork
           target: ${{ matrix.target }}
