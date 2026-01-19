@@ -5,8 +5,46 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use miette::{IntoDiagnostic, bail, miette};
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
+
+/// Rate limiter for IPC connections to prevent local DoS attacks.
+/// Uses a sliding window algorithm to limit requests per second.
+struct RateLimiter {
+    /// Timestamps of recent requests within the window
+    requests: Vec<Instant>,
+    /// Maximum requests allowed per window
+    max_requests: usize,
+    /// Window duration in seconds
+    window_secs: u64,
+}
+
+impl RateLimiter {
+    fn new(max_requests: usize, window_secs: u64) -> Self {
+        Self {
+            requests: Vec::with_capacity(max_requests),
+            max_requests,
+            window_secs,
+        }
+    }
+
+    /// Check if a request is allowed. Returns true if allowed, false if rate limited.
+    fn check(&mut self) -> bool {
+        let now = Instant::now();
+        let window = std::time::Duration::from_secs(self.window_secs);
+
+        // Remove expired timestamps
+        self.requests.retain(|&t| now.duration_since(t) < window);
+
+        if self.requests.len() >= self.max_requests {
+            false
+        } else {
+            self.requests.push(now);
+            true
+        }
+    }
+}
 
 pub struct IpcServer {
     // clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
@@ -62,34 +100,63 @@ impl IpcServer {
         Ok(())
     }
 
-    async fn read_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<IpcRequest>> {
+    /// Read raw bytes from socket until null terminator (without deserializing)
+    async fn read_raw_message(recv: &mut BufReader<RecvHalf>) -> Result<Option<Vec<u8>>> {
         let mut bytes = Vec::new();
         recv.read_until(0, &mut bytes).await.into_diagnostic()?;
         if bytes.is_empty() {
             return Ok(None);
         }
-        Ok(Some(deserialize(&bytes)?))
+        Ok(Some(bytes))
     }
 
     fn read_messages_chan(recv: RecvHalf) -> Receiver<IpcRequest> {
         let mut recv = BufReader::new(recv);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
+            // Rate limit: 100 requests per second per connection
+            // This is generous for normal CLI usage but prevents flooding
+            let mut rate_limiter = RateLimiter::new(100, 1);
+
             loop {
-                let msg = match Self::read_message(&mut recv).await {
-                    Ok(Some(msg)) => {
-                        trace!("Received message: {:?}", msg);
-                        msg
-                    }
+                // Check rate limit BEFORE reading to avoid wasting CPU on deserialization
+                // when rate limited. We still need to drain the socket to prevent buffer
+                // buildup, but we skip the costly deserialization step.
+                let is_rate_limited = !rate_limiter.check();
+
+                // Read raw bytes from socket
+                let bytes = match Self::read_raw_message(&mut recv).await {
+                    Ok(Some(bytes)) => bytes,
                     Ok(None) => {
                         trace!("Client disconnected");
                         break;
                     }
                     Err(err) => {
+                        // I/O errors are not rate-limited (they indicate connection issues)
+                        error!("Failed to read from socket: {:?}", err);
+                        break;
+                    }
+                };
+
+                // If rate limited, drop the message without deserializing
+                if is_rate_limited {
+                    warn!("IPC client rate limited, dropping message");
+                    continue;
+                }
+
+                // Deserialize the message
+                let msg = match deserialize(&bytes) {
+                    Ok(msg) => {
+                        trace!("Received message: {:?}", msg);
+                        msg
+                    }
+                    Err(err) => {
+                        // Deserialization errors still count towards rate limit (already counted above)
                         error!("Failed to deserialize message: {:?}", err);
                         continue;
                     }
                 };
+
                 if let Err(err) = tx.send(msg).await {
                     warn!("Failed to emit message: {:?}", err);
                 }
