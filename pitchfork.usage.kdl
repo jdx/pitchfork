@@ -2,7 +2,7 @@ name pitchfork
 bin pitchfork
 version "0.3.0"
 about "Daemons with DX"
-usage "Usage: pitchfork <COMMAND>"
+usage "Usage: pitchfork [COMMAND]"
 cmd activate help="Activate pitchfork in your shell session" {
     long_help "Activate pitchfork in your shell session\n\nGenerates shell code that enables automatic daemon management when changing\ndirectories. Required for auto-start/stop features in pitchfork.toml.\n\nSupported shells: bash, zsh, fish\n\nAdd to your shell config:\n  bash (~/.bashrc):\n    eval \"$(pitchfork activate bash)\"\n\n  zsh (~/.zshrc):\n    eval \"$(pitchfork activate zsh)\"\n\n  fish (~/.config/fish/config.fish):\n    pitchfork activate fish | source"
     arg <SHELL> help="Shell to activate (bash, zsh, fish)"

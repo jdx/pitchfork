@@ -12,6 +12,7 @@ mod pitchfork_toml;
 mod procs;
 mod state_file;
 mod supervisor;
+mod tui;
 mod ui;
 mod watch_files;
 mod web;

@@ -23,7 +23,7 @@ mod wait;
 #[clap(name = "pitchfork", version = env!("CARGO_PKG_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Cli {
     #[clap(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -50,22 +50,25 @@ enum Commands {
 pub async fn run() -> Result<()> {
     let args = Cli::parse();
     match args.command {
-        Commands::Activate(activate) => activate.run().await,
-        Commands::Boot(boot) => boot.run().await,
-        Commands::Cd(cd) => cd.run().await,
-        Commands::Clean(clean) => clean.run().await,
-        Commands::Config(config) => config.run().await,
-        Commands::Completion(completion) => completion.run().await,
-        Commands::Disable(disable) => disable.run().await,
-        Commands::Enable(enable) => enable.run().await,
-        Commands::List(list) => list.run().await,
-        Commands::Logs(logs) => logs.run().await,
-        Commands::Run(run) => run.run().await,
-        Commands::Start(start) => start.run().await,
-        Commands::Status(status) => status.run().await,
-        Commands::Stop(stop) => stop.run().await,
-        Commands::Supervisor(supervisor) => supervisor.run().await,
-        Commands::Usage(usage) => usage.run().await,
-        Commands::Wait(wait) => wait.run().await,
+        None => crate::tui::run().await,
+        Some(cmd) => match cmd {
+            Commands::Activate(activate) => activate.run().await,
+            Commands::Boot(boot) => boot.run().await,
+            Commands::Cd(cd) => cd.run().await,
+            Commands::Clean(clean) => clean.run().await,
+            Commands::Config(config) => config.run().await,
+            Commands::Completion(completion) => completion.run().await,
+            Commands::Disable(disable) => disable.run().await,
+            Commands::Enable(enable) => enable.run().await,
+            Commands::List(list) => list.run().await,
+            Commands::Logs(logs) => logs.run().await,
+            Commands::Run(run) => run.run().await,
+            Commands::Start(start) => start.run().await,
+            Commands::Status(status) => status.run().await,
+            Commands::Stop(stop) => stop.run().await,
+            Commands::Supervisor(supervisor) => supervisor.run().await,
+            Commands::Usage(usage) => usage.run().await,
+            Commands::Wait(wait) => wait.run().await,
+        },
     }
 }
