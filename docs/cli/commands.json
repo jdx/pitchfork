@@ -1067,6 +1067,22 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "tui": {
+        "full_cmd": [
+          "tui"
+        ],
+        "usage": "tui",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Launch the interactive TUI dashboard",
+        "name": "tui",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "usage": {
         "full_cmd": [
           "usage"
@@ -1127,7 +1143,7 @@
     "props": {}
   },
   "version": "0.3.0",
-  "usage": "Usage: pitchfork [COMMAND]",
+  "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
       "name": "id",
