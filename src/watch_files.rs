@@ -131,19 +131,36 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
     Ok(dirs_to_watch)
 }
 
+/// Normalize a path string to use forward slashes for glob pattern matching.
+/// This ensures consistent behavior across Windows and Unix platforms.
+fn normalize_path_for_glob(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 /// Check if a changed path matches any of the watch patterns.
 pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir: &Path) -> bool {
+    // Normalize the changed path to use forward slashes for consistent matching
+    let changed_path_str = normalize_path_for_glob(&changed_path.to_string_lossy());
+
     for pattern in patterns {
+        // Build the full pattern and normalize to use forward slashes
         let full_pattern = if Path::new(pattern).is_absolute() {
-            pattern.clone()
+            normalize_path_for_glob(pattern)
         } else {
-            base_dir.join(pattern).to_string_lossy().to_string()
+            normalize_path_for_glob(&base_dir.join(pattern).to_string_lossy())
         };
 
-        if let Ok(glob_pattern) = glob::Pattern::new(&full_pattern)
-            && glob_pattern.matches_path(changed_path)
-        {
-            return true;
+        if let Ok(glob_pattern) = glob::Pattern::new(&full_pattern) {
+            // Use matches() with the normalized string path instead of matches_path()
+            // to ensure consistent forward-slash matching
+            let match_options = glob::MatchOptions {
+                case_sensitive: cfg!(not(target_os = "windows")),
+                require_literal_separator: false,
+                require_literal_leading_dot: false,
+            };
+            if glob_pattern.matches_with(&changed_path_str, match_options) {
+                return true;
+            }
         }
     }
     false
