@@ -4,23 +4,12 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::daemon::RunOptions;
+use crate::daemon::{RunOptions, is_valid_daemon_id};
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
-
-/// Validate daemon ID to prevent path traversal attacks and CSS selector issues
-/// Note: HTML characters are allowed since we escape all output
-fn is_valid_daemon_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains("..")
-        && !id.contains(' ')
-        && id != "."
-}
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")

@@ -1,4 +1,4 @@
-use crate::daemon::{Daemon, RunOptions};
+use crate::daemon::{Daemon, RunOptions, validate_daemon_id};
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
@@ -1166,9 +1166,22 @@ impl Supervisor {
                 debug!("received connect message");
                 IpcResponse::Ok
             }
-            IpcRequest::Stop { id } => self.stop(&id).await?,
-            IpcRequest::Run(opts) => self.run(opts).await?,
+            IpcRequest::Stop { id } => {
+                if let Err(e) = validate_daemon_id(&id) {
+                    return Ok(IpcResponse::Error(e));
+                }
+                self.stop(&id).await?
+            }
+            IpcRequest::Run(opts) => {
+                if let Err(e) = validate_daemon_id(&opts.id) {
+                    return Ok(IpcResponse::Error(e));
+                }
+                self.run(opts).await?
+            }
             IpcRequest::Enable { id } => {
+                if let Err(e) = validate_daemon_id(&id) {
+                    return Ok(IpcResponse::Error(e));
+                }
                 if self.enable(id).await? {
                     IpcResponse::Yes
                 } else {
@@ -1176,6 +1189,9 @@ impl Supervisor {
                 }
             }
             IpcRequest::Disable { id } => {
+                if let Err(e) = validate_daemon_id(&id) {
+                    return Ok(IpcResponse::Error(e));
+                }
                 if self.disable(id).await? {
                     IpcResponse::Yes
                 } else {

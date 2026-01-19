@@ -8,19 +8,10 @@ use axum::{
 use std::convert::Infallible;
 use std::time::Duration;
 
+use crate::daemon::is_valid_daemon_id;
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
-
-/// Validate daemon ID to prevent path traversal attacks and CSS selector issues
-fn is_valid_daemon_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains("..")
-        && !id.contains(' ')
-        && id != "."
-}
 
 fn base_html(title: &str, content: &str) -> String {
     format!(
