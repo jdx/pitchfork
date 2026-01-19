@@ -986,7 +986,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             "/:search  q/Esc:clear  j/k:nav  S:sort  i:info  s:start  x:stop  l:details  ?:help"
         }
         View::Dashboard => {
-            "/:search  q:quit  j/k:nav  S:sort  o:order  i:info  s:start  x:stop  l:details  ?:help"
+            "/:search  q/Esc:quit  j/k:nav  S:sort  o:order  i:info  s:start  x:stop  l:details  ?:help"
         }
         View::Logs if app.log_search_active => "Type to search  Enter:finish  Esc:clear",
         View::Logs if !app.log_search_query.is_empty() => {

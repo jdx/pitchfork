@@ -58,8 +58,10 @@ fn handle_dashboard_event(
         KeyCode::Esc => {
             if !app.search_query.is_empty() {
                 app.clear_search();
+                Ok(None)
+            } else {
+                Ok(Some(Action::Quit))
             }
-            Ok(None)
         }
         KeyCode::Char('?') => {
             app.show_help();
