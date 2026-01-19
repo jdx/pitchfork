@@ -159,6 +159,13 @@ impl Supervisor {
                     Ok(cmd) => cmd,
                     Err(e) => {
                         error!("failed to parse command for daemon {}: {}", id, e);
+                        // Mark as exhausted to prevent infinite retry loop
+                        self.upsert_daemon(UpsertDaemonOpts {
+                            id,
+                            retry_count: Some(daemon.retry),
+                            ..Default::default()
+                        })
+                        .await?;
                         continue;
                     }
                 };

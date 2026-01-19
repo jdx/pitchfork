@@ -383,10 +383,21 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         let cmd = match shell_words::split(&daemon_config.run) {
             Ok(cmd) => cmd,
             Err(e) => {
-                return Html(format!(
-                    r#"<div class="error">Failed to parse command: {}</div>"#,
-                    html_escape(&e.to_string())
-                ));
+                // Don't early return - let the error flow through proper handling below
+                // which respects from_detail for correct HTML structure
+                let error_msg = format!("Failed to parse command: {}", e);
+                // Skip to error handling by returning early from the if-let block
+                return if from_detail {
+                    Html(format!(
+                        r#"<div class="error">{}</div>"#,
+                        html_escape(&error_msg)
+                    ))
+                } else {
+                    Html(format!(
+                        r#"<tr id="daemon-{safe_id}"><td colspan="8" class="error">{}</td></tr>"#,
+                        html_escape(&error_msg)
+                    ))
+                };
             }
         };
         let dir = daemon_config
