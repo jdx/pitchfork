@@ -86,36 +86,36 @@ pub enum DependencyError {
     },
 }
 
-/// Errors related to configuration file operations.
+/// Errors related to file operations (config and state files).
 #[derive(Debug, Error, Diagnostic)]
-pub enum ConfigError {
-    #[error("failed to parse config file: {}", path.display())]
-    #[diagnostic(code(pitchfork::config::parse_error))]
+pub enum FileError {
+    #[error("failed to parse file: {}", path.display())]
+    #[diagnostic(code(pitchfork::file::parse_error))]
     ParseError {
         path: std::path::PathBuf,
         #[help]
         details: Option<String>,
     },
 
-    #[error("failed to read config file: {}", path.display())]
-    #[diagnostic(code(pitchfork::config::read_error))]
+    #[error("failed to read file: {}", path.display())]
+    #[diagnostic(code(pitchfork::file::read_error))]
     ReadError {
         path: std::path::PathBuf,
         #[help]
         details: Option<String>,
     },
 
-    #[error("failed to write config file: {}", path.display())]
-    #[diagnostic(code(pitchfork::config::write_error))]
+    #[error("failed to write file: {}", path.display())]
+    #[diagnostic(code(pitchfork::file::write_error))]
     WriteError {
         path: std::path::PathBuf,
         #[help]
         details: Option<String>,
     },
 
-    #[error("no config file path specified")]
+    #[error("no file path specified")]
     #[diagnostic(
-        code(pitchfork::config::no_path),
+        code(pitchfork::file::no_path),
         help("ensure a pitchfork.toml file exists in your project or specify a path")
     )]
     NoPath,
@@ -206,15 +206,15 @@ mod tests {
     }
 
     #[test]
-    fn test_config_error_display() {
-        let err = ConfigError::ParseError {
+    fn test_file_error_display() {
+        let err = FileError::ParseError {
             path: std::path::PathBuf::from("/path/to/config.toml"),
             details: Some("invalid key".to_string()),
         };
-        assert!(err.to_string().contains("failed to parse"));
+        assert!(err.to_string().contains("failed to parse file"));
         assert!(err.to_string().contains("config.toml"));
 
-        let err = ConfigError::NoPath;
-        assert!(err.to_string().contains("no config file path"));
+        let err = FileError::NoPath;
+        assert!(err.to_string().contains("no file path"));
     }
 }
