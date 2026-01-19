@@ -3,7 +3,7 @@
 
 **Usage**: `pitchfork <SUBCOMMAND>`
 
-**Version**: 1.0.1
+**Version**: 1.0.2
 
 - **Usage**: `pitchfork <SUBCOMMAND>`
 
