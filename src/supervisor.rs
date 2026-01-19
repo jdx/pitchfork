@@ -2,13 +2,16 @@ use crate::daemon::{Daemon, RunOptions, validate_daemon_id};
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::server::{IpcServer, IpcServerHandle};
 use crate::ipc::{IpcRequest, IpcResponse};
+use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
+use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
 use crate::{Result, env};
 use duct::cmd;
 use itertools::Itertools;
 use log::LevelFilter::Info;
 use miette::IntoDiagnostic;
+use notify::RecursiveMode;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -118,7 +121,7 @@ impl Supervisor {
         self.interval_watch()?;
         self.cron_watch()?;
         self.signals()?;
-        // self.file_watch().await?;
+        self.daemon_file_watch()?;
 
         // Start web server if port is configured
         if let Some(port) = web_port {
@@ -1043,31 +1046,197 @@ impl Supervisor {
         exit(0)
     }
 
-    // async fn file_watch(&self) -> Result<()> {
-    //     let state_file = self.state_file.lock().await.path.clone();
-    //     task::spawn(async move {
-    //         let mut wf = WatchFiles::new(Duration::from_secs(2)).unwrap();
-    //
-    //         wf.watch(&state_file, RecursiveMode::NonRecursive).unwrap();
-    //
-    //         while let Some(paths) = wf.rx.recv().await {
-    //             if let Err(err) = SUPERVISOR.handle_file_change(paths).await {
-    //                 error!("failed to handle file change: {err}");
-    //             }
-    //         }
-    //     });
-    //
-    //     Ok(())
-    // }
+    /// Watch files for daemons that have `watch` patterns configured.
+    /// When a watched file changes, the daemon is automatically restarted.
+    fn daemon_file_watch(&self) -> Result<()> {
+        let pt = PitchforkToml::all_merged();
 
-    // async fn handle_file_change(&self, paths: Vec<PathBuf>) -> Result<()> {
-    //     debug!("file change: {:?}", paths);
-    //     // let path = self.state_file.lock().await.path.clone();
-    //     // if paths.contains(&path) {
-    //     //     *self.state_file.lock().await = StateFile::read(&path)?;
-    //     // }
-    //     self.refresh().await
-    // }
+        // Collect all daemons with watch patterns and their base directories
+        let watch_configs: Vec<(String, Vec<String>, PathBuf)> = pt
+            .daemons
+            .iter()
+            .filter(|(_, d)| !d.watch.is_empty())
+            .map(|(id, d)| {
+                let base_dir = d
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| env::CWD.clone());
+                (id.clone(), d.watch.clone(), base_dir)
+            })
+            .collect();
+
+        if watch_configs.is_empty() {
+            debug!("No daemons with watch patterns configured");
+            return Ok(());
+        }
+
+        info!(
+            "Setting up file watching for {} daemon(s)",
+            watch_configs.len()
+        );
+
+        // Collect all directories to watch
+        let mut all_dirs = std::collections::HashSet::new();
+        for (id, patterns, base_dir) in &watch_configs {
+            match expand_watch_patterns(patterns, base_dir) {
+                Ok(dirs) => {
+                    for dir in &dirs {
+                        debug!("Watching {} for daemon {}", dir.display(), id);
+                    }
+                    all_dirs.extend(dirs);
+                }
+                Err(e) => {
+                    warn!("Failed to expand watch patterns for {}: {}", id, e);
+                }
+            }
+        }
+
+        if all_dirs.is_empty() {
+            debug!("No directories to watch after expanding patterns");
+            return Ok(());
+        }
+
+        // Spawn the file watcher task
+        tokio::spawn(async move {
+            let mut wf = match WatchFiles::new(Duration::from_secs(1)) {
+                Ok(wf) => wf,
+                Err(e) => {
+                    error!("Failed to create file watcher: {}", e);
+                    return;
+                }
+            };
+
+            // Register all directories with the watcher
+            for dir in all_dirs {
+                if let Err(e) = wf.watch(&dir, RecursiveMode::Recursive) {
+                    warn!("Failed to watch directory {}: {}", dir.display(), e);
+                }
+            }
+
+            info!("File watcher started");
+
+            // Process file change events
+            while let Some(changed_paths) = wf.rx.recv().await {
+                debug!("File changes detected: {:?}", changed_paths);
+
+                // Find which daemons should be restarted based on the changed paths
+                let mut daemons_to_restart = std::collections::HashSet::new();
+
+                for changed_path in &changed_paths {
+                    for (id, patterns, base_dir) in &watch_configs {
+                        if path_matches_patterns(changed_path, patterns, base_dir) {
+                            info!(
+                                "File {} matched pattern for daemon {}, scheduling restart",
+                                changed_path.display(),
+                                id
+                            );
+                            daemons_to_restart.insert(id.clone());
+                        }
+                    }
+                }
+
+                // Restart each affected daemon
+                for id in daemons_to_restart {
+                    if let Err(e) = SUPERVISOR.restart_watched_daemon(&id).await {
+                        error!("Failed to restart daemon {} after file change: {}", id, e);
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Restart a daemon that is being watched for file changes.
+    /// Only restarts if the daemon is currently running.
+    async fn restart_watched_daemon(&self, id: &str) -> Result<()> {
+        // Check if daemon is running
+        let daemon = self.get_daemon(id).await;
+        let is_running = daemon
+            .as_ref()
+            .is_some_and(|d| d.pid.is_some() && d.status.is_running());
+
+        if !is_running {
+            debug!(
+                "Daemon {} is not running, skipping restart on file change",
+                id
+            );
+            return Ok(());
+        }
+
+        info!("Restarting daemon {} due to file change", id);
+
+        // Get the daemon config to rebuild RunOptions
+        let pt = PitchforkToml::all_merged();
+        let Some(daemon_config) = pt.daemons.get(id) else {
+            warn!("Daemon {} not found in config, cannot restart", id);
+            return Ok(());
+        };
+
+        let dir = daemon_config
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| env::CWD.clone());
+
+        let cmd = match shell_words::split(&daemon_config.run) {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                error!("Failed to parse command for daemon {}: {}", id, e);
+                return Ok(());
+            }
+        };
+
+        // Extract values from daemon before stopping
+        let shell_pid = daemon.as_ref().and_then(|d| d.shell_pid);
+        let autostop = daemon.as_ref().map(|d| d.autostop).unwrap_or(false);
+
+        // Stop the daemon first
+        let _ = self.stop(id).await;
+
+        // Small delay to allow the process to fully stop
+        time::sleep(Duration::from_millis(100)).await;
+
+        // Restart the daemon
+        let run_opts = RunOptions {
+            id: id.to_string(),
+            cmd,
+            force: true,
+            shell_pid,
+            dir,
+            autostop,
+            cron_schedule: daemon_config.cron.as_ref().map(|c| c.schedule.clone()),
+            cron_retrigger: daemon_config.cron.as_ref().map(|c| c.retrigger),
+            retry: daemon_config.retry,
+            retry_count: 0,
+            ready_delay: daemon_config.ready_delay,
+            ready_output: daemon_config.ready_output.clone(),
+            ready_http: daemon_config.ready_http.clone(),
+            ready_port: daemon_config.ready_port,
+            wait_ready: false, // Don't block on file-triggered restarts
+            depends: daemon_config.depends.clone(),
+        };
+
+        match self.run(run_opts).await {
+            Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
+                info!("Successfully restarted daemon {} after file change", id);
+            }
+            Ok(other) => {
+                warn!(
+                    "Unexpected response when restarting daemon {}: {:?}",
+                    id, other
+                );
+            }
+            Err(e) => {
+                error!("Failed to restart daemon {}: {}", id, e);
+            }
+        }
+
+        Ok(())
+    }
 
     fn interval_watch(&self) -> Result<()> {
         tokio::spawn(async move {

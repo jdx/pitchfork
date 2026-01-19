@@ -42,6 +42,7 @@ impl Add {
                 ready_port: None,
                 boot_start: None,
                 depends: vec![],
+                watch: vec![],
                 path: None,
             },
         );
