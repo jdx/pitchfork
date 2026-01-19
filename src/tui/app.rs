@@ -319,6 +319,7 @@ pub struct EditorState {
     pub daemon_id: String,
     pub daemon_id_editing: bool,
     pub daemon_id_cursor: usize,
+    pub daemon_id_error: Option<String>,
     pub fields: Vec<FormField>,
     pub focused_field: usize,
     pub config_path: PathBuf,
@@ -334,6 +335,7 @@ impl EditorState {
             daemon_id: String::new(),
             daemon_id_editing: true,
             daemon_id_cursor: 0,
+            daemon_id_error: None,
             fields: Self::default_fields(),
             focused_field: 0,
             config_path,
@@ -350,6 +352,7 @@ impl EditorState {
             daemon_id,
             daemon_id_editing: false,
             daemon_id_cursor: 0,
+            daemon_id_error: None,
             fields: Self::fields_from_config(config),
             focused_field: 0,
             config_path,
@@ -661,12 +664,17 @@ impl EditorState {
         let mut valid = true;
 
         // Validate daemon ID
-        if self.daemon_id.is_empty()
-            || !self
-                .daemon_id
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        self.daemon_id_error = None;
+        if self.daemon_id.is_empty() {
+            self.daemon_id_error = Some("Name is required".to_string());
+            valid = false;
+        } else if !self
+            .daemon_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
         {
+            self.daemon_id_error =
+                Some("Only letters, digits, hyphens, and underscores allowed".to_string());
             valid = false;
         }
 

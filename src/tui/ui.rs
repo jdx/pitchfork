@@ -1485,6 +1485,19 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
         format!("Name: {}", editor.daemon_id)
     };
 
+    // Append error if present
+    let id_display = if let Some(err) = &editor.daemon_id_error {
+        format!("{} [{}]", id_display, err)
+    } else {
+        id_display
+    };
+
+    let id_style = if editor.daemon_id_error.is_some() {
+        Style::default().fg(RED).bold()
+    } else {
+        id_style
+    };
+
     let header = Paragraph::new(id_display)
         .style(id_style)
         .block(
