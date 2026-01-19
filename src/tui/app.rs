@@ -5,10 +5,64 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::{ProcessStats, PROCS};
 use crate::Result;
 use miette::bail;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
+
+/// Maximum number of stat samples to keep for each daemon (e.g., 60 samples at 2s intervals = 2 minutes)
+const MAX_STAT_HISTORY: usize = 60;
+
+/// A snapshot of stats at a point in time
+#[derive(Debug, Clone, Copy)]
+pub struct StatsSnapshot {
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub disk_read_bytes: u64,
+    pub disk_write_bytes: u64,
+}
+
+impl From<&ProcessStats> for StatsSnapshot {
+    fn from(stats: &ProcessStats) -> Self {
+        Self {
+            cpu_percent: stats.cpu_percent,
+            memory_bytes: stats.memory_bytes,
+            disk_read_bytes: stats.disk_read_bytes,
+            disk_write_bytes: stats.disk_write_bytes,
+        }
+    }
+}
+
+/// Historical stats for a daemon
+#[derive(Debug, Clone, Default)]
+pub struct StatsHistory {
+    pub samples: VecDeque<StatsSnapshot>,
+}
+
+impl StatsHistory {
+    pub fn push(&mut self, snapshot: StatsSnapshot) {
+        self.samples.push_back(snapshot);
+        while self.samples.len() > MAX_STAT_HISTORY {
+            self.samples.pop_front();
+        }
+    }
+
+    pub fn cpu_values(&self) -> Vec<f32> {
+        self.samples.iter().map(|s| s.cpu_percent).collect()
+    }
+
+    pub fn memory_values(&self) -> Vec<u64> {
+        self.samples.iter().map(|s| s.memory_bytes).collect()
+    }
+
+    pub fn disk_read_values(&self) -> Vec<u64> {
+        self.samples.iter().map(|s| s.disk_read_bytes).collect()
+    }
+
+    pub fn disk_write_values(&self) -> Vec<u64> {
+        self.samples.iter().map(|s| s.disk_write_bytes).collect()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -85,6 +139,7 @@ pub struct App {
     pub message: Option<String>,
     pub message_time: Option<Instant>,
     pub process_stats: HashMap<u32, ProcessStats>, // PID -> stats
+    pub stats_history: HashMap<String, StatsHistory>, // daemon_id -> history
     pub pending_action: Option<PendingAction>,
     pub loading_text: Option<String>,
     pub search_query: String,
@@ -97,7 +152,7 @@ pub struct App {
     pub log_search_active: bool,
     pub log_search_matches: Vec<usize>, // Line indices that match
     pub log_search_current: usize,      // Current match index
-    // Details view
+    // Details view daemon (now used for full-page details view from 'l' key)
     pub details_daemon_id: Option<String>,
 }
 
@@ -116,6 +171,7 @@ impl App {
             message: None,
             message_time: None,
             process_stats: HashMap::new(),
+            stats_history: HashMap::new(),
             pending_action: None,
             loading_text: None,
             search_query: String::new(),
@@ -324,9 +380,17 @@ impl App {
             if let Some(pid) = daemon.pid {
                 if let Some(stats) = PROCS.get_stats(pid) {
                     self.process_stats.insert(pid, stats);
+                    // Record history for this daemon
+                    let history = self.stats_history.entry(daemon.id.clone()).or_default();
+                    history.push(StatsSnapshot::from(&stats));
                 }
             }
         }
+    }
+
+    /// Get stats history for a daemon
+    pub fn get_stats_history(&self, daemon_id: &str) -> Option<&StatsHistory> {
+        self.stats_history.get(daemon_id)
     }
 
     pub async fn refresh(&mut self, client: &IpcClient) -> Result<()> {
@@ -466,10 +530,11 @@ impl App {
         self.view = View::Dashboard;
     }
 
-    pub fn view_logs(&mut self, daemon_id: &str) {
+    /// View daemon details (charts + logs)
+    pub fn view_daemon_details(&mut self, daemon_id: &str) {
         self.log_daemon_id = Some(daemon_id.to_string());
         self.load_logs(daemon_id);
-        self.view = View::Logs;
+        self.view = View::Logs; // Logs view is now the full daemon details view
     }
 
     fn load_logs(&mut self, daemon_id: &str) {
@@ -581,7 +646,7 @@ impl App {
             wait_ready: false,
         };
 
-        let _ = client.run(opts).await;
+        client.run(opts).await?;
         self.set_message(format!("Started {}", daemon_id));
         Ok(())
     }

@@ -32,6 +32,25 @@ pub async fn run() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).into_diagnostic()?;
 
+    // Run with cleanup guaranteed
+    let result = run_with_cleanup(&mut terminal).await;
+
+    // Restore terminal (always runs)
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    );
+    let _ = terminal.show_cursor();
+
+    // Restore log level
+    log::set_max_level(prev_log_level);
+
+    result
+}
+
+async fn run_with_cleanup<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     // Connect to supervisor (auto-start if needed)
     let client = IpcClient::connect(true).await?;
 
@@ -40,22 +59,7 @@ pub async fn run() -> Result<()> {
     app.refresh(&client).await?;
 
     // Run main loop
-    let result = run_app(&mut terminal, &mut app, &client).await;
-
-    // Restore terminal
-    disable_raw_mode().into_diagnostic()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )
-    .into_diagnostic()?;
-    terminal.show_cursor().into_diagnostic()?;
-
-    // Restore log level
-    log::set_max_level(prev_log_level);
-
-    result
+    run_app(terminal, &mut app, &client).await
 }
 
 async fn run_app<B: Backend>(
@@ -77,8 +81,13 @@ async fn run_app<B: Backend>(
                     event::Action::Start(id) => {
                         app.start_loading(format!("Starting {}...", id));
                         terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                        app.start_daemon(client, &id).await?;
-                        app.stop_loading();
+                        // Handle start errors gracefully (don't crash TUI)
+                        if let Err(e) = app.start_daemon(client, &id).await {
+                            app.stop_loading();
+                            app.set_message(format!("Failed to start {}: {}", id, e));
+                        } else {
+                            app.stop_loading();
+                        }
                         app.refresh(client).await?;
                     }
                     event::Action::Enable(id) => {
@@ -110,9 +119,17 @@ async fn run_app<B: Backend>(
                                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                     client.stop(id.clone()).await?;
                                     tokio::time::sleep(Duration::from_millis(500)).await;
-                                    app.start_daemon(client, &id).await?;
-                                    app.stop_loading();
-                                    app.set_message(format!("Restarted {}", id));
+                                    // Handle start errors gracefully (don't crash TUI)
+                                    if let Err(e) = app.start_daemon(client, &id).await {
+                                        app.stop_loading();
+                                        app.set_message(format!(
+                                            "Stopped {} but failed to restart: {}",
+                                            id, e
+                                        ));
+                                    } else {
+                                        app.stop_loading();
+                                        app.set_message(format!("Restarted {}", id));
+                                    }
                                 }
                                 app::PendingAction::Disable(id) => {
                                     app.start_loading(format!("Disabling {}...", id));

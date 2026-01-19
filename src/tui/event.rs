@@ -142,7 +142,7 @@ fn handle_dashboard_event(
         KeyCode::Char('l') | KeyCode::Enter => {
             if let Some(daemon) = app.selected_daemon() {
                 let id = daemon.id.clone();
-                app.view_logs(&id);
+                app.view_daemon_details(&id);
             }
             Ok(None)
         }

@@ -1,11 +1,12 @@
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::PitchforkToml;
-use crate::tui::app::{App, PendingAction, SortColumn, View};
+use crate::tui::app::{App, PendingAction, SortColumn, StatsHistory, View};
 use ratatui::{
     prelude::*,
+    symbols,
     widgets::{
-        Block, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-        ScrollbarState, Table, Wrap,
+        Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, Paragraph, Row, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Table, Wrap,
     },
 };
 
@@ -386,24 +387,317 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
     ])
 }
 
+/// Draw the daemon details view (charts + logs)
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
-    // Split area for search bar if active
-    let (search_area, log_area) = if app.log_search_active || !app.log_search_query.is_empty() {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(area);
-        (Some(chunks[0]), chunks[1])
+    let daemon_id = app.log_daemon_id.as_deref().unwrap_or("unknown");
+
+    // Layout: daemon info (3) | charts (8) | current stats (3) | search bar (optional 3) | logs (rest)
+    let search_height = if app.log_search_active || !app.log_search_query.is_empty() {
+        3
     } else {
-        (None, area)
+        0
     };
 
-    // Draw log search bar if present
-    if let Some(search_area) = search_area {
-        draw_log_search_bar(f, search_area, app);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),             // Daemon header
+            Constraint::Length(8),             // Charts
+            Constraint::Length(3),             // Current stats
+            Constraint::Length(search_height), // Search bar (if active)
+            Constraint::Min(5),                // Logs
+        ])
+        .split(area);
+
+    draw_daemon_header(f, chunks[0], app, daemon_id);
+    draw_charts(f, chunks[1], app, daemon_id);
+    draw_current_stats(f, chunks[2], app, daemon_id);
+
+    let logs_area = if search_height > 0 {
+        draw_log_search_bar(f, chunks[3], app);
+        chunks[4]
+    } else {
+        chunks[4]
+    };
+
+    draw_log_panel(f, logs_area, app, daemon_id);
+}
+
+/// Draw daemon header with name and status
+fn draw_daemon_header(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
+    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+
+    let mut spans = vec![Span::styled(daemon_id, Style::default().fg(ORANGE).bold())];
+
+    if let Some(d) = daemon {
+        let (status_text, status_color) = status_display(&d.status);
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(status_text, Style::default().fg(status_color)));
+
+        if let Some(pid) = d.pid {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled("PID: ", Style::default().fg(GRAY)));
+            spans.push(Span::styled(
+                pid.to_string(),
+                Style::default().fg(Color::White),
+            ));
+        }
+
+        if let Some(pid) = d.pid {
+            if let Some(stats) = app.get_stats(pid) {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled("Uptime: ", Style::default().fg(GRAY)));
+                spans.push(Span::styled(
+                    stats.uptime_display(),
+                    Style::default().fg(Color::White),
+                ));
+            }
+        }
     }
 
-    let daemon_name = app.log_daemon_id.as_deref().unwrap_or("unknown");
+    if app.is_disabled(daemon_id) {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("[DISABLED]", Style::default().fg(RED).bold()));
+    }
+
+    let header = Paragraph::new(Line::from(spans))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(DARK_GRAY)),
+        );
+    f.render_widget(header, area);
+}
+
+/// Draw resource usage charts (CPU, Memory, Disk I/O)
+fn draw_charts(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .split(area);
+
+    let history = app.get_stats_history(daemon_id);
+
+    draw_cpu_chart(f, chunks[0], history);
+    draw_memory_chart(f, chunks[1], history);
+    draw_disk_chart(f, chunks[2], history);
+}
+
+/// Draw CPU usage chart
+fn draw_cpu_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
+    let values = history.map(|h| h.cpu_values()).unwrap_or_default();
+    let current = values.last().copied().unwrap_or(0.0);
+    let color = cpu_color(current);
+
+    // Convert to (x, y) data points for the chart
+    let data: Vec<(f64, f64)> = values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64))
+        .collect();
+
+    let datasets = vec![Dataset::default()
+        .marker(symbols::Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(color))
+        .data(&data)];
+
+    let x_max = data.len().max(1) as f64;
+
+    let chart = Chart::new(datasets)
+        .block(
+            Block::default()
+                .title(format!(" CPU {:.1}% ", current))
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(DARK_GRAY)),
+        )
+        .x_axis(
+            Axis::default()
+                .bounds([0.0, x_max])
+                .style(Style::default().fg(DARK_GRAY)),
+        )
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, 100.0])
+                .labels(vec![Line::from("0"), Line::from("50"), Line::from("100")])
+                .style(Style::default().fg(DARK_GRAY)),
+        );
+
+    f.render_widget(chart, area);
+}
+
+/// Draw memory usage chart
+fn draw_memory_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
+    let values = history.map(|h| h.memory_values()).unwrap_or_default();
+    let current = values.last().copied().unwrap_or(0);
+    let max_val = values.iter().copied().max().unwrap_or(1).max(1) as f64;
+    let color = memory_color(current);
+
+    // Convert to (x, y) data points for the chart (in MB for readability)
+    let data: Vec<(f64, f64)> = values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64 / (1024.0 * 1024.0)))
+        .collect();
+
+    let datasets = vec![Dataset::default()
+        .marker(symbols::Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(color))
+        .data(&data)];
+
+    let x_max = data.len().max(1) as f64;
+    let y_max = (max_val / (1024.0 * 1024.0)).max(1.0);
+
+    let chart = Chart::new(datasets)
+        .block(
+            Block::default()
+                .title(format!(" Mem {} ", format_memory(current)))
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(DARK_GRAY)),
+        )
+        .x_axis(
+            Axis::default()
+                .bounds([0.0, x_max])
+                .style(Style::default().fg(DARK_GRAY)),
+        )
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, y_max])
+                .labels(vec![
+                    Line::from("0"),
+                    Line::from(format!("{}M", (y_max / 2.0) as u64)),
+                    Line::from(format!("{}M", y_max as u64)),
+                ])
+                .style(Style::default().fg(DARK_GRAY)),
+        );
+
+    f.render_widget(chart, area);
+}
+
+/// Draw disk I/O chart (read and write as separate lines)
+fn draw_disk_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
+    let read_values = history.map(|h| h.disk_read_values()).unwrap_or_default();
+    let write_values = history.map(|h| h.disk_write_values()).unwrap_or_default();
+
+    let current_read = read_values.last().copied().unwrap_or(0);
+    let current_write = write_values.last().copied().unwrap_or(0);
+
+    // Convert to (x, y) data points for the chart (in KB/s)
+    let read_data: Vec<(f64, f64)> = read_values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64 / 1024.0))
+        .collect();
+
+    let write_data: Vec<(f64, f64)> = write_values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64 / 1024.0))
+        .collect();
+
+    let max_read = read_values.iter().copied().max().unwrap_or(1) as f64 / 1024.0;
+    let max_write = write_values.iter().copied().max().unwrap_or(1) as f64 / 1024.0;
+    let y_max = max_read.max(max_write).max(1.0);
+
+    let datasets = vec![
+        Dataset::default()
+            .name("R")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(GREEN))
+            .data(&read_data),
+        Dataset::default()
+            .name("W")
+            .marker(symbols::Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(YELLOW))
+            .data(&write_data),
+    ];
+
+    let x_max = read_data.len().max(write_data.len()).max(1) as f64;
+
+    // Build title with current rates
+    let title = format!(
+        " Disk R:{} W:{} ",
+        format_rate(current_read),
+        format_rate(current_write)
+    );
+
+    let chart = Chart::new(datasets)
+        .block(
+            Block::default()
+                .title(title)
+                .title_style(Style::default().fg(ORANGE).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(DARK_GRAY)),
+        )
+        .x_axis(
+            Axis::default()
+                .bounds([0.0, x_max])
+                .style(Style::default().fg(DARK_GRAY)),
+        )
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, y_max])
+                .labels(vec![
+                    Line::from("0"),
+                    Line::from(format!("{}K", (y_max / 2.0) as u64)),
+                    Line::from(format!("{}K", y_max as u64)),
+                ])
+                .style(Style::default().fg(DARK_GRAY)),
+        );
+
+    f.render_widget(chart, area);
+}
+
+/// Draw current stats summary
+fn draw_current_stats(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
+    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+    let stats = daemon
+        .and_then(|d| d.pid)
+        .and_then(|pid| app.get_stats(pid));
+
+    let content = if let Some(stats) = stats {
+        Line::from(vec![
+            Span::styled("CPU: ", Style::default().fg(GRAY)),
+            Span::styled(
+                format!("{:.1}%", stats.cpu_percent),
+                Style::default().fg(cpu_color(stats.cpu_percent)),
+            ),
+            Span::raw("   "),
+            Span::styled("Memory: ", Style::default().fg(GRAY)),
+            Span::styled(
+                stats.memory_display(),
+                Style::default().fg(memory_color(stats.memory_bytes)),
+            ),
+            Span::raw("   "),
+            Span::styled("Disk Read: ", Style::default().fg(GRAY)),
+            Span::styled(stats.disk_read_display(), Style::default().fg(GREEN)),
+            Span::raw("   "),
+            Span::styled("Disk Write: ", Style::default().fg(GRAY)),
+            Span::styled(stats.disk_write_display(), Style::default().fg(YELLOW)),
+        ])
+    } else {
+        Line::from(vec![Span::styled(
+            "No process stats available",
+            Style::default().fg(GRAY).italic(),
+        )])
+    };
+
+    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+    f.render_widget(paragraph, area);
+}
+
+/// Draw the logs panel
+fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     let follow_indicator = if app.log_follow { " [follow]" } else { "" };
     let search_indicator = if !app.log_search_matches.is_empty() {
         format!(
@@ -416,20 +710,17 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
     };
     let title = format!(
         " Logs: {}{}{} ",
-        daemon_name, follow_indicator, search_indicator
+        daemon_id, follow_indicator, search_indicator
     );
 
-    let visible_height = log_area.height.saturating_sub(2) as usize;
+    let visible_height = area.height.saturating_sub(2) as usize;
     let visible_lines: Vec<Line> = app
         .log_content
         .iter()
         .enumerate()
         .skip(app.log_scroll)
         .take(visible_height)
-        .map(|(line_idx, line)| {
-            // Highlight log lines with syntax coloring and search matches
-            highlight_log_line(line, line_idx, app)
-        })
+        .map(|(line_idx, line)| highlight_log_line(line, line_idx, app))
         .collect();
 
     let logs = Paragraph::new(visible_lines)
@@ -442,7 +733,7 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         )
         .wrap(Wrap { trim: false });
 
-    f.render_widget(logs, log_area);
+    f.render_widget(logs, area);
 
     // Render scrollbar if there are more lines than visible
     let total_lines = app.log_content.len();
@@ -457,12 +748,62 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
             .style(Style::default().fg(GRAY));
         f.render_stateful_widget(
             scrollbar,
-            log_area.inner(Margin {
+            area.inner(Margin {
                 vertical: 1,
                 horizontal: 0,
             }),
             &mut scrollbar_state,
         );
+    }
+}
+
+/// Get color for CPU usage
+fn cpu_color(percent: f32) -> Color {
+    if percent >= 90.0 {
+        RED
+    } else if percent >= 70.0 {
+        ORANGE
+    } else if percent >= 50.0 {
+        YELLOW
+    } else {
+        GREEN
+    }
+}
+
+/// Get color for memory usage
+fn memory_color(bytes: u64) -> Color {
+    if bytes > 2 * 1024 * 1024 * 1024 {
+        RED // > 2GB
+    } else if bytes > 1024 * 1024 * 1024 {
+        ORANGE // > 1GB
+    } else if bytes > 512 * 1024 * 1024 {
+        YELLOW // > 512MB
+    } else {
+        GREEN
+    }
+}
+
+/// Format memory in human-readable form
+fn format_memory(bytes: u64) -> String {
+    if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// Format bytes per second rate
+fn format_rate(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B/s", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}K/s", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}M/s", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G/s", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
 
@@ -536,11 +877,11 @@ fn highlight_log_line(line: &str, line_idx: usize, app: &App) -> Line<'static> {
 
     // Highlight timestamps (common patterns like 2024-01-15 or HH:MM:SS)
     let mut spans = Vec::new();
-    let mut remaining = line.to_string();
 
-    // Simple timestamp detection at start of line
-    if remaining.len() >= 10 {
-        let potential_date = &remaining[..10];
+    // Simple timestamp detection at start of line (use char-based iteration for UTF-8 safety)
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() >= 10 {
+        let potential_date: String = chars[..10].iter().collect();
         if potential_date.chars().filter(|c| *c == '-').count() == 2
             && potential_date
                 .chars()
@@ -548,18 +889,15 @@ fn highlight_log_line(line: &str, line_idx: usize, app: &App) -> Line<'static> {
                 .count()
                 == 8
         {
-            spans.push(Span::styled(
-                potential_date.to_string(),
-                Style::default().fg(GRAY),
-            ));
-            remaining = remaining[10..].to_string();
+            spans.push(Span::styled(potential_date, Style::default().fg(GRAY)));
+            let remaining: String = chars[10..].iter().collect();
+            if !remaining.is_empty() {
+                spans.push(Span::styled(remaining, style));
+            }
+        } else {
+            spans.push(Span::styled(line.to_string(), style));
         }
-    }
-
-    // Add the rest of the line
-    if !remaining.is_empty() {
-        spans.push(Span::styled(remaining, style));
-    } else if spans.is_empty() {
+    } else {
         spans.push(Span::styled(line.to_string(), style));
     }
 
@@ -579,14 +917,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.view {
         View::Dashboard if app.search_active => "Type to search  Enter:finish  Esc:clear",
         View::Dashboard if !app.search_query.is_empty() => {
-            "/:search  q/Esc:clear  j/k:nav  S:sort  i:info  s:start  x:stop  l:logs  ?:help"
+            "/:search  q/Esc:clear  j/k:nav  S:sort  i:info  s:start  x:stop  l:details  ?:help"
         }
         View::Dashboard => {
-            "/:search  q:quit  j/k:nav  S:sort  o:order  i:info  s:start  x:stop  l:logs  ?:help"
+            "/:search  q:quit  j/k:nav  S:sort  o:order  i:info  s:start  x:stop  l:details  ?:help"
         }
         View::Logs if app.log_search_active => "Type to search  Enter:finish  Esc:clear",
         View::Logs if !app.log_search_query.is_empty() => {
-            "/:search  n/N:next/prev  q/Esc:clear  Ctrl+D/U:page  f:follow  ?:help"
+            "/:search  n/N:next/prev  q/Esc:back  Ctrl+D/U:page  f:follow"
         }
         View::Logs => "/:search  q/Esc:back  j/k:scroll  Ctrl+D/U:page  f:follow  g:top  G:bottom",
         View::Help => "q/Esc/?:close",
@@ -619,8 +957,8 @@ fn draw_help_overlay(f: &mut Frame) {
         )]),
         Line::from("  j / Down    Move selection down"),
         Line::from("  k / Up      Move selection up"),
-        Line::from("  l / Enter   View logs for selected daemon"),
-        Line::from("  i           View daemon details"),
+        Line::from("  l / Enter   View daemon details (charts + logs)"),
+        Line::from("  i           Quick daemon info popup"),
         Line::from("  /           Search/filter daemons"),
         Line::from("  S           Cycle sort column"),
         Line::from("  o           Toggle sort order"),
@@ -645,10 +983,10 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from("  Ctrl+C      Force quit"),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Log View",
+            "Details View",
             Style::default().fg(RED).bold(),
         )]),
-        Line::from("  j / k       Scroll up/down"),
+        Line::from("  j / k       Scroll logs up/down"),
         Line::from("  Ctrl+D/U    Page down/up"),
         Line::from("  /           Search in logs"),
         Line::from("  n / N       Next/prev match"),
