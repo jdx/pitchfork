@@ -398,29 +398,95 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
         0
     };
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),             // Daemon header
-            Constraint::Length(8),             // Charts
-            Constraint::Length(3),             // Current stats
-            Constraint::Length(search_height), // Search bar (if active)
-            Constraint::Min(5),                // Logs
-        ])
-        .split(area);
+    if app.logs_expanded {
+        // Expanded mode: just header + search + logs
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),             // Daemon header
+                Constraint::Length(search_height), // Search bar (if active)
+                Constraint::Min(5),                // Logs (fills remaining space)
+            ])
+            .split(area);
 
-    draw_daemon_header(f, chunks[0], app, daemon_id);
-    draw_charts(f, chunks[1], app, daemon_id);
-    draw_current_stats(f, chunks[2], app, daemon_id);
+        draw_daemon_header_compact(f, chunks[0], app, daemon_id);
 
-    let logs_area = if search_height > 0 {
-        draw_log_search_bar(f, chunks[3], app);
-        chunks[4]
+        let logs_area = if search_height > 0 {
+            draw_log_search_bar(f, chunks[1], app);
+            chunks[2]
+        } else {
+            chunks[2]
+        };
+
+        draw_log_panel(f, logs_area, app, daemon_id);
     } else {
-        chunks[4]
-    };
+        // Normal mode: header + charts + stats + search + logs
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),             // Daemon header
+                Constraint::Length(8),             // Charts
+                Constraint::Length(3),             // Current stats
+                Constraint::Length(search_height), // Search bar (if active)
+                Constraint::Min(5),                // Logs
+            ])
+            .split(area);
 
-    draw_log_panel(f, logs_area, app, daemon_id);
+        draw_daemon_header(f, chunks[0], app, daemon_id);
+        draw_charts(f, chunks[1], app, daemon_id);
+        draw_current_stats(f, chunks[2], app, daemon_id);
+
+        let logs_area = if search_height > 0 {
+            draw_log_search_bar(f, chunks[3], app);
+            chunks[4]
+        } else {
+            chunks[4]
+        };
+
+        draw_log_panel(f, logs_area, app, daemon_id);
+    }
+}
+
+/// Draw compact daemon header (for expanded logs mode)
+fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
+    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+
+    let mut spans = vec![Span::styled(daemon_id, Style::default().fg(ORANGE).bold())];
+
+    if let Some(d) = daemon {
+        let (status_text, status_color) = status_display(&d.status);
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(status_text, Style::default().fg(status_color)));
+
+        if let Some(pid) = d.pid {
+            if let Some(stats) = app.get_stats(pid) {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    format!(
+                        "CPU: {:.1}%  Mem: {}",
+                        stats.cpu_percent,
+                        stats.memory_display()
+                    ),
+                    Style::default().fg(GRAY),
+                ));
+            }
+        }
+    }
+
+    spans.push(Span::raw("  "));
+    spans.push(Span::styled(
+        "[expanded]",
+        Style::default().fg(DARK_GRAY).italic(),
+    ));
+
+    let header = Paragraph::new(Line::from(spans))
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(DARK_GRAY)),
+        );
+    f.render_widget(header, area);
 }
 
 /// Draw daemon header with name and status
@@ -924,9 +990,14 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         }
         View::Logs if app.log_search_active => "Type to search  Enter:finish  Esc:clear",
         View::Logs if !app.log_search_query.is_empty() => {
-            "/:search  n/N:next/prev  q/Esc:back  Ctrl+D/U:page  f:follow"
+            "/:search  n/N:next/prev  q/Esc:back  Ctrl+D/U:page  f:follow  e:expand"
         }
-        View::Logs => "/:search  q/Esc:back  j/k:scroll  Ctrl+D/U:page  f:follow  g:top  G:bottom",
+        View::Logs if app.logs_expanded => {
+            "/:search  q/Esc:back  j/k:scroll  Ctrl+D/U:page  f:follow  e:collapse  g/G:top/btm"
+        }
+        View::Logs => {
+            "/:search  q/Esc:back  j/k:scroll  Ctrl+D/U:page  f:follow  e:expand  g/G:top/btm"
+        }
         View::Help => "q/Esc/?:close",
         View::Confirm => "y/Enter:confirm  n/Esc:cancel",
         View::Loading => "Please wait...",
@@ -991,6 +1062,7 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from("  /           Search in logs"),
         Line::from("  n / N       Next/prev match"),
         Line::from("  f           Toggle follow mode"),
+        Line::from("  e           Expand/collapse logs"),
         Line::from("  g / G       Go to top/bottom"),
         Line::from("  q / Esc     Return to dashboard"),
     ];

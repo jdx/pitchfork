@@ -154,6 +154,8 @@ pub struct App {
     pub log_search_current: usize,      // Current match index
     // Details view daemon (now used for full-page details view from 'l' key)
     pub details_daemon_id: Option<String>,
+    // Whether logs are expanded to fill the screen (hides charts)
+    pub logs_expanded: bool,
 }
 
 impl App {
@@ -183,6 +185,7 @@ impl App {
             log_search_matches: Vec::new(),
             log_search_current: 0,
             details_daemon_id: None,
+            logs_expanded: false,
         }
     }
 
@@ -353,6 +356,11 @@ impl App {
             // Jump to bottom when enabling follow
             self.log_scroll = self.log_content.len().saturating_sub(20);
         }
+    }
+
+    // Toggle logs expanded (hide/show charts)
+    pub fn toggle_logs_expanded(&mut self) {
+        self.logs_expanded = !self.logs_expanded;
     }
 
     pub fn set_message(&mut self, msg: impl Into<String>) {
@@ -533,6 +541,7 @@ impl App {
     /// View daemon details (charts + logs)
     pub fn view_daemon_details(&mut self, daemon_id: &str) {
         self.log_daemon_id = Some(daemon_id.to_string());
+        self.logs_expanded = false; // Start with charts visible
         self.load_logs(daemon_id);
         self.view = View::Logs; // Logs view is now the full daemon details view
     }

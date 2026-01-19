@@ -237,6 +237,10 @@ fn handle_logs_event(
             app.toggle_log_follow();
             Ok(None)
         }
+        KeyCode::Char('e') => {
+            app.toggle_logs_expanded();
+            Ok(None)
+        }
         KeyCode::Char('j') | KeyCode::Down => {
             app.log_follow = false;
             app.scroll_logs_down();
