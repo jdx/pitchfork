@@ -113,6 +113,8 @@ pub struct PitchforkTomlDaemon {
     /// List of daemon names that must be started before this one
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub watch: Vec<String>,
     #[serde(skip)]
     #[schemars(skip)]
     pub path: Option<PathBuf>,

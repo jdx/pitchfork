@@ -161,6 +161,28 @@ Running `pitchfork start api worker` starts daemons in this order:
 1. `database` and `cache` (in parallel, no dependencies)
 2. `api` and `worker` (in parallel, after their dependencies are ready)
 
+### `watch`
+
+Glob patterns for files to watch. When a matched file changes, the daemon is automatically restarted.
+
+```toml
+[daemons.api]
+run = "npm run dev"
+watch = ["src/**/*.ts", "package.json"]
+```
+
+**Pattern syntax:**
+- `*.js` - All `.js` files in the daemon's directory
+- `src/**/*.ts` - All `.ts` files in `src/` and subdirectories
+- `package.json` - Specific file
+
+**Behavior:**
+- Patterns are resolved relative to the `pitchfork.toml` file
+- Only running daemons are restarted (stopped daemons ignore changes)
+- Changes are debounced for 1 second to avoid rapid restarts
+
+See [File Watching guide](/guides/file-watching) for more details.
+
 ### `boot_start`
 
 Start this daemon automatically on system boot. Default: `false`
@@ -200,10 +222,11 @@ retry = 3
 run = "redis-server"
 ready_output = "Ready to accept connections"
 
-# API server - depends on database and cache
+# API server - depends on database and cache, hot reloads on changes
 [daemons.api]
 run = "npm run server"
 depends = ["postgres", "redis"]
+watch = ["src/**/*.ts", "package.json"]
 ready_http = "http://localhost:3000/health"
 auto = ["start", "stop"]
 retry = 5

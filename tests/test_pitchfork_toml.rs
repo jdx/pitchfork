@@ -78,6 +78,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             ready_port: None,
             boot_start: None,
             depends: vec![],
+            watch: vec![],
             path: Some(toml_path.clone()),
         },
     );

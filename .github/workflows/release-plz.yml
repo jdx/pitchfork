@@ -32,6 +32,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Fetch tags
+        if: ${{ steps.release-plz.outputs.releases }}
+        run: git fetch --tags
       - name: Install Claude Code
         if: ${{ steps.release-plz.outputs.releases }}
         run: npm install -g @anthropic-ai/claude-code

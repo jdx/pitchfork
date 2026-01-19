@@ -1,8 +1,10 @@
 use crate::Result;
+use glob::glob;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap, new_debouncer_opt};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -53,4 +55,114 @@ impl WatchFiles {
     pub fn watch(&mut self, path: &Path, recursive_mode: RecursiveMode) -> Result<()> {
         self.debouncer.watch(path, recursive_mode).into_diagnostic()
     }
+}
+
+/// Expand glob patterns to actual file paths.
+/// Patterns are resolved relative to base_dir.
+/// Returns unique directories that need to be watched.
+pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<HashSet<PathBuf>> {
+    let mut dirs_to_watch = HashSet::new();
+
+    for pattern in patterns {
+        // Make the pattern absolute by joining with base_dir
+        let full_pattern = if Path::new(pattern).is_absolute() {
+            pattern.clone()
+        } else {
+            base_dir.join(pattern).to_string_lossy().to_string()
+        };
+
+        // Expand the glob pattern
+        match glob(&full_pattern) {
+            Ok(paths) => {
+                for entry in paths.flatten() {
+                    // Watch the parent directory of each matched file
+                    // This allows us to detect new files that match the pattern
+                    if let Some(parent) = entry.parent() {
+                        dirs_to_watch.insert(parent.to_path_buf());
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Invalid glob pattern '{}': {}", pattern, e);
+            }
+        }
+
+        // For patterns with wildcards, watch the base directory (before the wildcard)
+        // For non-wildcard patterns, watch the parent directory of the specific file
+        // This ensures we catch new files even if they don't exist at startup
+        if pattern.contains('*') {
+            // Find the first directory without wildcards
+            let parts: Vec<&str> = pattern.split('/').collect();
+            let mut base = base_dir.to_path_buf();
+            for part in parts {
+                if part.contains('*') {
+                    break;
+                }
+                base = base.join(part);
+            }
+            // Watch the base directory if it exists, otherwise fall back to base_dir
+            // This ensures we can detect when the directory is created
+            let dir_to_watch = if base.is_dir() {
+                base
+            } else {
+                base_dir.to_path_buf()
+            };
+            dirs_to_watch.insert(dir_to_watch);
+        } else {
+            // Non-wildcard pattern (specific file like "package.json")
+            // Always watch the parent directory, even if file doesn't exist yet
+            let full_path = if Path::new(pattern).is_absolute() {
+                PathBuf::from(pattern)
+            } else {
+                base_dir.join(pattern)
+            };
+            if let Some(parent) = full_path.parent() {
+                // Watch the parent if it exists (or base_dir as fallback)
+                let dir_to_watch = if parent.is_dir() {
+                    parent.to_path_buf()
+                } else {
+                    base_dir.to_path_buf()
+                };
+                dirs_to_watch.insert(dir_to_watch);
+            }
+        }
+    }
+
+    Ok(dirs_to_watch)
+}
+
+/// Normalize a path string to use forward slashes for glob pattern matching.
+/// This ensures consistent behavior across Windows and Unix platforms.
+fn normalize_path_for_glob(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+/// Check if a changed path matches any of the watch patterns.
+/// Uses globset which properly supports ** for recursive directory matching.
+pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir: &Path) -> bool {
+    // Normalize the changed path to use forward slashes for consistent matching
+    let changed_path_str = normalize_path_for_glob(&changed_path.to_string_lossy());
+
+    for pattern in patterns {
+        // Build the full pattern and normalize to use forward slashes
+        let full_pattern = if Path::new(pattern).is_absolute() {
+            normalize_path_for_glob(pattern)
+        } else {
+            normalize_path_for_glob(&base_dir.join(pattern).to_string_lossy())
+        };
+
+        // Use globset which properly supports ** for recursive matching
+        let glob = globset::GlobBuilder::new(&full_pattern)
+            .case_insensitive(cfg!(target_os = "windows"))
+            .literal_separator(true) // * doesn't match /, use ** for recursive
+            .build();
+
+        if let Ok(glob) = glob {
+            let matcher = glob.compile_matcher();
+            if matcher.is_match(&changed_path_str) {
+                return true;
+            }
+        }
+    }
+    false
 }

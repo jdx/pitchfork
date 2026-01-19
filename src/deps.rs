@@ -149,6 +149,7 @@ mod tests {
             ready_port: None,
             boot_start: None,
             depends: depends.into_iter().map(String::from).collect(),
+            watch: vec![],
             path: None,
         }
     }
