@@ -11,6 +11,7 @@ mod disable;
 mod enable;
 mod list;
 pub mod logs;
+mod restart;
 mod run;
 mod start;
 mod status;
@@ -39,6 +40,7 @@ enum Commands {
     Enable(enable::Enable),
     List(list::List),
     Logs(logs::Logs),
+    Restart(restart::Restart),
     Run(run::Run),
     Start(start::Start),
     Status(status::Status),
@@ -62,6 +64,7 @@ pub async fn run() -> Result<()> {
         Commands::Enable(enable) => enable.run().await,
         Commands::List(list) => list.run().await,
         Commands::Logs(logs) => logs.run().await,
+        Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
         Commands::Start(start) => start.run().await,
         Commands::Status(status) => status.run().await,
