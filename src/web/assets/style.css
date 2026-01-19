@@ -427,6 +427,52 @@ textarea:focus {
     margin-top: 1rem;
 }
 
+/* Loading indicator */
+.htmx-request {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+.htmx-request::after {
+    content: "";
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-left: 6px;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Button-specific loading state */
+.btn.htmx-request {
+    position: relative;
+    color: transparent;
+}
+
+.btn.htmx-request::after {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    margin: -6px 0 0 -6px;
+    color: var(--color-text);
+}
+
+/* Row loading state */
+tr.htmx-request td {
+    opacity: 0.5;
+}
+
+tr.htmx-swapping td {
+    opacity: 0.5;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     nav {

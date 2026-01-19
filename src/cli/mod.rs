@@ -16,6 +16,7 @@ mod start;
 mod status;
 mod stop;
 mod supervisor;
+mod tui;
 mod usage;
 mod wait;
 
@@ -43,6 +44,7 @@ enum Commands {
     Status(status::Status),
     Stop(stop::Stop),
     Supervisor(supervisor::Supervisor),
+    Tui(tui::Tui),
     Usage(usage::Usage),
     Wait(wait::Wait),
 }
@@ -65,6 +67,7 @@ pub async fn run() -> Result<()> {
         Commands::Status(status) => status.run().await,
         Commands::Stop(stop) => stop.run().await,
         Commands::Supervisor(supervisor) => supervisor.run().await,
+        Commands::Tui(tui) => tui.run().await,
         Commands::Usage(usage) => usage.run().await,
         Commands::Wait(wait) => wait.run().await,
     }
