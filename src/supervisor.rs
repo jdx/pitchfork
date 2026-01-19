@@ -155,9 +155,24 @@ impl Supervisor {
 
             // Get command from pitchfork.toml
             if let Some(run_cmd) = self.get_daemon_run_command(&id) {
+                let cmd = match shell_words::split(&run_cmd) {
+                    Ok(cmd) => cmd,
+                    Err(e) => {
+                        error!("failed to parse command for daemon {}: {}", id, e);
+                        // Mark as exhausted to prevent infinite retry loop, preserving error status
+                        self.upsert_daemon(UpsertDaemonOpts {
+                            id,
+                            status: daemon.status.clone(),
+                            retry_count: Some(daemon.retry),
+                            ..Default::default()
+                        })
+                        .await?;
+                        continue;
+                    }
+                };
                 let retry_opts = RunOptions {
                     id: id.clone(),
-                    cmd: shell_words::split(&run_cmd).unwrap_or_default(),
+                    cmd,
                     force: false,
                     shell_pid: daemon.shell_pid,
                     dir: daemon.dir.unwrap_or_else(|| env::CWD.clone()),
@@ -324,9 +339,16 @@ impl Supervisor {
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| env::CWD.clone());
 
+            let cmd = match shell_words::split(&daemon.run) {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    error!("failed to parse command for boot daemon {}: {}", id, e);
+                    continue;
+                }
+            };
             let run_opts = RunOptions {
                 id: id.clone(),
-                cmd: shell_words::split(&daemon.run).unwrap_or_default(),
+                cmd,
                 force: false,
                 shell_pid: None,
                 dir,
@@ -1050,13 +1072,20 @@ impl Supervisor {
                         info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
                         // Get the run command from pitchfork.toml
                         if let Some(run_cmd) = self.get_daemon_run_command(&id) {
+                            let cmd = match shell_words::split(&run_cmd) {
+                                Ok(cmd) => cmd,
+                                Err(e) => {
+                                    error!("failed to parse command for cron daemon {}: {}", id, e);
+                                    continue;
+                                }
+                            };
                             let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                             // Use force: true for Always retrigger to ensure restart
                             let force =
                                 matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
                             let opts = RunOptions {
                                 id: id.clone(),
-                                cmd: shell_words::split(&run_cmd).unwrap_or_default(),
+                                cmd,
                                 force,
                                 shell_pid: None,
                                 dir,

@@ -380,6 +380,26 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
     let from_detail = query.from.as_deref() == Some("detail");
 
     let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
+        let cmd = match shell_words::split(&daemon_config.run) {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                // Don't early return - let the error flow through proper handling below
+                // which respects from_detail for correct HTML structure
+                let error_msg = format!("Failed to parse command: {}", e);
+                // Skip to error handling by returning early from the if-let block
+                return if from_detail {
+                    Html(format!(
+                        r#"<div class="error">{}</div>"#,
+                        html_escape(&error_msg)
+                    ))
+                } else {
+                    Html(format!(
+                        r#"<tr id="daemon-{safe_id}"><td colspan="8" class="error">{}</td></tr>"#,
+                        html_escape(&error_msg)
+                    ))
+                };
+            }
+        };
         let dir = daemon_config
             .path
             .as_ref()
@@ -389,7 +409,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
 
         let opts = RunOptions {
             id: id.clone(),
-            cmd: shell_words::split(&daemon_config.run).unwrap_or_default(),
+            cmd,
             force: false,
             shell_pid: None,
             dir,
