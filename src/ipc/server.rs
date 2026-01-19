@@ -5,8 +5,6 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use miette::{IntoDiagnostic, bail, miette};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -22,15 +20,18 @@ impl IpcServer {
         let opts = ListenerOptions::new().name(fs_name("main")?);
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         let (tx, rx) = tokio::sync::mpsc::channel(1);
+
+        // Set restrictive umask before creating socket to avoid TOCTOU race condition.
+        // This ensures the socket is created with 0600 permissions from the start.
+        #[cfg(unix)]
+        let old_umask = unsafe { libc::umask(0o077) };
+
         let listener = opts.create_tokio().into_diagnostic()?;
 
-        // Set socket permissions to 0600 (owner read/write only) for security
+        // Restore original umask
         #[cfg(unix)]
-        {
-            let permissions = std::fs::Permissions::from_mode(0o600);
-            if let Err(e) = std::fs::set_permissions(&*env::IPC_SOCK_MAIN, permissions) {
-                warn!("Failed to set IPC socket permissions: {}", e);
-            }
+        unsafe {
+            libc::umask(old_umask);
         }
 
         tokio::spawn(async move {
