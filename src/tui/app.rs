@@ -392,6 +392,11 @@ impl EditorState {
                 "Dependencies",
                 "Comma-separated daemon names that must start first.",
             ),
+            FormField::string_list(
+                "watch",
+                "Watch Files",
+                "Comma-separated glob patterns to watch for auto-restart.",
+            ),
             FormField::optional_text(
                 "cron_schedule",
                 "Cron Schedule",
@@ -423,6 +428,7 @@ impl EditorState {
                 "ready_port" => field.value = FormFieldValue::OptionalPort(config.ready_port),
                 "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
                 "depends" => field.value = FormFieldValue::StringList(config.depends.clone()),
+                "watch" => field.value = FormFieldValue::StringList(config.watch.clone()),
                 "cron_schedule" => {
                     field.value = FormFieldValue::OptionalText(
                         config.cron.as_ref().map(|c| c.schedule.clone()),
@@ -456,6 +462,7 @@ impl EditorState {
             ready_port: None,
             boot_start: None,
             depends: vec![],
+            watch: vec![],
             path: Some(self.config_path.clone()),
         };
 
@@ -475,6 +482,7 @@ impl EditorState {
                 ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = *p,
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
                 ("depends", FormFieldValue::StringList(v)) => config.depends = v.clone(),
+                ("watch", FormFieldValue::StringList(v)) => config.watch = v.clone(),
                 ("cron_schedule", FormFieldValue::OptionalText(s)) => cron_schedule = s.clone(),
                 ("cron_retrigger", FormFieldValue::Retrigger(r)) => cron_retrigger = *r,
                 _ => {}
