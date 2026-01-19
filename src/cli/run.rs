@@ -28,7 +28,9 @@ Examples:
   pitchfork run api -o 'Listening' -- ./server
                                 Wait for output pattern before ready
   pitchfork run api --http http://localhost:8080/health -- ./server
-                                Wait for HTTP endpoint to return 2xx"
+                                Wait for HTTP endpoint to return 2xx
+  pitchfork run api --port 8080 -- ./server
+                                Wait for TCP port to be listening"
 )]
 pub struct Run {
     /// Name of the daemon to run
@@ -51,6 +53,9 @@ pub struct Run {
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
     #[clap(long)]
     http: Option<String>,
+    /// Wait until TCP port is listening before considering daemon ready
+    #[clap(long)]
+    port: Option<u16>,
     /// Suppress startup log output
     #[clap(short, long)]
     quiet: bool,
@@ -80,6 +85,7 @@ impl Run {
                 ready_delay: self.delay.or(Some(3)),
                 ready_output: self.output.clone(),
                 ready_http: self.http.clone(),
+                ready_port: self.port,
                 wait_ready: true,
             })
             .await?;

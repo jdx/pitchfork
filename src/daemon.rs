@@ -28,6 +28,8 @@ pub struct Daemon {
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ready_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -45,6 +47,7 @@ pub struct RunOptions {
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
     pub ready_http: Option<String>,
+    pub ready_port: Option<u16>,
     pub wait_ready: bool,
 }
 

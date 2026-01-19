@@ -369,6 +369,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
             ready_delay: daemon_config.ready_delay.or(Some(3)),
             ready_output: daemon_config.ready_output.clone(),
             ready_http: daemon_config.ready_http.clone(),
+            ready_port: daemon_config.ready_port,
             wait_ready: false, // Don't block web request
         };
 

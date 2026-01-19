@@ -81,6 +81,16 @@ run = "npm run server"
 ready_http = "http://localhost:3000/health"
 ```
 
+### `ready_port`
+
+TCP port to check for readiness. Daemon is ready when port is listening.
+
+```toml
+[daemons.api]
+run = "npm run server"
+ready_port = 3000
+```
+
 ### `depends`
 
 List of daemon names that must be started first.
