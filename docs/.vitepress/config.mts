@@ -29,26 +29,64 @@ export default defineConfig({
     // https://vitepress.dev/reference/default-theme-config
     nav: [
       { text: "Home", link: "/" },
-      { text: "Getting Started", link: "/getting-started" },
+      { text: "Quick Start", link: "/quickstart" },
+      { text: "Guides", link: "/guides/shell-hook" },
       { text: "CLI Reference", link: "/cli" },
     ],
 
     sidebar: [
-      { text: "Getting Started", link: "/getting-started" },
-      { text: "Integration with mise", link: "/mise" },
-      { text: "Ready Checks", link: "/ready-checks" },
-      { text: "Retry on Failure", link: "/retry" },
-      { text: "Cron Scheduling", link: "/cron" },
-      { text: "Start on Boot", link: "/boot-start" },
-      { text: "Configuration", link: "/config" },
-      { text: "Architecture", link: "/architecture" },
       {
-        text: "CLI Reference",
-        link: "/cli",
-        items: commands.map((cmd) => ({
-          text: cmd.join(" "),
-          link: `/cli/${cmd.join("/")}`,
-        })),
+        text: "Getting Started",
+        items: [
+          { text: "Quick Start", link: "/quickstart" },
+          { text: "Installation", link: "/installation" },
+          { text: "Your First Project", link: "/first-daemon" },
+        ],
+      },
+      {
+        text: "How-To Guides",
+        items: [
+          { text: "Shell Hook (Auto Start/Stop)", link: "/guides/shell-hook" },
+          { text: "Ready Checks", link: "/guides/ready-checks" },
+          { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
+          { text: "Cron Scheduling", link: "/guides/scheduling" },
+          { text: "Start on Boot", link: "/guides/boot-start" },
+          { text: "Log Management", link: "/guides/logs" },
+          { text: "Web UI", link: "/guides/web-ui" },
+          { text: "mise Integration", link: "/guides/mise-integration" },
+        ],
+      },
+      {
+        text: "Reference",
+        items: [
+          { text: "Configuration", link: "/reference/configuration" },
+          { text: "Environment Variables", link: "/reference/environment-vars" },
+          { text: "File Locations", link: "/reference/file-locations" },
+          {
+            text: "CLI Reference",
+            link: "/cli",
+            collapsed: true,
+            items: commands.map((cmd) => ({
+              text: cmd.join(" "),
+              link: `/cli/${cmd.join("/")}`,
+            })),
+          },
+        ],
+      },
+      {
+        text: "Concepts",
+        collapsed: true,
+        items: [
+          { text: "How Pitchfork Works", link: "/concepts/how-it-works" },
+          { text: "Architecture", link: "/concepts/architecture" },
+        ],
+      },
+      {
+        text: "Resources",
+        collapsed: true,
+        items: [
+          { text: "Troubleshooting", link: "/troubleshooting" },
+        ],
       },
     ],
 

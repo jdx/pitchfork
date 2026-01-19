@@ -11,8 +11,8 @@ hero:
     alt: pitchfork logo
   actions:
     - theme: brand
-      text: Get Started
-      link: /getting-started
+      text: Quick Start
+      link: /quickstart
     - theme: alt
       text: CLI Reference
       link: /cli
