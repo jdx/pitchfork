@@ -735,6 +735,22 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "schema": {
+        "full_cmd": [
+          "schema"
+        ],
+        "usage": "schema",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": true,
+        "help": "Generate JSON Schema for pitchfork.toml configuration",
+        "name": "schema",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "start": {
         "full_cmd": [
           "start"
