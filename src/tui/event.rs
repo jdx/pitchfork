@@ -551,14 +551,14 @@ fn handle_config_editor_event(
         None => return Ok(None),
     };
 
+    // Ctrl+S to save (check before editing mode so it works while typing)
+    if modifiers.contains(KeyModifiers::CONTROL) && key == KeyCode::Char('s') {
+        return Ok(Some(Action::SaveConfig));
+    }
+
     // Handle text input mode
     if editor.is_editing() {
         return handle_editor_text_input(app, key);
-    }
-
-    // Ctrl+S to save
-    if modifiers.contains(KeyModifiers::CONTROL) && key == KeyCode::Char('s') {
-        return Ok(Some(Action::SaveConfig));
     }
 
     match key {
