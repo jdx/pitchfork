@@ -5,8 +5,46 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use miette::{IntoDiagnostic, bail, miette};
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
+
+/// Rate limiter for IPC connections to prevent local DoS attacks.
+/// Uses a sliding window algorithm to limit requests per second.
+struct RateLimiter {
+    /// Timestamps of recent requests within the window
+    requests: Vec<Instant>,
+    /// Maximum requests allowed per window
+    max_requests: usize,
+    /// Window duration in seconds
+    window_secs: u64,
+}
+
+impl RateLimiter {
+    fn new(max_requests: usize, window_secs: u64) -> Self {
+        Self {
+            requests: Vec::with_capacity(max_requests),
+            max_requests,
+            window_secs,
+        }
+    }
+
+    /// Check if a request is allowed. Returns true if allowed, false if rate limited.
+    fn check(&mut self) -> bool {
+        let now = Instant::now();
+        let window = std::time::Duration::from_secs(self.window_secs);
+
+        // Remove expired timestamps
+        self.requests.retain(|&t| now.duration_since(t) < window);
+
+        if self.requests.len() >= self.max_requests {
+            false
+        } else {
+            self.requests.push(now);
+            true
+        }
+    }
+}
 
 pub struct IpcServer {
     // clients: Mutex<HashMap<String, interprocess::local_socket::tokio::Stream>>,
@@ -75,6 +113,10 @@ impl IpcServer {
         let mut recv = BufReader::new(recv);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
+            // Rate limit: 100 requests per second per connection
+            // This is generous for normal CLI usage but prevents flooding
+            let mut rate_limiter = RateLimiter::new(100, 1);
+
             loop {
                 let msg = match Self::read_message(&mut recv).await {
                     Ok(Some(msg)) => {
@@ -90,6 +132,13 @@ impl IpcServer {
                         continue;
                     }
                 };
+
+                // Check rate limit before processing
+                if !rate_limiter.check() {
+                    warn!("IPC client rate limited, dropping message");
+                    continue;
+                }
+
                 if let Err(err) = tx.send(msg).await {
                     warn!("Failed to emit message: {:?}", err);
                 }
