@@ -3,7 +3,7 @@ use crate::daemon::{Daemon, RunOptions};
 use crate::env::PITCHFORK_LOGS_DIR;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
-    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
+    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon, Retry,
 };
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
@@ -412,7 +412,7 @@ impl EditorState {
             match field.name {
                 "run" => field.value = FormFieldValue::Text(config.run.clone()),
                 "auto" => field.value = FormFieldValue::AutoBehavior(config.auto.clone()),
-                "retry" => field.value = FormFieldValue::Number(config.retry),
+                "retry" => field.value = FormFieldValue::Number(config.retry.count()),
                 "ready_delay" => field.value = FormFieldValue::OptionalNumber(config.ready_delay),
                 "ready_output" => {
                     field.value = FormFieldValue::OptionalText(config.ready_output.clone())
@@ -449,7 +449,7 @@ impl EditorState {
             run: String::new(),
             auto: vec![],
             cron: None,
-            retry: 0,
+            retry: Retry(0),
             ready_delay: None,
             ready_output: None,
             ready_http: None,
@@ -466,7 +466,7 @@ impl EditorState {
             match (field.name, &field.value) {
                 ("run", FormFieldValue::Text(s)) => config.run = s.clone(),
                 ("auto", FormFieldValue::AutoBehavior(v)) => config.auto = v.clone(),
-                ("retry", FormFieldValue::Number(n)) => config.retry = *n,
+                ("retry", FormFieldValue::Number(n)) => config.retry = Retry(*n),
                 ("ready_delay", FormFieldValue::OptionalNumber(n)) => config.ready_delay = *n,
                 ("ready_output", FormFieldValue::OptionalText(s)) => {
                     config.ready_output = s.clone()
@@ -555,7 +555,7 @@ impl EditorState {
         if let Some(field) = self.fields.get_mut(self.focused_field) {
             if field.is_text_editable() {
                 field.editing = true;
-                field.cursor = field.get_text().len();
+                field.cursor = field.get_text().chars().count();
             } else {
                 // For non-text fields, toggle them
                 self.toggle_current_field();
@@ -612,6 +612,11 @@ impl EditorState {
             let byte_idx = char_to_byte_index(&text, field.cursor);
             text.remove(byte_idx);
             field.set_text(text);
+            // For Number fields, sync cursor to end if value defaulted to "0"
+            // This handles the case where backspacing to empty makes value 0
+            if matches!(field.value, FormFieldValue::Number(_)) {
+                field.cursor = field.get_text().chars().count();
+            }
             self.unsaved_changes = true;
         }
     }
@@ -802,12 +807,13 @@ impl App {
 
     pub fn confirm_action(&mut self, action: PendingAction) {
         self.pending_action = Some(action);
+        self.prev_view = self.view;
         self.view = View::Confirm;
     }
 
     pub fn cancel_confirm(&mut self) {
         self.pending_action = None;
-        self.view = View::Dashboard;
+        self.view = self.prev_view;
     }
 
     pub fn take_pending_action(&mut self) -> Option<PendingAction> {
@@ -1460,6 +1466,21 @@ impl App {
 
         // Read existing config (or create new)
         let mut config = PitchforkToml::read(&editor.config_path)?;
+
+        // Check for duplicate daemon ID
+        let is_duplicate = match &editor.mode {
+            EditMode::Create => config.daemons.contains_key(&editor.daemon_id),
+            EditMode::Edit { original_id } => {
+                // Only a duplicate if ID changed AND new ID already exists
+                original_id != &editor.daemon_id && config.daemons.contains_key(&editor.daemon_id)
+            }
+        };
+
+        if is_duplicate {
+            let daemon_id = editor.daemon_id.clone();
+            self.set_message(format!("A daemon named '{}' already exists", daemon_id));
+            return Ok(());
+        }
 
         // Handle rename case
         if let EditMode::Edit { original_id } = &editor.mode

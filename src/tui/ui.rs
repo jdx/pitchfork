@@ -25,6 +25,19 @@ const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-
 const BAR_FULL: char = '█';
 const BAR_EMPTY: char = '░';
 
+/// UTF-8 safe string truncation from the end, returning "...{suffix}" if too long.
+/// Uses character count instead of byte length to avoid panics on non-ASCII.
+fn truncate_path_end(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let suffix_len = max_chars.saturating_sub(3); // Account for "..."
+        let suffix: String = s.chars().skip(char_count - suffix_len).collect();
+        format!("...{}", suffix)
+    }
+}
+
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1486,11 +1499,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
 
     // Config path
     let path_str = editor.config_path.display().to_string();
-    let path_display = if path_str.len() > 60 {
-        format!("...{}", &path_str[path_str.len() - 57..])
-    } else {
-        path_str
-    };
+    let path_display = truncate_path_end(&path_str, 60);
     let path_line = Paragraph::new(format!("  Config: {}", path_display))
         .style(Style::default().fg(GRAY).bg(Color::Rgb(20, 20, 20)));
     f.render_widget(path_line, chunks[1]);
@@ -1724,11 +1733,7 @@ fn draw_file_select_overlay(f: &mut Frame, app: &App) {
         let indicator = if is_selected { "▶ " } else { "  " };
 
         let path_str = path.display().to_string();
-        let display_path = if path_str.len() > 50 {
-            format!("...{}", &path_str[path_str.len() - 47..])
-        } else {
-            path_str
-        };
+        let display_path = truncate_path_end(&path_str, 50);
 
         let exists_marker = if path.exists() { "" } else { " (new)" };
 
