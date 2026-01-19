@@ -5,6 +5,8 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
 use miette::{IntoDiagnostic, bail, miette};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -21,6 +23,16 @@ impl IpcServer {
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let listener = opts.create_tokio().into_diagnostic()?;
+
+        // Set socket permissions to 0600 (owner read/write only) for security
+        #[cfg(unix)]
+        {
+            let permissions = std::fs::Permissions::from_mode(0o600);
+            if let Err(e) = std::fs::set_permissions(&*env::IPC_SOCK_MAIN, permissions) {
+                warn!("Failed to set IPC socket permissions: {}", e);
+            }
+        }
+
         tokio::spawn(async move {
             loop {
                 if let Err(err) = Self::listen(&listener, tx.clone()).await {
