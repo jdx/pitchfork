@@ -125,11 +125,12 @@ pub enum FileError {
 #[derive(Debug, Error, Diagnostic)]
 pub enum IpcError {
     #[error("failed to connect to supervisor after {attempts} attempts")]
-    #[diagnostic(
-        code(pitchfork::ipc::connection_failed),
-        help("ensure the supervisor is running with: pitchfork supervisor start")
-    )]
-    ConnectionFailed { attempts: u32 },
+    #[diagnostic(code(pitchfork::ipc::connection_failed))]
+    ConnectionFailed {
+        attempts: u32,
+        #[help]
+        details: Option<String>,
+    },
 
     #[error("IPC request timed out after {seconds}s")]
     #[diagnostic(
@@ -277,7 +278,10 @@ mod tests {
 
     #[test]
     fn test_ipc_error_display() {
-        let err = IpcError::ConnectionFailed { attempts: 5 };
+        let err = IpcError::ConnectionFailed {
+            attempts: 5,
+            details: Some("connection refused".to_string()),
+        };
         assert!(err.to_string().contains("failed to connect"));
         assert!(err.to_string().contains("5 attempts"));
 

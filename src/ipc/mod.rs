@@ -60,21 +60,15 @@ fn fs_name(name: &str) -> Result<Name<'_>> {
 }
 
 fn serialize<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>> {
-    let format = if *env::IPC_JSON {
-        "JSON"
-    } else {
-        "MessagePack"
-    };
-    let msg = if *env::IPC_JSON {
+    if *env::IPC_JSON {
         serde_json::to_vec(msg)
             .into_diagnostic()
-            .wrap_err_with(|| format!("failed to serialize IPC message as {}", format))?
+            .wrap_err("failed to serialize IPC message as JSON")
     } else {
         rmp_serde::to_vec(msg)
             .into_diagnostic()
-            .wrap_err_with(|| format!("failed to serialize IPC message as {}", format))?
-    };
-    Ok(msg)
+            .wrap_err("failed to serialize IPC message as MessagePack")
+    }
 }
 
 fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
@@ -82,19 +76,13 @@ fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     bytes.pop();
     let preview = std::str::from_utf8(&bytes).unwrap_or("<binary>");
     trace!("msg: {:?}", preview);
-    let format = if *env::IPC_JSON {
-        "JSON"
-    } else {
-        "MessagePack"
-    };
-    let msg = if *env::IPC_JSON {
+    if *env::IPC_JSON {
         serde_json::from_slice(&bytes)
             .into_diagnostic()
-            .wrap_err_with(|| format!("failed to deserialize IPC {} response", format))?
+            .wrap_err("failed to deserialize IPC JSON response")
     } else {
         rmp_serde::from_slice(&bytes)
             .into_diagnostic()
-            .wrap_err_with(|| format!("failed to deserialize IPC {} response", format))?
-    };
-    Ok(msg)
+            .wrap_err("failed to deserialize IPC MessagePack response")
+    }
 }

@@ -67,6 +67,9 @@ impl IpcClient {
                     } else {
                         return Err(IpcError::ConnectionFailed {
                             attempts: CONNECT_ATTEMPTS,
+                            details: Some(format!(
+                                "{err}\nensure the supervisor is running with: pitchfork supervisor start"
+                            )),
                         }
                         .into());
                     }
@@ -75,6 +78,9 @@ impl IpcClient {
         }
         Err(IpcError::ConnectionFailed {
             attempts: CONNECT_ATTEMPTS,
+            details: Some(
+                "ensure the supervisor is running with: pitchfork supervisor start".to_string(),
+            ),
         }
         .into())
     }
