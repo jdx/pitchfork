@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/jdx/pitchfork/compare/v1.0.2...v1.1.0) - 2026-01-19
+
+### Added
+
+- add file watching to auto-restart daemons ([#165](https://github.com/jdx/pitchfork/pull/165))
+- support boolean values for retry configuration ([#170](https://github.com/jdx/pitchfork/pull/170))
+- disable web UI by default ([#172](https://github.com/jdx/pitchfork/pull/172))
+- auto-generate JSON schema from Rust types ([#167](https://github.com/jdx/pitchfork/pull/167))
+
+### Fixed
+
+- improve cron watcher granularity for sub-minute schedules ([#163](https://github.com/jdx/pitchfork/pull/163))
+- improve log file position tracking accuracy ([#164](https://github.com/jdx/pitchfork/pull/164))
+
 ## [1.0.2](https://github.com/jdx/pitchfork/compare/v1.0.1...v1.0.2) - 2026-01-19
 
 ### Fixed
