@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2](https://github.com/jdx/pitchfork/compare/v1.0.1...v1.0.2) - 2026-01-19
+
+### Fixed
+
+- handle channel send errors in watch_files.rs ([#157](https://github.com/jdx/pitchfork/pull/157))
+- implement clean IPC server shutdown ([#154](https://github.com/jdx/pitchfork/pull/154))
+- replace unwraps with proper error handling in deps.rs ([#153](https://github.com/jdx/pitchfork/pull/153))
+
+### Other
+
+- *(deps)* lock file maintenance ([#158](https://github.com/jdx/pitchfork/pull/158))
+
 ## [1.0.1](https://github.com/jdx/pitchfork/releases/tag/v1.0.1) - 2026-01-19
 
 ### Fixed
