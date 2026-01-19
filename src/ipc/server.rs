@@ -23,16 +23,20 @@ impl IpcServer {
 
         // Set restrictive umask before creating socket to avoid TOCTOU race condition.
         // This ensures the socket is created with 0600 permissions from the start.
+        // Note: IpcServer::new() is called during supervisor startup before other async
+        // tasks are spawned, so the brief umask change won't affect concurrent operations.
         #[cfg(unix)]
         let old_umask = unsafe { libc::umask(0o077) };
 
-        let listener = opts.create_tokio().into_diagnostic()?;
+        let listener_result = opts.create_tokio();
 
-        // Restore original umask
+        // Always restore original umask, even if socket creation failed
         #[cfg(unix)]
         unsafe {
             libc::umask(old_umask);
         }
+
+        let listener = listener_result.into_diagnostic()?;
 
         tokio::spawn(async move {
             loop {
