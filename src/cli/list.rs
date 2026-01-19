@@ -1,6 +1,6 @@
+use crate::Result;
 use crate::state_file::StateFile;
 use crate::ui::table::print_table;
-use crate::Result;
 use comfy_table::{Cell, ContentArrangement, Table};
 
 /// List all daemons

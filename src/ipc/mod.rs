@@ -1,6 +1,6 @@
+use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::env;
-use crate::Result;
 use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
 use miette::IntoDiagnostic;
 use std::path::PathBuf;

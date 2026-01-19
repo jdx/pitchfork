@@ -4,7 +4,7 @@ use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
-use crate::{env, Result};
+use crate::{Result, env};
 use duct::cmd;
 use itertools::Itertools;
 use log::LevelFilter::Info;
@@ -21,8 +21,8 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::oneshot;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::{select, signal, time};
 
 pub struct Supervisor {
@@ -42,12 +42,11 @@ pub static SUPERVISOR: Lazy<Supervisor> =
 
 pub fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
-    if let Some(d) = sf.daemons.get("pitchfork") {
-        if let Some(pid) = d.pid {
-            if PROCS.is_running(pid) {
-                return Ok(());
-            }
-        }
+    if let Some(d) = sf.daemons.get("pitchfork")
+        && let Some(pid) = d.pid
+        && PROCS.is_running(pid)
+    {
+        return Ok(());
     }
     start_in_background()
 }
@@ -204,24 +203,23 @@ impl Supervisor {
             // if this daemon's dir starts with the left dir
             // and no other shell pid has this dir as a prefix
             // schedule the daemon for autostop
-            if let Some(daemon_dir) = daemon.dir.as_ref() {
-                if daemon_dir.starts_with(dir)
-                    && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
-                {
-                    if delay_secs == 0 {
-                        // No delay configured, stop immediately
-                        info!("autostopping {daemon}");
-                        self.stop(&daemon.id).await?;
-                        self.add_notification(Info, format!("autostopped {daemon}"))
-                            .await;
-                    } else {
-                        // Schedule autostop with delay
-                        let stop_at = time::Instant::now() + Duration::from_secs(delay_secs);
-                        let mut pending = self.pending_autostops.lock().await;
-                        if !pending.contains_key(&daemon.id) {
-                            info!("scheduling autostop for {} in {}s", daemon.id, delay_secs);
-                            pending.insert(daemon.id.clone(), stop_at);
-                        }
+            if let Some(daemon_dir) = daemon.dir.as_ref()
+                && daemon_dir.starts_with(dir)
+                && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
+            {
+                if delay_secs == 0 {
+                    // No delay configured, stop immediately
+                    info!("autostopping {daemon}");
+                    self.stop(&daemon.id).await?;
+                    self.add_notification(Info, format!("autostopped {daemon}"))
+                        .await;
+                } else {
+                    // Schedule autostop with delay
+                    let stop_at = time::Instant::now() + Duration::from_secs(delay_secs);
+                    let mut pending = self.pending_autostops.lock().await;
+                    if !pending.contains_key(&daemon.id) {
+                        info!("scheduling autostop for {} in {}s", daemon.id, delay_secs);
+                        pending.insert(daemon.id.clone(), stop_at);
                     }
                 }
             }
@@ -277,19 +275,20 @@ impl Supervisor {
             }
 
             // Check if daemon is still running and should be stopped
-            if let Some(daemon) = self.get_daemon(&daemon_id).await {
-                if daemon.autostop && daemon.status.is_running() {
-                    // Verify no shell is in the daemon's directory
-                    let shell_dirs = self.get_dirs_with_shell_pids().await;
-                    let shell_dirs = shell_dirs.keys().collect_vec();
-                    if let Some(daemon_dir) = daemon.dir.as_ref() {
-                        if !shell_dirs.iter().any(|d| d.starts_with(daemon_dir)) {
-                            info!("autostopping {} (after delay)", daemon_id);
-                            self.stop(&daemon_id).await?;
-                            self.add_notification(Info, format!("autostopped {daemon_id}"))
-                                .await;
-                        }
-                    }
+            if let Some(daemon) = self.get_daemon(&daemon_id).await
+                && daemon.autostop
+                && daemon.status.is_running()
+            {
+                // Verify no shell is in the daemon's directory
+                let shell_dirs = self.get_dirs_with_shell_pids().await;
+                let shell_dirs = shell_dirs.keys().collect_vec();
+                if let Some(daemon_dir) = daemon.dir.as_ref()
+                    && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
+                {
+                    info!("autostopping {} (after delay)", daemon_id);
+                    self.stop(&daemon_id).await?;
+                    self.add_notification(Info, format!("autostopped {daemon_id}"))
+                        .await;
                 }
             }
         }
@@ -381,15 +380,16 @@ impl Supervisor {
         if let Some(daemon) = daemon {
             // Stopping state is treated as "not running" - the monitoring task will clean it up
             // Only check for Running state with a valid PID
-            if !daemon.status.is_stopping() && !daemon.status.is_stopped() {
-                if let Some(pid) = daemon.pid {
-                    if opts.force {
-                        self.stop(id).await?;
-                        info!("run: stop completed for daemon {id}");
-                    } else {
-                        warn!("daemon {id} already running with pid {pid}");
-                        return Ok(IpcResponse::DaemonAlreadyRunning);
-                    }
+            if !daemon.status.is_stopping()
+                && !daemon.status.is_stopped()
+                && let Some(pid) = daemon.pid
+            {
+                if opts.force {
+                    self.stop(id).await?;
+                    info!("run: stop completed for daemon {id}");
+                } else {
+                    warn!("daemon {id} already running with pid {pid}");
+                    return Ok(IpcResponse::DaemonAlreadyRunning);
                 }
             }
         }
@@ -600,17 +600,15 @@ impl Supervisor {
                         trace!("stdout: {id} {formatted}");
 
                         // Check if output matches ready pattern
-                        if !ready_notified {
-                            if let Some(ref pattern) = ready_pattern {
-                                if pattern.is_match(&line) {
+                        if !ready_notified
+                            && let Some(ref pattern) = ready_pattern
+                                && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
                                 }
-                            }
-                        }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
                         let formatted = format_line(line.clone());
@@ -623,17 +621,15 @@ impl Supervisor {
                         trace!("stderr: {id} {formatted}");
 
                         // Check if output matches ready pattern (also check stderr)
-                        if !ready_notified {
-                            if let Some(ref pattern) = ready_pattern {
-                                if pattern.is_match(&line) {
+                        if !ready_notified
+                            && let Some(ref pattern) = ready_pattern
+                                && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
                                 }
-                            }
-                        }
                     },
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
@@ -978,10 +974,10 @@ impl Supervisor {
             let mut interval = time::interval(interval_duration());
             loop {
                 interval.tick().await;
-                if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > interval_duration() {
-                    if let Err(err) = SUPERVISOR.refresh().await {
-                        error!("failed to refresh: {err}");
-                    }
+                if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > interval_duration()
+                    && let Err(err) = SUPERVISOR.refresh().await
+                {
+                    error!("failed to refresh: {err}");
                 }
             }
         });
@@ -1011,77 +1007,75 @@ impl Supervisor {
         let daemons = self.state_file.lock().await.daemons.clone();
 
         for (id, daemon) in daemons {
-            if let Some(schedule_str) = &daemon.cron_schedule {
-                if let Some(retrigger) = daemon.cron_retrigger {
-                    // Parse the cron schedule
-                    let schedule = match Schedule::from_str(schedule_str) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            warn!("invalid cron schedule for daemon {id}: {e}");
-                            continue;
+            if let Some(schedule_str) = &daemon.cron_schedule
+                && let Some(retrigger) = daemon.cron_retrigger
+            {
+                // Parse the cron schedule
+                let schedule = match Schedule::from_str(schedule_str) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("invalid cron schedule for daemon {id}: {e}");
+                        continue;
+                    }
+                };
+
+                // Check if we should trigger now
+                let should_trigger = schedule.upcoming(chrono::Local).take(1).any(|next| {
+                    // If the next execution is within the next minute, trigger it
+                    let diff = next.signed_duration_since(now);
+                    diff.num_seconds() < 60 && diff.num_seconds() >= 0
+                });
+
+                if should_trigger {
+                    let should_run = match retrigger {
+                        crate::pitchfork_toml::CronRetrigger::Finish => {
+                            // Run if not currently running
+                            daemon.pid.is_none()
+                        }
+                        crate::pitchfork_toml::CronRetrigger::Always => {
+                            // Always run (force restart handled in run method)
+                            true
+                        }
+                        crate::pitchfork_toml::CronRetrigger::Success => {
+                            // Run only if previous command succeeded
+                            daemon.pid.is_none() && daemon.last_exit_success.unwrap_or(false)
+                        }
+                        crate::pitchfork_toml::CronRetrigger::Fail => {
+                            // Run only if previous command failed
+                            daemon.pid.is_none() && !daemon.last_exit_success.unwrap_or(true)
                         }
                     };
 
-                    // Check if we should trigger now
-                    let should_trigger = schedule.upcoming(chrono::Local).take(1).any(|next| {
-                        // If the next execution is within the next minute, trigger it
-                        let diff = next.signed_duration_since(now);
-                        diff.num_seconds() < 60 && diff.num_seconds() >= 0
-                    });
-
-                    if should_trigger {
-                        let should_run = match retrigger {
-                            crate::pitchfork_toml::CronRetrigger::Finish => {
-                                // Run if not currently running
-                                daemon.pid.is_none()
+                    if should_run {
+                        info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
+                        // Get the run command from pitchfork.toml
+                        if let Some(run_cmd) = self.get_daemon_run_command(&id) {
+                            let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                            // Use force: true for Always retrigger to ensure restart
+                            let force =
+                                matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
+                            let opts = RunOptions {
+                                id: id.clone(),
+                                cmd: shell_words::split(&run_cmd).unwrap_or_default(),
+                                force,
+                                shell_pid: None,
+                                dir,
+                                autostop: daemon.autostop,
+                                cron_schedule: Some(schedule_str.clone()),
+                                cron_retrigger: Some(retrigger),
+                                retry: daemon.retry,
+                                retry_count: daemon.retry_count,
+                                ready_delay: daemon.ready_delay,
+                                ready_output: daemon.ready_output.clone(),
+                                ready_http: daemon.ready_http.clone(),
+                                ready_port: daemon.ready_port,
+                                wait_ready: false,
+                            };
+                            if let Err(e) = self.run(opts).await {
+                                error!("failed to run cron daemon {id}: {e}");
                             }
-                            crate::pitchfork_toml::CronRetrigger::Always => {
-                                // Always run (force restart handled in run method)
-                                true
-                            }
-                            crate::pitchfork_toml::CronRetrigger::Success => {
-                                // Run only if previous command succeeded
-                                daemon.pid.is_none() && daemon.last_exit_success.unwrap_or(false)
-                            }
-                            crate::pitchfork_toml::CronRetrigger::Fail => {
-                                // Run only if previous command failed
-                                daemon.pid.is_none() && !daemon.last_exit_success.unwrap_or(true)
-                            }
-                        };
-
-                        if should_run {
-                            info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
-                            // Get the run command from pitchfork.toml
-                            if let Some(run_cmd) = self.get_daemon_run_command(&id) {
-                                let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                                // Use force: true for Always retrigger to ensure restart
-                                let force = matches!(
-                                    retrigger,
-                                    crate::pitchfork_toml::CronRetrigger::Always
-                                );
-                                let opts = RunOptions {
-                                    id: id.clone(),
-                                    cmd: shell_words::split(&run_cmd).unwrap_or_default(),
-                                    force,
-                                    shell_pid: None,
-                                    dir,
-                                    autostop: daemon.autostop,
-                                    cron_schedule: Some(schedule_str.clone()),
-                                    cron_retrigger: Some(retrigger),
-                                    retry: daemon.retry,
-                                    retry_count: daemon.retry_count,
-                                    ready_delay: daemon.ready_delay,
-                                    ready_output: daemon.ready_output.clone(),
-                                    ready_http: daemon.ready_http.clone(),
-                                    ready_port: daemon.ready_port,
-                                    wait_ready: false,
-                                };
-                                if let Err(e) = self.run(opts).await {
-                                    error!("failed to run cron daemon {id}: {e}");
-                                }
-                            } else {
-                                warn!("no run command found for cron daemon {id}");
-                            }
+                        } else {
+                            warn!("no run command found for cron daemon {id}");
                         }
                     }
                 }

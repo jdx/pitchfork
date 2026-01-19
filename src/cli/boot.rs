@@ -1,5 +1,5 @@
-use crate::boot_manager::BootManager;
 use crate::Result;
+use crate::boot_manager::BootManager;
 use clap::Parser;
 
 #[derive(Debug, Parser)]

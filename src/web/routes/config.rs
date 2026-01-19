@@ -1,4 +1,4 @@
-use axum::{extract::Query, response::Html, Form};
+use axum::{Form, extract::Query, response::Html};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -197,15 +197,14 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
     }
 
     // Create parent directories if needed
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return Html(format!(
-                    r#"<div class="error">Failed to create directory: {}</div>"#,
-                    html_escape(&e.to_string())
-                ));
-            }
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return Html(format!(
+            r#"<div class="error">Failed to create directory: {}</div>"#,
+            html_escape(&e.to_string())
+        ));
     }
 
     // Write the file

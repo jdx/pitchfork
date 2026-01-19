@@ -1,11 +1,11 @@
 use crate::Result;
 use axum::{
+    Router,
     body::Body,
     http::{Method, Request, StatusCode},
     middleware::{self, Next},
     response::Response,
     routing::{get, post},
-    Router,
 };
 use std::net::SocketAddr;
 

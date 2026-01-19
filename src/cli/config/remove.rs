@@ -1,5 +1,5 @@
-use crate::pitchfork_toml::PitchforkToml;
 use crate::Result;
+use crate::pitchfork_toml::PitchforkToml;
 
 /// Remove a daemon from pitchfork.toml
 #[derive(Debug, clap::Args)]

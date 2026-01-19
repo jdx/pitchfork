@@ -1,5 +1,5 @@
-use crate::state_file::StateFile;
 use crate::Result;
+use crate::state_file::StateFile;
 
 /// Display the status of a daemon
 #[derive(Debug, clap::Args)]

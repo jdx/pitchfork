@@ -1,5 +1,5 @@
 use crate::daemon::Daemon;
-use crate::{env, Result};
+use crate::{Result, env};
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, BTreeSet};

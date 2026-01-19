@@ -1,10 +1,10 @@
-use crate::ipc::{deserialize, fs_name, serialize, IpcRequest, IpcResponse};
-use crate::{env, Result};
+use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::{Result, env};
+use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
 use interprocess::local_socket::traits::tokio::Stream;
-use interprocess::local_socket::ListenerOptions;
-use miette::{bail, miette, IntoDiagnostic};
+use miette::{IntoDiagnostic, bail, miette};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::{Receiver, Sender};
 

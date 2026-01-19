@@ -1,5 +1,5 @@
-use crate::ipc::client::IpcClient;
 use crate::Result;
+use crate::ipc::client::IpcClient;
 
 /// Prevent a daemon from restarting
 #[derive(Debug, clap::Args)]

@@ -1,5 +1,5 @@
-use crate::ipc::client::IpcClient;
 use crate::Result;
+use crate::ipc::client::IpcClient;
 
 /// Allow a daemon to start
 #[derive(Debug, clap::Args)]

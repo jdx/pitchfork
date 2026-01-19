@@ -1,10 +1,10 @@
 use crate::daemon::{Daemon, RunOptions};
-use crate::ipc::{deserialize, fs_name, serialize, IpcRequest, IpcResponse};
-use crate::{supervisor, Result};
+use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Stream;
-use miette::{bail, ensure, IntoDiagnostic};
+use miette::{IntoDiagnostic, bail, ensure};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

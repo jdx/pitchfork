@@ -1,8 +1,8 @@
 use axum::{
     extract::Path,
     response::{
-        sse::{Event, KeepAlive, Sse},
         Html,
+        sse::{Event, KeepAlive, Sse},
     },
 };
 use std::convert::Infallible;

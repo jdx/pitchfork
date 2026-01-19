@@ -1,5 +1,5 @@
-use crate::procs::PROCS;
 use crate::Result;
+use crate::procs::PROCS;
 
 mod run;
 mod start;
@@ -42,7 +42,9 @@ pub async fn kill_or_stop(existing_pid: u32, force: bool) -> Result<bool> {
             PROCS.kill_async(existing_pid).await?;
             Ok(true)
         } else {
-            warn!("pitchfork supervisor is already running with pid {existing_pid}. Kill it with `--force`");
+            warn!(
+                "pitchfork supervisor is already running with pid {existing_pid}. Kill it with `--force`"
+            );
             Ok(false)
         }
     } else {
