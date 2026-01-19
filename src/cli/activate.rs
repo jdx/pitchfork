@@ -1,4 +1,4 @@
-use crate::{env, Result};
+use crate::{Result, env};
 
 /// Activate pitchfork in your shell session
 ///

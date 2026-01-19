@@ -1,5 +1,5 @@
-use crate::cli::Cli;
 use crate::Result;
+use crate::cli::Cli;
 use clap::CommandFactory;
 
 /// Generates a usage spec for the CLI

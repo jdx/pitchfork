@@ -1,8 +1,8 @@
+use crate::Result;
 use crate::cli::logs::print_startup_logs;
 use crate::daemon::RunOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
-use crate::Result;
 use chrono::{DateTime, Local};
 use miette::ensure;
 use std::sync::Arc;

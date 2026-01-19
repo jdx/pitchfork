@@ -1,5 +1,5 @@
-use crate::ipc::client::IpcClient;
 use crate::Result;
+use crate::ipc::client::IpcClient;
 
 /// Gets the status of the pitchfork daemon
 #[derive(Debug, clap::Args)]

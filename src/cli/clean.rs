@@ -1,5 +1,5 @@
-use crate::ipc::client::IpcClient;
 use crate::Result;
+use crate::ipc::client::IpcClient;
 
 /// Removes stopped/failed daemons from `pitchfork list`
 #[derive(Debug, clap::Args)]

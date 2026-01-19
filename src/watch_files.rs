@@ -2,7 +2,7 @@ use crate::Result;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, FileIdMap};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap, new_debouncer_opt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

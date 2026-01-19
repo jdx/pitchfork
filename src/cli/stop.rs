@@ -1,5 +1,5 @@
-use crate::ipc::client::IpcClient;
 use crate::Result;
+use crate::ipc::client::IpcClient;
 use miette::ensure;
 
 /// Sends a stop signal to a daemon

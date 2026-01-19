@@ -1,6 +1,6 @@
-use crate::{env, Result};
+use crate::{Result, env};
 use indexmap::IndexMap;
-use miette::{bail, IntoDiagnostic};
+use miette::{IntoDiagnostic, bail};
 use std::path::{Path, PathBuf};
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PitchforkToml {

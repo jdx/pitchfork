@@ -1,6 +1,6 @@
 use crate::ui::style::edim;
 use crate::watch_files::WatchFiles;
-use crate::{env, Result};
+use crate::{Result, env};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Timelike};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
@@ -121,15 +121,15 @@ impl Logs {
             })
             .filter(|(date, _, _)| {
                 if let Ok(dt) = parse_datetime(date) {
-                    if let Some(from) = from {
-                        if dt < from {
-                            return false;
-                        }
+                    if let Some(from) = from
+                        && dt < from
+                    {
+                        return false;
                     }
-                    if let Some(to) = to {
-                        if dt > to {
-                            return false;
-                        }
+                    if let Some(to) = to
+                        && dt > to
+                    {
+                        return false;
                     }
                     true
                 } else {
@@ -312,10 +312,10 @@ pub fn print_logs_for_time_range(
                 if dt < from {
                     return false;
                 }
-                if let Some(to) = to {
-                    if dt > to {
-                        return false;
-                    }
+                if let Some(to) = to
+                    && dt > to
+                {
+                    return false;
                 }
                 true
             } else {

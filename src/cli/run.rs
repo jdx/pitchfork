@@ -1,7 +1,7 @@
 use crate::cli::logs::print_startup_logs;
 use crate::daemon::RunOptions;
 use crate::ipc::client::IpcClient;
-use crate::{env, Result};
+use crate::{Result, env};
 use chrono::Local;
 use miette::bail;
 
@@ -95,10 +95,10 @@ impl Run {
         }
 
         // Show startup logs on success (unless --quiet)
-        if !self.quiet {
-            if let Err(e) = print_startup_logs(&self.id, start_time) {
-                debug!("Failed to print startup logs: {}", e);
-            }
+        if !self.quiet
+            && let Err(e) = print_startup_logs(&self.id, start_time)
+        {
+            debug!("Failed to print startup logs: {}", e);
         }
 
         Ok(())

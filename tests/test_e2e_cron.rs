@@ -1,6 +1,6 @@
 mod common;
 
-use common::{get_script_path, TestEnv};
+use common::{TestEnv, get_script_path};
 use std::time::Duration;
 
 // ----------------------------------------------------------------------------

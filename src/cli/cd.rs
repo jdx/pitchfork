@@ -1,6 +1,6 @@
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto};
-use crate::{env, Result};
+use crate::{Result, env};
 use duct::cmd;
 use itertools::Itertools;
 use log::LevelFilter;

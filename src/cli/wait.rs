@@ -1,7 +1,7 @@
+use crate::Result;
 use crate::cli::logs;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
-use crate::Result;
 use tokio::time;
 
 /// Wait for a daemon to stop, tailing the logs along the way

@@ -1,4 +1,4 @@
-use crate::{env, Result};
+use crate::{Result, env};
 use auto_launcher::{AutoLaunch, AutoLaunchBuilder, LinuxLaunchMode, MacOSLaunchMode};
 use miette::IntoDiagnostic;
 

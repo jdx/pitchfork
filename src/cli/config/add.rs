@@ -1,5 +1,5 @@
-use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto, PitchforkTomlDaemon};
 use crate::Result;
+use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto, PitchforkTomlDaemon};
 
 /// Add a new daemon to ./pitchfork.toml
 #[derive(Debug, clap::Args)]

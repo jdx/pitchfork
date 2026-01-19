@@ -1,5 +1,5 @@
-use crate::ipc::client::IpcClient;
 use crate::Result;
+use crate::ipc::client::IpcClient;
 
 /// Starts the internal pitchfork daemon in the background
 #[derive(Debug, clap::Args)]
