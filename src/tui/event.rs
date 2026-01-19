@@ -1,6 +1,6 @@
 use crate::tui::app::{App, PendingAction, View};
 use crate::Result;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use miette::IntoDiagnostic;
 
 pub enum Action {
@@ -12,22 +12,46 @@ pub enum Action {
 }
 
 pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
-    if let Event::Key(key) = event::read().into_diagnostic()? {
-        // Ctrl+C always quits
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return Ok(Some(Action::Quit));
-        }
+    let event = event::read().into_diagnostic()?;
 
-        match app.view {
-            View::Dashboard => handle_dashboard_event(app, key.code, key.modifiers),
-            View::Logs => handle_logs_event(app, key.code, key.modifiers),
-            View::Help => handle_help_event(app, key.code),
-            View::Confirm => handle_confirm_event(app, key.code),
-            View::Details => handle_details_event(app, key.code),
-            View::Loading => Ok(None), // Ignore input during loading
+    match event {
+        Event::Key(key) => {
+            // Ctrl+C always quits
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                return Ok(Some(Action::Quit));
+            }
+
+            match app.view {
+                View::Dashboard => handle_dashboard_event(app, key.code, key.modifiers),
+                View::Logs => handle_logs_event(app, key.code, key.modifiers),
+                View::Help => handle_help_event(app, key.code),
+                View::Confirm => handle_confirm_event(app, key.code),
+                View::Details => handle_details_event(app, key.code),
+                View::Loading => Ok(None), // Ignore input during loading
+            }
         }
-    } else {
-        Ok(None)
+        Event::Mouse(mouse) => {
+            match app.view {
+                View::Dashboard => handle_dashboard_mouse(app, mouse.kind, mouse.row),
+                View::Logs => handle_logs_mouse(app, mouse.kind),
+                View::Help | View::Details => {
+                    // Click anywhere to close overlays
+                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        app.back_to_dashboard();
+                    }
+                    Ok(None)
+                }
+                View::Confirm => {
+                    // Click anywhere to cancel (Esc behavior)
+                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        app.cancel_confirm();
+                    }
+                    Ok(None)
+                }
+                View::Loading => Ok(None),
+            }
+        }
+        _ => Ok(None),
     }
 }
 
@@ -334,6 +358,63 @@ fn handle_confirm_event(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
             // User cancelled
             app.cancel_confirm();
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_dashboard_mouse(app: &mut App, kind: MouseEventKind, row: u16) -> Result<Option<Action>> {
+    // Skip if search is active (don't interfere with typing)
+    if app.search_active {
+        return Ok(None);
+    }
+
+    match kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Calculate which daemon was clicked
+            // Table starts at row 6 (header=3, stats=3) + 2 for table header/border
+            let table_start = 8_u16;
+            if row >= table_start {
+                let clicked_index = (row - table_start) as usize;
+                let filtered_count = app.filtered_daemons().len();
+                if clicked_index < filtered_count {
+                    app.selected = clicked_index;
+                }
+            }
+            Ok(None)
+        }
+        MouseEventKind::ScrollDown => {
+            app.select_next();
+            Ok(None)
+        }
+        MouseEventKind::ScrollUp => {
+            app.select_prev();
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_logs_mouse(app: &mut App, kind: MouseEventKind) -> Result<Option<Action>> {
+    // Skip if search is active
+    if app.log_search_active {
+        return Ok(None);
+    }
+
+    match kind {
+        MouseEventKind::ScrollDown => {
+            app.log_follow = false;
+            app.scroll_logs_down();
+            app.scroll_logs_down();
+            app.scroll_logs_down();
+            Ok(None)
+        }
+        MouseEventKind::ScrollUp => {
+            app.log_follow = false;
+            app.scroll_logs_up();
+            app.scroll_logs_up();
+            app.scroll_logs_up();
             Ok(None)
         }
         _ => Ok(None),
