@@ -51,21 +51,9 @@ jobs:
           fi
 
           echo "Generating editorialized release notes for $TAG (prev: ${PREV_TAG:-none})..."
-
-          # Capture script output and exit code separately to handle failures gracefully
-          set +e
-          NOTES=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG" 2>&1)
-          EXIT_CODE=$?
-          set -e
-
-          if [[ $EXIT_CODE -eq 0 && -n "$NOTES" ]]; then
-            echo "Updating GitHub release with editorialized notes..."
-            gh release edit "$TAG" --notes "$NOTES"
-            echo "Release notes updated successfully"
-          else
-            echo "Warning: Failed to generate editorialized notes (exit code: $EXIT_CODE), keeping original"
-            echo "Script output: $NOTES"
-          fi
+          NOTES=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG")
+          gh release edit "$TAG" --notes "$NOTES"
+          echo "Release notes updated successfully"
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
