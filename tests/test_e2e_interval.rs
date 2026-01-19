@@ -3,6 +3,8 @@ mod common;
 use common::{TestEnv, get_script_path};
 use std::time::Duration;
 
+const FAST_INTERVAL: (&str, &str) = ("PITCHFORK_INTERVAL_SECS", "2");
+
 #[test]
 fn test_interval_watch_long_running_task_stays_running() {
     let env = TestEnv::new();
@@ -15,8 +17,8 @@ ready_delay = 1
 "#;
     env.create_toml(toml_content);
 
-    // Start the daemon in background using pitchfork run
-    let start_output = env.run_command(&["start", "long_runner"]);
+    // Start the daemon with fast interval (2s instead of default 10s)
+    let start_output = env.run_command_with_env(&["start", "long_runner"], &[FAST_INTERVAL]);
 
     println!(
         "Start stdout: {}",
@@ -27,18 +29,18 @@ ready_delay = 1
         String::from_utf8_lossy(&start_output.stderr)
     );
 
-    // Sleep for 20 seconds to allow interval_watch to run multiple times
-    println!("Waiting 20 seconds to let interval_watch refresh...");
-    env.sleep(Duration::from_secs(20));
+    // Sleep for 6 seconds to allow interval_watch to run multiple times (2s interval)
+    println!("Waiting 6 seconds to let interval_watch refresh...");
+    env.sleep(Duration::from_secs(6));
 
     // Check daemon status - should still be Running
     let status = env.get_daemon_status("long_runner");
-    println!("Daemon status after 20s: {:?}", status);
+    println!("Daemon status after 6s: {:?}", status);
 
     let status = status.unwrap();
     assert!(
         status.contains("running"),
-        "Daemon should still be Running after 20s, but was: {}",
+        "Daemon should still be Running after 6s, but was: {}",
         status
     );
 
@@ -63,8 +65,8 @@ run = "bun run {} 5"
     );
     env.create_toml(&toml_content);
 
-    // Start the daemon - it should pass ready check
-    let start_output = env.run_command(&["start", "fail_after_ready"]);
+    // Start the daemon with fast interval - it should pass ready check
+    let start_output = env.run_command_with_env(&["start", "fail_after_ready"], &[FAST_INTERVAL]);
 
     println!(
         "Start stdout: {}",
@@ -82,13 +84,13 @@ run = "bun run {} 5"
         "Start should succeed as daemon passes ready check"
     );
 
-    // Sleep for 20 seconds to allow daemon to fail and interval_watch to detect it
-    println!("Waiting 20 seconds for daemon to fail and interval_watch to detect...");
-    env.sleep(Duration::from_secs(20));
+    // Sleep for 10 seconds to allow daemon to fail (5s) and interval_watch to detect it (2s interval)
+    println!("Waiting 10 seconds for daemon to fail and interval_watch to detect...");
+    env.sleep(Duration::from_secs(10));
 
     // Check daemon status - should be Errored
     let status = env.get_daemon_status("fail_after_ready");
-    println!("Daemon status after 20s: {:?}", status);
+    println!("Daemon status after 10s: {:?}", status);
 
     let status = status.unwrap();
     assert!(
@@ -127,8 +129,8 @@ retry = 1
     );
     env.create_toml(&toml_content);
 
-    // Start the daemon - it should pass ready check
-    let start_output = env.run_command(&["start", "retry_after_ready"]);
+    // Start the daemon with fast interval - it should pass ready check
+    let start_output = env.run_command_with_env(&["start", "retry_after_ready"], &[FAST_INTERVAL]);
 
     println!(
         "Start stdout: {}",
@@ -146,12 +148,13 @@ retry = 1
         "Start should succeed as daemon passes ready check"
     );
 
-    println!("Waiting 20 seconds for daemon to fail, retry, and fail again...");
-    env.sleep(Duration::from_secs(20));
+    // Wait for daemon to fail (5s), retry interval (2s), fail again (5s), detect (2s) + buffer
+    println!("Waiting 16 seconds for daemon to fail, retry, and fail again...");
+    env.sleep(Duration::from_secs(16));
 
     // Check daemon status - should be Errored after exhausting retries
     let status = env.get_daemon_status("retry_after_ready");
-    println!("Daemon status after 20s: {:?}", status);
+    println!("Daemon status after 16s: {:?}", status);
 
     let status = status.unwrap();
     assert!(

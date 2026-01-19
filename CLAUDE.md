@@ -8,11 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build
 cargo build
 
-# Run tests
-cargo test
+# Run tests (uses nextest for faster parallel execution)
+cargo nextest run
 
 # Run a single test
-cargo test test_name
+cargo nextest run test_name
 
 # Lint (check)
 cargo fmt --check

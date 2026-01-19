@@ -4,7 +4,7 @@ _.path = "target/debug"
 [tasks.ci]
 depends = ["lint", "build"]
 run = [
-  "cargo test",
+  "cargo nextest run",
 ]
 
 [tasks.docs]
@@ -39,6 +39,8 @@ run = [
 
 [tools]
 bun = "latest" # for docs and test
+cargo-binstall = "latest"
 hk = "latest"
 pkl = "latest" # for hk config
 usage = "latest" # for rendering CLI usage
+"cargo:cargo-nextest" = "latest"
