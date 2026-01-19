@@ -595,6 +595,9 @@ impl Supervisor {
             let mut port_check_interval =
                 ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
 
+            // Setup periodic log flush interval (every 1 second instead of per-line)
+            let mut log_flush_interval = tokio::time::interval(Duration::from_secs(1));
+
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
                 tokio::sync::mpsc::channel::<std::io::Result<std::process::ExitStatus>>(1);
@@ -619,9 +622,6 @@ impl Supervisor {
                         if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
                             error!("Failed to write to log for daemon {id}: {e}");
                         }
-                        if let Err(e) = log_appender.flush().await {
-                            error!("Failed to flush log for daemon {id}: {e}");
-                        }
                         trace!("stdout: {id} {formatted}");
 
                         // Check if output matches ready pattern
@@ -639,9 +639,6 @@ impl Supervisor {
                         let formatted = format_line(line.clone());
                         if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
                             error!("Failed to write to log for daemon {id}: {e}");
-                        }
-                        if let Err(e) = log_appender.flush().await {
-                            error!("Failed to flush log for daemon {id}: {e}");
                         }
                         trace!("stderr: {id} {formatted}");
 
@@ -752,8 +749,19 @@ impl Supervisor {
                         // Disable timer after it fires
                         delay_timer = None;
                     }
+                    _ = log_flush_interval.tick() => {
+                        // Periodic flush to ensure logs are written to disk
+                        if let Err(e) = log_appender.flush().await {
+                            error!("Failed to flush log for daemon {id}: {e}");
+                        }
+                    }
                     else => break,
                 }
+            }
+
+            // Final flush to ensure all buffered logs are written
+            if let Err(e) = log_appender.flush().await {
+                error!("Failed to final flush log for daemon {id}: {e}");
             }
 
             // Get the final exit status
