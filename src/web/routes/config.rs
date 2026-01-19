@@ -36,9 +36,60 @@ fn get_allowed_paths() -> Vec<PathBuf> {
     PitchforkToml::list_paths()
 }
 
-fn is_path_allowed(path: &PathBuf) -> bool {
+/// Canonicalize a path, handling both existing and non-existing files/directories.
+/// Walks up the path tree to find an existing ancestor and canonicalizes from there.
+fn safe_canonicalize(path: &PathBuf) -> Option<PathBuf> {
+    // First try to canonicalize the full path (works for existing files)
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return Some(canonical);
+    }
+
+    // For non-existing paths, walk up the tree to find an existing ancestor
+    let mut existing_ancestor = path.clone();
+    let mut non_existing_parts: Vec<std::ffi::OsString> = Vec::new();
+
+    while !existing_ancestor.exists() {
+        if let Some(file_name) = existing_ancestor.file_name() {
+            non_existing_parts.push(file_name.to_os_string());
+        } else {
+            // Reached root without finding existing ancestor
+            return None;
+        }
+        existing_ancestor = existing_ancestor.parent()?.to_path_buf();
+    }
+
+    // Canonicalize the existing ancestor
+    let canonical_base = std::fs::canonicalize(&existing_ancestor).ok()?;
+
+    // Rebuild the path with non-existing parts
+    let mut result = canonical_base;
+    for part in non_existing_parts.into_iter().rev() {
+        result = result.join(part);
+    }
+
+    Some(result)
+}
+
+/// Check if a path is in the allowed list and return the canonical path if valid.
+/// Returns the canonical path to use for file operations, preventing TOCTOU attacks.
+fn validate_path(path: &PathBuf) -> Option<PathBuf> {
     let allowed = get_allowed_paths();
-    allowed.iter().any(|p| p == path)
+
+    // Canonicalize the input path
+    let canonical_input = safe_canonicalize(path)?;
+
+    // Check against canonicalized allowed paths
+    let is_allowed = allowed.iter().any(|allowed_path| {
+        safe_canonicalize(allowed_path)
+            .map(|canonical_allowed| canonical_allowed == canonical_input)
+            .unwrap_or(false)
+    });
+
+    if is_allowed {
+        Some(canonical_input)
+    } else {
+        None
+    }
 }
 
 pub async fn list() -> Html<String> {
@@ -88,17 +139,22 @@ pub struct EditQuery {
 pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
     let path = PathBuf::from(&query.path);
 
-    if !is_path_allowed(&path) {
-        let content = r#"
-            <h1>Error</h1>
-            <p class="error">This file path is not allowed.</p>
-            <a href="/config" class="btn">Back to Config List</a>
-        "#;
-        return Html(base_html("Error", content));
-    }
+    // Validate and get canonical path to prevent TOCTOU attacks
+    let canonical_path = match validate_path(&path) {
+        Some(p) => p,
+        None => {
+            let content = r#"
+                <h1>Error</h1>
+                <p class="error">This file path is not allowed.</p>
+                <a href="/config" class="btn">Back to Config List</a>
+            "#;
+            return Html(base_html("Error", content));
+        }
+    };
 
-    let content_value = if path.exists() {
-        match std::fs::read_to_string(&path) {
+    // Use canonical path for file operations
+    let content_value = if canonical_path.exists() {
+        match std::fs::read_to_string(&canonical_path) {
             Ok(c) => html_escape(&c),
             Err(e) => format!("# Error reading file: {}", e),
         }
@@ -179,9 +235,13 @@ pub async fn validate(Form(form): Form<ConfigForm>) -> Html<String> {
 pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
     let path = PathBuf::from(&form.path);
 
-    if !is_path_allowed(&path) {
-        return Html(r#"<div class="error">This file path is not allowed.</div>"#.to_string());
-    }
+    // Validate and get canonical path to prevent TOCTOU attacks
+    let canonical_path = match validate_path(&path) {
+        Some(p) => p,
+        None => {
+            return Html(r#"<div class="error">This file path is not allowed.</div>"#.to_string());
+        }
+    };
 
     // Validate TOML first
     if let Err(e) = toml::from_str::<PitchforkToml>(&form.content) {
@@ -196,8 +256,8 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
         ));
     }
 
-    // Create parent directories if needed
-    if let Some(parent) = path.parent()
+    // Create parent directories if needed (using canonical path)
+    if let Some(parent) = canonical_path.parent()
         && !parent.exists()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -207,8 +267,8 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
         ));
     }
 
-    // Write the file
-    match std::fs::write(&path, &form.content) {
+    // Write the file using canonical path to prevent symlink attacks
+    match std::fs::write(&canonical_path, &form.content) {
         Ok(_) => Html(format!(
             r#"
             <div class="save-success">
@@ -216,7 +276,7 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
                 <p>Configuration saved to {}</p>
             </div>
         "#,
-            html_escape(&path.display().to_string())
+            html_escape(&canonical_path.display().to_string())
         )),
         Err(e) => Html(format!(
             r#"
