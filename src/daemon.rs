@@ -62,6 +62,8 @@ pub struct Daemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cron_retrigger: Option<CronRetrigger>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_cron_triggered: Option<chrono::DateTime<chrono::Local>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub last_exit_success: Option<bool>,
     #[serde(default)]
     pub retry: u32,
