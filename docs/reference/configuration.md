@@ -52,12 +52,20 @@ run = "npm run server"
 
 ### `retry`
 
-Number of retry attempts on failure. Default: `0`
+Number of retry attempts on failure, or `true` for infinite retries. Default: `0`
+
+- A number (e.g., `3`) means retry that many times
+- `true` means retry indefinitely
+- `false` or `0` means no retries
 
 ```toml
 [daemons.api]
 run = "npm run server"
-retry = 3
+retry = 3  # Retry up to 3 times
+
+[daemons.critical]
+run = "npm run worker"
+retry = true  # Retry forever
 ```
 
 ### `auto`

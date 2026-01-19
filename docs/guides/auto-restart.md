@@ -14,6 +14,18 @@ retry = 3  # Retry up to 3 times on failure
 
 This tells pitchfork to retry up to 3 times if the daemon exits with an error. Total attempts: 4 (1 initial + 3 retries).
 
+## Infinite Retries
+
+Use `retry = true` for daemons that should always restart:
+
+```toml
+[daemons.critical-worker]
+run = "npm run worker"
+retry = true  # Retry forever until manually stopped
+```
+
+This is useful for critical services that must stay running.
+
 ## CLI Override
 
 Override retry behavior from the command line:

@@ -35,7 +35,7 @@ retry = 3
 
     let daemon = pt.daemons.get("test_daemon").unwrap();
     assert_eq!(daemon.run, "echo 'hello world'");
-    assert_eq!(daemon.retry, 3);
+    assert_eq!(daemon.retry.count(), 3);
 
     Ok(())
 }
@@ -71,7 +71,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             run: "echo 'test'".to_string(),
             auto: vec![],
             cron: None,
-            retry: 5,
+            retry: pitchfork_toml::Retry::from(5),
             ready_delay: None,
             ready_output: None,
             ready_http: None,
@@ -197,7 +197,7 @@ auto = ["start", "stop"]
     assert!(pt.daemons.contains_key("daemon2"));
     assert!(pt.daemons.contains_key("daemon3"));
 
-    assert_eq!(pt.daemons.get("daemon2").unwrap().retry, 10);
+    assert_eq!(pt.daemons.get("daemon2").unwrap().retry.count(), 10);
     assert_eq!(pt.daemons.get("daemon3").unwrap().auto.len(), 2);
 
     Ok(())
@@ -308,7 +308,7 @@ retry = 15
     // Verify that project config overrides user and system
     let shared = merged.daemons.get("shared_daemon").unwrap();
     assert_eq!(shared.run, "echo 'from project'");
-    assert_eq!(shared.retry, 15);
+    assert_eq!(shared.retry.count(), 15);
 
     Ok(())
 }
@@ -343,7 +343,7 @@ retry = 5
     assert_eq!(merged.daemons.len(), 1);
     let web = merged.daemons.get("web").unwrap();
     assert_eq!(web.run, "python -m http.server 9000");
-    assert_eq!(web.retry, 5);
+    assert_eq!(web.retry.count(), 5);
 
     Ok(())
 }
@@ -401,7 +401,7 @@ ready_output = "ready to accept connections"
     assert_eq!(merged.daemons.len(), 1);
     let db = merged.daemons.get("database").unwrap();
     assert_eq!(db.run, "postgres -D ./data");
-    assert_eq!(db.retry, 10);
+    assert_eq!(db.retry.count(), 10);
     assert_eq!(db.ready_delay, Some(3000));
     assert_eq!(
         db.ready_output,
@@ -561,6 +561,70 @@ depends = []
     let daemon = pt.daemons.get("standalone").unwrap();
 
     assert!(daemon.depends.is_empty());
+
+    Ok(())
+}
+
+/// Test that retry can be a boolean (true = infinite, false = 0)
+#[test]
+fn test_retry_boolean_values() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.infinite_retry]
+run = "echo 'will retry forever'"
+retry = true
+
+[daemons.no_retry]
+run = "echo 'no retry'"
+retry = false
+
+[daemons.numeric_retry]
+run = "echo 'retry 5 times'"
+retry = 5
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+
+    // Test infinite retry (true = u32::MAX)
+    let infinite = pt.daemons.get("infinite_retry").unwrap();
+    assert!(infinite.retry.is_infinite());
+    assert_eq!(infinite.retry.count(), u32::MAX);
+    assert_eq!(infinite.retry.to_string(), "infinite");
+
+    // Test no retry (false = 0)
+    let no_retry = pt.daemons.get("no_retry").unwrap();
+    assert!(!no_retry.retry.is_infinite());
+    assert_eq!(no_retry.retry.count(), 0);
+    assert_eq!(no_retry.retry.to_string(), "0");
+
+    // Test numeric retry
+    let numeric = pt.daemons.get("numeric_retry").unwrap();
+    assert!(!numeric.retry.is_infinite());
+    assert_eq!(numeric.retry.count(), 5);
+    assert_eq!(numeric.retry.to_string(), "5");
+
+    // Test serialization round-trip
+    pt.write()?;
+    let raw = fs::read_to_string(&toml_path).unwrap();
+    // Infinite retry should serialize as `true`
+    assert!(
+        raw.contains("retry = true"),
+        "infinite retry should serialize as 'true'"
+    );
+    // Numeric retry should serialize as number
+    assert!(
+        raw.contains("retry = 5"),
+        "numeric retry should serialize as number"
+    );
+    // Zero retry should serialize as 0
+    assert!(
+        raw.contains("retry = 0") || raw.contains("retry = false"),
+        "zero retry should serialize as 0 or false"
+    );
 
     Ok(())
 }

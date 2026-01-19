@@ -113,7 +113,7 @@ impl Restart {
                         .unwrap_or_default();
                     let cron_schedule = d.cron.as_ref().map(|c| c.schedule.clone());
                     let cron_retrigger = d.cron.as_ref().map(|c| c.retrigger);
-                    let retry = d.retry;
+                    let retry = d.retry.count();
                     let ready_delay = d.ready_delay;
                     let ready_output = d.ready_output.clone();
                     let ready_http = d.ready_http.clone();

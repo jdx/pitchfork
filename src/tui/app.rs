@@ -773,7 +773,7 @@ impl App {
             autostop: false,
             cron_schedule,
             cron_retrigger,
-            retry: daemon_config.retry,
+            retry: daemon_config.retry.count(),
             retry_count: 0,
             ready_delay: daemon_config.ready_delay,
             ready_output: daemon_config.ready_output.clone(),

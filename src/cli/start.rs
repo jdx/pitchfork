@@ -224,7 +224,7 @@ impl Start {
             .unwrap_or_default();
         let cron_schedule = daemon_config.cron.as_ref().map(|c| c.schedule.clone());
         let cron_retrigger = daemon_config.cron.as_ref().map(|c| c.retrigger);
-        let retry = daemon_config.retry;
+        let retry = daemon_config.retry.count();
         let ready_delay = daemon_config.ready_delay;
         let ready_output = daemon_config.ready_output.clone();
         let ready_http = daemon_config.ready_http.clone();

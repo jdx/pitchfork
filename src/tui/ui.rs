@@ -1323,11 +1323,15 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
             ]));
         }
 
-        if cfg.retry > 0 {
+        if cfg.retry.count() > 0 {
             lines.push(Line::from(vec![
                 Span::styled("Retry: ", Style::default().fg(GRAY)),
                 Span::styled(cfg.retry.to_string(), Style::default().fg(Color::White)),
-                Span::raw(" attempts"),
+                if cfg.retry.is_infinite() {
+                    Span::raw("")
+                } else {
+                    Span::raw(" attempts")
+                },
             ]));
         }
 

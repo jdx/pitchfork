@@ -416,7 +416,7 @@ impl Supervisor {
                 autostop: false, // Boot daemons should not autostop
                 cron_schedule: daemon.cron.as_ref().map(|c| c.schedule.clone()),
                 cron_retrigger: daemon.cron.as_ref().map(|c| c.retrigger),
-                retry: daemon.retry,
+                retry: daemon.retry.count(),
                 retry_count: 0,
                 ready_delay: daemon.ready_delay,
                 ready_output: daemon.ready_output.clone(),
@@ -480,7 +480,8 @@ impl Supervisor {
 
         // If wait_ready is true and retry is configured, implement retry loop
         if opts.wait_ready && opts.retry > 0 {
-            let max_attempts = opts.retry + 1; // initial attempt + retries
+            // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
+            let max_attempts = opts.retry.saturating_add(1);
             for attempt in 0..max_attempts {
                 let mut retry_opts = opts.clone();
                 retry_opts.retry_count = attempt;
