@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/jdx/pitchfork/compare/v1.1.0...v1.2.0) - 2026-01-19
+
+### Added
+
+- enhance miette error diagnostics with source highlighting and URLs ([#183](https://github.com/jdx/pitchfork/pull/183))
+- add structured IPC error types with miette diagnostics ([#181](https://github.com/jdx/pitchfork/pull/181))
+- add structured config error types with file path context ([#182](https://github.com/jdx/pitchfork/pull/182))
+- add config editor to TUI for creating and editing daemons ([#171](https://github.com/jdx/pitchfork/pull/171))
+- add custom diagnostic error types with miette ([#180](https://github.com/jdx/pitchfork/pull/180))
+
+### Other
+
+- improve miette error handling adoption ([#177](https://github.com/jdx/pitchfork/pull/177))
+- modularize supervisor.rs into focused submodules ([#175](https://github.com/jdx/pitchfork/pull/175))
+
 ## [1.1.0](https://github.com/jdx/pitchfork/compare/v1.0.2...v1.1.0) - 2026-01-19
 
 ### Added
