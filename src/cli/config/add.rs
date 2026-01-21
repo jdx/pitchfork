@@ -33,6 +33,7 @@ impl Add {
             self.id.clone(),
             PitchforkTomlDaemon {
                 run: shell_words::join(&self.args),
+                dir: None,
                 auto,
                 cron: None,
                 retry: Retry::default(),

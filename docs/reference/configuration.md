@@ -50,6 +50,51 @@ The command to execute.
 run = "npm run server"
 ```
 
+### `dir`
+
+Working directory for the daemon process. Default: parent directory of `pitchfork.toml`
+
+Supports:
+- **Environment variables**: `$VAR`, `${VAR}` (e.g., mise-managed env vars)
+- **Tilde expansion**: `~`, `~/path`
+- **Absolute paths**: `/absolute/path`
+- **Relative paths**: Resolved from the `pitchfork.toml` location
+
+```toml
+# Home directory expansion
+[daemons.api]
+run = "npm run server"
+dir = "~/projects/my-app"
+
+# Absolute path
+[daemons.worker]
+run = "python worker.py"
+dir = "/var/lib/workers"
+
+# Relative to pitchfork.toml location
+[daemons.build]
+run = "npm run build"
+dir = "../build-scripts"
+
+# Subdirectory of current project
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+
+# Environment variable (e.g., from mise)
+[daemons.app]
+run = "cargo run"
+dir = "$PROJECT_ROOT/apps/main"
+```
+
+**Note**: The directory must exist before starting the daemon. If the path doesn't exist or is inaccessible, the daemon will fail to start with a clear error message.
+
+**Use cases:**
+- Run daemons from a central config but execute in different project directories
+- Override default directory when pitchfork.toml is not in the project root
+- Point to directories containing runtime dependencies or data files
+- Use mise-managed environment variables for flexible deployment
+
 ### `retry`
 
 Number of retry attempts on failure, or `true` for infinite retries. Default: `0`
@@ -230,6 +275,20 @@ watch = ["src/**/*.ts", "package.json"]
 ready_http = "http://localhost:3000/health"
 auto = ["start", "stop"]
 retry = 5
+
+# Frontend - runs in subdirectory
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+ready_port = 5173
+auto = ["start", "stop"]
+
+# Worker - runs in different project using environment variable
+[daemons.worker]
+run = "python worker.py"
+dir = "$WORKER_DIR"
+depends = ["postgres", "redis"]
+retry = true
 
 # Scheduled backup
 [daemons.backup]

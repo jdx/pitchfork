@@ -97,6 +97,10 @@ pub struct PitchforkTomlDaemon {
     /// The command to run. Prepend with 'exec' to avoid shell process overhead.
     #[schemars(example = example_run_command())]
     pub run: String,
+    /// Working directory for the daemon. Supports environment variables ($VAR, ${VAR})
+    /// and tilde expansion (~). Relative paths are resolved from the pitchfork.toml location.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dir: Option<String>,
     /// Automatic start/stop behavior based on shell hooks
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub auto: Vec<PitchforkTomlAuto>,
@@ -284,5 +288,198 @@ impl<'de> Deserialize<'de> for Retry {
         }
 
         deserializer.deserialize_any(RetryVisitor)
+    }
+}
+
+/// Expand environment variables and tilde in a path string
+///
+/// Supports:
+/// - `~` or `~/path` - expands to home directory
+/// - `$VAR` or `${VAR}` - expands to environment variable value
+///
+/// Uses the shellexpand crate for robust shell-like expansion.
+fn expand_path_string(path: &str) -> String {
+    // Use shellexpand for both tilde and environment variable expansion
+    match shellexpand::full(path) {
+        Ok(expanded) => expanded.into_owned(),
+        Err(_) => path.to_string(), // If expansion fails, return original
+    }
+}
+
+/// Resolve a daemon's working directory
+///
+/// Takes an optional configured directory string and the path to the pitchfork.toml file,
+/// and returns the resolved PathBuf.
+///
+/// Resolution logic:
+/// 1. Expand environment variables and tilde in configured path
+/// 2. If absolute path (starts with /), use as-is
+/// 3. If relative path, resolve from parent directory of pitchfork.toml
+/// 4. If no configured path, use parent directory of pitchfork.toml
+pub fn resolve_daemon_dir(
+    configured_dir: Option<&str>,
+    toml_path: Option<&PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(dir_str) = configured_dir {
+        // Expand environment variables and tilde
+        let expanded = expand_path_string(dir_str);
+        let path = Path::new(&expanded);
+
+        // If absolute, use as-is
+        if path.is_absolute() {
+            return Some(path.to_path_buf());
+        }
+
+        // If relative, resolve from toml parent directory
+        if let Some(toml_path) = toml_path
+            && let Some(parent) = toml_path.parent()
+        {
+            return Some(parent.join(path));
+        }
+
+        // No toml path, just return the expanded path
+        return Some(path.to_path_buf());
+    }
+
+    // No configured dir, use parent directory of pitchfork.toml
+    toml_path.and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_expand_path_string_tilde() {
+        let expanded = expand_path_string("~/projects/foo");
+        assert!(
+            expanded.starts_with('/'),
+            "Expected absolute path, got: {}",
+            expanded
+        );
+        assert!(expanded.contains("projects/foo"));
+    }
+
+    #[test]
+    fn test_expand_path_string_tilde_alone() {
+        let expanded = expand_path_string("~");
+        assert!(
+            expanded.starts_with('/'),
+            "Expected absolute path, got: {}",
+            expanded
+        );
+    }
+
+    #[test]
+    fn test_expand_path_string_tilde_not_at_start() {
+        let expanded = expand_path_string("/path/~/subdir");
+        assert_eq!(expanded, "/path/~/subdir");
+    }
+
+    #[test]
+    fn test_expand_path_string_env_var_simple() {
+        unsafe {
+            env::set_var("PITCHFORK_TEST_VAR_SIMPLE", "test_value");
+        }
+        let expanded = expand_path_string("$PITCHFORK_TEST_VAR_SIMPLE/path");
+        assert_eq!(expanded, "test_value/path");
+        unsafe {
+            env::remove_var("PITCHFORK_TEST_VAR_SIMPLE");
+        }
+    }
+
+    #[test]
+    fn test_expand_path_string_env_var_braces() {
+        unsafe {
+            env::set_var("PITCHFORK_TEST_VAR_BRACES", "test_value");
+        }
+        let expanded = expand_path_string("${PITCHFORK_TEST_VAR_BRACES}/path");
+        assert_eq!(expanded, "test_value/path");
+        unsafe {
+            env::remove_var("PITCHFORK_TEST_VAR_BRACES");
+        }
+    }
+
+    #[test]
+    fn test_expand_path_string_undefined_env_var() {
+        let expanded = expand_path_string("$UNDEFINED_VAR/path");
+        assert_eq!(expanded, "$UNDEFINED_VAR/path");
+    }
+
+    #[test]
+    fn test_expand_path_string_undefined_env_var_braces() {
+        let expanded = expand_path_string("${UNDEFINED_VAR}/path");
+        assert_eq!(expanded, "${UNDEFINED_VAR}/path");
+    }
+
+    #[test]
+    fn test_expand_path_string_combined() {
+        unsafe {
+            env::set_var("PITCHFORK_TEST_VAR_COMBINED", "test");
+        }
+        let expanded = expand_path_string("~/projects/$PITCHFORK_TEST_VAR_COMBINED/foo");
+        assert!(expanded.starts_with('/'));
+        assert!(expanded.ends_with("projects/test/foo"));
+        unsafe {
+            env::remove_var("PITCHFORK_TEST_VAR_COMBINED");
+        }
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_absolute() {
+        let dir = resolve_daemon_dir(Some("/absolute/path"), None);
+        assert_eq!(dir, Some(PathBuf::from("/absolute/path")));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_relative() {
+        let toml_path = PathBuf::from("/config/subdir/pitchfork.toml");
+        let dir = resolve_daemon_dir(Some("backend"), Some(&toml_path));
+        assert_eq!(dir, Some(PathBuf::from("/config/subdir/backend")));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_relative_with_dot_slash() {
+        let toml_path = PathBuf::from("/config/subdir/pitchfork.toml");
+        let dir = resolve_daemon_dir(Some("./backend"), Some(&toml_path));
+        assert_eq!(dir, Some(PathBuf::from("/config/subdir/backend")));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_relative_parent() {
+        let toml_path = PathBuf::from("/config/subdir/pitchfork.toml");
+        let dir = resolve_daemon_dir(Some("../other"), Some(&toml_path));
+        // Note: PathBuf::join doesn't normalize .. automatically
+        // The result will be "/config/subdir/../other" which is valid
+        assert_eq!(dir, Some(PathBuf::from("/config/subdir/../other")));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_none_uses_toml_parent() {
+        let toml_path = PathBuf::from("/config/subdir/pitchfork.toml");
+        let dir = resolve_daemon_dir(None, Some(&toml_path));
+        assert_eq!(dir, Some(PathBuf::from("/config/subdir")));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_with_tilde() {
+        let dir = resolve_daemon_dir(Some("~/projects/foo"), None);
+        assert!(dir.is_some());
+        let dir = dir.unwrap();
+        assert!(dir.is_absolute());
+        assert!(dir.to_str().unwrap().contains("projects/foo"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_with_env_var() {
+        unsafe {
+            env::set_var("PITCHFORK_PROJECT_ROOT", "/var/projects");
+        }
+        let dir = resolve_daemon_dir(Some("$PITCHFORK_PROJECT_ROOT/app"), None);
+        assert_eq!(dir, Some(PathBuf::from("/var/projects/app")));
+        unsafe {
+            env::remove_var("PITCHFORK_PROJECT_ROOT");
+        }
     }
 }

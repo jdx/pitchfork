@@ -471,6 +471,7 @@ impl EditorState {
     pub fn to_daemon_config(&self) -> PitchforkTomlDaemon {
         let mut config = PitchforkTomlDaemon {
             run: String::new(),
+            dir: None,
             auto: vec![],
             cron: None,
             retry: Retry(0),

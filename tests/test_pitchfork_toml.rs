@@ -69,6 +69,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
         "test_daemon".to_string(),
         pitchfork_toml::PitchforkTomlDaemon {
             run: "echo 'test'".to_string(),
+            dir: None,
             auto: vec![],
             cron: None,
             retry: pitchfork_toml::Retry::from(5),

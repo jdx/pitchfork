@@ -145,6 +145,7 @@ mod tests {
     fn make_daemon(depends: Vec<&str>) -> PitchforkTomlDaemon {
         PitchforkTomlDaemon {
             run: "echo test".to_string(),
+            dir: None,
             auto: vec![],
             cron: None,
             retry: Retry::default(),
