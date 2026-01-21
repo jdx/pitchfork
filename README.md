@@ -2,7 +2,7 @@
 
 <h1 align="center">
   <a href="https://pitchfork.jdx.dev">
-    <img src="logo.png" alt="pitchfork" width="256" height="256" />
+    <img src="docs/public/img/logo.png" alt="pitchfork" width="256" height="256" />
     <br>
     pitchfork
   </a>
