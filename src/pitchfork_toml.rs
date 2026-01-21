@@ -302,7 +302,14 @@ fn expand_path_string(path: &str) -> String {
     // Use shellexpand for both tilde and environment variable expansion
     match shellexpand::full(path) {
         Ok(expanded) => expanded.into_owned(),
-        Err(_) => path.to_string(), // If expansion fails, return original
+        Err(err) => {
+            // Provide a clearer diagnostic when expansion fails (e.g., undefined $VAR)
+            eprintln!(
+                "Warning: failed to expand environment variables in path '{}': {}. Using literal value.",
+                path, err
+            );
+            path.to_string()
+        }
     }
 }
 
@@ -378,6 +385,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_expand_path_string_env_var_simple() {
         unsafe {
             env::set_var("PITCHFORK_TEST_VAR_SIMPLE", "test_value");
@@ -390,6 +398,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_expand_path_string_env_var_braces() {
         unsafe {
             env::set_var("PITCHFORK_TEST_VAR_BRACES", "test_value");
@@ -414,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_expand_path_string_combined() {
         unsafe {
             env::set_var("PITCHFORK_TEST_VAR_COMBINED", "test");
@@ -472,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_resolve_daemon_dir_with_env_var() {
         unsafe {
             env::set_var("PITCHFORK_PROJECT_ROOT", "/var/projects");

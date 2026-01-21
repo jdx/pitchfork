@@ -4,6 +4,7 @@ use crate::env::PITCHFORK_LOGS_DIR;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon, Retry,
+    resolve_daemon_dir,
 };
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
@@ -369,6 +370,11 @@ impl EditorState {
                 "Command to execute. Prepend 'exec' to avoid shell overhead.",
                 true,
             ),
+            FormField::optional_text(
+                "dir",
+                "Working Directory",
+                "Custom working directory for daemon (supports ~, $VAR, absolute, relative).",
+            ),
             FormField::auto_behavior(
                 "auto",
                 "Auto Behavior",
@@ -434,6 +440,7 @@ impl EditorState {
         for field in &mut fields {
             match field.name {
                 "run" => field.value = FormFieldValue::Text(config.run.clone()),
+                "dir" => field.value = FormFieldValue::OptionalText(config.dir.clone()),
                 "auto" => field.value = FormFieldValue::AutoBehavior(config.auto.clone()),
                 "retry" => field.value = FormFieldValue::Number(config.retry.count()),
                 "ready_delay" => field.value = FormFieldValue::OptionalNumber(config.ready_delay),
@@ -491,6 +498,7 @@ impl EditorState {
         for field in &self.fields {
             match (field.name, &field.value) {
                 ("run", FormFieldValue::Text(s)) => config.run = s.clone(),
+                ("dir", FormFieldValue::OptionalText(s)) => config.dir = s.clone(),
                 ("auto", FormFieldValue::AutoBehavior(v)) => config.auto = v.clone(),
                 ("retry", FormFieldValue::Number(n)) => config.retry = Retry(*n),
                 ("ready_delay", FormFieldValue::OptionalNumber(n)) => config.ready_delay = *n,
@@ -1411,12 +1419,15 @@ impl App {
             .map(|c| (Some(c.schedule.clone()), Some(c.retrigger)))
             .unwrap_or((None, None));
 
+        let dir = resolve_daemon_dir(daemon_config.dir.as_deref(), daemon_config.path.as_ref())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
         let opts = RunOptions {
             id: daemon_id.to_string(),
             cmd,
             force: false,
             shell_pid: None,
-            dir: std::env::current_dir().unwrap_or_default(),
+            dir,
             autostop: false,
             cron_schedule,
             cron_retrigger,

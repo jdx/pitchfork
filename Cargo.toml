@@ -75,4 +75,5 @@ exec = "0.3"
 libc = "0.2"
 
 [dev-dependencies]
+serial_test = "3.3.1"
 tempfile = "3"
