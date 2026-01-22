@@ -29,6 +29,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_output: Option<String>,
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
+    pub ready_cmd: Option<String>,
     pub depends: Option<Vec<String>>,
 }
 
@@ -50,6 +51,7 @@ impl Default for UpsertDaemonOpts {
             ready_output: None,
             ready_http: None,
             ready_port: None,
+            ready_cmd: None,
             depends: None,
         }
     }
@@ -96,6 +98,9 @@ impl Supervisor {
                 .ready_http
                 .or(existing.and_then(|d| d.ready_http.clone())),
             ready_port: opts.ready_port.or(existing.and_then(|d| d.ready_port)),
+            ready_cmd: opts
+                .ready_cmd
+                .or(existing.and_then(|d| d.ready_cmd.clone())),
             depends: opts
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),

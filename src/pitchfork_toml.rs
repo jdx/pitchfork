@@ -120,6 +120,9 @@ pub struct PitchforkTomlDaemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[schemars(range(min = 1, max = 65535))]
     pub ready_port: Option<u16>,
+    /// Shell command to poll for readiness (exit code 0 = ready)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ready_cmd: Option<String>,
     /// Whether to start this daemon automatically on system boot
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,

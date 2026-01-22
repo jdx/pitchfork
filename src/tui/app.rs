@@ -478,6 +478,7 @@ impl EditorState {
             ready_output: None,
             ready_http: None,
             ready_port: None,
+            ready_cmd: None,
             boot_start: None,
             depends: vec![],
             watch: vec![],
@@ -1174,6 +1175,7 @@ impl App {
                         ready_output: None,
                         ready_http: None,
                         ready_port: None,
+                        ready_cmd: None,
                         depends: vec![],
                     };
                     self.daemons.push(placeholder);
@@ -1425,6 +1427,7 @@ impl App {
             ready_output: daemon_config.ready_output.clone(),
             ready_http: daemon_config.ready_http.clone(),
             ready_port: daemon_config.ready_port,
+            ready_cmd: daemon_config.ready_cmd.clone(),
             wait_ready: false,
             depends: daemon_config.depends.clone(),
         };

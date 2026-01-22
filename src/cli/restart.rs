@@ -118,6 +118,7 @@ impl Restart {
                     let ready_output = d.ready_output.clone();
                     let ready_http = d.ready_http.clone();
                     let ready_port = d.ready_port;
+                    let ready_cmd = d.ready_cmd.clone();
                     let depends = d.depends.clone();
 
                     (
@@ -131,6 +132,7 @@ impl Restart {
                         ready_output,
                         ready_http,
                         ready_port,
+                        ready_cmd,
                         depends,
                     )
                 }
@@ -151,6 +153,7 @@ impl Restart {
                 ready_output,
                 ready_http,
                 ready_port,
+                ready_cmd,
                 depends,
             ) = daemon_data;
 
@@ -183,6 +186,7 @@ impl Restart {
                         ready_output,
                         ready_http,
                         ready_port,
+                        ready_cmd,
                         wait_ready: true,
                         depends,
                     })

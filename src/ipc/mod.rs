@@ -23,6 +23,7 @@ pub(crate) mod server;
 // }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
+#[allow(clippy::large_enum_variant)]
 pub enum IpcRequest {
     Connect,
     Clean,

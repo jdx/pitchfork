@@ -76,6 +76,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             ready_output: None,
             ready_http: None,
             ready_port: None,
+            ready_cmd: None,
             boot_start: None,
             depends: vec![],
             watch: vec![],
@@ -157,6 +158,9 @@ fn test_daemon_with_ready_checks() -> Result<()> {
 run = "echo 'server starting'"
 ready_delay = 5000
 ready_output = "Server is ready"
+ready_http = "http://localhost:8080/health"
+ready_port = 8080
+ready_cmd = "test -f /tmp/ready"
 "#;
 
     fs::write(&toml_path, toml_content).unwrap();
@@ -166,6 +170,12 @@ ready_output = "Server is ready"
 
     assert_eq!(daemon.ready_delay, Some(5000));
     assert_eq!(daemon.ready_output, Some("Server is ready".to_string()));
+    assert_eq!(
+        daemon.ready_http,
+        Some("http://localhost:8080/health".to_string())
+    );
+    assert_eq!(daemon.ready_port, Some(8080));
+    assert_eq!(daemon.ready_cmd, Some("test -f /tmp/ready".to_string()));
 
     Ok(())
 }
