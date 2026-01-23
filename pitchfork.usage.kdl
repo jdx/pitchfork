@@ -104,6 +104,9 @@ cmd run help="Runs a one-off daemon" {
     flag --port help="Wait until TCP port is listening before considering daemon ready" {
         arg <PORT>
     }
+    flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
+        arg <CMD>
+    }
     flag "-q --quiet" help="Suppress startup log output"
     arg <ID> help="Name of the daemon to run"
     arg "[-- RUN]…" help="Command and arguments to run (after --)" required=#false var=#true
@@ -128,6 +131,9 @@ cmd start help="Starts a daemon from a pitchfork.toml file" {
     }
     flag --port help="Wait until TCP port is listening before considering daemon ready" {
         arg <PORT>
+    }
+    flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
+        arg <CMD>
     }
     flag "-q --quiet" help="Suppress startup log output"
     arg "[ID]…" help="ID of the daemon(s) in pitchfork.toml to start" required=#false var=#true

@@ -710,6 +710,25 @@
             }
           },
           {
+            "name": "cmd",
+            "usage": "--cmd <CMD>",
+            "help": "Shell command to poll for readiness (exit code 0 = ready)",
+            "help_first_line": "Shell command to poll for readiness (exit code 0 = ready)",
+            "short": [],
+            "long": [
+              "cmd"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "CMD",
+              "usage": "<CMD>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "quiet",
             "usage": "-q --quiet",
             "help": "Suppress startup log output",
@@ -886,6 +905,25 @@
             "arg": {
               "name": "PORT",
               "usage": "<PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "cmd",
+            "usage": "--cmd <CMD>",
+            "help": "Shell command to poll for readiness (exit code 0 = ready)",
+            "help_first_line": "Shell command to poll for readiness (exit code 0 = ready)",
+            "short": [],
+            "long": [
+              "cmd"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "CMD",
+              "usage": "<CMD>",
               "required": true,
               "double_dash": "Optional",
               "hide": false

@@ -118,6 +118,20 @@ run = "npm run server"
 ready_port = 3000
 ```
 
+### `ready_cmd`
+
+Shell command to poll for readiness. Daemon is ready when command exits with code 0.
+
+```toml
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+ready_cmd = "pg_isready -h localhost"
+
+[daemons.redis]
+run = "redis-server"
+ready_cmd = "redis-cli ping"
+```
+
 ### `depends`
 
 List of daemon names that must be started before this daemon. When you start a daemon, its dependencies are automatically started first in the correct order.
