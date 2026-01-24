@@ -68,10 +68,12 @@ crossterm = "0.28"
 fuzzy-matcher = "0.3.7"
 glob = "0.3"
 globset = "0.4"
+shellexpand = "3.1.1"
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"
 libc = "0.2"
 
 [dev-dependencies]
+serial_test = "3.3.1"
 tempfile = "3"

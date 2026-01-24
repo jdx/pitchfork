@@ -68,12 +68,27 @@ impl Supervisor {
                         continue;
                     }
                 };
+
+                // Re-resolve directory from config to handle config changes
+                let dir = {
+                    let pt = crate::pitchfork_toml::PitchforkToml::all_merged();
+                    if let Some(daemon_config) = pt.daemons.get(&id) {
+                        crate::pitchfork_toml::resolve_daemon_dir(
+                            daemon_config.dir.as_deref(),
+                            daemon_config.path.as_ref(),
+                        )
+                        .unwrap_or_else(|| env::CWD.clone())
+                    } else {
+                        daemon.dir.unwrap_or_else(|| env::CWD.clone())
+                    }
+                };
+
                 let retry_opts = RunOptions {
                     id: id.clone(),
                     cmd,
                     force: false,
                     shell_pid: daemon.shell_pid,
-                    dir: daemon.dir.unwrap_or_else(|| env::CWD.clone()),
+                    dir,
                     autostop: daemon.autostop,
                     cron_schedule: daemon.cron_schedule,
                     cron_retrigger: daemon.cron_retrigger,

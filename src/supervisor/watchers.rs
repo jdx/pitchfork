@@ -142,7 +142,20 @@ impl Supervisor {
                                     continue;
                                 }
                             };
-                            let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+
+                            // Re-resolve directory from config to handle config changes
+                            let dir = {
+                                let pt = crate::pitchfork_toml::PitchforkToml::all_merged();
+                                if let Some(daemon_config) = pt.daemons.get(&id) {
+                                    crate::pitchfork_toml::resolve_daemon_dir(
+                                        daemon_config.dir.as_deref(),
+                                        daemon_config.path.as_ref(),
+                                    )
+                                    .unwrap_or_else(|| env::CWD.clone())
+                                } else {
+                                    daemon.dir.clone().unwrap_or_else(|| env::CWD.clone())
+                                }
+                            };
                             // Use force: true for Always retrigger to ensure restart
                             let force =
                                 matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
@@ -314,12 +327,11 @@ impl Supervisor {
             return Ok(());
         };
 
-        let dir = daemon_config
-            .path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| env::CWD.clone());
+        let dir = crate::pitchfork_toml::resolve_daemon_dir(
+            daemon_config.dir.as_deref(),
+            daemon_config.path.as_ref(),
+        )
+        .unwrap_or_else(|| env::CWD.clone());
 
         let cmd = match shell_words::split(&daemon_config.run) {
             Ok(cmd) => cmd,

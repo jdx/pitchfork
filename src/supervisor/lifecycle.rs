@@ -135,6 +135,26 @@ impl Supervisor {
         if let Some(parent) = log_path.parent() {
             xx::file::mkdirp(parent)?;
         }
+
+        // Validate working directory exists and is accessible
+        // Only validate non-empty paths (empty PathBuf means current directory)
+        if !opts.dir.as_os_str().is_empty() {
+            if !opts.dir.exists() {
+                return Ok(IpcResponse::DaemonFailed {
+                    error: format!(
+                        "Working directory does not exist: {}. Create the directory or check your 'dir' configuration.",
+                        opts.dir.display()
+                    ),
+                });
+            }
+
+            if !opts.dir.is_dir() {
+                return Ok(IpcResponse::DaemonFailed {
+                    error: format!("Path is not a directory: {}", opts.dir.display()),
+                });
+            }
+        }
+
         info!("run: spawning daemon {id} with args: {args:?}");
         let mut cmd = tokio::process::Command::new("sh");
         cmd.args(&args)

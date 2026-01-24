@@ -113,6 +113,13 @@
             "type": "string"
           }
         },
+        "dir": {
+          "description": "Working directory for the daemon. Supports environment variables ($VAR, ${VAR})\nand tilde expansion (~). Relative paths are resolved from the pitchfork.toml location.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ready_delay": {
           "description": "Delay in milliseconds before considering the daemon ready",
           "type": [

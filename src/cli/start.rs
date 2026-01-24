@@ -2,6 +2,7 @@ use crate::Result;
 use crate::cli::logs::print_startup_logs;
 use crate::daemon::RunOptions;
 use crate::deps::resolve_dependencies;
+use crate::env;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
 use chrono::{DateTime, Local};
@@ -216,12 +217,11 @@ impl Start {
         let auto_stop = daemon_config
             .auto
             .contains(&crate::pitchfork_toml::PitchforkTomlAuto::Stop);
-        let dir = daemon_config
-            .path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
+        let dir = crate::pitchfork_toml::resolve_daemon_dir(
+            daemon_config.dir.as_deref(),
+            daemon_config.path.as_ref(),
+        )
+        .unwrap_or_else(|| env::CWD.clone());
         let cron_schedule = daemon_config.cron.as_ref().map(|c| c.schedule.clone());
         let cron_retrigger = daemon_config.cron.as_ref().map(|c| c.retrigger);
         let retry = daemon_config.retry.count();
