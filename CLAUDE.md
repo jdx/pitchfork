@@ -79,3 +79,36 @@ Configs merge in order (later overrides earlier):
 - **Serialization**: Heavy use of serde with TOML for config/state, MessagePack for IPC
 - **File locking**: Always lock state file for concurrent access (`xx::fslock`)
 - **Daemon commands**: Prepend `exec` to eliminate shell process overhead
+
+## Conventional Commits
+
+All commit messages and PR titles MUST follow conventional commit format:
+
+**Format:** `<type>(<scope>): <description>`
+
+**Types:**
+- `feat:` - New features
+- `fix:` - Bug fixes
+- `refactor:` - Code refactoring
+- `docs:` - Documentation changes
+- `style:` - Code style/formatting (no logic changes)
+- `perf:` - Performance improvements
+- `test:` - Testing changes
+- `chore:` - Maintenance tasks, releases, dependency updates
+- `security:` - Security-related changes
+
+**Scopes:**
+- For command-specific changes, use the command name: `start`, `stop`, `status`, `logs`, `run`, etc.
+- For subsystem changes: `supervisor`, `ipc`, `config`, `state`, `daemon`, `cron`, `deps`
+
+**Description Style:**
+- Use lowercase after the colon
+- Use imperative mood ("add feature" not "added feature")
+- Keep it concise but descriptive
+
+**Examples:**
+- `fix(supervisor): handle graceful shutdown on SIGTERM`
+- `feat(start): add --restart-policy flag`
+- `feat(cron): support timezone-aware scheduling`
+- `docs: update configuration examples`
+- `chore: release 0.2.0`
