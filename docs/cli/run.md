@@ -63,6 +63,10 @@ Wait until HTTP endpoint returns 2xx status before considering daemon ready
 
 Wait until TCP port is listening before considering daemon ready
 
+### `--cmd <CMD>`
+
+Shell command to poll for readiness (exit code 0 = ready)
+
 ### `-q --quiet`
 
 Suppress startup log output

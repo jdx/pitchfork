@@ -56,6 +56,9 @@ pub struct Start {
     /// Wait until TCP port is listening before considering daemon ready
     #[clap(long)]
     port: Option<u16>,
+    /// Shell command to poll for readiness (exit code 0 = ready)
+    #[clap(long)]
+    cmd: Option<String>,
     /// Suppress startup log output
     #[clap(short, long)]
     quiet: bool,
@@ -229,6 +232,7 @@ impl Start {
         let ready_output = daemon_config.ready_output.clone();
         let ready_http = daemon_config.ready_http.clone();
         let ready_port = daemon_config.ready_port;
+        let ready_cmd = daemon_config.ready_cmd.clone();
         let depends = daemon_config.depends.clone();
 
         let ipc_clone = ipc.clone();
@@ -239,6 +243,7 @@ impl Start {
         let output = self.output.clone();
         let http = self.http.clone();
         let port = self.port;
+        let cmd_override = self.cmd.clone();
 
         tokio::spawn(async move {
             let cmd = match shell_words::split(&run) {
@@ -267,6 +272,7 @@ impl Start {
                     ready_output: output.or(ready_output),
                     ready_http: http.or(ready_http),
                     ready_port: port.or(ready_port),
+                    ready_cmd: cmd_override.or(ready_cmd),
                     wait_ready: true,
                     depends,
                 })

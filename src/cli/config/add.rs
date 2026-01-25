@@ -40,6 +40,7 @@ impl Add {
                 ready_output: None,
                 ready_http: None,
                 ready_port: None,
+                ready_cmd: None,
                 boot_start: None,
                 depends: vec![],
                 watch: vec![],

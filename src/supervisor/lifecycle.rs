@@ -7,6 +7,7 @@ use crate::daemon::RunOptions;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
+use crate::shell::Shell;
 use crate::{Result, env};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
@@ -176,6 +177,7 @@ impl Supervisor {
                 ready_output: opts.ready_output.clone(),
                 ready_http: opts.ready_http.clone(),
                 ready_port: opts.ready_port,
+                ready_cmd: opts.ready_cmd.clone(),
                 depends: Some(opts.depends.clone()),
             })
             .await?;
@@ -185,6 +187,7 @@ impl Supervisor {
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
         let ready_port = opts.ready_port;
+        let ready_cmd = opts.ready_cmd.clone();
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -243,6 +246,11 @@ impl Supervisor {
             // Setup TCP port readiness check interval (poll every 500ms)
             let mut port_check_interval =
                 ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
+
+            // Setup command readiness check interval (poll every 500ms)
+            let mut cmd_check_interval = ready_cmd
+                .as_ref()
+                .map(|_| tokio::time::interval(Duration::from_millis(500)));
 
             // Setup periodic log flush interval (every 500ms - balances I/O reduction with responsiveness)
             let mut log_flush_interval = tokio::time::interval(Duration::from_millis(500));
@@ -394,13 +402,47 @@ impl Supervisor {
                         }
                     }
                     _ = async {
+                        if let Some(ref mut interval) = cmd_check_interval {
+                            interval.tick().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_cmd.is_some() => {
+                        if let Some(ref cmd) = ready_cmd {
+                            // Run the readiness check command using the shell abstraction
+                            let mut command = Shell::default_for_platform().command(cmd);
+                            command
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null());
+                            let result: std::io::Result<std::process::ExitStatus> = command.status().await;
+                            match result {
+                                Ok(status) if status.success() => {
+                                    info!("daemon {id} ready: readiness command succeeded");
+                                    ready_notified = true;
+                                    let _ = log_appender.flush().await;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    // Stop checking once ready
+                                    cmd_check_interval = None;
+                                }
+                                Ok(_) => {
+                                    trace!("daemon {id} cmd check: command returned non-zero (not ready)");
+                                }
+                                Err(e) => {
+                                    trace!("daemon {id} cmd check failed: {e}");
+                                }
+                            }
+                        }
+                    }
+                    _ = async {
                         if let Some(ref mut timer) = delay_timer {
                             timer.await;
                         } else {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() {
+                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
                             // Flush logs before notifying so clients see logs immediately

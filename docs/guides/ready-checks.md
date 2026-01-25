@@ -102,6 +102,33 @@ ready_port = 5432
 The port check polls every 500ms by attempting a TCP connection to 127.0.0.1:port.
 :::
 
+## Command Check
+
+Wait until a shell command returns exit code 0.
+
+**CLI:**
+```bash
+pitchfork run myapp --cmd "pg_isready -h localhost" -- node server.js
+pitchfork start myapp --cmd "curl -sf http://localhost:3000/health"
+```
+
+**Config:**
+```toml
+[daemons.api]
+run = "node server.js"
+ready_cmd = "curl -sf http://localhost:3000/health"
+
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+ready_cmd = "pg_isready -h localhost"
+```
+
+**Best for:** Services that require custom readiness logic or external tools.
+
+::: tip
+The command check polls every 500ms. Use this when you need more complex readiness checks than the built-in options provide.
+:::
+
 ## Behaviors
 
 | Check Type | Ready When |
@@ -110,6 +137,7 @@ The port check polls every 500ms by attempting a TCP connection to 127.0.0.1:por
 | Output | Pattern matches stdout/stderr |
 | HTTP | Endpoint returns 2xx status |
 | Port | TCP connection to port succeeds |
+| Command | Shell command returns exit code 0 |
 
 - If multiple checks are configured, the first one to succeed marks the daemon as ready
 - If the daemon exits with a non-zero code before becoming ready, `pitchfork start/run` exits with that same code
@@ -142,4 +170,25 @@ ready_http = "http://localhost:3000/health"
 [daemons.api]
 run = "uvicorn main:app"
 ready_http = "http://localhost:8000/health"
+```
+
+**PostgreSQL (using pg_isready):**
+```toml
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+ready_cmd = "pg_isready -h localhost"
+```
+
+**Redis (using redis-cli):**
+```toml
+[daemons.redis]
+run = "redis-server"
+ready_cmd = "redis-cli ping"
+```
+
+**File-based readiness:**
+```toml
+[daemons.worker]
+run = "./start-worker.sh"
+ready_cmd = "test -f /tmp/worker.ready"
 ```

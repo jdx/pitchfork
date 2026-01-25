@@ -161,6 +161,7 @@ impl Supervisor {
                                 ready_output: daemon.ready_output.clone(),
                                 ready_http: daemon.ready_http.clone(),
                                 ready_port: daemon.ready_port,
+                                ready_cmd: daemon.ready_cmd.clone(),
                                 wait_ready: false,
                                 depends: daemon.depends.clone(),
                             };
@@ -355,6 +356,7 @@ impl Supervisor {
             ready_output: daemon_config.ready_output.clone(),
             ready_http: daemon_config.ready_http.clone(),
             ready_port: daemon_config.ready_port,
+            ready_cmd: daemon_config.ready_cmd.clone(),
             wait_ready: false, // Don't block on file-triggered restarts
             depends: daemon_config.depends.clone(),
         };

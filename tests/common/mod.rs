@@ -183,6 +183,11 @@ impl TestEnv {
         other_dir
     }
 
+    /// Get a path for a marker file in the temp directory
+    pub fn marker_path(&self, name: &str) -> PathBuf {
+        self.temp_dir.path().join(format!("{name}_marker"))
+    }
+
     /// Get daemon status by running `pitchfork status <id>`
     #[allow(dead_code)]
     pub fn get_daemon_status(&self, daemon_id: &str) -> Option<String> {

@@ -56,6 +56,9 @@ pub struct Run {
     /// Wait until TCP port is listening before considering daemon ready
     #[clap(long)]
     port: Option<u16>,
+    /// Shell command to poll for readiness (exit code 0 = ready)
+    #[clap(long)]
+    cmd: Option<String>,
     /// Suppress startup log output
     #[clap(short, long)]
     quiet: bool,
@@ -86,6 +89,7 @@ impl Run {
                 ready_output: self.output.clone(),
                 ready_http: self.http.clone(),
                 ready_port: self.port,
+                ready_cmd: self.cmd.clone(),
                 wait_ready: true,
                 depends: vec![],
             })

@@ -961,3 +961,64 @@ ready_port = 18082
     // Clean up
     env.run_command(&["stop", "port_test"]);
 }
+
+/// Test ready_cmd check - waits for a command to return exit code 0
+#[test]
+fn test_ready_cmd_check() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Create a unique marker file path for this test
+    let marker_file = env.marker_path("ready");
+    let marker_path = marker_file.display().to_string();
+
+    // Daemon creates a marker file after 1 second delay, then sleeps
+    let toml_content = format!(
+        r#"
+[daemons.cmd_test]
+run = "bash -c 'echo Starting; sleep 1; touch {}; echo Ready; sleep 60'"
+ready_cmd = "test -f {}"
+"#,
+        marker_path, marker_path
+    );
+    env.create_toml(&toml_content);
+
+    let start_time = std::time::Instant::now();
+    let output = env.run_command(&["start", "cmd_test"]);
+    let elapsed = start_time.elapsed();
+
+    println!("Start took: {:?}", elapsed);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(output.status.success(), "Start command should succeed");
+
+    // Should take at least 1 second (the delay before file is created)
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "Should wait for ready command to succeed"
+    );
+
+    // Should not take too long (less than 10 seconds)
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "Should not take too long to detect ready state"
+    );
+
+    // Verify the marker file exists
+    assert!(marker_file.exists(), "Marker file should have been created");
+
+    // Small delay to let stdout flush to logs
+    env.sleep(Duration::from_millis(100));
+
+    // Verify logs show the daemon started and became ready
+    let logs = env.read_logs("cmd_test");
+    assert!(
+        logs.contains("Starting"),
+        "Logs should contain start message"
+    );
+    assert!(logs.contains("Ready"), "Logs should contain ready message");
+
+    // Clean up
+    env.run_command(&["stop", "cmd_test"]);
+}

@@ -12,6 +12,7 @@ pub mod ipc;
 pub mod logger;
 pub mod pitchfork_toml;
 pub mod procs;
+pub mod shell;
 pub mod state_file;
 pub mod supervisor;
 pub mod tui;
