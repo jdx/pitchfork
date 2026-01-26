@@ -46,7 +46,6 @@ pub enum IpcResponse {
     Notifications(Vec<(log::LevelFilter, String)>),
     ActiveDaemons(Vec<Daemon>),
     DisabledDaemons(Vec<String>),
-    DaemonAlreadyStopped,
     DaemonAlreadyRunning,
     DaemonStart {
         daemon: Daemon,
