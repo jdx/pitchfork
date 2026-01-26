@@ -31,12 +31,14 @@ fn base_html(title: &str, content: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - pitchfork</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand">pitchfork</a>
+        <a href="/" class="nav-brand"><img src="/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
         <div class="nav-links">
             <a href="/">Dashboard</a>
             <a href="/logs">Logs</a>
@@ -46,6 +48,31 @@ fn base_html(title: &str, content: &str) -> String {
     <main>
         {content}
     </main>
+    <script>
+        // Initialize Lucide icons on page load
+        lucide.createIcons();
+        
+        // Re-initialize Lucide icons after HTMX swaps content
+        document.body.addEventListener('htmx:afterSwap', function(evt) {{
+            lucide.createIcons();
+        }});
+        
+        // Optimize HTMX updates to reduce flicker
+        document.body.addEventListener('htmx:beforeSwap', function(evt) {{
+            // Get the new content
+            const newContent = evt.detail.xhr.responseText.trim();
+            const currentContent = evt.detail.target.innerHTML.trim();
+            
+            // Normalize whitespace for comparison
+            const normalize = (str) => str.replace(/\\s+/g, ' ').trim();
+            
+            // Only swap if content actually changed
+            if (normalize(newContent) === normalize(currentContent)) {{
+                evt.detail.shouldSwap = false;
+                evt.preventDefault();
+            }}
+        }});
+    </script>
 </body>
 </html>"#
     )
@@ -90,38 +117,38 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm">Stop</button>
-            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm">Restart</button>
+            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
+            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
         "##
         )
     } else {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+            <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
         "##
         )
     };
 
     let toggle_btn = if is_disabled {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm">Enable</button>"##
+            r##"<button hx-post="/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm">Disable</button>"##
+            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
         )
     };
 
     format!(
-        r#"<tr id="daemon-{safe_id}">
-        <td><a href="/daemons/{url_id}">{safe_id}</a> {disabled_badge}</td>
+        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
+        <td><span class="daemon-name">{safe_id}</span> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td>{cpu_display}</td>
         <td>{mem_display}</td>
         <td>{uptime_display}</td>
         <td class="error-msg">{error_msg}</td>
-        <td class="actions">{actions} {toggle_btn} <a href="/logs/{url_id}" class="btn btn-sm">Logs</a></td>
+        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
     </tr>"#,
         d.status
     )
@@ -156,16 +183,16 @@ async fn list_content() -> String {
         if !state.daemons.contains_key(id) {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
-            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}">
-                <td><a href="/daemons/{url_id}">{safe_id}</a> <span class="badge">not started</span></td>
+            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
+                <td><span class="daemon-name">{safe_id}</span></td>
                 <td>-</td>
-                <td><span class="status stopped">not started</span></td>
+                <td><span class="status stopped">-</span></td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td></td>
-                <td class="actions">
-                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                <td class="actions" onclick="event.stopPropagation()">
+                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
                 </td>
             </tr>"##));
         }
@@ -196,7 +223,7 @@ async fn list_content() -> String {
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML">
+            <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
                 {rows}
             </tbody>
         </table>
@@ -226,16 +253,16 @@ pub async fn list_partial() -> Html<String> {
         if !state.daemons.contains_key(id) {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
-            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}">
-                <td><a href="/daemons/{url_id}">{safe_id}</a> <span class="badge">not started</span></td>
+            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
+                <td><span class="daemon-name">{safe_id}</span></td>
                 <td>-</td>
-                <td><span class="status stopped">not started</span></td>
+                <td><span class="status stopped">-</span></td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td></td>
-                <td class="actions">
-                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary">Start</button>
+                <td class="actions" onclick="event.stopPropagation()">
+                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
                 </td>
             </tr>"##));
         }
@@ -255,6 +282,9 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         return Html(base_html("Error", content));
     }
 
+    // Refresh process info for accurate stats
+    PROCS.refresh_processes();
+
     let safe_id = html_escape(&id);
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
@@ -272,17 +302,118 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             _ => "other",
         };
 
+        // Get extended process info if we have a PID
+        let process_section = if let Some(pid) = d.pid {
+            if let Some(stats) = PROCS.get_extended_stats(pid) {
+                format!(
+                    r#"
+                    <h2>Process Information</h2>
+                    <div class="process-info-grid">
+                        <div class="process-info-card">
+                            <div class="label">CPU Usage</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Memory (RSS)</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Virtual Memory</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Uptime</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Threads</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Disk Read</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Disk Write</div>
+                            <div class="value">{}</div>
+                        </div>
+                        <div class="process-info-card">
+                            <div class="label">Process Status</div>
+                            <div class="value">{}</div>
+                        </div>
+                    </div>
+                    <div class="detail-section">
+                        <dl>
+                            <dt>Process Name</dt><dd><code>{}</code></dd>
+                            <dt>Executable</dt><dd><code>{}</code></dd>
+                            <dt>Working Dir</dt><dd><code>{}</code></dd>
+                            <dt>Start Time</dt><dd>{}</dd>
+                            <dt>Parent PID</dt><dd>{}</dd>
+                            <dt>User</dt><dd>{}</dd>
+                            <dt>Command</dt><dd><code>{}</code></dd>
+                        </dl>
+                    </div>
+                    {}
+                "#,
+                    stats.cpu_display(),
+                    stats.memory_display(),
+                    stats.virtual_memory_display(),
+                    stats.uptime_display(),
+                    stats.thread_count,
+                    stats.disk_read_display(),
+                    stats.disk_write_display(),
+                    html_escape(&stats.status),
+                    html_escape(&stats.name),
+                    html_escape(stats.exe_path.as_deref().unwrap_or("-")),
+                    html_escape(stats.cwd.as_deref().unwrap_or("-")),
+                    stats.start_time_display(),
+                    stats
+                        .parent_pid
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    html_escape(stats.user_id.as_deref().unwrap_or("-")),
+                    html_escape(
+                        &config_info
+                            .map(|c| c.run.clone())
+                            .unwrap_or_else(|| stats.cmd_display())
+                    ),
+                    if !stats.environ.is_empty() {
+                        format!(
+                            r#"<h2>Environment Variables (first 20)</h2>
+                            <div class="detail-section">
+                                <div class="env-list">{}</div>
+                            </div>"#,
+                            stats
+                                .environ
+                                .iter()
+                                .map(|e| format!("<div>{}</div>", html_escape(e)))
+                                .collect::<Vec<_>>()
+                                .join("")
+                        )
+                    } else {
+                        String::new()
+                    }
+                )
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
         let config_section = if let Some(cfg) = config_info {
             format!(
                 r#"
                 <h2>Configuration</h2>
-                <dl>
-                    <dt>Command</dt><dd><code>{}</code></dd>
-                    <dt>Retry</dt><dd>{}</dd>
-                    <dt>Ready Delay</dt><dd>{}</dd>
-                    <dt>Ready Output</dt><dd>{}</dd>
-                    <dt>Ready HTTP</dt><dd>{}</dd>
-                </dl>
+                <div class="detail-section">
+                    <dl>
+                        <dt>Command</dt><dd><code>{}</code></dd>
+                        <dt>Retry</dt><dd>{}</dd>
+                        <dt>Ready Delay</dt><dd>{}</dd>
+                        <dt>Ready Output</dt><dd>{}</dd>
+                        <dt>Ready HTTP</dt><dd>{}</dd>
+                    </dl>
+                </div>
             "#,
                 html_escape(&cfg.run),
                 cfg.retry,
@@ -298,21 +429,28 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 
         format!(
             r#"
-            <h1>Daemon: {safe_id}</h1>
+            <div class="page-header">
+                <div>
+                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{safe_id}</span></h1>
+                </div>
+                <div class="header-actions">
+                    <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> View Logs</a>
+                    <a href="/" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>
+                </div>
+            </div>
             <div class="daemon-detail">
                 <h2>Status</h2>
-                <dl>
-                    <dt>Status</dt><dd><span class="status {status_class}">{}</span></dd>
-                    <dt>PID</dt><dd>{}</dd>
-                    <dt>Directory</dt><dd>{}</dd>
-                    <dt>Disabled</dt><dd>{}</dd>
-                    <dt>Retry Count</dt><dd>{} / {}</dd>
-                </dl>
-                {config_section}
-                <div class="actions">
-                    <a href="/logs/{url_id}" class="btn">View Logs</a>
-                    <a href="/" class="btn">Back to List</a>
+                <div class="detail-section">
+                    <dl>
+                        <dt>Status</dt><dd><span class="status {status_class}">{}</span></dd>
+                        <dt>PID</dt><dd>{}</dd>
+                        <dt>Directory</dt><dd>{}</dd>
+                        <dt>Disabled</dt><dd>{}</dd>
+                        <dt>Retry Count</dt><dd>{} / {}</dd>
+                    </dl>
                 </div>
+                {process_section}
+                {config_section}
             </div>
         "#,
             d.status,

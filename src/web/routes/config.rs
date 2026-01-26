@@ -12,12 +12,14 @@ fn base_html(title: &str, content: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - pitchfork</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand">pitchfork</a>
+        <a href="/" class="nav-brand"><img src="/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
         <div class="nav-links">
             <a href="/">Dashboard</a>
             <a href="/logs">Logs</a>
@@ -27,6 +29,15 @@ fn base_html(title: &str, content: &str) -> String {
     <main>
         {content}
     </main>
+    <script>
+        // Initialize Lucide icons on page load
+        lucide.createIcons();
+        
+        // Re-initialize Lucide icons after HTMX swaps content
+        document.body.addEventListener('htmx:afterSwap', function(evt) {{
+            lucide.createIcons();
+        }});
+    </script>
 </body>
 </html>"#
     )
@@ -99,32 +110,38 @@ pub async fn list() -> Html<String> {
     for path in paths {
         let exists = path.exists();
         let display = html_escape(&path.display().to_string());
-        let exists_badge = if exists {
-            r#"<span class="badge exists">exists</span>"#
-        } else {
-            r#"<span class="badge">not created</span>"#
-        };
+        let status_class = if exists { "exists" } else { "not-created" };
+        let status_text = if exists { "EXISTS" } else { "NOT CREATED" };
 
         let path_str = path.to_string_lossy();
         let encoded_path = urlencoding::encode(&path_str);
         file_list.push_str(&format!(
             r#"
-            <li>
-                <a href="/config/edit?path={encoded_path}">{display}</a>
-                {exists_badge}
-            </li>
+            <div class="config-card {status_class}">
+                <div class="config-path">{display}</div>
+                <div class="config-status">
+                    <span class="status-badge {status_class}">{status_text}</span>
+                <a href="/config/edit?path={encoded_path}" class="btn btn-sm"><i data-lucide="edit" class="icon"></i> Edit</a>
+                </div>
+            </div>
         "#
         ));
     }
 
     let content = format!(
         r#"
-        <h1>Configuration Files</h1>
-        <p>Pitchfork loads configuration from these locations (in order of precedence):</p>
-        <ul class="config-file-list">
+        <div class="page-header">
+            <div>
+                <h1>Configuration Files</h1>
+                <p class="subtitle">Pitchfork loads configuration from these locations (in order of precedence)</p>
+            </div>
+        </div>
+        <div class="config-list">
             {file_list}
-        </ul>
-        <p class="help-text">Later files override earlier ones. Click a file to edit it.</p>
+        </div>
+        <div class="help-box">
+            <strong>💡 Note:</strong> Later files override earlier ones. Click Edit to modify a configuration file.
+        </div>
     "#
     );
 
@@ -146,7 +163,7 @@ pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
             let content = r#"
                 <h1>Error</h1>
                 <p class="error">This file path is not allowed.</p>
-                <a href="/config" class="btn">Back to Config List</a>
+        <a href="/config" class="btn"><i data-lucide="arrow-left" class="icon"></i> Back to Config List</a>
             "#;
             return Html(base_html("Error", content));
         }
@@ -178,7 +195,7 @@ pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
         <div class="page-header">
             <h1>Edit: {display_path}</h1>
             <div class="header-actions">
-                <a href="/config" class="btn btn-sm">Back</a>
+            <a href="/config" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>
             </div>
         </div>
         <form hx-post="/config/save" hx-target="#save-result">
@@ -187,8 +204,8 @@ pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
                 <textarea name="content" id="config-editor" rows="25">{content_value}</textarea>
             </div>
             <div class="form-actions">
-                <button type="button" hx-post="/config/validate" hx-include="#config-editor, input[name=path]" hx-target="#validation-result" class="btn">Validate</button>
-                <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" hx-post="/config/validate" hx-include="#config-editor, input[name=path]" hx-target="#validation-result" class="btn"><i data-lucide="check-circle" class="icon"></i> Validate</button>
+            <button type="submit" class="btn btn-primary"><i data-lucide="save" class="icon"></i> Save</button>
             </div>
             <div id="validation-result"></div>
             <div id="save-result"></div>

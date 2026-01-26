@@ -119,6 +119,46 @@ impl Procs {
             }
         })
     }
+
+    /// Get extended process information for a given PID
+    pub fn get_extended_stats(&self, pid: u32) -> Option<ExtendedProcessStats> {
+        let system = self.lock_system();
+        system.process(sysinfo::Pid::from_u32(pid)).map(|p| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let disk = p.disk_usage();
+
+            ExtendedProcessStats {
+                name: p.name().to_string_lossy().to_string(),
+                exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
+                cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
+                cmd: p
+                    .cmd()
+                    .iter()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .collect(),
+                environ: p
+                    .environ()
+                    .iter()
+                    .take(20)
+                    .map(|s| s.to_string_lossy().to_string())
+                    .collect(),
+                status: format!("{:?}", p.status()),
+                cpu_percent: p.cpu_usage(),
+                memory_bytes: p.memory(),
+                virtual_memory_bytes: p.virtual_memory(),
+                uptime_secs: now.saturating_sub(p.start_time()),
+                start_time: p.start_time(),
+                disk_read_bytes: disk.read_bytes,
+                disk_write_bytes: disk.written_bytes,
+                parent_pid: p.parent().map(|pp| pp.as_u32()),
+                thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
+                user_id: p.user_id().map(|u| u.to_string()),
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -132,16 +172,7 @@ pub struct ProcessStats {
 
 impl ProcessStats {
     pub fn memory_display(&self) -> String {
-        let bytes = self.memory_bytes;
-        if bytes < 1024 {
-            format!("{}B", bytes)
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1}KB", bytes as f64 / 1024.0)
-        } else if bytes < 1024 * 1024 * 1024 {
-            format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-        }
+        format_bytes(self.memory_bytes)
     }
 
     pub fn cpu_display(&self) -> String {
@@ -149,39 +180,113 @@ impl ProcessStats {
     }
 
     pub fn uptime_display(&self) -> String {
-        let secs = self.uptime_secs;
-        if secs < 60 {
-            format!("{}s", secs)
-        } else if secs < 3600 {
-            format!("{}m {}s", secs / 60, secs % 60)
-        } else if secs < 86400 {
-            let hours = secs / 3600;
-            let mins = (secs % 3600) / 60;
-            format!("{}h {}m", hours, mins)
-        } else {
-            let days = secs / 86400;
-            let hours = (secs % 86400) / 3600;
-            format!("{}d {}h", days, hours)
-        }
+        format_duration(self.uptime_secs)
     }
 
     pub fn disk_read_display(&self) -> String {
-        Self::format_bytes_per_sec(self.disk_read_bytes)
+        format_bytes_per_sec(self.disk_read_bytes)
     }
 
     pub fn disk_write_display(&self) -> String {
-        Self::format_bytes_per_sec(self.disk_write_bytes)
+        format_bytes_per_sec(self.disk_write_bytes)
+    }
+}
+
+/// Extended process stats with more detailed information
+#[derive(Debug, Clone)]
+pub struct ExtendedProcessStats {
+    pub name: String,
+    pub exe_path: Option<String>,
+    pub cwd: Option<String>,
+    pub cmd: Vec<String>,
+    pub environ: Vec<String>,
+    pub status: String,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub uptime_secs: u64,
+    pub start_time: u64,
+    pub disk_read_bytes: u64,
+    pub disk_write_bytes: u64,
+    pub parent_pid: Option<u32>,
+    pub thread_count: usize,
+    pub user_id: Option<String>,
+}
+
+impl ExtendedProcessStats {
+    pub fn memory_display(&self) -> String {
+        format_bytes(self.memory_bytes)
     }
 
-    fn format_bytes_per_sec(bytes: u64) -> String {
-        if bytes < 1024 {
-            format!("{}B/s", bytes)
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1}KB/s", bytes as f64 / 1024.0)
-        } else if bytes < 1024 * 1024 * 1024 {
-            format!("{:.1}MB/s", bytes as f64 / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1}GB/s", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-        }
+    pub fn virtual_memory_display(&self) -> String {
+        format_bytes(self.virtual_memory_bytes)
+    }
+
+    pub fn cpu_display(&self) -> String {
+        format!("{:.1}%", self.cpu_percent)
+    }
+
+    pub fn uptime_display(&self) -> String {
+        format_duration(self.uptime_secs)
+    }
+
+    pub fn start_time_display(&self) -> String {
+        use std::time::{Duration, UNIX_EPOCH};
+        let datetime = UNIX_EPOCH + Duration::from_secs(self.start_time);
+        chrono::DateTime::<chrono::Local>::from(datetime)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+    }
+
+    pub fn disk_read_display(&self) -> String {
+        format_bytes_per_sec(self.disk_read_bytes)
+    }
+
+    pub fn disk_write_display(&self) -> String {
+        format_bytes_per_sec(self.disk_write_bytes)
+    }
+
+    pub fn cmd_display(&self) -> String {
+        self.cmd.join(" ")
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if secs < 86400 {
+        let hours = secs / 3600;
+        let mins = (secs % 3600) / 60;
+        format!("{}h {}m", hours, mins)
+    } else {
+        let days = secs / 86400;
+        let hours = (secs % 86400) / 3600;
+        format!("{}d {}h", days, hours)
+    }
+}
+
+fn format_bytes_per_sec(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B/s", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB/s", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}MB/s", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}GB/s", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
