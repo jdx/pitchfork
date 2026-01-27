@@ -299,7 +299,11 @@ impl IpcClient {
             }
             IpcResponse::DaemonStopFailed { error } => {
                 error!("failed to stop daemon {}: {}", id, error);
-                Ok(())
+                Err(crate::error::DaemonError::StopFailed {
+                    id: id.clone(),
+                    error,
+                }
+                .into())
             }
             rsp => Err(Self::unexpected_response(
                 "Ok, DaemonNotRunning, DaemonNotFound, DaemonWasNotRunning, or DaemonStopFailed",

@@ -65,6 +65,17 @@ pub enum DaemonIdError {
     InvalidChars { id: String },
 }
 
+/// Errors related to daemon operations.
+#[derive(Debug, Error, Diagnostic)]
+pub enum DaemonError {
+    #[error("failed to stop daemon '{id}': {error}")]
+    #[diagnostic(
+        code(pitchfork::daemon::stop_failed),
+        help("the process may be stuck or require manual intervention. Try: kill -9 <pid>")
+    )]
+    StopFailed { id: String, error: String },
+}
+
 /// Errors related to dependency resolution.
 #[derive(Debug, Error, Diagnostic)]
 pub enum DependencyError {

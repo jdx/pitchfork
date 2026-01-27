@@ -582,9 +582,10 @@ impl Supervisor {
                 trace!("killing pid: {pid}");
                 PROCS.refresh_processes();
                 if PROCS.is_running(pid) {
-                    // First set status to Stopping (keeps PID for monitoring task)
+                    // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
+                        pid: Some(pid),
                         status: DaemonStatus::Stopping,
                         ..Default::default()
                     })
@@ -608,6 +609,7 @@ impl Supervisor {
                             debug!("failed to stop pid {pid}: process still running after kill");
                             self.upsert_daemon(UpsertDaemonOpts {
                                 id: id.to_string(),
+                                pid: Some(pid), // Preserve PID to avoid orphaning the process
                                 status: DaemonStatus::Running,
                                 ..Default::default()
                             })
@@ -625,6 +627,7 @@ impl Supervisor {
                         id: id.to_string(),
                         pid: None,
                         status: DaemonStatus::Stopped,
+                        last_exit_success: Some(true), // Manual stop is considered successful
                         ..Default::default()
                     })
                     .await?;
