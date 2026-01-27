@@ -89,14 +89,15 @@ pub async fn index() -> Html<String> {
 
         for (idx, id) in ids.iter().enumerate() {
             let safe_id = html_escape(id);
+            let js_id = js_escape(id);
             let url_id = url_encode(id);
             let is_first = idx == 0;
             let active_class = if is_first { " active" } else { "" };
 
-            // Tab button
+            // Tab button - use js_id for onclick to prevent JS injection
             tabs.push_str(&format!(
                 r#"<button class="tab{}" onclick="switchTab('{}', event)">{}</button>"#,
-                active_class, safe_id, safe_id
+                active_class, js_id, safe_id
             ));
 
             // Tab content
@@ -136,7 +137,7 @@ pub async fn index() -> Html<String> {
                     </div>
                 </div>
                 "#,
-                safe_id, active_class, safe_id, url_id, safe_id, safe_id, safe_id, url_id, initial_logs
+                safe_id, active_class, safe_id, url_id, safe_id, js_id, safe_id, url_id, initial_logs
             ));
         }
 
@@ -190,20 +191,18 @@ pub async fn index() -> Html<String> {
             tabs,
             tab_contents,
             ids.iter()
-                .map(|id| {
-                    let safe_id = html_escape(id);
+                .enumerate()
+                .map(|(idx, id)| {
+                    let js_id = js_escape(id);
                     let url_id = url_encode(id);
                     format!(
                         r#"
                 var clearSource_{} = new EventSource('/logs/{}/stream');
                 clearSource_{}.addEventListener('clear', function(e) {{
-                    document.getElementById('log-output-{}').textContent = '';
+                    document.getElementById('log-output-' + '{}').textContent = '';
                 }});
                 "#,
-                        safe_id.replace('-', "_"),
-                        url_id,
-                        safe_id.replace('-', "_"),
-                        safe_id
+                        idx, url_id, idx, js_id
                     )
                 })
                 .collect::<Vec<_>>()
@@ -385,6 +384,16 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// Escape a string for use inside JavaScript single-quoted string literals.
+/// This prevents breaking out of the string when the value contains quotes.
+fn js_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn url_encode(s: &str) -> String {
