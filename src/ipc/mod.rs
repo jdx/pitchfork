@@ -46,14 +46,29 @@ pub enum IpcResponse {
     Notifications(Vec<(log::LevelFilter, String)>),
     ActiveDaemons(Vec<Daemon>),
     DisabledDaemons(Vec<String>),
-    DaemonAlreadyStopped,
     DaemonAlreadyRunning,
-    DaemonStart { daemon: Daemon },
-    DaemonFailed { error: String },
-    DaemonReady { daemon: Daemon },
-    DaemonFailedWithCode { exit_code: Option<i32> },
+    DaemonStart {
+        daemon: Daemon,
+    },
+    DaemonFailed {
+        error: String,
+    },
+    DaemonReady {
+        daemon: Daemon,
+    },
+    DaemonFailedWithCode {
+        exit_code: Option<i32>,
+    },
+    /// Process was not running but had a PID record (unexpected exit)
+    DaemonWasNotRunning,
+    /// Failed to kill the process (still running)
+    DaemonStopFailed {
+        error: String,
+    },
+    /// Daemon exists but is not running (no PID)
+    DaemonNotRunning,
+    DaemonNotFound,
 }
-
 fn fs_name(name: &str) -> Result<Name<'_>> {
     let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
     let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;

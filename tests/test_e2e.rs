@@ -901,6 +901,9 @@ ready_http = "http://localhost:18081/health"
         "Should not take too long to detect ready state"
     );
 
+    // Small delay to let stdout flush to logs
+    env.sleep(Duration::from_millis(100));
+
     // Verify logs show the server started
     let logs = env.read_logs("http_test");
     assert!(
@@ -950,6 +953,9 @@ ready_port = 18082
         elapsed < Duration::from_secs(10),
         "Should not take too long to detect ready state"
     );
+
+    // Small delay to let stdout flush to logs
+    env.sleep(Duration::from_millis(100));
 
     // Verify logs show the server started
     let logs = env.read_logs("port_test");
@@ -1021,4 +1027,154 @@ ready_cmd = "test -f {}"
 
     // Clean up
     env.run_command(&["stop", "cmd_test"]);
+}
+
+// ============================================================================
+// Stop Command Tests
+// ============================================================================
+
+/// Test that stop command correctly transitions daemon from running to stopped
+/// This test verifies the fix for the bug where daemon would get stuck in "stopping" status
+/// due to a race condition between sysinfo's process.wait() and tokio's child.wait()
+#[test]
+fn test_stop_transitions_to_stopped() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.stop_test]
+run = "sleep 60"
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start the daemon
+    let output = env.run_command(&["start", "stop_test"]);
+    assert!(output.status.success(), "Start command should succeed");
+
+    // Verify daemon is running
+    let status = env.get_daemon_status("stop_test");
+    println!("Status after start: {:?}", status);
+    assert_eq!(
+        status,
+        Some("running".to_string()),
+        "Daemon should be running after start"
+    );
+
+    // Stop the daemon
+    let stop_start = std::time::Instant::now();
+    let output = env.run_command(&["stop", "stop_test"]);
+    let stop_elapsed = stop_start.elapsed();
+
+    println!("Stop took: {:?}", stop_elapsed);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(output.status.success(), "Stop command should succeed");
+
+    // Key test: Stop should complete quickly (not hang)
+    assert!(
+        stop_elapsed < Duration::from_secs(5),
+        "Stop should complete quickly, took {:?}",
+        stop_elapsed
+    );
+
+    // Key test: Daemon status should be "stopped", NOT "stopping"
+    let status = env.get_daemon_status("stop_test");
+    println!("Status after stop: {:?}", status);
+    assert_eq!(
+        status,
+        Some("stopped".to_string()),
+        "Daemon should be stopped after stop command, not stuck in stopping"
+    );
+}
+
+/// Test stop command with a daemon that has child processes
+#[test]
+fn test_stop_kills_child_processes() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Use bash to spawn a child process
+    let toml_content = r#"
+[daemons.stop_children_test]
+run = "bash -c 'sleep 60 & sleep 60 & wait'"
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start the daemon
+    let output = env.run_command(&["start", "stop_children_test"]);
+    assert!(
+        output.status.success(),
+        "Start command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify daemon is running
+    let status = env.get_daemon_status("stop_children_test");
+    assert_eq!(
+        status,
+        Some("running".to_string()),
+        "Daemon should be running"
+    );
+
+    // Stop the daemon
+    let stop_start = std::time::Instant::now();
+    let output = env.run_command(&["stop", "stop_children_test"]);
+    let stop_elapsed = stop_start.elapsed();
+
+    println!("Stop took: {:?}", stop_elapsed);
+
+    assert!(output.status.success(), "Stop command should succeed");
+
+    // Stop should complete in reasonable time even with child processes
+    assert!(
+        stop_elapsed < Duration::from_secs(10),
+        "Stop should complete in reasonable time, took {:?}",
+        stop_elapsed
+    );
+
+    // Daemon should be stopped
+    let status = env.get_daemon_status("stop_children_test");
+    assert_eq!(
+        status,
+        Some("stopped".to_string()),
+        "Daemon should be stopped"
+    );
+}
+
+/// Test stopping an already stopped daemon
+#[test]
+fn test_stop_already_stopped() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.already_stopped_test]
+run = "sleep 60"
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start and stop the daemon
+    let output = env.run_command(&["start", "already_stopped_test"]);
+    assert!(output.status.success(), "Start should succeed");
+
+    let output = env.run_command(&["stop", "already_stopped_test"]);
+    assert!(output.status.success(), "First stop should succeed");
+
+    // Try to stop again
+    let output = env.run_command(&["stop", "already_stopped_test"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("Second stop stdout: {}", stdout);
+
+    // Should handle gracefully (either succeed or indicate already stopped)
+    // The daemon should still be in stopped state
+    let status = env.get_daemon_status("already_stopped_test");
+    assert_eq!(
+        status,
+        Some("stopped".to_string()),
+        "Daemon should remain stopped"
+    );
 }

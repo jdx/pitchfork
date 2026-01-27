@@ -582,29 +582,59 @@ impl Supervisor {
                 trace!("killing pid: {pid}");
                 PROCS.refresh_processes();
                 if PROCS.is_running(pid) {
-                    // First set status to Stopping (keeps PID for monitoring task)
+                    // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
+                        pid: Some(pid),
                         status: DaemonStatus::Stopping,
                         ..Default::default()
                     })
                     .await?;
 
-                    // Then kill the process
-                    if let Err(e) = PROCS.kill_async(pid).await {
-                        warn!("failed to kill pid {pid}: {e}");
-                    }
-                    PROCS.refresh_processes();
+                    // First kill child processes (should be ahead of parent)
                     for child_pid in PROCS.all_children(pid) {
                         debug!("killing child pid: {child_pid}");
                         if let Err(e) = PROCS.kill_async(child_pid).await {
                             warn!("failed to kill child pid {child_pid}: {e}");
                         }
                     }
-                    // Monitoring task will clear PID and set to Stopped when it detects exit
+
+                    // Then kill the parent process
+                    if let Err(e) = PROCS.kill_async(pid).await {
+                        debug!("failed to kill pid {pid}: {e}");
+                        // Check if the process is actually stopped despite the error
+                        PROCS.refresh_processes();
+                        if PROCS.is_running(pid) {
+                            // Process still running after kill attempt - set back to Running
+                            debug!("failed to stop pid {pid}: process still running after kill");
+                            self.upsert_daemon(UpsertDaemonOpts {
+                                id: id.to_string(),
+                                pid: Some(pid), // Preserve PID to avoid orphaning the process
+                                status: DaemonStatus::Running,
+                                ..Default::default()
+                            })
+                            .await?;
+                            return Ok(IpcResponse::DaemonStopFailed {
+                                error: format!(
+                                    "process {pid} still running after kill attempt: {e}"
+                                ),
+                            });
+                        }
+                    }
+
+                    // Process successfully stopped
+                    self.upsert_daemon(UpsertDaemonOpts {
+                        id: id.to_string(),
+                        pid: None,
+                        status: DaemonStatus::Stopped,
+                        last_exit_success: Some(true), // Manual stop is considered successful
+                        ..Default::default()
+                    })
+                    .await?;
                 } else {
-                    debug!("pid {pid} not running");
+                    debug!("pid {pid} not running, process may have exited unexpectedly");
                     // Process already dead, directly mark as stopped
+                    // Note that the cleanup logic is handled in monitor task
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
                         pid: None,
@@ -612,14 +642,16 @@ impl Supervisor {
                         ..Default::default()
                     })
                     .await?;
+                    return Ok(IpcResponse::DaemonWasNotRunning);
                 }
-                return Ok(IpcResponse::Ok);
+                Ok(IpcResponse::Ok)
             } else {
                 debug!("daemon {id} not running");
+                Ok(IpcResponse::DaemonNotRunning)
             }
         } else {
             debug!("daemon {id} not found");
+            Ok(IpcResponse::DaemonNotFound)
         }
-        Ok(IpcResponse::DaemonAlreadyStopped)
     }
 }

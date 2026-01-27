@@ -282,11 +282,34 @@ impl IpcClient {
                 info!("stopped daemon {}", id);
                 Ok(())
             }
-            IpcResponse::DaemonAlreadyStopped => {
+            IpcResponse::DaemonNotRunning => {
                 warn!("daemon {} is not running", id);
                 Ok(())
             }
-            rsp => Err(Self::unexpected_response("Ok or DaemonAlreadyStopped", &rsp).into()),
+            IpcResponse::DaemonNotFound => {
+                warn!("daemon {} not found", id);
+                Ok(())
+            }
+            IpcResponse::DaemonWasNotRunning => {
+                warn!(
+                    "daemon {} was not running (process may have exited unexpectedly)",
+                    id
+                );
+                Ok(())
+            }
+            IpcResponse::DaemonStopFailed { error } => {
+                error!("failed to stop daemon {}: {}", id, error);
+                Err(crate::error::DaemonError::StopFailed {
+                    id: id.clone(),
+                    error,
+                }
+                .into())
+            }
+            rsp => Err(Self::unexpected_response(
+                "Ok, DaemonNotRunning, DaemonNotFound, DaemonWasNotRunning, or DaemonStopFailed",
+                &rsp,
+            )
+            .into()),
         }
     }
 }
