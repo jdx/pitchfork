@@ -103,7 +103,7 @@ impl Run {
         if !self.quiet
             && let Err(e) = print_startup_logs(&self.id, start_time)
         {
-            debug!("Failed to print startup logs: {}", e);
+            debug!("Failed to print startup logs: {e}");
         }
 
         Ok(())

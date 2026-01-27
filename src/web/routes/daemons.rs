@@ -418,7 +418,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                 html_escape(&cfg.run),
                 cfg.retry,
                 cfg.ready_delay
-                    .map(|d| format!("{}s", d))
+                    .map(|d| format!("{d}s"))
                     .unwrap_or_else(|| "-".into()),
                 html_escape(cfg.ready_output.as_deref().unwrap_or("-")),
                 html_escape(cfg.ready_http.as_deref().unwrap_or("-")),
@@ -487,7 +487,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         )
     };
 
-    Html(base_html(&format!("Daemon: {}", safe_id), &content))
+    Html(base_html(&format!("Daemon: {safe_id}"), &content))
 }
 
 #[derive(Deserialize, Default)]
@@ -512,7 +512,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
             Err(e) => {
                 // Don't early return - let the error flow through proper handling below
                 // which respects from_detail for correct HTML structure
-                let error_msg = format!("Failed to parse command: {}", e);
+                let error_msg = format!("Failed to parse command: {e}");
                 // Skip to error handling by returning early from the if-let block
                 return if from_detail {
                     Html(format!(
@@ -556,10 +556,10 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
 
         match SUPERVISOR.run(opts).await {
             Ok(_) => None,
-            Err(e) => Some(format!("Failed to start: {}", e)),
+            Err(e) => Some(format!("Failed to start: {e}")),
         }
     } else {
-        Some(format!("Daemon '{}' not found in config", id))
+        Some(format!("Daemon '{id}' not found in config"))
     };
 
     // Return updated row

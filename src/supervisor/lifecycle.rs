@@ -37,7 +37,7 @@ pub(crate) fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
             Some(re)
         }
         Err(e) => {
-            error!("invalid regex pattern '{}': {}", pattern, e);
+            error!("invalid regex pattern '{pattern}': {e}");
             None
         }
     }
@@ -53,7 +53,7 @@ impl Supervisor {
         {
             let mut pending = self.pending_autostops.lock().await;
             if pending.remove(id).is_some() {
-                info!("cleared pending autostop for {} (daemon starting)", id);
+                info!("cleared pending autostop for {id} (daemon starting)");
             }
         }
 
@@ -102,7 +102,7 @@ impl Supervisor {
                             time::sleep(Duration::from_secs(backoff_secs)).await;
                             continue;
                         } else {
-                            info!("daemon {id} failed after {} attempts", max_attempts);
+                            info!("daemon {id} failed after {max_attempts} attempts");
                             return Ok(IpcResponse::DaemonFailedWithCode { exit_code });
                         }
                     }
@@ -263,10 +263,7 @@ impl Supervisor {
             let child_pid = child.id().unwrap_or(0);
             tokio::spawn(async move {
                 let result = child.wait().await;
-                debug!(
-                    "daemon pid {child_pid} wait() completed with result: {:?}",
-                    result
-                );
+                debug!("daemon pid {child_pid} wait() completed with result: {result:?}");
                 let _ = exit_tx.send(result).await;
             });
 
@@ -319,7 +316,7 @@ impl Supervisor {
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
                         exit_status = Some(result);
-                        debug!("daemon {id} process exited, exit_status: {:?}", exit_status);
+                        debug!("daemon {id} process exited, exit_status: {exit_status:?}");
                         // Flush logs before notifying so clients see logs immediately
                         let _ = log_appender.flush().await;
                         if !ready_notified {
@@ -337,7 +334,7 @@ impl Supervisor {
                                     let exit_code = exit_status.as_ref()
                                         .and_then(|r| r.as_ref().ok())
                                         .and_then(|s| s.code());
-                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {:?}", exit_code);
+                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
                                     let _ = tx.send(Err(exit_code));
                                 }
                             }

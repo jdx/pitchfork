@@ -113,7 +113,7 @@ impl Supervisor {
         if let Some(port) = web_port {
             tokio::spawn(async move {
                 if let Err(e) = crate::web::serve(port).await {
-                    error!("Web server error: {}", e);
+                    error!("Web server error: {e}");
                 }
             });
         }
@@ -176,7 +176,7 @@ impl Supervisor {
             let stream = match signal::unix::signal(signal) {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!("Failed to register signal handler for {:?}: {}", signal, e);
+                    warn!("Failed to register signal handler for {signal:?}: {e}");
                     continue;
                 }
             };

@@ -35,13 +35,12 @@ ready_delay = 1
 
     // Check daemon status - should still be Running
     let status = env.get_daemon_status("long_runner");
-    println!("Daemon status after 6s: {:?}", status);
+    println!("Daemon status after 6s: {status:?}");
 
     let status = status.unwrap();
     assert!(
         status.contains("running"),
-        "Daemon should still be Running after 6s, but was: {}",
-        status
+        "Daemon should still be Running after 6s, but was: {status}"
     );
 
     // Clean up
@@ -90,18 +89,17 @@ run = "bun run {} 5"
 
     // Check daemon status - should be Errored
     let status = env.get_daemon_status("fail_after_ready");
-    println!("Daemon status after 10s: {:?}", status);
+    println!("Daemon status after 10s: {status:?}");
 
     let status = status.unwrap();
     assert!(
         status.contains("errored"),
-        "Daemon should be Errored after failing, but was: {}",
-        status
+        "Daemon should be Errored after failing, but was: {status}"
     );
 
     // Verify logs show the failure
     let logs = env.read_logs("fail_after_ready");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
     assert!(
         logs.contains("Failed after 5!"),
         "Logs should contain failure message"
@@ -154,24 +152,22 @@ retry = 1
 
     // Check daemon status - should be Errored after exhausting retries
     let status = env.get_daemon_status("retry_after_ready");
-    println!("Daemon status after 16s: {:?}", status);
+    println!("Daemon status after 16s: {status:?}");
 
     let status = status.unwrap();
     assert!(
         status.contains("errored"),
-        "Daemon should be Errored after exhausting retries, but was: {}",
-        status
+        "Daemon should be Errored after exhausting retries, but was: {status}"
     );
 
     // Verify logs show TWO failures (original + 1 retry)
     let logs = env.read_logs("retry_after_ready");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let failure_count = logs.matches("Failed after 5!").count();
     assert_eq!(
         failure_count, 2,
-        "Logs should contain exactly 2 failure messages (original + 1 retry), found {}",
-        failure_count
+        "Logs should contain exactly 2 failure messages (original + 1 retry), found {failure_count}"
     );
 
     // Clean up

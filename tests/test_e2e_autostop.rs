@@ -28,8 +28,8 @@ ready_delay = 1
     // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=5 and fast interval
     println!("=== test_autostop_delay ===");
     println!("Project dir: {:?}", env.project_dir());
-    println!("Other dir: {:?}", other_dir);
-    println!("Shell PID: {}", shell_pid);
+    println!("Other dir: {other_dir:?}");
+    println!("Shell PID: {shell_pid}");
 
     let cd1_output = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
@@ -45,7 +45,7 @@ ready_delay = 1
 
     // Check state file after initial cd
     let state_contents = std::fs::read_to_string(env.state_file_path()).unwrap_or_default();
-    println!("State after initial cd:\n{}", state_contents);
+    println!("State after initial cd:\n{state_contents}");
 
     // Start the daemon with shell_pid association
     let output = env.run_command(&["start", "delayed_stop", "--shell-pid", &shell_pid]);
@@ -88,8 +88,7 @@ ready_delay = 1
     let status = env.get_daemon_status("delayed_stop");
     assert!(
         status.as_deref() != Some("running"),
-        "Daemon should be stopped after delay, got: {:?}",
-        status
+        "Daemon should be stopped after delay, got: {status:?}"
     );
 
     // Clean up
@@ -199,7 +198,7 @@ ready_delay = 1
     // First, register the shell in the project directory
     // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=0 and fast interval
     println!("Project dir: {:?}", env.project_dir());
-    println!("Other dir: {:?}", other_dir);
+    println!("Other dir: {other_dir:?}");
 
     let cd_output = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
@@ -216,7 +215,7 @@ ready_delay = 1
     // Check state file after initial cd
     let state_file = env.state_file_path();
     let state_after_cd = std::fs::read_to_string(&state_file).unwrap_or_default();
-    println!("State file after initial cd:\n{}", state_after_cd);
+    println!("State file after initial cd:\n{state_after_cd}");
 
     // Start the daemon
     let output = env.run_command(&["start", "immediate_stop", "--shell-pid", &shell_pid]);
@@ -234,7 +233,7 @@ ready_delay = 1
     // Check the state file to see daemon config
     let state_file = env.state_file_path();
     let state_contents = std::fs::read_to_string(&state_file).unwrap_or_default();
-    println!("State file:\n{}", state_contents);
+    println!("State file:\n{state_contents}");
 
     let status = env.get_daemon_status("immediate_stop");
     assert_eq!(
@@ -276,8 +275,7 @@ ready_delay = 1
     let status = env.get_daemon_status("immediate_stop");
     assert!(
         status.as_deref() != Some("running"),
-        "Daemon should be stopped immediately with PITCHFORK_AUTOSTOP_DELAY=0, got: {:?}",
-        status
+        "Daemon should be stopped immediately with PITCHFORK_AUTOSTOP_DELAY=0, got: {status:?}"
     );
 
     // Clean up

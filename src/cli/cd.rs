@@ -53,11 +53,11 @@ impl Cd {
             }
             for (level, msg) in ipc.get_notifications().await? {
                 match level {
-                    LevelFilter::Trace => trace!("{}", msg),
-                    LevelFilter::Debug => debug!("{}", msg),
-                    LevelFilter::Info => info!("{}", msg),
-                    LevelFilter::Warn => warn!("{}", msg),
-                    LevelFilter::Error => error!("{}", msg),
+                    LevelFilter::Trace => trace!("{msg}"),
+                    LevelFilter::Debug => debug!("{msg}"),
+                    LevelFilter::Info => info!("{msg}"),
+                    LevelFilter::Warn => warn!("{msg}"),
+                    LevelFilter::Error => error!("{msg}"),
                     _ => {}
                 }
             }

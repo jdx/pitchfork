@@ -45,13 +45,12 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "finish" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_finish_fail");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let execution_count = logs.matches("Failed after 5!").count();
     assert!(
         execution_count >= 2,
-        "With 'finish' retrigger, task should execute at least 2 times (found {})",
-        execution_count
+        "With 'finish' retrigger, task should execute at least 2 times (found {execution_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_finish_fail"]);
@@ -94,13 +93,12 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "always" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_always_fail");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let execution_count = logs.matches("Failed after 5!").count();
     assert!(
         execution_count >= 2,
-        "With 'always' retrigger, task should execute at least 2 times (found {})",
-        execution_count
+        "With 'always' retrigger, task should execute at least 2 times (found {execution_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_always_fail"]);
@@ -143,13 +141,12 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "success" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_success_fail");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let execution_count = logs.matches("Failed after 5!").count();
     assert_eq!(
         execution_count, 1,
-        "With 'success' retrigger and failing task, should only execute once (found {})",
-        execution_count
+        "With 'success' retrigger and failing task, should only execute once (found {execution_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_success_fail"]);
@@ -192,13 +189,12 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "fail" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_fail_fail");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let execution_count = logs.matches("Failed after 5!").count();
     assert!(
         execution_count >= 2,
-        "With 'fail' retrigger, task should execute at least 2 times (found {})",
-        execution_count
+        "With 'fail' retrigger, task should execute at least 2 times (found {execution_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_fail_fail"]);
@@ -246,14 +242,13 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "finish" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_finish_long");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     // Count how many times "Output 1/999" appears (indicates a new start)
     let start_count = logs.matches("Output 1/999").count();
     assert_eq!(
         start_count, 1,
-        "With 'finish' retrigger and long-running task, should only start once (found {})",
-        start_count
+        "With 'finish' retrigger and long-running task, should only start once (found {start_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_finish_long"]);
@@ -296,14 +291,13 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "always" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_always_long");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     // Count how many times "Output 1/999" appears (indicates a new start)
     let start_count = logs.matches("Output 1/999").count();
     assert!(
         start_count >= 2,
-        "With 'always' retrigger, task should restart at least 2 times (found {})",
-        start_count
+        "With 'always' retrigger, task should restart at least 2 times (found {start_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_always_long"]);
@@ -346,14 +340,13 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "success" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_success_long");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     // Count how many times "Output 1/999" appears (indicates a new start)
     let start_count = logs.matches("Output 1/999").count();
     assert_eq!(
         start_count, 1,
-        "With 'success' retrigger and long-running task, should only start once (found {})",
-        start_count
+        "With 'success' retrigger and long-running task, should only start once (found {start_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_success_long"]);
@@ -396,14 +389,13 @@ cron = {{ schedule = "*/30 * * * * *", retrigger = "fail" }}
     env.sleep(Duration::from_secs(120));
 
     let logs = env.read_logs("cron_fail_long");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     // Count how many times "Output 1/999" appears (indicates a new start)
     let start_count = logs.matches("Output 1/999").count();
     assert_eq!(
         start_count, 1,
-        "With 'fail' retrigger and long-running task, should only start once (found {})",
-        start_count
+        "With 'fail' retrigger and long-running task, should only start once (found {start_count})"
     );
 
     let _ = env.run_command(&["stop", "cron_fail_long"]);

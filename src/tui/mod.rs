@@ -80,28 +80,28 @@ async fn run_app<B: Backend>(
             match action {
                 event::Action::Quit => break,
                 event::Action::Start(id) => {
-                    app.start_loading(format!("Starting {}...", id));
+                    app.start_loading(format!("Starting {id}..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                     // Handle start errors gracefully (don't crash TUI)
                     if let Err(e) = app.start_daemon(client, &id).await {
                         app.stop_loading();
-                        app.set_message(format!("Failed to start {}: {}", id, e));
+                        app.set_message(format!("Failed to start {id}: {e}"));
                     } else {
                         app.stop_loading();
                     }
                     app.refresh(client).await?;
                 }
                 event::Action::Enable(id) => {
-                    app.start_loading(format!("Enabling {}...", id));
+                    app.start_loading(format!("Enabling {id}..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                     client.enable(id.clone()).await?;
                     app.stop_loading();
-                    app.set_message(format!("Enabled {}", id));
+                    app.set_message(format!("Enabled {id}"));
                     app.refresh(client).await?;
                 }
                 event::Action::BatchStart(ids) => {
                     let count = ids.len();
-                    app.start_loading(format!("Starting {} daemons...", count));
+                    app.start_loading(format!("Starting {count} daemons..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                     let mut started = 0;
                     for id in &ids {
@@ -111,19 +111,19 @@ async fn run_app<B: Backend>(
                     }
                     app.stop_loading();
                     app.clear_selection();
-                    app.set_message(format!("Started {}/{} daemons", started, count));
+                    app.set_message(format!("Started {started}/{count} daemons"));
                     app.refresh(client).await?;
                 }
                 event::Action::BatchEnable(ids) => {
                     let count = ids.len();
-                    app.start_loading(format!("Enabling {} daemons...", count));
+                    app.start_loading(format!("Enabling {count} daemons..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                     for id in &ids {
                         let _ = client.enable(id.clone()).await;
                     }
                     app.stop_loading();
                     app.clear_selection();
-                    app.set_message(format!("Enabled {} daemons", count));
+                    app.set_message(format!("Enabled {count} daemons"));
                     app.refresh(client).await?;
                 }
                 event::Action::Refresh => {
@@ -154,7 +154,7 @@ async fn run_app<B: Backend>(
                         }
                         Err(e) => {
                             app.stop_loading();
-                            app.set_message(format!("Save failed: {}", e));
+                            app.set_message(format!("Save failed: {e}"));
                         }
                     }
                 }
@@ -165,14 +165,14 @@ async fn run_app<B: Backend>(
                     if let Some(pending) = app.take_pending_action() {
                         match pending {
                             app::PendingAction::Stop(id) => {
-                                app.start_loading(format!("Stopping {}...", id));
+                                app.start_loading(format!("Stopping {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 client.stop(id.clone()).await?;
                                 app.stop_loading();
-                                app.set_message(format!("Stopped {}", id));
+                                app.set_message(format!("Stopped {id}"));
                             }
                             app::PendingAction::Restart(id) => {
-                                app.start_loading(format!("Restarting {}...", id));
+                                app.start_loading(format!("Restarting {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 client.stop(id.clone()).await?;
                                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -180,35 +180,34 @@ async fn run_app<B: Backend>(
                                 if let Err(e) = app.start_daemon(client, &id).await {
                                     app.stop_loading();
                                     app.set_message(format!(
-                                        "Stopped {} but failed to restart: {}",
-                                        id, e
+                                        "Stopped {id} but failed to restart: {e}"
                                     ));
                                 } else {
                                     app.stop_loading();
-                                    app.set_message(format!("Restarted {}", id));
+                                    app.set_message(format!("Restarted {id}"));
                                 }
                             }
                             app::PendingAction::Disable(id) => {
-                                app.start_loading(format!("Disabling {}...", id));
+                                app.start_loading(format!("Disabling {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 client.disable(id.clone()).await?;
                                 app.stop_loading();
-                                app.set_message(format!("Disabled {}", id));
+                                app.set_message(format!("Disabled {id}"));
                             }
                             app::PendingAction::BatchStop(ids) => {
                                 let count = ids.len();
-                                app.start_loading(format!("Stopping {} daemons...", count));
+                                app.start_loading(format!("Stopping {count} daemons..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 for id in &ids {
                                     let _ = client.stop(id.clone()).await;
                                 }
                                 app.stop_loading();
                                 app.clear_selection();
-                                app.set_message(format!("Stopped {} daemons", count));
+                                app.set_message(format!("Stopped {count} daemons"));
                             }
                             app::PendingAction::BatchRestart(ids) => {
                                 let count = ids.len();
-                                app.start_loading(format!("Restarting {} daemons...", count));
+                                app.start_loading(format!("Restarting {count} daemons..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 // Stop all first
                                 for id in &ids {
@@ -224,38 +223,37 @@ async fn run_app<B: Backend>(
                                 }
                                 app.stop_loading();
                                 app.clear_selection();
-                                app.set_message(format!("Restarted {}/{} daemons", started, count));
+                                app.set_message(format!("Restarted {started}/{count} daemons"));
                             }
                             app::PendingAction::BatchDisable(ids) => {
                                 let count = ids.len();
-                                app.start_loading(format!("Disabling {} daemons...", count));
+                                app.start_loading(format!("Disabling {count} daemons..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 for id in &ids {
                                     let _ = client.disable(id.clone()).await;
                                 }
                                 app.stop_loading();
                                 app.clear_selection();
-                                app.set_message(format!("Disabled {} daemons", count));
+                                app.set_message(format!("Disabled {count} daemons"));
                             }
                             app::PendingAction::DeleteDaemon { id, config_path } => {
-                                app.start_loading(format!("Deleting {}...", id));
+                                app.start_loading(format!("Deleting {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 match app.delete_daemon_from_config(&id, &config_path) {
                                     Ok(true) => {
                                         app.stop_loading();
                                         app.close_editor();
-                                        app.set_message(format!("Deleted {}", id));
+                                        app.set_message(format!("Deleted {id}"));
                                     }
                                     Ok(false) => {
                                         app.stop_loading();
                                         app.set_message(format!(
-                                            "Daemon '{}' not found in config",
-                                            id
+                                            "Daemon '{id}' not found in config"
                                         ));
                                     }
                                     Err(e) => {
                                         app.stop_loading();
-                                        app.set_message(format!("Delete failed: {}", e));
+                                        app.set_message(format!("Delete failed: {e}"));
                                     }
                                 }
                             }

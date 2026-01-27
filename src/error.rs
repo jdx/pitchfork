@@ -299,7 +299,7 @@ pub fn find_similar_daemon<'a>(
         })
         .max_by_key(|(_, score)| *score)
         .filter(|(_, score)| *score > 0)
-        .map(|(candidate, _)| format!("did you mean '{}'?", candidate))
+        .map(|(candidate, _)| format!("did you mean '{candidate}'?"))
 }
 
 #[cfg(test)]

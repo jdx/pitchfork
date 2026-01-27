@@ -61,13 +61,12 @@ impl Restart {
             for id in &self.id {
                 if !pt.daemons.contains_key(id) {
                     warn!(
-                        "Daemon {} not found in config (ad-hoc daemons cannot be restarted), skipping",
-                        id
+                        "Daemon {id} not found in config (ad-hoc daemons cannot be restarted), skipping"
                     );
                     continue;
                 }
                 if disabled_daemons.contains(id) {
-                    warn!("Daemon {} is disabled, skipping", id);
+                    warn!("Daemon {id} is disabled, skipping");
                     continue;
                 }
                 valid_ids.push(id.clone());
@@ -83,7 +82,7 @@ impl Restart {
         // Stop all daemons first (all have been validated as restartable)
         for id in &ids {
             if let Err(e) = ipc.stop(id.clone()).await {
-                warn!("Failed to stop daemon {}: {}", id, e);
+                warn!("Failed to stop daemon {id}: {e}");
             }
         }
 
@@ -137,7 +136,7 @@ impl Restart {
                     )
                 }
                 None => {
-                    warn!("Daemon {} not found in config, skipping", id);
+                    warn!("Daemon {id} not found in config, skipping");
                     continue;
                 }
             };
@@ -163,7 +162,7 @@ impl Restart {
                 let cmd = match shell_words::split(&run) {
                     Ok(c) => c,
                     Err(e) => {
-                        error!("Failed to parse command for daemon {}: {}", id, e);
+                        error!("Failed to parse command for daemon {id}: {e}");
                         return (id, None, Some(1));
                     }
                 };
@@ -194,14 +193,14 @@ impl Restart {
                 {
                     Ok((started, exit_code)) => (!started.is_empty(), exit_code),
                     Err(e) => {
-                        error!("Failed to start daemon {}: {}", id, e);
+                        error!("Failed to start daemon {id}: {e}");
                         (false, Some(1))
                     }
                 };
 
                 // Only report success if daemon was actually started
                 if !actually_started {
-                    warn!("Daemon {} was not restarted (may still be running)", id);
+                    warn!("Daemon {id} was not restarted (may still be running)");
                     return (id, None, Some(1));
                 }
 
@@ -225,7 +224,7 @@ impl Restart {
                     }
                 }
                 Err(e) => {
-                    error!("Task panicked: {}", e);
+                    error!("Task panicked: {e}");
                     any_failed = true;
                 }
             }
@@ -235,7 +234,7 @@ impl Restart {
         if !self.quiet {
             for (id, start_time) in successful_daemons {
                 if let Err(e) = print_startup_logs(&id, start_time) {
-                    debug!("Failed to print startup logs for {}: {}", id, e);
+                    debug!("Failed to print startup logs for {id}: {e}");
                 }
             }
         }

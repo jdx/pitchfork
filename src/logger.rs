@@ -42,7 +42,7 @@ impl log::Log for Logger {
         if record.level() <= self.term_level {
             let out = self.render(record, self.term_level);
             if !out.is_empty() {
-                eprintln!("{}", out);
+                eprintln!("{out}");
             }
         }
     }

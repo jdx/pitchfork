@@ -35,7 +35,7 @@ impl IpcClient {
         if !rsp.is_ok() {
             return Err(IpcError::UnexpectedResponse {
                 expected: "Ok".to_string(),
-                actual: format!("{:?}", rsp),
+                actual: format!("{rsp:?}"),
             }
             .into());
         }
@@ -59,8 +59,7 @@ impl IpcClient {
                 Err(err) => {
                     if let Some(duration) = duration {
                         debug!(
-                            "Failed to connect to IPC socket: {:?}, retrying in {:?}",
-                            err, duration
+                            "Failed to connect to IPC socket: {err:?}, retrying in {duration:?}"
                         );
                         tokio::time::sleep(duration).await;
                         continue;
@@ -129,7 +128,7 @@ impl IpcClient {
     fn unexpected_response(expected: &str, actual: &IpcResponse) -> IpcError {
         IpcError::UnexpectedResponse {
             expected: expected.to_string(),
-            actual: format!("{:?}", actual),
+            actual: format!("{actual:?}"),
         }
     }
 
@@ -146,11 +145,11 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::Enable { id: id.clone() }).await?;
         match rsp {
             IpcResponse::Yes => {
-                info!("enabled daemon {}", id);
+                info!("enabled daemon {id}");
                 Ok(true)
             }
             IpcResponse::No => {
-                info!("daemon {} already enabled", id);
+                info!("daemon {id} already enabled");
                 Ok(false)
             }
             rsp => Err(Self::unexpected_response("Yes or No", &rsp).into()),
@@ -161,11 +160,11 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::Disable { id: id.clone() }).await?;
         match rsp {
             IpcResponse::Yes => {
-                info!("disabled daemon {}", id);
+                info!("disabled daemon {id}");
                 Ok(true)
             }
             IpcResponse::No => {
-                info!("daemon {} already disabled", id);
+                info!("daemon {id} already disabled");
                 Ok(false)
             }
             rsp => Err(Self::unexpected_response("Yes or No", &rsp).into()),
@@ -200,7 +199,7 @@ impl IpcClient {
                 if let Err(e) =
                     crate::cli::logs::print_logs_for_time_range(&opts.id, start_time, None)
                 {
-                    error!("Failed to print logs: {}", e);
+                    error!("Failed to print logs: {e}");
                 }
             }
             IpcResponse::DaemonAlreadyRunning => {
@@ -214,7 +213,7 @@ impl IpcClient {
                 if let Err(e) =
                     crate::cli::logs::print_logs_for_time_range(&opts.id, start_time, None)
                 {
-                    error!("Failed to print logs: {}", e);
+                    error!("Failed to print logs: {e}");
                 }
             }
             rsp => {
@@ -279,26 +278,23 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::Stop { id: id.clone() }).await?;
         match rsp {
             IpcResponse::Ok => {
-                info!("stopped daemon {}", id);
+                info!("stopped daemon {id}");
                 Ok(())
             }
             IpcResponse::DaemonNotRunning => {
-                warn!("daemon {} is not running", id);
+                warn!("daemon {id} is not running");
                 Ok(())
             }
             IpcResponse::DaemonNotFound => {
-                warn!("daemon {} not found", id);
+                warn!("daemon {id} not found");
                 Ok(())
             }
             IpcResponse::DaemonWasNotRunning => {
-                warn!(
-                    "daemon {} was not running (process may have exited unexpectedly)",
-                    id
-                );
+                warn!("daemon {id} was not running (process may have exited unexpectedly)");
                 Ok(())
             }
             IpcResponse::DaemonStopFailed { error } => {
-                error!("failed to stop daemon {}: {}", id, error);
+                error!("failed to stop daemon {id}: {error}");
                 Err(crate::error::DaemonError::StopFailed {
                     id: id.clone(),
                     error,

@@ -111,13 +111,13 @@ impl IpcServer {
                                 tokio::spawn(async move {
                                     while let Some(req) = incoming_chan.recv().await {
                                         if let Err(err) = tx.send((req, outgoing_chan.clone())).await {
-                                            debug!("Failed to send message: {:?}", err);
+                                            debug!("Failed to send message: {err:?}");
                                         }
                                     }
                                 });
                             }
                             Err(err) => {
-                                error!("ipc server accept error: {:?}", err);
+                                error!("ipc server accept error: {err:?}");
                             }
                         }
                     }
@@ -141,7 +141,7 @@ impl IpcServer {
         }
         msg.push(0);
         if let Err(err) = send.write_all(&msg).await {
-            trace!("Failed to send message: {:?}", err);
+            trace!("Failed to send message: {err:?}");
         }
         Ok(())
     }
@@ -179,7 +179,7 @@ impl IpcServer {
                     }
                     Err(err) => {
                         // I/O errors are not rate-limited (they indicate connection issues)
-                        error!("Failed to read from socket: {:?}", err);
+                        error!("Failed to read from socket: {err:?}");
                         break;
                     }
                 };
@@ -193,18 +193,18 @@ impl IpcServer {
                 // Deserialize the message
                 let msg = match deserialize(&bytes) {
                     Ok(msg) => {
-                        trace!("Received message: {:?}", msg);
+                        trace!("Received message: {msg:?}");
                         msg
                     }
                     Err(err) => {
                         // Deserialization errors still count towards rate limit (already counted above)
-                        error!("Failed to deserialize message: {:?}", err);
+                        error!("Failed to deserialize message: {err:?}");
                         continue;
                     }
                 };
 
                 if let Err(err) = tx.send(msg).await {
-                    warn!("Failed to emit message: {:?}", err);
+                    warn!("Failed to emit message: {err:?}");
                 }
             }
         });
@@ -217,7 +217,7 @@ impl IpcServer {
             loop {
                 let msg = match rx.recv().await {
                     Some(msg) => {
-                        trace!("Sending message: {:?}", msg);
+                        trace!("Sending message: {msg:?}");
                         msg
                     }
                     None => {
@@ -226,7 +226,7 @@ impl IpcServer {
                     }
                 };
                 if let Err(err) = Self::send(&mut send, msg).await {
-                    warn!("Failed to send message: {:?}", err);
+                    warn!("Failed to send message: {err:?}");
                 }
             }
         });

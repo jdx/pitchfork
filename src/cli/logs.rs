@@ -75,7 +75,7 @@ impl Logs {
             };
             for id in &ids {
                 let log_dir = env::PITCHFORK_LOGS_DIR.join(id);
-                let path = log_dir.join(format!("{}.log", id));
+                let path = log_dir.join(format!("{id}.log"));
                 if path.exists() {
                     xx::file::create(&path)?;
                 }
@@ -332,10 +332,7 @@ pub fn print_logs_for_time_range(
         .collect_vec();
 
     if log_lines.is_empty() {
-        eprintln!(
-            "No logs found for daemon '{}' in the specified time range",
-            daemon_id
-        );
+        eprintln!("No logs found for daemon '{daemon_id}' in the specified time range");
     } else {
         eprintln!("\n{} {} {}", edim("==="), edim("Error logs"), edim("==="));
         for (date, _id, msg) in log_lines {

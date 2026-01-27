@@ -34,7 +34,7 @@ fn truncate_path_end(s: &str, max_chars: usize) -> String {
     } else {
         let suffix_len = max_chars.saturating_sub(3); // Account for "..."
         let suffix: String = s.chars().skip(char_count - suffix_len).collect();
-        format!("...{}", suffix)
+        format!("...{suffix}")
     }
 }
 
@@ -310,7 +310,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
 
     let selection_count = app.multi_select.len();
     let title = if selection_count > 0 {
-        format!(" Daemons ({} selected) ", selection_count)
+        format!(" Daemons ({selection_count} selected) ")
     } else if !app.search_query.is_empty() {
         format!(" Daemons ({} of {}) ", filtered.len(), app.daemons.len())
     } else {
@@ -387,7 +387,7 @@ fn status_display(status: &DaemonStatus) -> (String, Color) {
         DaemonStatus::Failed(_) => ("failed".to_string(), RED),
         DaemonStatus::Errored(code) => {
             let text = code
-                .map(|c| format!("errored ({})", c))
+                .map(|c| format!("errored ({c})"))
                 .unwrap_or_else(|| "errored".to_string());
             (text, RED)
         }
@@ -413,7 +413,7 @@ fn render_bar(percent: f32, width: usize) -> Line<'static> {
 
     let filled_str: String = std::iter::repeat_n(BAR_FULL, filled).collect();
     let empty_str: String = std::iter::repeat_n(BAR_EMPTY, empty).collect();
-    let pct_str = format!("{:>3.0}%", clamped);
+    let pct_str = format!("{clamped:>3.0}%");
 
     Line::from(vec![
         Span::styled(filled_str, Style::default().fg(bar_color)),
@@ -459,7 +459,7 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
         Span::styled(filled_str, Style::default().fg(bar_color)),
         Span::styled(empty_str, Style::default().fg(DARK_GRAY)),
         Span::raw(" "),
-        Span::styled(format!("{:>5}", size_str), Style::default().fg(GRAY)),
+        Span::styled(format!("{size_str:>5}"), Style::default().fg(GRAY)),
     ])
 }
 
@@ -694,7 +694,7 @@ fn draw_cpu_chart(f: &mut Frame, area: Rect, history: Option<&StatsHistory>) {
     let chart = Chart::new(datasets)
         .block(
             Block::default()
-                .title(format!(" CPU {:.1}% ", current))
+                .title(format!(" CPU {current:.1}% "))
                 .title_style(Style::default().fg(ORANGE).bold())
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(DARK_GRAY)),
@@ -855,10 +855,7 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     } else {
         String::new()
     };
-    let title = format!(
-        " Logs: {}{}{} ",
-        daemon_id, follow_indicator, search_indicator
-    );
+    let title = format!(" Logs: {daemon_id}{follow_indicator}{search_indicator} ");
 
     let visible_height = area.height.saturating_sub(2) as usize;
     let visible_lines: Vec<Line> = app
@@ -944,7 +941,7 @@ fn format_memory(bytes: u64) -> String {
 /// Format bytes per second rate
 fn format_rate(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{}B/s", bytes)
+        format!("{bytes}B/s")
     } else if bytes < 1024 * 1024 {
         format!("{:.1}K/s", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {
@@ -969,7 +966,7 @@ fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
         String::new()
     };
 
-    let search_bar = Paragraph::new(format!("{}{}", search_text, match_info))
+    let search_bar = Paragraph::new(format!("{search_text}{match_info}"))
         .style(if app.log_search_active {
             Style::default().fg(Color::White)
         } else {
@@ -1215,14 +1212,14 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
     f.render_widget(Clear, area);
 
     let (action_text, target_text) = match &app.pending_action {
-        Some(PendingAction::Stop(id)) => ("Stop", format!("daemon '{}'", id)),
-        Some(PendingAction::Restart(id)) => ("Restart", format!("daemon '{}'", id)),
-        Some(PendingAction::Disable(id)) => ("Disable", format!("daemon '{}'", id)),
+        Some(PendingAction::Stop(id)) => ("Stop", format!("daemon '{id}'")),
+        Some(PendingAction::Restart(id)) => ("Restart", format!("daemon '{id}'")),
+        Some(PendingAction::Disable(id)) => ("Disable", format!("daemon '{id}'")),
         Some(PendingAction::BatchStop(ids)) => ("Stop", format!("{} daemons", ids.len())),
         Some(PendingAction::BatchRestart(ids)) => ("Restart", format!("{} daemons", ids.len())),
         Some(PendingAction::BatchDisable(ids)) => ("Disable", format!("{} daemons", ids.len())),
         Some(PendingAction::DeleteDaemon { id, .. }) => {
-            ("Delete", format!("daemon '{}' from config", id))
+            ("Delete", format!("daemon '{id}' from config"))
         }
         Some(PendingAction::DiscardEditorChanges) => ("Discard", "unsaved changes".to_string()),
         None => ("Unknown", "unknown".to_string()),
@@ -1371,7 +1368,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         if let Some(delay) = cfg.ready_delay {
             lines.push(Line::from(vec![
                 Span::styled("Ready delay: ", Style::default().fg(GRAY)),
-                Span::styled(format!("{}s", delay), Style::default().fg(Color::White)),
+                Span::styled(format!("{delay}s"), Style::default().fg(Color::White)),
             ]));
         }
 
@@ -1487,7 +1484,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
 
     // Append error if present
     let id_display = if let Some(err) = &editor.daemon_id_error {
-        format!("{} [{}]", id_display, err)
+        format!("{id_display} [{err}]")
     } else {
         id_display
     };
@@ -1513,7 +1510,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
     // Config path
     let path_str = editor.config_path.display().to_string();
     let path_display = truncate_path_end(&path_str, 60);
-    let path_line = Paragraph::new(format!("  Config: {}", path_display))
+    let path_line = Paragraph::new(format!("  Config: {path_display}"))
         .style(Style::default().fg(GRAY).bg(Color::Rgb(20, 20, 20)));
     f.render_widget(path_line, chunks[1]);
 
@@ -1546,7 +1543,7 @@ fn draw_config_editor_overlay(f: &mut Frame, app: &App) {
         if let Some(error) = &field.error {
             lines.push(Line::from(vec![
                 Span::raw("    "),
-                Span::styled(format!("⚠ {}", error), Style::default().fg(RED)),
+                Span::styled(format!("⚠ {error}"), Style::default().fg(RED)),
             ]));
         }
 
@@ -1593,19 +1590,13 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
             let display = if s.is_empty() && !is_editing {
                 Span::styled("(empty)", Style::default().fg(DARK_GRAY).italic())
             } else {
-                Span::styled(
-                    format!("{}{}", s, cursor),
-                    Style::default().fg(Color::White),
-                )
+                Span::styled(format!("{s}{cursor}"), Style::default().fg(Color::White))
             };
             Line::from(vec![Span::raw("    "), display])
         }
         FormFieldValue::OptionalText(opt) => {
             let display = match opt {
-                Some(s) => Span::styled(
-                    format!("{}{}", s, cursor),
-                    Style::default().fg(Color::White),
-                ),
+                Some(s) => Span::styled(format!("{s}{cursor}"), Style::default().fg(Color::White)),
                 None if is_editing => {
                     Span::styled(cursor.to_string(), Style::default().fg(Color::White))
                 }
@@ -1615,10 +1606,7 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
         }
         FormFieldValue::Number(n) => {
             let display = if is_editing {
-                Span::styled(
-                    format!("{}{}", n, cursor),
-                    Style::default().fg(Color::White),
-                )
+                Span::styled(format!("{n}{cursor}"), Style::default().fg(Color::White))
             } else {
                 Span::styled(n.to_string(), Style::default().fg(Color::White))
             };
@@ -1626,10 +1614,7 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
         }
         FormFieldValue::OptionalNumber(opt) => {
             let display = match opt {
-                Some(n) => Span::styled(
-                    format!("{}{}", n, cursor),
-                    Style::default().fg(Color::White),
-                ),
+                Some(n) => Span::styled(format!("{n}{cursor}"), Style::default().fg(Color::White)),
                 None if is_editing => {
                     Span::styled(cursor.to_string(), Style::default().fg(Color::White))
                 }
@@ -1639,10 +1624,7 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
         }
         FormFieldValue::OptionalPort(opt) => {
             let display = match opt {
-                Some(p) => Span::styled(
-                    format!("{}{}", p, cursor),
-                    Style::default().fg(Color::White),
-                ),
+                Some(p) => Span::styled(format!("{p}{cursor}"), Style::default().fg(Color::White)),
                 None if is_editing => {
                     Span::styled(cursor.to_string(), Style::default().fg(Color::White))
                 }
@@ -1705,7 +1687,7 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
                 } else {
                     Style::default().fg(GRAY)
                 };
-                spans.push(Span::styled(format!("{} ", name), style));
+                spans.push(Span::styled(format!("{name} "), style));
             }
             Line::from(spans)
         }
@@ -1714,10 +1696,7 @@ fn render_field_value(field: &crate::tui::app::FormField, is_editing: bool) -> L
                 Span::styled("(none)", Style::default().fg(DARK_GRAY).italic())
             } else {
                 let text = v.join(", ");
-                Span::styled(
-                    format!("{}{}", text, cursor),
-                    Style::default().fg(Color::White),
-                )
+                Span::styled(format!("{text}{cursor}"), Style::default().fg(Color::White))
             };
             Line::from(vec![Span::raw("    "), display])
         }

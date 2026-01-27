@@ -228,7 +228,7 @@ fn test_cron_retrigger_variants() -> Result<()> {
     ];
 
     for (variant_name, expected) in variants {
-        let toml_path = temp_dir.path().join(format!("cron_{}.toml", variant_name));
+        let toml_path = temp_dir.path().join(format!("cron_{variant_name}.toml"));
         let toml_content = format!(
             r#"
 [daemons.test]
@@ -236,9 +236,8 @@ run = "echo 'test'"
 
 [daemons.test.cron]
 schedule = "* * * * *"
-retrigger = "{}"
-"#,
-            variant_name
+retrigger = "{variant_name}"
+"#
         );
 
         fs::write(&toml_path, toml_content).unwrap();

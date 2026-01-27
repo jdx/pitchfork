@@ -83,7 +83,7 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
                 }
             }
             Err(e) => {
-                log::warn!("Invalid glob pattern '{}': {}", pattern, e);
+                log::warn!("Invalid glob pattern '{pattern}': {e}");
             }
         }
 

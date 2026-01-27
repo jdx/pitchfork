@@ -222,9 +222,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 
     let safe_id = html_escape(&id);
     let url_id = url_encode(&id);
-    let log_path = env::PITCHFORK_LOGS_DIR
-        .join(&id)
-        .join(format!("{}.log", id));
+    let log_path = env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"));
 
     let initial_logs = if log_path.exists() {
         match std::fs::read(&log_path) {
@@ -270,7 +268,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     "#
     );
 
-    Html(base_html(&format!("Logs: {}", safe_id), &content))
+    Html(base_html(&format!("Logs: {safe_id}"), &content))
 }
 
 pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
@@ -279,9 +277,7 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
         return Html(String::new());
     }
 
-    let log_path = env::PITCHFORK_LOGS_DIR
-        .join(&id)
-        .join(format!("{}.log", id));
+    let log_path = env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"));
 
     let logs = if log_path.exists() {
         match std::fs::read(&log_path) {
@@ -312,9 +308,7 @@ pub async fn stream_sse(
     let valid_id = is_valid_daemon_id(&id);
 
     let log_path = if valid_id {
-        env::PITCHFORK_LOGS_DIR
-            .join(&id)
-            .join(format!("{}.log", id))
+        env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"))
     } else {
         // Return a dummy path that won't exist - stream will just be empty
         std::path::PathBuf::from("/dev/null/invalid")
@@ -367,9 +361,7 @@ pub async fn clear(Path(id): Path<String>) -> Html<String> {
         return Html("".to_string());
     }
 
-    let log_path = env::PITCHFORK_LOGS_DIR
-        .join(&id)
-        .join(format!("{}.log", id));
+    let log_path = env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"));
 
     if log_path.exists() {
         let _ = std::fs::write(&log_path, "");

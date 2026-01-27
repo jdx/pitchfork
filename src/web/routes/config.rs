@@ -173,7 +173,7 @@ pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
     let content_value = if canonical_path.exists() {
         match std::fs::read_to_string(&canonical_path) {
             Ok(c) => html_escape(&c),
-            Err(e) => format!("# Error reading file: {}", e),
+            Err(e) => format!("# Error reading file: {e}"),
         }
     } else {
         r#"# New pitchfork.toml configuration

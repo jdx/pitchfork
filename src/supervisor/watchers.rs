@@ -138,7 +138,7 @@ impl Supervisor {
                             let cmd = match shell_words::split(&run_cmd) {
                                 Ok(cmd) => cmd,
                                 Err(e) => {
-                                    error!("failed to parse command for cron daemon {}: {}", id, e);
+                                    error!("failed to parse command for cron daemon {id}: {e}");
                                     continue;
                                 }
                             };
@@ -221,7 +221,7 @@ impl Supervisor {
                     all_dirs.extend(dirs);
                 }
                 Err(e) => {
-                    warn!("Failed to expand watch patterns for {}: {}", id, e);
+                    warn!("Failed to expand watch patterns for {id}: {e}");
                 }
             }
         }
@@ -236,7 +236,7 @@ impl Supervisor {
             let mut wf = match WatchFiles::new(Duration::from_secs(1)) {
                 Ok(wf) => wf,
                 Err(e) => {
-                    error!("Failed to create file watcher: {}", e);
+                    error!("Failed to create file watcher: {e}");
                     return;
                 }
             };
@@ -252,7 +252,7 @@ impl Supervisor {
 
             // Process file change events
             while let Some(changed_paths) = wf.rx.recv().await {
-                debug!("File changes detected: {:?}", changed_paths);
+                debug!("File changes detected: {changed_paths:?}");
 
                 // Find which daemons should be restarted based on the changed paths
                 let mut daemons_to_restart = std::collections::HashSet::new();
@@ -273,7 +273,7 @@ impl Supervisor {
                 // Restart each affected daemon
                 for id in daemons_to_restart {
                     if let Err(e) = SUPERVISOR.restart_watched_daemon(&id).await {
-                        error!("Failed to restart daemon {} after file change: {}", id, e);
+                        error!("Failed to restart daemon {id} after file change: {e}");
                     }
                 }
             }
@@ -292,26 +292,23 @@ impl Supervisor {
             .is_some_and(|d| d.pid.is_some() && d.status.is_running());
 
         if !is_running {
-            debug!(
-                "Daemon {} is not running, skipping restart on file change",
-                id
-            );
+            debug!("Daemon {id} is not running, skipping restart on file change");
             return Ok(());
         }
 
         // Check if daemon is disabled
         let is_disabled = self.state_file.lock().await.disabled.contains(id);
         if is_disabled {
-            debug!("Daemon {} is disabled, skipping restart on file change", id);
+            debug!("Daemon {id} is disabled, skipping restart on file change");
             return Ok(());
         }
 
-        info!("Restarting daemon {} due to file change", id);
+        info!("Restarting daemon {id} due to file change");
 
         // Get the daemon config to rebuild RunOptions
         let pt = PitchforkToml::all_merged();
         let Some(daemon_config) = pt.daemons.get(id) else {
-            warn!("Daemon {} not found in config, cannot restart", id);
+            warn!("Daemon {id} not found in config, cannot restart");
             return Ok(());
         };
 
@@ -325,7 +322,7 @@ impl Supervisor {
         let cmd = match shell_words::split(&daemon_config.run) {
             Ok(cmd) => cmd,
             Err(e) => {
-                error!("Failed to parse command for daemon {}: {}", id, e);
+                error!("Failed to parse command for daemon {id}: {e}");
                 return Ok(());
             }
         };
@@ -363,16 +360,13 @@ impl Supervisor {
 
         match self.run(run_opts).await {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
-                info!("Successfully restarted daemon {} after file change", id);
+                info!("Successfully restarted daemon {id} after file change");
             }
             Ok(other) => {
-                warn!(
-                    "Unexpected response when restarting daemon {}: {:?}",
-                    id, other
-                );
+                warn!("Unexpected response when restarting daemon {id}: {other:?}");
             }
             Err(e) => {
-                error!("Failed to restart daemon {}: {}", id, e);
+                error!("Failed to restart daemon {id}: {e}");
             }
         }
 

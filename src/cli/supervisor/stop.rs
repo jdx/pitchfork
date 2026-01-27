@@ -13,7 +13,7 @@ impl Stop {
         if let Some(d) = pid_file.daemons.get("pitchfork")
             && let Some(pid) = d.pid
         {
-            info!("Stopping pitchfork daemon with pid {}", pid);
+            info!("Stopping pitchfork daemon with pid {pid}");
             if kill_or_stop(pid, true).await? {
                 return Ok(());
             }

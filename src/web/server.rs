@@ -68,16 +68,16 @@ pub async fn serve(port: u16) -> Result<()> {
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => {
                 if offset > 0 {
-                    info!("Port {} was in use, using port {} instead", port, try_port);
+                    info!("Port {port} was in use, using port {try_port} instead");
                 }
-                info!("Web UI listening on http://{}", addr);
+                info!("Web UI listening on http://{addr}");
 
                 return axum::serve(listener, app)
                     .await
                     .map_err(|e| miette::miette!("Web server error: {}", e));
             }
             Err(e) => {
-                debug!("Port {} unavailable: {}", try_port, e);
+                debug!("Port {try_port} unavailable: {e}");
                 last_error = Some(e);
             }
         }
