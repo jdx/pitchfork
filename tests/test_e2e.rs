@@ -854,6 +854,10 @@ fn test_ready_http_check() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
+    // Clean up any stray processes on port 18081
+    #[cfg(unix)]
+    env.kill_port(18081);
+
     let script = get_script_path("http_server.ts");
     // Server starts listening after 1 second delay
     let toml_content = format!(
@@ -907,6 +911,10 @@ ready_http = "http://localhost:18081/health"
 fn test_ready_port_check() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
+
+    // Clean up any stray processes on port 18082
+    #[cfg(unix)]
+    env.kill_port(18082);
 
     let script = get_script_path("http_server.ts");
     // Server starts listening after 1 second delay

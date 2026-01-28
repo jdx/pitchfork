@@ -27,7 +27,8 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         crate::daemon_status::DaemonStatus::Waiting => "waiting",
         crate::daemon_status::DaemonStatus::Stopping => "stopping",
         crate::daemon_status::DaemonStatus::Failed(_) => "failed",
-        crate::daemon_status::DaemonStatus::Errored(_) => "errored",
+        crate::daemon_status::DaemonStatus::Errored(_)
+        | crate::daemon_status::DaemonStatus::ErroredUnknown => "errored",
     };
 
     let pid_display = d

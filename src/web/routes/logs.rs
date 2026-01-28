@@ -96,12 +96,11 @@ pub async fn index() -> Html<String> {
 
             // Tab button - use js_id for onclick to prevent JS injection
             tabs.push_str(&format!(
-                r#"<button class="tab{}" onclick="switchTab('{}', event)">{}</button>"#,
-                active_class, js_id, safe_id
+                r#"<button class="tab{active_class}" onclick="switchTab('{js_id}', event)">{safe_id}</button>"#
             ));
 
             // Tab content
-            let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{}.log", id));
+            let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
 
             let initial_logs = if log_path.exists() {
                 match std::fs::read(&log_path) {
@@ -123,21 +122,20 @@ pub async fn index() -> Html<String> {
 
             tab_contents.push_str(&format!(
                 r#"
-                <div id="tab-{}" class="tab-content{}">
+                <div id="tab-{safe_id}" class="tab-content{active_class}">
                     <div class="page-header">
-                        <h2>DAEMON: {}</h2>
+                        <h2>DAEMON: {safe_id}</h2>
                         <div class="header-actions">
-                            <button hx-post="/logs/{}/clear" hx-swap="none" class="btn btn-sm"
-                                hx-confirm="Are you sure you want to clear the logs for {}?"
-                                onclick="clearTabLogs('{}')"><i data-lucide="trash-2" class="icon"></i> Clear Logs</button>
+                            <button hx-post="/logs/{url_id}/clear" hx-swap="none" class="btn btn-sm"
+                                hx-confirm="Are you sure you want to clear the logs for {safe_id}?"
+                                onclick="clearTabLogs('{js_id}')"><i data-lucide="trash-2" class="icon"></i> Clear Logs</button>
                         </div>
                     </div>
                     <div class="log-viewer">
-                        <pre id="log-output-{}" hx-ext="sse" sse-connect="/logs/{}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{}</pre>
+                        <pre id="log-output-{safe_id}" hx-ext="sse" sse-connect="/logs/{url_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
                     </div>
                 </div>
-                "#,
-                safe_id, active_class, safe_id, url_id, safe_id, js_id, safe_id, url_id, initial_logs
+                "#
             ));
         }
 
@@ -197,12 +195,11 @@ pub async fn index() -> Html<String> {
                     let url_id = url_encode(id);
                     format!(
                         r#"
-                var clearSource_{} = new EventSource('/logs/{}/stream');
-                clearSource_{}.addEventListener('clear', function(e) {{
-                    document.getElementById('log-output-' + '{}').textContent = '';
+                var clearSource_{idx} = new EventSource('/logs/{url_id}/stream');
+                clearSource_{idx}.addEventListener('clear', function(e) {{
+                    document.getElementById('log-output-' + '{js_id}').textContent = '';
                 }});
-                "#,
-                        idx, url_id, idx, js_id
+                "#
                     )
                 })
                 .collect::<Vec<_>>()
