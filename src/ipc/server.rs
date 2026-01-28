@@ -179,7 +179,7 @@ impl IpcServer {
                     }
                     Err(err) => {
                         // I/O errors are not rate-limited (they indicate connection issues)
-                        error!("Failed to read from socket: {err:?}");
+                        debug!("Failed to read from socket: {err:?}");
                         break;
                     }
                 };
@@ -197,9 +197,11 @@ impl IpcServer {
                         msg
                     }
                     Err(err) => {
-                        // Deserialization errors still count towards rate limit (already counted above)
-                        error!("Failed to deserialize message: {err:?}");
-                        continue;
+                        // Send an Invalid request so the handler can respond with an error
+                        warn!("Failed to deserialize message: {err:?}");
+                        IpcRequest::Invalid {
+                            error: format!("{err:#}"),
+                        }
                     }
                 };
 

@@ -35,6 +35,10 @@ impl Supervisor {
     /// Handle a single IPC request and return the appropriate response
     pub(crate) async fn handle_ipc(&self, req: IpcRequest) -> Result<IpcResponse> {
         let rsp = match req {
+            IpcRequest::Invalid { error } => {
+                warn!("Invalid IPC request: {error}");
+                return Ok(IpcResponse::Error(format!("Invalid request: {error}")));
+            }
             IpcRequest::Connect => {
                 debug!("received connect message");
                 IpcResponse::Ok

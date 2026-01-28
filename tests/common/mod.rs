@@ -212,6 +212,29 @@ impl TestEnv {
         None
     }
 
+    /// Kill any process listening on the specified port
+    #[cfg(unix)]
+    pub fn kill_port(&self, port: u16) {
+        use std::process::Command;
+        // Use lsof to find process using the port, then kill it
+        let output = Command::new("lsof")
+            .args(["-ti", &format!(":{port}")])
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for pid in pids.lines() {
+                    if let Ok(pid) = pid.trim().parse::<i32>() {
+                        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+                    }
+                }
+                // Give the OS time to release the port
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
     /// Cleanup all processes and supervisor
     pub fn cleanup(&self) {
         let _ = self.run_command(&["supervisor", "stop"]);
