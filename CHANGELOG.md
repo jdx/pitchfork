@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/jdx/pitchfork/compare/v1.2.0...v1.3.0) - 2026-01-28
+
+### Added
+
+- impl `stop --all` ([#195](https://github.com/jdx/pitchfork/pull/195))
+- beautify web ui ([#191](https://github.com/jdx/pitchfork/pull/191))
+- add ready_cmd option ([#187](https://github.com/jdx/pitchfork/pull/187))
+
+### Fixed
+
+- refactor the logic of stopping a daemon and add tests ([#192](https://github.com/jdx/pitchfork/pull/192))
+
+### Other
+
+- *(ci)* run linting on all files in CI ([#196](https://github.com/jdx/pitchfork/pull/196))
+- Update README.md logo ([#184](https://github.com/jdx/pitchfork/pull/184))
+
 ## [1.2.0](https://github.com/jdx/pitchfork/compare/v1.1.0...v1.2.0) - 2026-01-19
 
 ### Added
