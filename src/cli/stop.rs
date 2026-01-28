@@ -37,8 +37,12 @@ pub struct Stop {
 impl Stop {
     pub async fn run(&self) -> Result<()> {
         ensure!(
+            !(self.all && !self.id.is_empty()),
+            "--all and daemon IDs cannot be used together"
+        );
+        ensure!(
             self.all || !self.id.is_empty(),
-            "At least one daemon ID must be provided"
+            "At least one daemon ID must be provided (or use --all)"
         );
 
         let ipc = Arc::new(IpcClient::connect(false).await?);
