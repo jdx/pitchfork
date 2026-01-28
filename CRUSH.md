@@ -87,8 +87,8 @@ All commit messages and PR titles MUST follow conventional commit format:
 **Format:** `<type>(<scope>): <description>`
 
 **Types:**
-- `feat:` - New features
-- `fix:` - Bug fixes that affect the CLI behavior (not CI, docs, or infrastructure)
+- `feat:` - New features that affect the pitchfork CLI/application
+- `fix:` - Bug fixes that affect the pitchfork CLI/application (not CI, docs, or infrastructure)
 - `refactor:` - Code refactoring
 - `docs:` - Documentation changes
 - `style:` - Code style/formatting (no logic changes)
@@ -112,3 +112,5 @@ All commit messages and PR titles MUST follow conventional commit format:
 - `feat(cron): support timezone-aware scheduling`
 - `docs: update configuration examples`
 - `chore: release 0.2.0`
+- `chore(ci): fix linting in CI pipeline`
+- `chore(deps): update dependencies`

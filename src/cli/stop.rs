@@ -37,7 +37,7 @@ pub struct Stop {
 impl Stop {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            !(self.all && !self.id.is_empty()),
+            !self.all || self.id.is_empty(),
             "--all and daemon IDs cannot be used together"
         );
         ensure!(
