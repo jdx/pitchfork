@@ -12,10 +12,10 @@ dir = "docs"
 run = "bun i && exec bun run docs:dev"
 
 [tasks.lint]
-run = "hk check"
+run = "hk check --all"
 
 [tasks.lint-fix]
-run = "hk fix"
+run = "hk fix --all"
 
 [tasks.build]
 run = "cargo build"
