@@ -56,7 +56,7 @@ impl Supervisor {
                 let cmd = match shell_words::split(&run_cmd) {
                     Ok(cmd) => cmd,
                     Err(e) => {
-                        error!("failed to parse command for daemon {}: {}", id, e);
+                        error!("failed to parse command for daemon {id}: {e}");
                         // Mark as exhausted to prevent infinite retry loop, preserving error status
                         self.upsert_daemon(UpsertDaemonOpts {
                             id,
@@ -88,10 +88,10 @@ impl Supervisor {
                     depends: daemon.depends.clone(),
                 };
                 if let Err(e) = self.run(retry_opts).await {
-                    error!("failed to retry daemon {}: {}", id, e);
+                    error!("failed to retry daemon {id}: {e}");
                 }
             } else {
-                warn!("no run command found for daemon {}, cannot retry", id);
+                warn!("no run command found for daemon {id}, cannot retry");
                 // Mark as exhausted
                 self.upsert_daemon(UpsertDaemonOpts {
                     id,

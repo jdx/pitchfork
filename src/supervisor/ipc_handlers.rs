@@ -15,18 +15,18 @@ impl Supervisor {
             let (msg, send) = match ipc.read().await {
                 Ok(msg) => msg,
                 Err(e) => {
-                    error!("failed to accept connection: {:?}", e);
+                    error!("failed to accept connection: {e:?}");
                     continue;
                 }
             };
-            debug!("received message: {:?}", msg);
+            debug!("received message: {msg:?}");
             tokio::spawn(async move {
                 let rsp = SUPERVISOR
                     .handle_ipc(msg)
                     .await
                     .unwrap_or_else(|err| IpcResponse::Error(err.to_string()));
                 if let Err(err) = send.send(rsp).await {
-                    debug!("failed to send message: {:?}", err);
+                    debug!("failed to send message: {err:?}");
                 }
             });
         }

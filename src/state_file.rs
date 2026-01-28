@@ -43,11 +43,11 @@ impl StateFile {
         }
         let _lock = xx::fslock::get(path, false)?;
         let raw = xx::file::read_to_string(path).unwrap_or_else(|e| {
-            warn!("Error reading state file {:?}: {}", path, e);
+            warn!("Error reading state file {path:?}: {e}");
             String::new()
         });
         let mut state_file: Self = toml::from_str(&raw).unwrap_or_else(|e| {
-            warn!("Error parsing state file {:?}: {}", path, e);
+            warn!("Error parsing state file {path:?}: {e}");
             Self::new(path.to_path_buf())
         });
         state_file.path = path.to_path_buf();

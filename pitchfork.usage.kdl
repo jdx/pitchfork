@@ -145,8 +145,9 @@ cmd status help="Display the status of a daemon" {
 }
 cmd stop help="Sends a stop signal to a daemon" {
     alias kill
-    long_help "Sends a stop signal to a daemon\n\nSends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'\nto check if the daemon has stopped.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork kill api           Same as 'stop' (alias)"
-    arg "[ID]…" help="The name of the daemon to stop" required=#false var=#true
+    long_help "Sends a stop signal to a daemon\n\nSends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'\nto check if the daemon has stopped.\n\nWhen using --all, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork kill api           Same as 'stop' (alias)"
+    flag "-a --all" help="Stop all running daemons (in reverse dependency order)"
+    arg "[ID]…" help="The name of the daemon(s) to stop" required=#false var=#true
 }
 cmd supervisor subcommand_required=#true help="Start, stop, and check the status of the pitchfork supervisor daemon" {
     alias sup

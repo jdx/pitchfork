@@ -75,7 +75,7 @@ impl Procs {
 
     fn kill(&self, pid: u32) -> bool {
         if let Some(process) = self.lock_system().process(sysinfo::Pid::from_u32(pid)) {
-            debug!("killing process {}", pid);
+            debug!("killing process {pid}");
             #[cfg(windows)]
             process.kill();
             #[cfg(unix)]
@@ -253,7 +253,7 @@ impl ExtendedProcessStats {
 
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{}B", bytes)
+        format!("{bytes}B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1}KB", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {
@@ -265,23 +265,23 @@ fn format_bytes(bytes: u64) -> String {
 
 fn format_duration(secs: u64) -> String {
     if secs < 60 {
-        format!("{}s", secs)
+        format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else if secs < 86400 {
         let hours = secs / 3600;
         let mins = (secs % 3600) / 60;
-        format!("{}h {}m", hours, mins)
+        format!("{hours}h {mins}m")
     } else {
         let days = secs / 86400;
         let hours = (secs % 86400) / 3600;
-        format!("{}d {}h", days, hours)
+        format!("{days}d {hours}h")
     }
 }
 
 fn format_bytes_per_sec(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{}B/s", bytes)
+        format!("{bytes}B/s")
     } else if bytes < 1024 * 1024 {
         format!("{:.1}KB/s", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {

@@ -1433,7 +1433,7 @@ impl App {
         };
 
         client.run(opts).await?;
-        self.set_message(format!("Started {}", daemon_id));
+        self.set_message(format!("Started {daemon_id}"));
         Ok(())
     }
 
@@ -1484,7 +1484,7 @@ impl App {
             ));
             self.view = View::ConfigEditor;
         } else {
-            self.set_message(format!("Daemon '{}' not found in config", daemon_id));
+            self.set_message(format!("Daemon '{daemon_id}' not found in config"));
         }
     }
 
@@ -1526,7 +1526,7 @@ impl App {
 
         if is_duplicate {
             let daemon_id = editor.daemon_id.clone();
-            self.set_message(format!("A daemon named '{}' already exists", daemon_id));
+            self.set_message(format!("A daemon named '{daemon_id}' already exists"));
             return Ok(false);
         }
 
@@ -1547,7 +1547,7 @@ impl App {
 
         editor.unsaved_changes = false;
         let daemon_id = editor.daemon_id.clone();
-        self.set_message(format!("Saved daemon '{}'", daemon_id));
+        self.set_message(format!("Saved daemon '{daemon_id}'"));
 
         Ok(true)
     }

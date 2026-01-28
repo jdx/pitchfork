@@ -25,7 +25,7 @@ run = "bun run {} 0"
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     // Key test: daemon fails instantly (before 3s ready check)
@@ -67,7 +67,7 @@ retry = 0
     let elapsed = start_time.elapsed();
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     // Key test: daemon fails after 2s (before 3s ready check)
@@ -78,8 +78,7 @@ retry = 0
     );
     assert!(
         elapsed >= Duration::from_secs(2),
-        "Start should wait at least 2s for daemon to fail, took {:?}",
-        elapsed
+        "Start should wait at least 2s for daemon to fail, took {elapsed:?}"
     );
 
     // Optional: verify logs
@@ -114,7 +113,7 @@ retry = 0
     let elapsed = start_time.elapsed();
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     // Key test: daemon fails after 4s, which is AFTER the 3s ready check
@@ -125,8 +124,7 @@ retry = 0
     );
     assert!(
         elapsed >= Duration::from_secs(3),
-        "Start should wait at least 3s for ready check, took {:?}",
-        elapsed
+        "Start should wait at least 3s for ready check, took {elapsed:?}"
     );
 
     let _ = env.run_command(&["stop", "four_sec_fail"]);
@@ -154,7 +152,7 @@ run = "sleep 10"
     // Run list command
     let output = env.run_command(&["list"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("List output: {}", stdout);
+    println!("List output: {stdout}");
 
     assert!(stdout.contains("test_list"), "List should show the daemon");
     assert!(output.status.success(), "List command should succeed");
@@ -187,7 +185,7 @@ run = "bun run {} 0"
     // Run list command and check for error message
     let output = env.run_command(&["list"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("List output: {}", stdout);
+    println!("List output: {stdout}");
 
     assert!(
         stdout.contains("list_error_test"),
@@ -195,8 +193,7 @@ run = "bun run {} 0"
     );
     assert!(
         stdout.contains("exit code"),
-        "List should show the exit code error message, got: {}",
-        stdout
+        "List should show the exit code error message, got: {stdout}"
     );
     assert!(output.status.success(), "List command should succeed");
 
@@ -268,7 +265,7 @@ ready_delay = 0
     // Check the stdout from the tail command
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    println!("Tail output: {}", stdout);
+    println!("Tail output: {stdout}");
 
     // Verify that tail command captured the streaming output
     assert!(!stdout.is_empty(), "Tail output should not be empty");
@@ -307,7 +304,7 @@ ready_delay = 0
     let start_output = env.run_command(&["start", "test_wait"]);
     let start_elapsed = start_time.elapsed();
 
-    println!("start elapsed: {:?}", start_elapsed);
+    println!("start elapsed: {start_elapsed:?}");
     assert!(
         start_output.status.success(),
         "Start command should succeed"
@@ -315,8 +312,7 @@ ready_delay = 0
 
     assert!(
         start_elapsed < Duration::from_secs(2),
-        "Start should return quickly with ready_delay=0, took {:?}",
-        start_elapsed
+        "Start should return quickly with ready_delay=0, took {start_elapsed:?}"
     );
 
     // Run wait command in background - it should wait for daemon to exit (~3s total)
@@ -329,7 +325,7 @@ ready_delay = 0
         .expect("Failed to get wait output");
     let wait_elapsed = wait_start.elapsed();
 
-    println!("wait elapsed: {:?}", wait_elapsed);
+    println!("wait elapsed: {wait_elapsed:?}");
     println!("wait stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("wait stderr: {}", String::from_utf8_lossy(&output.stderr));
 
@@ -341,8 +337,7 @@ ready_delay = 0
     );
     assert!(
         wait_elapsed >= Duration::from_secs(2) && wait_elapsed < Duration::from_secs(6),
-        "Wait should exit when daemon exits (~3s), took {:?}",
-        wait_elapsed
+        "Wait should exit when daemon exits (~3s), took {wait_elapsed:?}"
     );
 
     // Clean up
@@ -368,7 +363,7 @@ run = "sleep 10"
     // Check status
     let output = env.run_command(&["status", "test_status"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Status output: {}", stdout);
+    println!("Status output: {stdout}");
 
     assert!(output.status.success(), "Status command should succeed");
 
@@ -402,7 +397,7 @@ retry = 0
     let elapsed = start_time.elapsed();
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     // Key test: with retry=0, daemon fails immediately, start should fail quickly
@@ -412,8 +407,7 @@ retry = 0
     );
     assert!(
         elapsed < Duration::from_secs(3),
-        "Start should return before ready check when daemon fails immediately, took {:?}",
-        elapsed
+        "Start should return before ready check when daemon fails immediately, took {elapsed:?}"
     );
 
     // Optional: verify only one attempt
@@ -447,7 +441,7 @@ retry = 3  # exponential backoff: 1s, 2s, 4s between retries
     let elapsed = start_time.elapsed();
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     // Key test: even with retry=3, if all attempts fail, start should ultimately fail
@@ -459,20 +453,18 @@ retry = 3  # exponential backoff: 1s, 2s, 4s between retries
     // Each retry has exponential backoff, so it should take at least a few seconds
     assert!(
         elapsed >= Duration::from_secs(7), // 1 + 2 + 4
-        "Start should take time for retries with backoff, took {:?}",
-        elapsed
+        "Start should take time for retries with backoff, took {elapsed:?}"
     );
 
     // Optional: verify multiple attempts were made
     let logs = env.read_logs("retry_three");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let attempt_count = logs.matches("Failed after 0!").count();
 
     assert!(
         attempt_count == 4,
-        "Should not exceed 4 attempts (1 + 3 retries), got {}",
-        attempt_count
+        "Should not exceed 4 attempts (1 + 3 retries), got {attempt_count}"
     );
 
     let _ = env.run_command(&["stop", "retry_three"]);
@@ -510,7 +502,7 @@ retry = 2  # totally 3 attempts
     let elapsed = start_time.elapsed();
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     // Key test: with retry, daemon fails twice then succeeds on third attempt
@@ -522,13 +514,12 @@ retry = 2  # totally 3 attempts
 
     // Optional: verify it did retry and eventually succeed
     let logs = env.read_logs("retry_success");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let attempt_count = logs.matches("Attempt").count();
     assert_eq!(
         attempt_count, 3,
-        "Should attempt 3 times before succeeding, got {}",
-        attempt_count
+        "Should attempt 3 times before succeeding, got {attempt_count}"
     );
     assert!(logs.contains("Success!"), "Should eventually succeed");
 
@@ -556,7 +547,7 @@ ready_delay = 1
     let output = env.run_command(&["start", "custom_delay"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
 
     // With ready_delay=1, should be ready in ~1 second, not 3
@@ -586,7 +577,7 @@ ready_output = "READY"
     let output = env.run_command(&["start", "ready_pattern"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
 
     // Should be ready after ~1 second when "READY" appears, not wait for 3s delay
@@ -619,7 +610,7 @@ ready_output = "Listening on http://.*:(\\d+)"
     let output = env.run_command(&["start", "ready_regex"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
 
     // Should match the regex pattern
@@ -659,7 +650,7 @@ ready_output = "NEVER_APPEARS"
     let output = env.run_command(&["start", "ready_no_match"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("exit code: {:?}", output.status.code());
 
@@ -667,13 +658,12 @@ ready_output = "NEVER_APPEARS"
     // slowly_output.ts outputs 5 times with 1s interval, so runs for ~5 seconds
     assert!(
         elapsed >= Duration::from_secs(3),
-        "Should block until daemon exits (~3s), took {:?}",
-        elapsed
+        "Should block until daemon exits (~3s), took {elapsed:?}"
     );
 
     // Check logs to verify daemon did run
     let logs = env.read_logs("ready_no_match");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
     assert!(
         logs.contains("Output 3/3"),
         "Logs should show daemon ran to completion"
@@ -700,7 +690,7 @@ ready_delay = 5
     let _output = env.run_command(&["start", "ready_both"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
 
     // When both are specified, whichever happens first should trigger ready
     // The output pattern should match first (~0.5s) before the delay (5s)
@@ -741,7 +731,7 @@ run = "echo 'Daemon 3' && sleep 10"
     // List should show all three
     let output = env.run_command(&["list"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("List: {}", stdout);
+    println!("List: {stdout}");
 
     assert!(stdout.contains("daemon1"), "Should list daemon1");
     assert!(stdout.contains("daemon2"), "Should list daemon2");
@@ -774,7 +764,7 @@ ready_delay = 1
     let elapsed = start_time.elapsed();
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
     println!("exit code: {:?}", output.status.code());
 
     env.sleep(Duration::from_secs(3));
@@ -788,13 +778,12 @@ ready_delay = 1
 
     // Optional: verify multiple attempts
     let logs = env.read_logs("retry_ready");
-    println!("Logs:\n{}", logs);
+    println!("Logs:\n{logs}");
 
     let attempt_count = logs.matches("Failed after 0!").count();
     assert!(
         attempt_count > 1,
-        "Should retry multiple times, got {}",
-        attempt_count
+        "Should retry multiple times, got {attempt_count}"
     );
 
     let _ = env.run_command(&["stop", "retry_ready"]);
@@ -848,13 +837,11 @@ ready_delay = 0
     let logs2_after = env.read_logs("clear_test_2");
     assert!(
         logs1_after.is_empty(),
-        "Daemon 1 logs should be cleared, got: {}",
-        logs1_after
+        "Daemon 1 logs should be cleared, got: {logs1_after}"
     );
     assert!(
         logs2_after.is_empty(),
-        "Daemon 2 logs should be cleared, got: {}",
-        logs2_after
+        "Daemon 2 logs should be cleared, got: {logs2_after}"
     );
 
     // Clean up
@@ -883,7 +870,7 @@ ready_http = "http://localhost:18081/health"
     let output = env.run_command(&["start", "http_test"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
 
@@ -902,13 +889,14 @@ ready_http = "http://localhost:18081/health"
     );
 
     // Small delay to let stdout flush to logs
-    env.sleep(Duration::from_millis(100));
+    env.sleep(Duration::from_millis(500));
 
     // Verify logs show the server started
     let logs = env.read_logs("http_test");
+    println!("Logs: {logs}");
     assert!(
         logs.contains("Server listening"),
-        "Logs should contain server start message"
+        "Logs should contain server start message, got: {logs}"
     );
 
     // Clean up
@@ -936,7 +924,7 @@ ready_port = 18082
     let output = env.run_command(&["start", "port_test"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
 
@@ -955,13 +943,14 @@ ready_port = 18082
     );
 
     // Small delay to let stdout flush to logs
-    env.sleep(Duration::from_millis(100));
+    env.sleep(Duration::from_millis(500));
 
     // Verify logs show the server started
     let logs = env.read_logs("port_test");
+    println!("Logs: {logs}");
     assert!(
         logs.contains("Server listening"),
-        "Logs should contain server start message"
+        "Logs should contain server start message, got: {logs}"
     );
 
     // Clean up
@@ -982,10 +971,9 @@ fn test_ready_cmd_check() {
     let toml_content = format!(
         r#"
 [daemons.cmd_test]
-run = "bash -c 'echo Starting; sleep 1; touch {}; echo Ready; sleep 60'"
-ready_cmd = "test -f {}"
-"#,
-        marker_path, marker_path
+run = "bash -c 'echo Starting; sleep 1; touch {marker_path}; echo Ready; sleep 60'"
+ready_cmd = "test -f {marker_path}"
+"#
     );
     env.create_toml(&toml_content);
 
@@ -993,7 +981,7 @@ ready_cmd = "test -f {}"
     let output = env.run_command(&["start", "cmd_test"]);
     let elapsed = start_time.elapsed();
 
-    println!("Start took: {:?}", elapsed);
+    println!("Start took: {elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
 
@@ -1015,15 +1003,19 @@ ready_cmd = "test -f {}"
     assert!(marker_file.exists(), "Marker file should have been created");
 
     // Small delay to let stdout flush to logs
-    env.sleep(Duration::from_millis(100));
+    env.sleep(Duration::from_millis(500));
 
     // Verify logs show the daemon started and became ready
     let logs = env.read_logs("cmd_test");
+    println!("Logs: {logs}");
     assert!(
         logs.contains("Starting"),
-        "Logs should contain start message"
+        "Logs should contain start message, got: {logs}"
     );
-    assert!(logs.contains("Ready"), "Logs should contain ready message");
+    assert!(
+        logs.contains("Ready"),
+        "Logs should contain ready message, got: {logs}"
+    );
 
     // Clean up
     env.run_command(&["stop", "cmd_test"]);
@@ -1054,7 +1046,7 @@ ready_delay = 1
 
     // Verify daemon is running
     let status = env.get_daemon_status("stop_test");
-    println!("Status after start: {:?}", status);
+    println!("Status after start: {status:?}");
     assert_eq!(
         status,
         Some("running".to_string()),
@@ -1066,7 +1058,7 @@ ready_delay = 1
     let output = env.run_command(&["stop", "stop_test"]);
     let stop_elapsed = stop_start.elapsed();
 
-    println!("Stop took: {:?}", stop_elapsed);
+    println!("Stop took: {stop_elapsed:?}");
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
 
@@ -1075,13 +1067,12 @@ ready_delay = 1
     // Key test: Stop should complete quickly (not hang)
     assert!(
         stop_elapsed < Duration::from_secs(5),
-        "Stop should complete quickly, took {:?}",
-        stop_elapsed
+        "Stop should complete quickly, took {stop_elapsed:?}"
     );
 
     // Key test: Daemon status should be "stopped", NOT "stopping"
     let status = env.get_daemon_status("stop_test");
-    println!("Status after stop: {:?}", status);
+    println!("Status after stop: {status:?}");
     assert_eq!(
         status,
         Some("stopped".to_string()),
@@ -1124,15 +1115,14 @@ ready_delay = 1
     let output = env.run_command(&["stop", "stop_children_test"]);
     let stop_elapsed = stop_start.elapsed();
 
-    println!("Stop took: {:?}", stop_elapsed);
+    println!("Stop took: {stop_elapsed:?}");
 
     assert!(output.status.success(), "Stop command should succeed");
 
     // Stop should complete in reasonable time even with child processes
     assert!(
         stop_elapsed < Duration::from_secs(10),
-        "Stop should complete in reasonable time, took {:?}",
-        stop_elapsed
+        "Stop should complete in reasonable time, took {stop_elapsed:?}"
     );
 
     // Daemon should be stopped
@@ -1167,7 +1157,7 @@ ready_delay = 1
     // Try to stop again
     let output = env.run_command(&["stop", "already_stopped_test"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Second stop stdout: {}", stdout);
+    println!("Second stop stdout: {stdout}");
 
     // Should handle gracefully (either succeed or indicate already stopped)
     // The daemon should still be in stopped state

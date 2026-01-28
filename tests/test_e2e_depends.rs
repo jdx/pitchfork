@@ -25,8 +25,8 @@ ready_delay = 1
     let output = env.run_command(&["start", "api"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("stdout: {}", stdout);
-    println!("stderr: {}", stderr);
+    println!("stdout: {stdout}");
+    println!("stderr: {stderr}");
 
     assert!(
         output.status.success(),
@@ -36,7 +36,7 @@ ready_delay = 1
     // Check that both daemons are running
     let list_output = env.run_command(&["list"]);
     let list_stdout = String::from_utf8_lossy(&list_output.stdout);
-    println!("List output: {}", list_stdout);
+    println!("List output: {list_stdout}");
 
     assert!(list_stdout.contains("db"), "db daemon should be running");
     assert!(list_stdout.contains("api"), "api daemon should be running");
@@ -202,7 +202,7 @@ ready_delay = 1
 
     println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
-    println!("elapsed: {:?}", elapsed);
+    println!("elapsed: {elapsed:?}");
 
     assert!(output.status.success(), "Start api should succeed");
 
@@ -210,8 +210,7 @@ ready_delay = 1
     // Only api needed to start (1s ready_delay)
     assert!(
         elapsed < Duration::from_secs(3),
-        "Should skip already running db, took {:?}",
-        elapsed
+        "Should skip already running db, took {elapsed:?}"
     );
 
     // Clean up
@@ -241,7 +240,7 @@ depends = ["b"]
 
     let output = env.run_command(&["start", "a"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("stderr: {}", stderr);
+    println!("stderr: {stderr}");
 
     assert!(
         !output.status.success(),
@@ -268,7 +267,7 @@ depends = ["nonexistent"]
 
     let output = env.run_command(&["start", "api"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("stderr: {}", stderr);
+    println!("stderr: {stderr}");
 
     assert!(
         !output.status.success(),
@@ -309,12 +308,12 @@ ready_delay = 1
     // Verify both are running
     let list_output = env.run_command(&["list"]);
     let list_stdout = String::from_utf8_lossy(&list_output.stdout);
-    println!("List between starts: {}", list_stdout);
+    println!("List between starts: {list_stdout}");
     assert!(list_stdout.contains("running"), "Daemons should be running");
 
     // Get db's log content before force restart
     let db_logs_before = env.read_logs("db");
-    println!("db logs before: {}", db_logs_before);
+    println!("db logs before: {db_logs_before}");
     let db_started_count_before = db_logs_before.matches("db_started").count();
 
     // Force restart api - db should NOT be restarted
@@ -327,7 +326,7 @@ ready_delay = 1
 
     // Check db logs - should still only have same count (not restarted)
     let db_logs_after = env.read_logs("db");
-    println!("db logs after: {}", db_logs_after);
+    println!("db logs after: {db_logs_after}");
 
     let db_started_count_after = db_logs_after.matches("db_started").count();
     assert_eq!(
@@ -337,10 +336,177 @@ ready_delay = 1
 
     // api should have been restarted (two "api_started" lines)
     let api_logs = env.read_logs("api");
-    println!("api logs: {}", api_logs);
+    println!("api logs: {api_logs}");
     let api_started_count = api_logs.matches("api_started").count();
     assert_eq!(api_started_count, 2, "api should have been restarted");
 
     // Clean up
     env.run_command(&["stop", "--all"]);
+}
+
+/// Test that stop --all stops all daemons in reverse dependency order
+#[test]
+fn test_stop_all_with_dependencies() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.db]
+run = "echo 'db started' && sleep 30"
+ready_delay = 1
+
+[daemons.cache]
+run = "echo 'cache started' && sleep 30"
+ready_delay = 1
+
+[daemons.api]
+run = "echo 'api started' && sleep 30"
+depends = ["db", "cache"]
+ready_delay = 1
+
+[daemons.worker]
+run = "echo 'worker started' && sleep 30"
+depends = ["db"]
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start all daemons first
+    let output = env.run_command(&["start", "--all"]);
+    assert!(output.status.success(), "Start --all should succeed");
+
+    // Wait for daemons to fully start
+    env.sleep(Duration::from_millis(500));
+
+    // Verify all daemons are running
+    let list_output = env.run_command(&["list"]);
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_stdout.contains("db"), "db should be running");
+    assert!(list_stdout.contains("cache"), "cache should be running");
+    assert!(list_stdout.contains("api"), "api should be running");
+    assert!(list_stdout.contains("worker"), "worker should be running");
+
+    // Stop all daemons
+    let output = env.run_command(&["stop", "--all"]);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "Stop --all should succeed");
+
+    // Wait a moment for processes to terminate
+    env.sleep(Duration::from_millis(500));
+
+    // Verify all daemons are stopped
+    let list_output = env.run_command(&["list"]);
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    println!("List after stop --all: {list_stdout}");
+
+    // Check each daemon is stopped (not running)
+    for daemon in ["db", "cache", "api", "worker"] {
+        // Find the line for this daemon and check it shows "stopped"
+        let daemon_running = list_stdout
+            .lines()
+            .any(|line| line.starts_with(daemon) && line.contains("running"));
+        assert!(
+            !daemon_running,
+            "{daemon} should not be running after stop --all"
+        );
+    }
+}
+
+/// Test that stop --all handles partial running daemons
+#[test]
+fn test_stop_all_partial_running() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.db]
+run = "echo 'db started' && sleep 30"
+ready_delay = 1
+
+[daemons.api]
+run = "echo 'api started' && sleep 30"
+depends = ["db"]
+ready_delay = 1
+
+[daemons.worker]
+run = "echo 'worker started' && sleep 30"
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start only db and api (not worker)
+    let output = env.run_command(&["start", "api"]);
+    assert!(output.status.success(), "Start api should succeed");
+
+    // Wait for daemons to fully start
+    env.sleep(Duration::from_millis(500));
+
+    // Verify db and api are running, but not worker
+    let list_output = env.run_command(&["list"]);
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    assert!(list_stdout.contains("db"), "db should be running");
+    assert!(list_stdout.contains("api"), "api should be running");
+
+    // Stop all should handle this gracefully
+    let output = env.run_command(&["stop", "--all"]);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Stop --all should succeed even with partial running daemons"
+    );
+
+    // Wait for processes to terminate
+    env.sleep(Duration::from_millis(500));
+
+    // Verify all daemons are stopped
+    let list_output = env.run_command(&["list"]);
+    let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+    println!("List after stop --all: {list_stdout}");
+
+    // Check each daemon is stopped (not running)
+    for daemon in ["db", "api", "worker"] {
+        let daemon_running = list_stdout
+            .lines()
+            .any(|line| line.starts_with(daemon) && line.contains("running"));
+        assert!(
+            !daemon_running,
+            "{daemon} should not be running after stop --all"
+        );
+    }
+}
+
+/// Test stop --all when no daemons are running
+#[test]
+fn test_stop_all_no_running_daemons() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.db]
+run = "echo 'db started' && sleep 30"
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start db first to ensure supervisor is running, then stop it
+    let output = env.run_command(&["start", "db"]);
+    assert!(output.status.success(), "Start db should succeed");
+
+    let output = env.run_command(&["stop", "db"]);
+    assert!(output.status.success(), "Stop db should succeed");
+
+    // Wait for db to stop
+    env.sleep(Duration::from_millis(500));
+
+    // Now stop all without any running daemons should succeed gracefully
+    let output = env.run_command(&["stop", "--all"]);
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(
+        output.status.success(),
+        "Stop --all should succeed even with no running daemons"
+    );
 }

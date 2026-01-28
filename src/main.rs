@@ -43,7 +43,7 @@ fn handle_epipe() {
             });
         }
         Err(e) => {
-            warn!("Could not set up SIGPIPE handler: {}", e);
+            warn!("Could not set up SIGPIPE handler: {e}");
         }
     }
 }

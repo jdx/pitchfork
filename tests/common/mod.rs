@@ -131,7 +131,7 @@ impl TestEnv {
             .join("pitchfork")
             .join("logs")
             .join(daemon_id)
-            .join(format!("{}.log", daemon_id));
+            .join(format!("{daemon_id}.log"));
 
         fs::read_to_string(log_path).unwrap_or_default()
     }

@@ -120,7 +120,7 @@ impl std::str::FromStr for Shell {
             "fish" => Ok(Shell::Fish),
             "cmd" => Ok(Shell::Cmd),
             "powershell" | "pwsh" => Ok(Shell::PowerShell),
-            _ => Err(format!("unknown shell: {}", s)),
+            _ => Err(format!("unknown shell: {s}")),
         }
     }
 }

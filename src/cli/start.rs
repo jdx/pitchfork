@@ -86,7 +86,7 @@ impl Start {
             .into_iter()
             .filter(|id| {
                 if disabled_daemons.contains(id) {
-                    warn!("Daemon {} is disabled", id);
+                    warn!("Daemon {id} is disabled");
                     false
                 } else {
                     true
@@ -129,7 +129,7 @@ impl Start {
                 .filter(|id| {
                     // Skip disabled daemons (dependencies might be disabled)
                     if disabled_daemons.contains(id) {
-                        debug!("Skipping disabled dependency: {}", id);
+                        debug!("Skipping disabled dependency: {id}");
                         return false;
                     }
 
@@ -137,10 +137,15 @@ impl Start {
                     if running_daemons.contains(id) {
                         // Only force restart if --force was used AND this daemon was explicitly requested
                         if self.force && explicitly_requested.contains(id) {
-                            debug!("Force restarting explicitly requested daemon: {}", id);
+                            debug!("Force restarting explicitly requested daemon: {id}");
                             return true;
                         }
-                        debug!("Daemon {} is already running, skipping", id);
+                        // Show info message for explicitly requested daemons that are already running
+                        if explicitly_requested.contains(id) {
+                            info!("Daemon {id} is already running, use --force to restart");
+                        } else {
+                            debug!("Daemon {id} is already running, skipping");
+                        }
                         return false;
                     }
 
@@ -158,7 +163,7 @@ impl Start {
                 let daemon_config = match pt.daemons.get(&id) {
                     Some(d) => d,
                     None => {
-                        warn!("Daemon {} not found", id);
+                        warn!("Daemon {id} not found");
                         continue;
                     }
                 };
@@ -174,13 +179,13 @@ impl Start {
                     Ok((id, start_time, exit_code)) => {
                         if exit_code.is_some() {
                             any_failed = true;
-                            error!("Daemon {} failed to start", id);
+                            error!("Daemon {id} failed to start");
                         } else if let Some(start_time) = start_time {
                             successful_daemons.push((id, start_time));
                         }
                     }
                     Err(e) => {
-                        error!("Task panicked: {}", e);
+                        error!("Task panicked: {e}");
                         any_failed = true;
                     }
                 }
@@ -197,7 +202,7 @@ impl Start {
         if !self.quiet {
             for (id, start_time) in successful_daemons {
                 if let Err(e) = print_startup_logs(&id, start_time) {
-                    debug!("Failed to print startup logs for {}: {}", id, e);
+                    debug!("Failed to print startup logs for {id}: {e}");
                 }
             }
         }
@@ -249,7 +254,7 @@ impl Start {
             let cmd = match shell_words::split(&run) {
                 Ok(c) => c,
                 Err(e) => {
-                    error!("Failed to parse command for daemon {}: {}", id, e);
+                    error!("Failed to parse command for daemon {id}: {e}");
                     return (id, None, Some(1));
                 }
             };
@@ -280,7 +285,7 @@ impl Start {
             {
                 Ok((_started, exit_code)) => exit_code,
                 Err(e) => {
-                    error!("Failed to start daemon {}: {}", id, e);
+                    error!("Failed to start daemon {id}: {e}");
                     Some(1)
                 }
             };

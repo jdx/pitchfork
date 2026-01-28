@@ -988,25 +988,40 @@
         "full_cmd": [
           "stop"
         ],
-        "usage": "stop [ID]…",
+        "usage": "stop [-a --all] [ID]…",
         "subcommands": {},
         "args": [
           {
             "name": "ID",
             "usage": "[ID]…",
-            "help": "The name of the daemon to stop",
-            "help_first_line": "The name of the daemon to stop",
+            "help": "The name of the daemon(s) to stop",
+            "help_first_line": "The name of the daemon(s) to stop",
             "required": false,
             "double_dash": "Optional",
             "var": true,
             "hide": false
           }
         ],
-        "flags": [],
+        "flags": [
+          {
+            "name": "all",
+            "usage": "-a --all",
+            "help": "Stop all running daemons (in reverse dependency order)",
+            "help_first_line": "Stop all running daemons (in reverse dependency order)",
+            "short": [
+              "a"
+            ],
+            "long": [
+              "all"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "Sends a stop signal to a daemon",
-        "help_long": "Sends a stop signal to a daemon\n\nSends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'\nto check if the daemon has stopped.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork kill api           Same as 'stop' (alias)",
+        "help_long": "Sends a stop signal to a daemon\n\nSends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'\nto check if the daemon has stopped.\n\nWhen using --all, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork kill api           Same as 'stop' (alias)",
         "name": "stop",
         "aliases": [
           "kill"

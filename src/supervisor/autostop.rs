@@ -75,7 +75,7 @@ impl Supervisor {
 
         for daemon_id in daemons_to_cancel {
             if pending.remove(&daemon_id).is_some() {
-                info!("cancelled pending autostop for {}", daemon_id);
+                info!("cancelled pending autostop for {daemon_id}");
             }
         }
     }
@@ -110,7 +110,7 @@ impl Supervisor {
                 if let Some(daemon_dir) = daemon.dir.as_ref()
                     && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
                 {
-                    info!("autostopping {} (after delay)", daemon_id);
+                    info!("autostopping {daemon_id} (after delay)");
                     self.stop(&daemon_id).await?;
                     self.add_notification(Info, format!("autostopped {daemon_id}"))
                         .await;
@@ -139,7 +139,7 @@ impl Supervisor {
         info!("Found {} daemon(s) to start at boot", boot_daemons.len());
 
         for (id, daemon) in boot_daemons {
-            info!("Starting boot daemon: {}", id);
+            info!("Starting boot daemon: {id}");
 
             let dir = daemon
                 .path
@@ -151,7 +151,7 @@ impl Supervisor {
             let cmd = match shell_words::split(&daemon.run) {
                 Ok(cmd) => cmd,
                 Err(e) => {
-                    error!("failed to parse command for boot daemon {}: {}", id, e);
+                    error!("failed to parse command for boot daemon {id}: {e}");
                     continue;
                 }
             };
@@ -177,19 +177,16 @@ impl Supervisor {
 
             match self.run(run_opts).await {
                 Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {
-                    info!("Successfully started boot daemon: {}", id);
+                    info!("Successfully started boot daemon: {id}");
                 }
                 Ok(IpcResponse::DaemonAlreadyRunning) => {
-                    info!("Boot daemon already running: {}", id);
+                    info!("Boot daemon already running: {id}");
                 }
                 Ok(other) => {
-                    warn!(
-                        "Unexpected response when starting boot daemon {}: {:?}",
-                        id, other
-                    );
+                    warn!("Unexpected response when starting boot daemon {id}: {other:?}");
                 }
                 Err(e) => {
-                    error!("Failed to start boot daemon {}: {}", id, e);
+                    error!("Failed to start boot daemon {id}: {e}");
                 }
             }
         }

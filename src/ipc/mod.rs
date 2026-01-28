@@ -91,7 +91,7 @@ fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     let mut bytes = bytes.to_vec();
     bytes.pop();
     let preview = std::str::from_utf8(&bytes).unwrap_or("<binary>");
-    trace!("msg: {:?}", preview);
+    trace!("msg: {preview:?}");
     if *env::IPC_JSON {
         serde_json::from_slice(&bytes)
             .into_diagnostic()
