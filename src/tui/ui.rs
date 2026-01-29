@@ -385,12 +385,8 @@ fn status_display(status: &DaemonStatus) -> (String, Color) {
         DaemonStatus::Waiting => ("waiting".to_string(), YELLOW),
         DaemonStatus::Stopping => ("stopping".to_string(), YELLOW),
         DaemonStatus::Failed(_) => ("failed".to_string(), RED),
-        DaemonStatus::Errored(code) => {
-            let text = code
-                .map(|c| format!("errored ({c})"))
-                .unwrap_or_else(|| "errored".to_string());
-            (text, RED)
-        }
+        DaemonStatus::Errored(code) => (format!("errored ({code})"), RED),
+        DaemonStatus::ErroredUnknown => ("errored".to_string(), RED),
     }
 }
 

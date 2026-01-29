@@ -80,8 +80,23 @@ cmd logs help="Displays logs for daemon(s)" {
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
 cmd restart help="Restarts a daemon (stops then starts it)" {
-    long_help "Restarts a daemon (stops then starts it)\n\nSends SIGTERM to stop the daemon, then starts it again from the\npitchfork.toml configuration.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons"
+    long_help "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
     flag "-a --all" help="Restart all running daemons"
+    flag --delay help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
+        arg <DELAY>
+    }
+    flag --output help="Wait until output matches this regex pattern before considering daemon ready" {
+        arg <OUTPUT>
+    }
+    flag --http help="Wait until HTTP endpoint returns 2xx status before considering daemon ready" {
+        arg <HTTP>
+    }
+    flag --port help="Wait until TCP port is listening before considering daemon ready" {
+        arg <PORT>
+    }
+    flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
+        arg <CMD>
+    }
     flag "-q --quiet" help="Suppress startup log output"
     arg "[ID]…" help="ID of the daemon(s) to restart" required=#false var=#true
 }

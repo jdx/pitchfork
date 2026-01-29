@@ -87,7 +87,8 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         crate::daemon_status::DaemonStatus::Waiting => "waiting",
         crate::daemon_status::DaemonStatus::Stopping => "stopping",
         crate::daemon_status::DaemonStatus::Failed(_) => "failed",
-        crate::daemon_status::DaemonStatus::Errored(_) => "errored",
+        crate::daemon_status::DaemonStatus::Errored(_)
+        | crate::daemon_status::DaemonStatus::ErroredUnknown => "errored",
     };
 
     let pid_display = d
@@ -141,7 +142,7 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
 
     format!(
         r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-        <td><span class="daemon-name">{safe_id}</span> {disabled_badge}</td>
+        <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td>{cpu_display}</td>
@@ -184,7 +185,7 @@ async fn list_content() -> String {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><span class="daemon-name">{safe_id}</span></td>
+                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status stopped">-</span></td>
                 <td>-</td>
@@ -224,7 +225,7 @@ async fn list_content() -> String {
                 </tr>
             </thead>
             <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
-                {rows}
+            {rows}
             </tbody>
         </table>
     "##
@@ -254,7 +255,7 @@ pub async fn list_partial() -> Html<String> {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><span class="daemon-name">{safe_id}</span></td>
+                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status stopped">-</span></td>
                 <td>-</td>

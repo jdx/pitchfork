@@ -517,11 +517,15 @@ impl Supervisor {
                 } else {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
+                    let status = match status.code() {
+                        Some(code) => DaemonStatus::Errored(code),
+                        None => DaemonStatus::ErroredUnknown,
+                    };
                     if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             pid: None,
-                            status: DaemonStatus::Errored(status.code()),
+                            status,
                             last_exit_success: Some(false),
                             ..Default::default()
                         })
@@ -534,7 +538,7 @@ impl Supervisor {
                 .upsert_daemon(UpsertDaemonOpts {
                     id: id.clone(),
                     pid: None,
-                    status: DaemonStatus::Errored(None),
+                    status: DaemonStatus::ErroredUnknown,
                     last_exit_success: Some(false),
                     ..Default::default()
                 })
