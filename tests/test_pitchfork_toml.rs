@@ -638,3 +638,160 @@ retry = 5
 
     Ok(())
 }
+
+// =============================================================================
+// Tests for pitchfork.local.toml support (via list_paths_from / all_merged_from)
+// =============================================================================
+
+/// Test list_paths_from discovers both pitchfork.toml and pitchfork.local.toml
+/// and returns them in correct priority order
+#[test]
+fn test_list_paths_from_local_toml() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+    let local_path = temp_dir.path().join("pitchfork.local.toml");
+
+    // Test 1: Both files exist - local should come after base
+    fs::write(&toml_path, "[daemons]").unwrap();
+    fs::write(&local_path, "[daemons]").unwrap();
+
+    let paths = pitchfork_toml::PitchforkToml::list_paths_from(temp_dir.path());
+
+    assert!(paths.contains(&toml_path), "Should discover pitchfork.toml");
+    assert!(
+        paths.contains(&local_path),
+        "Should discover pitchfork.local.toml"
+    );
+
+    let toml_idx = paths.iter().position(|p| p == &toml_path).unwrap();
+    let local_idx = paths.iter().position(|p| p == &local_path).unwrap();
+    assert!(
+        local_idx > toml_idx,
+        "pitchfork.local.toml should have higher priority (come later)"
+    );
+
+    // Test 2: Only local.toml exists
+    fs::remove_file(&toml_path).unwrap();
+    let paths = pitchfork_toml::PitchforkToml::list_paths_from(temp_dir.path());
+    assert!(
+        paths.contains(&local_path),
+        "Should discover pitchfork.local.toml even without pitchfork.toml"
+    );
+}
+
+/// Test all_merged_from with local.toml: overrides, adds daemons, and local-only scenarios
+#[test]
+fn test_all_merged_from_local_toml() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+    let local_path = temp_dir.path().join("pitchfork.local.toml");
+
+    // Scenario 1: local.toml overrides base config and adds new daemons
+    let toml_content = r#"
+[daemons.api]
+run = "npm run server"
+ready_port = 3000
+
+[daemons.worker]
+run = "npm run worker"
+"#;
+
+    let local_content = r#"
+[daemons.api]
+run = "npm run dev"
+ready_port = 3001
+
+[daemons.debug]
+run = "npm run debug"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+    fs::write(&local_path, local_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::all_merged_from(temp_dir.path());
+
+    // api should be overridden by local
+    let api = pt.daemons.get("api").unwrap();
+    assert_eq!(api.run, "npm run dev");
+    assert_eq!(api.ready_port, Some(3001));
+
+    // worker should remain from base
+    let worker = pt.daemons.get("worker").unwrap();
+    assert_eq!(worker.run, "npm run worker");
+
+    // debug should be added from local
+    assert!(pt.daemons.contains_key("debug"));
+    assert_eq!(pt.daemons.get("debug").unwrap().run, "npm run debug");
+
+    // Scenario 2: Only local.toml exists (no base config)
+    fs::remove_file(&toml_path).unwrap();
+    fs::write(
+        &local_path,
+        r#"
+[daemons.local_only]
+run = "echo local"
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::all_merged_from(temp_dir.path());
+    assert!(pt.daemons.contains_key("local_only"));
+    assert_eq!(pt.daemons.get("local_only").unwrap().run, "echo local");
+}
+
+/// Test nested directory structure with local.toml at different levels
+#[test]
+fn test_all_merged_from_nested_local_toml() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Parent directory has base config
+    fs::write(
+        temp_dir.path().join("pitchfork.toml"),
+        r#"
+[daemons.shared]
+run = "echo shared"
+"#,
+    )
+    .unwrap();
+
+    // Child directory has both base and local config
+    let child_dir = temp_dir.path().join("child");
+    fs::create_dir(&child_dir).unwrap();
+
+    fs::write(
+        child_dir.join("pitchfork.toml"),
+        r#"
+[daemons.child_daemon]
+run = "echo child"
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        child_dir.join("pitchfork.local.toml"),
+        r#"
+[daemons.child_daemon]
+run = "echo child-local"
+
+[daemons.local_only]
+run = "echo local-only"
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::all_merged_from(&child_dir);
+
+    // Should have all three daemons
+    assert!(
+        pt.daemons.contains_key("shared"),
+        "Should inherit from parent"
+    );
+    assert!(pt.daemons.contains_key("child_daemon"));
+    assert!(pt.daemons.contains_key("local_only"));
+
+    // child_daemon should be overridden by local
+    assert_eq!(
+        pt.daemons.get("child_daemon").unwrap().run,
+        "echo child-local"
+    );
+}
