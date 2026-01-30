@@ -18,17 +18,51 @@ pub struct PitchforkToml {
 }
 
 impl PitchforkToml {
+    /// List all configuration file paths from the current working directory.
+    /// See `list_paths_from` for details on the search order.
     pub fn list_paths() -> Vec<PathBuf> {
+        Self::list_paths_from(&env::CWD)
+    }
+
+    /// List all configuration file paths starting from a given directory.
+    ///
+    /// Returns paths in order of precedence (lowest to highest):
+    /// 1. System-level: /etc/pitchfork/config.toml
+    /// 2. User-level: ~/.config/pitchfork/config.toml
+    /// 3. Project-level: pitchfork.toml and pitchfork.local.toml files
+    ///    from filesystem root to the given directory
+    ///
+    /// Within each directory, pitchfork.toml comes before pitchfork.local.toml,
+    /// so local.toml values override the base config.
+    pub fn list_paths_from(cwd: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_SYSTEM.clone());
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
-        paths.extend(xx::file::find_up_all(&env::CWD, &["pitchfork.toml"]));
+
+        // Find both files in one call. Order is reversed so after .reverse():
+        // - each directory has pitchfork.toml before pitchfork.local.toml
+        // - directories go from root to cwd (later configs override earlier)
+        let mut project_paths =
+            xx::file::find_up_all(cwd, &["pitchfork.local.toml", "pitchfork.toml"]);
+        project_paths.reverse();
+        paths.extend(project_paths);
+
         paths
     }
 
+    /// Merge all configuration files from the current working directory.
+    /// See `all_merged_from` for details.
     pub fn all_merged() -> PitchforkToml {
+        Self::all_merged_from(&env::CWD)
+    }
+
+    /// Merge all configuration files starting from a given directory.
+    ///
+    /// Reads and merges configuration files in precedence order.
+    /// Later files override values from earlier files.
+    pub fn all_merged_from(cwd: &Path) -> PitchforkToml {
         let mut pt = Self::default();
-        for p in Self::list_paths() {
+        for p in Self::list_paths_from(cwd) {
             match Self::read(&p) {
                 Ok(pt2) => pt.merge(pt2),
                 Err(e) => eprintln!("error reading {}: {}", p.display(), e),

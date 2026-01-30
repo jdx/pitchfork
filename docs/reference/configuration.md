@@ -8,7 +8,7 @@ Pitchfork loads configuration files in order, with later files overriding earlie
 
 1. **System-level:** `/etc/pitchfork/config.toml`
 2. **User-level:** `~/.config/pitchfork/config.toml`
-3. **Project-level:** `pitchfork.toml` files from filesystem root to current directory
+3. **Project-level:** `pitchfork.toml`/`pitchfork.local.toml` files from filesystem root to current directory (`pitchfork.local.toml` overrides `pitchfork.toml` in the same directory)
 
 ## JSON Schema
 
