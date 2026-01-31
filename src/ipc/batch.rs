@@ -8,7 +8,7 @@ use crate::deps::resolve_dependencies;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
 use chrono::{DateTime, Local};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -138,6 +138,7 @@ impl IpcClient {
     /// - Disabled daemon filtering
     /// - Already running daemon detection
     /// - Parallel execution within dependency levels
+    /// - Ad-hoc daemon restart using saved commands
     pub async fn start_daemons(
         self: &Arc<Self>,
         ids: &[String],
@@ -145,6 +146,14 @@ impl IpcClient {
     ) -> Result<StartResult> {
         let pt = PitchforkToml::all_merged();
         let disabled_daemons = self.get_disabled_daemons().await?;
+
+        // Get all active daemons for ad-hoc restart support
+        let all_daemons = self.active_daemons().await?;
+        let adhoc_daemons: HashMap<String, crate::daemon::Daemon> = all_daemons
+            .into_iter()
+            .filter(|d| !pt.daemons.contains_key(&d.id))
+            .map(|d| (d.id.clone(), d))
+            .collect();
 
         // Filter out disabled daemons from the requested list
         let requested_ids: Vec<String> = ids
@@ -167,8 +176,10 @@ impl IpcClient {
             });
         }
 
-        // Resolve dependencies to get start order (levels)
-        let dep_order = resolve_dependencies(&requested_ids, &pt.daemons)?;
+        // Separate config-based daemons from ad-hoc daemons
+        let (config_ids, adhoc_ids): (Vec<String>, Vec<String>) = requested_ids
+            .into_iter()
+            .partition(|id| pt.daemons.contains_key(id));
 
         // Get currently running daemons
         let running_daemons: HashSet<String> = self
@@ -186,63 +197,129 @@ impl IpcClient {
         let mut any_failed = false;
         let mut successful_daemons: Vec<(String, DateTime<Local>)> = Vec::new();
 
-        for level in dep_order.levels {
-            // Filter daemons to start in this level
-            let to_start: Vec<String> = level
-                .into_iter()
-                .filter(|id| {
-                    // Skip disabled daemons (dependencies might be disabled)
-                    if disabled_daemons.contains(id) {
-                        debug!("Skipping disabled dependency: {id}");
-                        return false;
-                    }
+        // First, handle config-based daemons with dependency resolution
+        if !config_ids.is_empty() {
+            // Resolve dependencies to get start order (levels)
+            let dep_order = resolve_dependencies(&config_ids, &pt.daemons)?;
 
-                    // Skip already running daemons unless force is set AND they were explicitly requested
-                    if running_daemons.contains(id) {
-                        if opts.force && explicitly_requested.contains(id) {
-                            debug!("Force restarting explicitly requested daemon: {id}");
-                            return true;
+            for level in dep_order.levels {
+                // Filter daemons to start in this level
+                let to_start: Vec<String> = level
+                    .into_iter()
+                    .filter(|id| {
+                        // Skip disabled daemons (dependencies might be disabled)
+                        if disabled_daemons.contains(id) {
+                            debug!("Skipping disabled dependency: {id}");
+                            return false;
                         }
-                        if explicitly_requested.contains(id) {
-                            info!("Daemon {id} is already running, use --force to restart");
-                        } else {
-                            debug!("Daemon {id} is already running, skipping");
+
+                        // Skip already running daemons unless force is set AND they were explicitly requested
+                        if running_daemons.contains(id) {
+                            if opts.force && explicitly_requested.contains(id) {
+                                debug!("Force restarting explicitly requested daemon: {id}");
+                                return true;
+                            }
+                            if explicitly_requested.contains(id) {
+                                info!("Daemon {id} is already running, use --force to restart");
+                            } else {
+                                debug!("Daemon {id} is already running, skipping");
+                            }
+                            return false;
                         }
-                        return false;
+
+                        true
+                    })
+                    .collect();
+
+                if to_start.is_empty() {
+                    continue;
+                }
+
+                // Start all daemons in this level concurrently
+                let mut tasks = Vec::new();
+                for id in to_start {
+                    if let Some(daemon_config) = pt.daemons.get(&id) {
+                        let is_explicit = explicitly_requested.contains(&id);
+                        let task = Self::spawn_start_task(
+                            self.clone(),
+                            id,
+                            daemon_config,
+                            is_explicit,
+                            &opts,
+                        );
+                        tasks.push(task);
                     }
+                }
 
-                    true
-                })
-                .collect();
+                // Wait for all daemons in this level to complete before moving to next level
+                for task in tasks {
+                    match task.await {
+                        Ok((id, start_time, exit_code)) => {
+                            if exit_code.is_some() {
+                                any_failed = true;
+                                error!("Daemon {id} failed to start");
+                            } else if let Some(start_time) = start_time {
+                                successful_daemons.push((id, start_time));
+                            }
+                        }
+                        Err(e) => {
+                            error!("Task panicked: {e}");
+                            any_failed = true;
+                        }
+                    }
+                }
 
-            if to_start.is_empty() {
-                continue;
+                // If any daemon in this level failed, abort starting dependents
+                if any_failed {
+                    error!("Dependency failed, aborting remaining starts");
+                    break;
+                }
             }
+        }
 
-            // Start all daemons in this level concurrently
+        // Then, handle ad-hoc daemons (no dependency resolution needed)
+        if !any_failed && !adhoc_ids.is_empty() {
             let mut tasks = Vec::new();
-            for id in to_start {
-                let daemon_config = match pt.daemons.get(&id) {
-                    Some(d) => d,
-                    None => {
-                        warn!("Daemon {id} not found in config");
+            for id in adhoc_ids {
+                // Skip already running daemons unless force is set
+                if running_daemons.contains(&id) {
+                    if opts.force && explicitly_requested.contains(&id) {
+                        debug!("Force restarting ad-hoc daemon: {id}");
+                    } else {
+                        if explicitly_requested.contains(&id) {
+                            info!("Ad-hoc daemon {id} is already running, use --force to restart");
+                        }
                         continue;
                     }
-                };
+                }
 
-                let is_explicit = explicitly_requested.contains(&id);
-                let task =
-                    Self::spawn_start_task(self.clone(), id, daemon_config, is_explicit, &opts);
-                tasks.push(task);
+                if let Some(adhoc_daemon) = adhoc_daemons.get(&id) {
+                    if let Some(ref cmd) = adhoc_daemon.cmd {
+                        let is_explicit = explicitly_requested.contains(&id);
+                        let task = Self::spawn_adhoc_start_task(
+                            self.clone(),
+                            id,
+                            cmd.clone(),
+                            adhoc_daemon.dir.clone().unwrap_or_default(),
+                            is_explicit,
+                            &opts,
+                        );
+                        tasks.push(task);
+                    } else {
+                        warn!("Ad-hoc daemon {id} has no saved command, cannot restart");
+                    }
+                } else {
+                    warn!("Daemon {id} not found in config or state");
+                }
             }
 
-            // Wait for all daemons in this level to complete before moving to next level
+            // Wait for all ad-hoc daemons to complete
             for task in tasks {
                 match task.await {
                     Ok((id, start_time, exit_code)) => {
                         if exit_code.is_some() {
                             any_failed = true;
-                            error!("Daemon {id} failed to start");
+                            error!("Ad-hoc daemon {id} failed to start");
                         } else if let Some(start_time) = start_time {
                             successful_daemons.push((id, start_time));
                         }
@@ -252,12 +329,6 @@ impl IpcClient {
                         any_failed = true;
                     }
                 }
-            }
-
-            // If any daemon in this level failed, abort starting dependents
-            if any_failed {
-                error!("Dependency failed, aborting remaining starts");
-                break;
             }
         }
 
@@ -308,6 +379,65 @@ impl IpcClient {
                 }
                 Err(e) => {
                     error!("Failed to start daemon {id}: {e}");
+                    (id, None, Some(1))
+                }
+            }
+        })
+    }
+
+    /// Spawn a task to start an ad-hoc daemon using saved command
+    ///
+    /// This handles restarting ad-hoc daemons that were originally started
+    /// via `pitchfork run` command.
+    fn spawn_adhoc_start_task(
+        ipc: Arc<Self>,
+        id: String,
+        cmd: Vec<String>,
+        dir: PathBuf,
+        is_explicitly_requested: bool,
+        opts: &StartOptions,
+    ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>)> {
+        let force = opts.force && is_explicitly_requested;
+        let delay = opts.delay;
+        let output = opts.output.clone();
+        let http = opts.http.clone();
+        let port = opts.port;
+        let ready_cmd = opts.cmd.clone();
+        let retry = opts.retry.unwrap_or(0);
+
+        tokio::spawn(async move {
+            let run_opts = RunOptions {
+                id: id.clone(),
+                cmd,
+                shell_pid: None,
+                force,
+                dir,
+                autostop: false,
+                cron_schedule: None,
+                cron_retrigger: None,
+                retry,
+                retry_count: 0,
+                ready_delay: delay.or(Some(3)),
+                ready_output: output,
+                ready_http: http,
+                ready_port: port,
+                ready_cmd,
+                wait_ready: true,
+                depends: vec![],
+            };
+
+            let result = ipc.run(run_opts).await;
+
+            match result {
+                Ok(run_result) => {
+                    if run_result.started {
+                        (id, Some(run_result.start_time), run_result.exit_code)
+                    } else {
+                        (id, None, run_result.exit_code)
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to start ad-hoc daemon {id}: {e}");
                     (id, None, Some(1))
                 }
             }

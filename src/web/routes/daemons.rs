@@ -447,6 +447,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                         <dt>Status</dt><dd><span class="status {status_class}">{}</span></dd>
                         <dt>PID</dt><dd>{}</dd>
                         <dt>Directory</dt><dd>{}</dd>
+                        <dt>Command</dt><dd><code>{}</code></dd>
                         <dt>Disabled</dt><dd>{}</dd>
                         <dt>Retry Count</dt><dd>{} / {}</dd>
                     </dl>
@@ -461,6 +462,12 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                 &d.dir
                     .as_ref()
                     .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "-".into())
+            ),
+            html_escape(
+                &d.cmd
+                    .as_ref()
+                    .map(shell_words::join)
                     .unwrap_or_else(|| "-".into())
             ),
             if is_disabled { "Yes" } else { "No" },

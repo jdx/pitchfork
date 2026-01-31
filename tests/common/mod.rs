@@ -212,6 +212,33 @@ impl TestEnv {
         None
     }
 
+    /// Get daemon PID by running `pitchfork status <id>`
+    #[allow(dead_code)]
+    pub fn get_daemon_pid(&self, daemon_id: &str) -> Option<u32> {
+        let output = self.run_command(&["status", daemon_id]);
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse output like:
+        // Name: docs
+        // PID: 51580
+        // Status: running
+        for line in stdout.lines() {
+            if line.trim().starts_with("PID:") {
+                let pid_str = line.split(':').nth(1)?.trim();
+                if pid_str == "-" || pid_str.is_empty() {
+                    return None;
+                }
+                return pid_str.parse().ok();
+            }
+        }
+        None
+    }
+
     /// Kill any process listening on the specified port
     #[cfg(unix)]
     pub fn kill_port(&self, port: u16) {

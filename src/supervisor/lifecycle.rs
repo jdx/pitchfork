@@ -118,6 +118,7 @@ impl Supervisor {
     /// Run a daemon once (single attempt)
     pub(crate) async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
+        let original_cmd = opts.cmd.clone(); // Save original command for persistence
         let cmd = opts.cmd;
 
         // Create channel for readiness notification if wait_ready is true
@@ -167,6 +168,7 @@ impl Supervisor {
                 status: DaemonStatus::Running,
                 shell_pid: opts.shell_pid,
                 dir: Some(opts.dir.clone()),
+                cmd: Some(original_cmd),
                 autostop: opts.autostop,
                 cron_schedule: opts.cron_schedule.clone(),
                 cron_retrigger: opts.cron_retrigger,
@@ -626,9 +628,11 @@ impl Supervisor {
                     // Verify process is fully terminated before returning
                     // This avoids race conditions where a new process starts before
                     // the old one has fully released resources (ports, files, etc.)
+                    let mut process_terminated = false;
                     for i in 0..10 {
                         PROCS.refresh_pids(&[pid]);
                         if !PROCS.is_running(pid) {
+                            process_terminated = true;
                             break;
                         }
                         if i < 9 {
@@ -638,6 +642,13 @@ impl Supervisor {
                             );
                             time::sleep(Duration::from_millis(50)).await;
                         }
+                    }
+
+                    if !process_terminated {
+                        warn!(
+                            "Process {pid} for daemon {id} did not terminate within 500ms after SIGTERM. \
+                             The process may take longer to release resources."
+                        );
                     }
 
                     // Process successfully stopped

@@ -1165,6 +1165,7 @@ impl App {
                         shell_pid: None,
                         status: DaemonStatus::Stopped,
                         dir: None,
+                        cmd: None,
                         autostop: false,
                         cron_schedule: None,
                         cron_retrigger: None,

@@ -57,12 +57,16 @@ impl Restart {
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
         // Compute daemon IDs to restart
-        // For --all, only restart currently running daemons
         let ids: Vec<String> = if self.all {
             ipc.get_running_daemons().await?
         } else {
             self.id.clone()
         };
+
+        if ids.is_empty() {
+            info!("No daemons to restart");
+            return Ok(());
+        }
 
         let opts = StartOptions {
             force: true, // restart always forces
