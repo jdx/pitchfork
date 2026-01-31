@@ -424,9 +424,9 @@
           {
             "name": "n",
             "usage": "-n <N>",
-            "help": "Show N lines of logs",
-            "help_long": "Show N lines of logs\n\nSet to 0 to show all logs",
-            "help_first_line": "Show N lines of logs",
+            "help": "Show last N lines of logs",
+            "help_long": "Show last N lines of logs\n\nOnly applies when --since/--until is not used. Without this option, all logs are shown.",
+            "help_first_line": "Show last N lines of logs",
             "short": [
               "n"
             ],
@@ -439,10 +439,7 @@
               "required": true,
               "double_dash": "Optional",
               "hide": false
-            },
-            "default": [
-              "100"
-            ]
+            }
           },
           {
             "name": "tail",
@@ -453,54 +450,85 @@
               "t"
             ],
             "long": [
-              "tail"
+              "tail",
+              "follow"
             ],
             "hide": false,
             "global": false
           },
           {
-            "name": "from",
-            "usage": "--from <FROM>",
-            "help": "Show logs from this time (format: \"YYYY-MM-DD HH:MM:SS\")",
-            "help_first_line": "Show logs from this time (format: \"YYYY-MM-DD HH:MM:SS\")",
-            "short": [],
+            "name": "since",
+            "usage": "-s --since <SINCE>",
+            "help": "Show logs from this time",
+            "help_long": "Show logs from this time\n\nSupports multiple formats: - Full datetime: \"YYYY-MM-DD HH:MM:SS\" or \"YYYY-MM-DD HH:MM\" - Time only: \"HH:MM:SS\" or \"HH:MM\" (uses today's date) - Relative time: \"5min\", \"2h\", \"1d\" (e.g., last 5 minutes)",
+            "help_first_line": "Show logs from this time",
+            "short": [
+              "s"
+            ],
             "long": [
-              "from"
+              "since"
             ],
             "hide": false,
             "global": false,
             "arg": {
-              "name": "FROM",
-              "usage": "<FROM>",
+              "name": "SINCE",
+              "usage": "<SINCE>",
               "required": true,
               "double_dash": "Optional",
               "hide": false
             }
           },
           {
-            "name": "to",
-            "usage": "--to <TO>",
-            "help": "Show logs until this time (format: \"YYYY-MM-DD HH:MM:SS\")",
-            "help_first_line": "Show logs until this time (format: \"YYYY-MM-DD HH:MM:SS\")",
-            "short": [],
+            "name": "until",
+            "usage": "-u --until <UNTIL>",
+            "help": "Show logs until this time",
+            "help_long": "Show logs until this time\n\nSupports multiple formats: - Full datetime: \"YYYY-MM-DD HH:MM:SS\" or \"YYYY-MM-DD HH:MM\" - Time only: \"HH:MM:SS\" or \"HH:MM\" (uses today's date)",
+            "help_first_line": "Show logs until this time",
+            "short": [
+              "u"
+            ],
             "long": [
-              "to"
+              "until"
             ],
             "hide": false,
             "global": false,
             "arg": {
-              "name": "TO",
-              "usage": "<TO>",
+              "name": "UNTIL",
+              "usage": "<UNTIL>",
               "required": true,
               "double_dash": "Optional",
               "hide": false
             }
+          },
+          {
+            "name": "no-pager",
+            "usage": "--no-pager",
+            "help": "Disable pager even in interactive terminal",
+            "help_first_line": "Disable pager even in interactive terminal",
+            "short": [],
+            "long": [
+              "no-pager"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "raw",
+            "usage": "--raw",
+            "help": "Output raw log lines without color or formatting",
+            "help_first_line": "Output raw log lines without color or formatting",
+            "short": [],
+            "long": [
+              "raw"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Displays logs for daemon(s)",
-        "help_long": "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show last 100 lines for 'api'\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api -n 0         Show all logs (no limit)\n  pitchfork logs api --tail       Follow logs in real-time\n  pitchfork logs api --from '2024-01-15 10:00:00'\n                                  Show logs since a specific time\n  pitchfork logs api --to '2024-01-15 12:00:00'\n                                  Show logs until a specific time\n  pitchfork logs api --clear      Delete logs for 'api'\n  pitchfork logs --clear          Delete logs for all daemons",
+        "help_long": "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show all logs for 'api' (paged if needed)\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api --follow     Follow logs in real-time\n  pitchfork logs api --since '2024-01-15 10:00:00'\n                                  Show logs since a specific time (forward)\n  pitchfork logs api --since '10:30:00'\n                                  Show logs since 10:30:00 today\n  pitchfork logs api --since '10:30' --until '12:00'\n                                  Show logs since 10:30:00 until 12:00:00 today\n  pitchfork logs api --since 5min Show logs from last 5 minutes\n  pitchfork logs api --raw        Output raw log lines without formatting\n  pitchfork logs api --raw -n 100 Output last 100 raw log lines\n  pitchfork logs api --clear      Delete logs for 'api'\n  pitchfork logs --clear          Delete logs for all daemons",
         "name": "logs",
         "aliases": [
           "l"

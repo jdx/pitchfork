@@ -996,6 +996,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "humantime"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+
+[[package]]
 name = "hyper"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1894,6 +1900,7 @@ dependencies = [
  "fuzzy-matcher",
  "glob",
  "globset",
+ "humantime",
  "indexmap",
  "interprocess",
  "itertools 0.14.0",
