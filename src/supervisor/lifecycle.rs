@@ -520,8 +520,8 @@ impl Supervisor {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
                     let status = match status.code() {
-                        Some(code) => DaemonStatus::Errored(code),
-                        None => DaemonStatus::ErroredUnknown,
+                        Some(code) => DaemonStatus::Errored(Some(code)),
+                        None => DaemonStatus::Errored(None),
                     };
                     if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
@@ -540,7 +540,7 @@ impl Supervisor {
                 .upsert_daemon(UpsertDaemonOpts {
                     id: id.clone(),
                     pid: None,
-                    status: DaemonStatus::ErroredUnknown,
+                    status: DaemonStatus::Errored(None),
                     last_exit_success: Some(false),
                     ..Default::default()
                 })

@@ -933,8 +933,7 @@ impl App {
                         crate::daemon_status::DaemonStatus::Waiting => 1,
                         crate::daemon_status::DaemonStatus::Stopping => 2,
                         crate::daemon_status::DaemonStatus::Stopped => 3,
-                        crate::daemon_status::DaemonStatus::Errored(_)
-                        | crate::daemon_status::DaemonStatus::ErroredUnknown => 4,
+                        crate::daemon_status::DaemonStatus::Errored(_) => 4,
                         crate::daemon_status::DaemonStatus::Failed(_) => 5,
                     };
                     status_order(a).cmp(&status_order(b))

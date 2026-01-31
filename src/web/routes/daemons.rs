@@ -24,6 +24,15 @@ fn url_encode(s: &str) -> String {
     urlencoding::encode(s).into_owned()
 }
 
+/// Get daemon command from the stored cmd field
+fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
+    daemon
+        .cmd
+        .as_ref()
+        .map(|cmd| shell_words::join(cmd))
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn base_html(title: &str, content: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -88,8 +97,7 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         crate::daemon_status::DaemonStatus::Waiting => "waiting",
         crate::daemon_status::DaemonStatus::Stopping => "stopping",
         crate::daemon_status::DaemonStatus::Failed(_) => "failed",
-        crate::daemon_status::DaemonStatus::Errored(_)
-        | crate::daemon_status::DaemonStatus::ErroredUnknown => "errored",
+        crate::daemon_status::DaemonStatus::Errored(_) => "errored",
     };
 
     let pid_display = d
@@ -352,7 +360,6 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                             <dt>Start Time</dt><dd>{}</dd>
                             <dt>Parent PID</dt><dd>{}</dd>
                             <dt>User</dt><dd>{}</dd>
-                            <dt>Command</dt><dd><code>{}</code></dd>
                         </dl>
                     </div>
                     {}
@@ -374,11 +381,6 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                         .map(|p| p.to_string())
                         .unwrap_or_else(|| "-".to_string()),
                     html_escape(stats.user_id.as_deref().unwrap_or("-")),
-                    html_escape(
-                        &config_info
-                            .map(|c| c.run.clone())
-                            .unwrap_or_else(|| stats.cmd_display())
-                    ),
                     if !stats.environ.is_empty() {
                         format!(
                             r#"<h2>Environment Variables (first 20)</h2>
@@ -448,6 +450,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                         <dt>PID</dt><dd>{}</dd>
                         <dt>Directory</dt><dd>{}</dd>
                         <dt>Command</dt><dd><code>{}</code></dd>
+                        <dt>Ad-hoc</dt><dd>{}</dd>
                         <dt>Disabled</dt><dd>{}</dd>
                         <dt>Retry Count</dt><dd>{} / {}</dd>
                     </dl>
@@ -464,12 +467,8 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "-".into())
             ),
-            html_escape(
-                &d.cmd
-                    .as_ref()
-                    .map(shell_words::join)
-                    .unwrap_or_else(|| "-".into())
-            ),
+            html_escape(&get_daemon_command(d)),
+            if config_info.is_none() { "Yes" } else { "No" },
             if is_disabled { "Yes" } else { "No" },
             d.retry_count,
             d.retry,
