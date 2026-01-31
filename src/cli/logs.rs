@@ -9,9 +9,78 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use xx::regex;
+
+/// Pager configuration for displaying logs
+struct PagerConfig {
+    command: String,
+    args: Vec<String>,
+}
+
+impl PagerConfig {
+    /// Select and configure the appropriate pager.
+    /// Prefers $PAGER environment variable, then bat (if available), then less.
+    fn new(start_at_end: bool) -> Self {
+        let command = std::env::var("PAGER").unwrap_or_else(|_| {
+            // Prefer bat over less if available
+            if Command::new("bat").arg("--version").output().is_ok() {
+                "bat".to_string()
+            } else {
+                "less".to_string()
+            }
+        });
+
+        let args = Self::build_args(&command, start_at_end);
+        Self { command, args }
+    }
+
+    fn build_args(pager: &str, start_at_end: bool) -> Vec<String> {
+        let mut args = vec![];
+        if pager == "bat" {
+            args.push("--paging=always".to_string());
+            args.push("--style=plain".to_string());
+            args.push("--color=always".to_string());
+            // Use --pager to pass +G to less for starting at end
+            if start_at_end {
+                args.push("--pager".to_string());
+                args.push("less -RF +G".to_string());
+            }
+        } else if pager == "less" {
+            args.push("-R".to_string());
+            if start_at_end {
+                args.push("+G".to_string());
+            }
+        }
+        args
+    }
+
+    /// Spawn the pager with piped stdin
+    fn spawn_piped(&self) -> io::Result<Child> {
+        Command::new(&self.command)
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .spawn()
+    }
+
+    /// Spawn the pager with a file argument
+    fn spawn_with_file(&self, path: &Path) -> io::Result<std::process::ExitStatus> {
+        let mut args = self.args.clone();
+        args.push(path.to_string_lossy().to_string());
+        Command::new(&self.command).args(&args).status()
+    }
+}
+
+/// Format a single log line for output.
+/// When `single_daemon` is true, omits the daemon ID from the output.
+fn format_log_line(date: &str, id: &str, msg: &str, single_daemon: bool) -> String {
+    if single_daemon {
+        format!("{} {}", edim(date), msg)
+    } else {
+        format!("{} {} {}", edim(date), id, msg)
+    }
+}
 
 /// Displays logs for daemon(s)
 #[derive(Debug, clap::Args)]
@@ -106,8 +175,16 @@ impl Logs {
             return Ok(());
         }
 
-        let from = self.since.as_ref().and_then(|s| parse_time_input(s).ok());
-        let to = self.until.as_ref().and_then(|s| parse_time_input(s).ok());
+        let from = if let Some(since) = self.since.as_ref() {
+            Some(parse_time_input(since)?)
+        } else {
+            None
+        };
+        let to = if let Some(until) = self.until.as_ref() {
+            Some(parse_time_input(until)?)
+        } else {
+            None
+        };
 
         self.print_existing_logs(from, to)?;
         if self.tail {
@@ -128,7 +205,7 @@ impl Logs {
         let has_time_filter = from.is_some() || to.is_some();
 
         if self.raw {
-            return self.print_raw_lines(&log_files, from, to, has_time_filter);
+            return self.print_raw_lines(&log_files, from, to);
         }
 
         if has_time_filter {
@@ -231,11 +308,7 @@ impl Logs {
             self.output_with_pager(log_lines, single_daemon, has_time_filter)?;
         } else {
             for (date, id, msg) in log_lines {
-                if single_daemon {
-                    println!("{} {}", edim(&date), msg);
-                } else {
-                    println!("{} {} {}", edim(&date), id, msg);
-                }
+                println!("{}", format_log_line(&date, &id, &msg, single_daemon));
             }
         }
 
@@ -248,45 +321,34 @@ impl Logs {
         single_daemon: bool,
         has_time_filter: bool,
     ) -> Result<()> {
-        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
-        let mut pager_args = vec![];
+        // When time filter is used, start at top; otherwise start at end
+        let pager_config = PagerConfig::new(!has_time_filter);
 
-        if pager == "less" {
-            pager_args.push("-R");
-            if !has_time_filter {
-                pager_args.push("+G");
-            }
-        }
-
-        let pager_result = Command::new(&pager)
-            .args(&pager_args)
-            .stdin(Stdio::piped())
-            .spawn();
-
-        match pager_result {
+        match pager_config.spawn_piped() {
             Ok(mut child) => {
-                let stdin = child.stdin.as_mut().expect("Failed to open pager stdin");
-
-                for (date, id, msg) in log_lines {
-                    let line = if single_daemon {
-                        format!("{} {}\n", edim(&date), msg)
-                    } else {
-                        format!("{} {} {}\n", edim(&date), id, msg)
-                    };
-                    if stdin.write_all(line.as_bytes()).is_err() {
-                        break;
+                if let Some(stdin) = child.stdin.as_mut() {
+                    for (date, id, msg) in log_lines {
+                        let line =
+                            format!("{}\n", format_log_line(&date, &id, &msg, single_daemon));
+                        if stdin.write_all(line.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                    let _ = child.wait();
+                } else {
+                    debug!("Failed to get pager stdin, falling back to direct output");
+                    for (date, id, msg) in log_lines {
+                        println!("{}", format_log_line(&date, &id, &msg, single_daemon));
                     }
                 }
-
-                let _ = child.wait();
             }
-            Err(_) => {
+            Err(e) => {
+                debug!(
+                    "Failed to spawn pager: {}, falling back to direct output",
+                    e
+                );
                 for (date, id, msg) in log_lines {
-                    if single_daemon {
-                        println!("{} {}", edim(&date), msg);
-                    } else {
-                        println!("{} {} {}", edim(&date), id, msg);
-                    }
+                    println!("{}", format_log_line(&date, &id, &msg, single_daemon));
                 }
             }
         }
@@ -308,61 +370,70 @@ impl Logs {
             return self.open_file_in_pager(&lf.path);
         }
 
-        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
-        let mut pager_args = vec![];
+        let pager_config = PagerConfig::new(true); // start_at_end = true
 
-        if pager == "less" {
-            pager_args.push("-R");
-            pager_args.push("+G");
-        }
-
-        let pager_result = Command::new(&pager)
-            .args(&pager_args)
-            .stdin(Stdio::piped())
-            .spawn();
-
-        match pager_result {
+        match pager_config.spawn_piped() {
             Ok(mut child) => {
-                let stdin = child.stdin.take().expect("Failed to open pager stdin");
+                if let Some(stdin) = child.stdin.take() {
+                    // Use a separate thread to stream data, so pager can start immediately
+                    let log_files_clone: Vec<_> = log_files
+                        .iter()
+                        .map(|(name, lf)| (name.clone(), lf.path.clone()))
+                        .collect();
+                    let single_daemon_clone = single_daemon;
 
-                // Use a separate thread to stream data, so pager can start immediately
-                let log_files_clone: Vec<_> = log_files
-                    .iter()
-                    .map(|(name, lf)| (name.clone(), lf.path.clone()))
-                    .collect();
-                let single_daemon_clone = single_daemon;
+                    // Stream merged logs from multiple files
+                    // Note: This collects all lines into memory for sorting.
+                    // For very large log files, consider implementing a streaming merge
+                    // approach using a min-heap to merge sorted iterators.
+                    std::thread::spawn(move || {
+                        let mut writer = BufWriter::new(stdin);
 
-                std::thread::spawn(move || {
-                    let mut writer = BufWriter::new(stdin);
-
-                    for (name, path) in log_files_clone {
-                        let file = match File::open(&path) {
-                            Ok(f) => f,
-                            Err(_) => continue,
-                        };
-
-                        let reader = BufReader::new(file);
-                        let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-                        let parsed = parse_log_lines(&lines);
-
-                        for (date, msg) in parsed {
-                            let output = if single_daemon_clone {
-                                format!("{} {}\n", edim(&date), msg)
-                            } else {
-                                format!("{} {} {}\n", edim(&date), name, msg)
+                        // Collect all log lines from all files and sort by timestamp
+                        let mut all_log_lines = Vec::new();
+                        for (name, path) in log_files_clone {
+                            let file = match File::open(&path) {
+                                Ok(f) => f,
+                                Err(_) => continue,
                             };
+
+                            let reader = BufReader::new(file);
+                            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+                            let parsed = parse_log_lines(&lines);
+
+                            for (date, msg) in parsed {
+                                all_log_lines.push((date, name.clone(), msg));
+                            }
+                        }
+
+                        // Sort by timestamp
+                        all_log_lines.sort_by_cached_key(|l| l.0.to_string());
+
+                        // Write sorted lines
+                        for (date, name, msg) in all_log_lines {
+                            let output = format!(
+                                "{}\n",
+                                format_log_line(&date, &name, &msg, single_daemon_clone)
+                            );
                             if writer.write_all(output.as_bytes()).is_err() {
                                 return;
                             }
                         }
-                    }
 
-                    let _ = writer.flush();
-                });
+                        let _ = writer.flush();
+                    });
 
-                let _ = child.wait();
+                    let _ = child.wait();
+                } else {
+                    debug!("Failed to get pager stdin, falling back to direct output");
+                    return self.stream_logs_direct(log_files, single_daemon);
+                }
             }
-            Err(_) => {
+            Err(e) => {
+                debug!(
+                    "Failed to spawn pager: {}, falling back to direct output",
+                    e
+                );
                 return self.stream_logs_direct(log_files, single_daemon);
             }
         }
@@ -371,20 +442,9 @@ impl Logs {
     }
 
     fn open_file_in_pager(&self, path: &Path) -> Result<()> {
-        let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
-        let mut pager_args = vec![];
+        let pager_config = PagerConfig::new(true); // start_at_end = true
 
-        if pager == "less" {
-            pager_args.push("-R");
-            pager_args.push("+G");
-        }
-
-        pager_args.push(path.to_str().unwrap());
-
-        let status = Command::new(&pager)
-            .args(&pager_args)
-            .status()
-            .into_diagnostic()?;
+        let status = pager_config.spawn_with_file(path).into_diagnostic()?;
 
         if !status.success() {
             return Err(miette::miette!("Pager exited with error"));
@@ -397,8 +457,8 @@ impl Logs {
         log_files: &BTreeMap<String, LogFile>,
         single_daemon: bool,
     ) -> Result<()> {
-        use std::io::Write;
-
+        // Collect all log lines from all files and sort by timestamp
+        let mut all_log_lines = Vec::new();
         for (name, lf) in log_files {
             let file = match File::open(&lf.path) {
                 Ok(f) => f,
@@ -413,14 +473,18 @@ impl Logs {
             let parsed = parse_log_lines(&lines);
 
             for (date, msg) in parsed {
-                let output = if single_daemon {
-                    format!("{} {}\n", edim(&date), msg)
-                } else {
-                    format!("{} {} {}\n", edim(&date), name, msg)
-                };
-                if io::stdout().write_all(output.as_bytes()).is_err() {
-                    return Ok(());
-                }
+                all_log_lines.push((date, name.clone(), msg));
+            }
+        }
+
+        // Sort by timestamp
+        all_log_lines.sort_by_cached_key(|l| l.0.to_string());
+
+        // Write sorted lines
+        for (date, name, msg) in all_log_lines {
+            let output = format!("{}\n", format_log_line(&date, &name, &msg, single_daemon));
+            if io::stdout().write_all(output.as_bytes()).is_err() {
+                return Ok(());
             }
         }
 
@@ -432,8 +496,9 @@ impl Logs {
         log_files: &BTreeMap<String, LogFile>,
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
-        has_time_filter: bool,
     ) -> Result<()> {
+        // Derive has_time_filter internally instead of passing as parameter
+        let has_time_filter = from.is_some() || to.is_some();
         if has_time_filter {
             let mut all_lines: Vec<String> = log_files
                 .iter()
@@ -538,7 +603,7 @@ fn get_terminal_height() -> Option<usize> {
 }
 
 fn read_lines_in_time_range(
-    path: &PathBuf,
+    path: &Path,
     from: Option<DateTime<Local>>,
     to: Option<DateTime<Local>>,
 ) -> Result<Vec<String>> {
@@ -612,7 +677,8 @@ fn binary_search_log_position(
         file.seek(SeekFrom::Start(line_start)).into_diagnostic()?;
         let mut reader = BufReader::new(&*file);
         let mut line = String::new();
-        if reader.read_line(&mut line).into_diagnostic()? == 0 {
+        let bytes_read = reader.read_line(&mut line).into_diagnostic()?;
+        if bytes_read == 0 {
             high = mid;
             continue;
         }
@@ -623,20 +689,20 @@ fn binary_search_log_position(
             Some(lt) => {
                 if find_start {
                     if lt < target_time {
-                        low = line_start + line.len() as u64;
+                        low = line_start + bytes_read as u64;
                     } else {
                         high = line_start;
                     }
                 } else {
                     if lt <= target_time {
-                        low = line_start + line.len() as u64;
+                        low = line_start + bytes_read as u64;
                     } else {
                         high = line_start;
                     }
                 }
             }
             None => {
-                low = line_start + line.len() as u64;
+                low = line_start + bytes_read as u64;
             }
         }
     }
@@ -649,27 +715,39 @@ fn find_line_start(file: &mut File, pos: u64) -> Result<u64> {
         return Ok(0);
     }
 
-    let search_start = pos.saturating_sub(1);
-    file.seek(SeekFrom::Start(search_start)).into_diagnostic()?;
-
-    let mut search_pos = search_start;
-    let mut buf = [0u8; 1];
+    // Start searching from the byte just before `pos`.
+    let mut search_pos = pos.saturating_sub(1);
+    const CHUNK_SIZE: usize = 8192;
 
     loop {
+        // Determine the start of the chunk we want to read.
+        let chunk_start = search_pos.saturating_sub(CHUNK_SIZE as u64 - 1);
+        let len_u64 = search_pos - chunk_start + 1;
+        let len = len_u64 as usize;
+
+        // Seek once to the beginning of this chunk.
+        file.seek(SeekFrom::Start(chunk_start)).into_diagnostic()?;
+        let mut buf = vec![0u8; len];
         if file.read_exact(&mut buf).is_err() {
+            // Match the original behavior: on read error, fall back to start of file.
             return Ok(0);
         }
 
-        if buf[0] == b'\n' {
-            return Ok(search_pos + 1);
+        // Scan this chunk backwards for a newline.
+        for (i, &b) in buf.iter().enumerate().rev() {
+            if b == b'\n' {
+                return Ok(chunk_start + i as u64 + 1);
+            }
         }
 
-        if search_pos == 0 {
+        // No newline in this chunk; if we've reached the start of the file,
+        // there is no earlier newline.
+        if chunk_start == 0 {
             return Ok(0);
         }
 
-        search_pos -= 1;
-        file.seek(SeekFrom::Start(search_pos)).into_diagnostic()?;
+        // Move to the previous chunk (just before this one).
+        search_pos = chunk_start - 1;
     }
 }
 
@@ -835,10 +913,12 @@ fn parse_datetime(s: &str) -> Result<DateTime<Local>> {
 fn parse_time_input(s: &str) -> Result<DateTime<Local>> {
     let s = s.trim();
 
+    // Try full datetime first (YYYY-MM-DD HH:MM:SS)
     if let Ok(dt) = parse_datetime(s) {
         return Ok(dt);
     }
 
+    // Try datetime without seconds (YYYY-MM-DD HH:MM)
     if let Ok(naive_dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M") {
         return Local
             .from_local_datetime(&naive_dt)
@@ -846,13 +926,29 @@ fn parse_time_input(s: &str) -> Result<DateTime<Local>> {
             .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'", s));
     }
 
+    // Try time-only format (HH:MM:SS or HH:MM)
+    // Note: This branch won't be reached for inputs like "10:30" that could match
+    // parse_datetime, because parse_datetime expects a full date prefix and will fail.
     if let Ok(time) = parse_time_only(s) {
-        let today = Local::now().date_naive();
-        let naive_dt = NaiveDateTime::new(today, time);
-        return Local
+        let now = Local::now();
+        let today = now.date_naive();
+        let mut naive_dt = NaiveDateTime::new(today, time);
+        let mut dt = Local
             .from_local_datetime(&naive_dt)
             .single()
-            .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'", s));
+            .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'", s))?;
+
+        // If the interpreted time for today is in the future, assume the user meant yesterday
+        if dt > now
+            && let Some(yesterday) = today.pred_opt()
+        {
+            naive_dt = NaiveDateTime::new(yesterday, time);
+            dt = Local
+                .from_local_datetime(&naive_dt)
+                .single()
+                .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'", s))?;
+        }
+        return Ok(dt);
     }
 
     if let Ok(duration) = humantime::parse_duration(s) {
