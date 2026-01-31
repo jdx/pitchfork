@@ -467,6 +467,7 @@ tbody tr {
 .status.stopped { background: rgba(115, 115, 115, 0.15); color: var(--color-text-dim); }
 .status.waiting, .status.stopping { background: rgba(234, 179, 8, 0.15); color: var(--color-warning); }
 .status.failed, .status.errored { background: rgba(220, 38, 38, 0.15); color: var(--color-error); }
+.status.available { background: rgba(6, 182, 212, 0.15); color: var(--color-info); }
 
 .badge {
     display: inline-block;

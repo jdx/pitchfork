@@ -59,7 +59,7 @@ cmd enable help="Allow a daemon to start" {
 }
 cmd list help="List all daemons" {
     alias ls
-    long_help "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status   Error\n  api     12345  running\n  worker  -      errored  exit code 1\n  db      -      stopped  disabled"
+    long_help "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status     Error\n  api     12345  running\n  worker         available\n  db             errored    exit code 127"
     flag --hide-header help="Hide the table header row"
 }
 cmd logs help="Displays logs for daemon(s)" {

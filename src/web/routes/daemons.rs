@@ -5,6 +5,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::daemon::is_valid_daemon_id;
+use crate::daemon_list::get_all_daemons_direct;
 use crate::env;
 use crate::ipc::batch::{StartOptions, build_run_options};
 use crate::pitchfork_toml::PitchforkToml;
@@ -173,38 +174,32 @@ async fn list_content() -> String {
     // Refresh process info for accurate CPU/memory stats
     PROCS.refresh_processes();
 
-    let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
-        .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    let pt = PitchforkToml::all_merged();
-
+    let entries = get_all_daemons_direct(&SUPERVISOR)
+        .await
+        .unwrap_or_default();
     let mut rows = String::new();
 
-    // Show daemons from state file
-    for (id, daemon) in &state.daemons {
-        if id == "pitchfork" {
-            continue; // Skip supervisor itself
-        }
-        let is_disabled = state.disabled.contains(id);
-        rows.push_str(&daemon_row(id, daemon, is_disabled));
-    }
-
-    // Show daemons from config that aren't in state yet
-    for id in pt.daemons.keys() {
-        if !state.daemons.contains_key(id) {
-            let safe_id = html_escape(id);
-            let url_id = url_encode(id);
+    for entry in entries {
+        if entry.is_available {
+            // Show available (config-only) daemons
+            let safe_id = html_escape(&entry.id);
+            let url_id = url_encode(&entry.id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
                 <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
-                <td><span class="status stopped">-</span></td>
+                <td><span class="status available">available</span></td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td></td>
                 <td class="actions" onclick="event.stopPropagation()">
                     <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+                    <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a>
                 </td>
             </tr>"##));
+        } else {
+            // Show active daemons from state file
+            rows.push_str(&daemon_row(&entry.id, &entry.daemon, entry.is_disabled));
         }
     }
 
@@ -245,36 +240,32 @@ pub async fn list_partial() -> Html<String> {
     // Refresh process info for accurate CPU/memory stats
     PROCS.refresh_processes();
 
-    let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
-        .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    let pt = PitchforkToml::all_merged();
-
+    let entries = get_all_daemons_direct(&SUPERVISOR)
+        .await
+        .unwrap_or_default();
     let mut rows = String::new();
 
-    for (id, daemon) in &state.daemons {
-        if id == "pitchfork" {
-            continue;
-        }
-        let is_disabled = state.disabled.contains(id);
-        rows.push_str(&daemon_row(id, daemon, is_disabled));
-    }
-
-    for id in pt.daemons.keys() {
-        if !state.daemons.contains_key(id) {
-            let safe_id = html_escape(id);
-            let url_id = url_encode(id);
+    for entry in entries {
+        if entry.is_available {
+            // Show available (config-only) daemons
+            let safe_id = html_escape(&entry.id);
+            let url_id = url_encode(&entry.id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
                 <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
-                <td><span class="status stopped">-</span></td>
+                <td><span class="status available">available</span></td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>
                 <td></td>
                 <td class="actions" onclick="event.stopPropagation()">
                     <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+                    <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a>
                 </td>
             </tr>"##));
+        } else {
+            // Show active daemons from state file
+            rows.push_str(&daemon_row(&entry.id, &entry.daemon, entry.is_disabled));
         }
     }
 
