@@ -5,7 +5,8 @@ use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::RecursiveMode;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -21,33 +22,16 @@ struct PagerConfig {
 
 impl PagerConfig {
     /// Select and configure the appropriate pager.
-    /// Prefers $PAGER environment variable, then bat (if available), then less.
+    /// Uses $PAGER environment variable if set, otherwise defaults to less.
     fn new(start_at_end: bool) -> Self {
-        let command = std::env::var("PAGER").unwrap_or_else(|_| {
-            // Prefer bat over less if available
-            if Command::new("bat").arg("--version").output().is_ok() {
-                "bat".to_string()
-            } else {
-                "less".to_string()
-            }
-        });
-
+        let command = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
         let args = Self::build_args(&command, start_at_end);
         Self { command, args }
     }
 
     fn build_args(pager: &str, start_at_end: bool) -> Vec<String> {
         let mut args = vec![];
-        if pager == "bat" {
-            args.push("--paging=always".to_string());
-            args.push("--style=plain".to_string());
-            args.push("--color=always".to_string());
-            // Use --pager to pass +G to less for starting at end
-            if start_at_end {
-                args.push("--pager".to_string());
-                args.push("less -RF +G".to_string());
-            }
-        } else if pager == "less" {
+        if pager == "less" {
             args.push("-R".to_string());
             if start_at_end {
                 args.push("+G".to_string());
@@ -79,6 +63,179 @@ fn format_log_line(date: &str, id: &str, msg: &str, single_daemon: bool) -> Stri
         format!("{} {}", edim(date), msg)
     } else {
         format!("{} {} {}", edim(date), id, msg)
+    }
+}
+
+/// A parsed log entry with timestamp, daemon name, and message
+#[derive(Debug)]
+struct LogEntry {
+    timestamp: String,
+    daemon: String,
+    message: String,
+    source_idx: usize, // Index of the source iterator
+}
+
+impl PartialEq for LogEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.timestamp == other.timestamp
+    }
+}
+
+impl Eq for LogEntry {}
+
+impl PartialOrd for LogEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LogEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.timestamp.cmp(&other.timestamp)
+    }
+}
+
+/// Streaming merger for multiple sorted log files using a min-heap.
+/// This allows merging sorted iterators without loading all data into memory.
+struct StreamingMerger<I>
+where
+    I: Iterator<Item = (String, String)>,
+{
+    sources: Vec<(String, I)>,           // (daemon_name, line_iterator)
+    heap: BinaryHeap<Reverse<LogEntry>>, // Min-heap (using Reverse for ascending order)
+}
+
+impl<I> StreamingMerger<I>
+where
+    I: Iterator<Item = (String, String)>,
+{
+    fn new() -> Self {
+        Self {
+            sources: Vec::new(),
+            heap: BinaryHeap::new(),
+        }
+    }
+
+    fn add_source(&mut self, daemon_name: String, iter: I) {
+        self.sources.push((daemon_name, iter));
+    }
+
+    fn initialize(&mut self) {
+        // Pull the first entry from each source into the heap
+        for (idx, (daemon, iter)) in self.sources.iter_mut().enumerate() {
+            if let Some((timestamp, message)) = iter.next() {
+                self.heap.push(Reverse(LogEntry {
+                    timestamp,
+                    daemon: daemon.clone(),
+                    message,
+                    source_idx: idx,
+                }));
+            }
+        }
+    }
+}
+
+impl<I> Iterator for StreamingMerger<I>
+where
+    I: Iterator<Item = (String, String)>,
+{
+    type Item = (String, String, String); // (timestamp, daemon, message)
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Pop the smallest entry from the heap
+        let Reverse(entry) = self.heap.pop()?;
+
+        // Pull the next entry from the same source and push to heap
+        let (daemon, iter) = &mut self.sources[entry.source_idx];
+        if let Some((timestamp, message)) = iter.next() {
+            self.heap.push(Reverse(LogEntry {
+                timestamp,
+                daemon: daemon.clone(),
+                message,
+                source_idx: entry.source_idx,
+            }));
+        }
+
+        Some((entry.timestamp, entry.daemon, entry.message))
+    }
+}
+
+/// A proper streaming log parser that handles multi-line entries
+struct StreamingLogParser {
+    reader: BufReader<File>,
+    current_entry: Option<(String, String)>,
+    finished: bool,
+}
+
+impl StreamingLogParser {
+    fn new(file: File) -> Self {
+        Self {
+            reader: BufReader::new(file),
+            current_entry: None,
+            finished: false,
+        }
+    }
+}
+
+impl Iterator for StreamingLogParser {
+    type Item = (String, String);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+) (.*)$");
+
+        loop {
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => {
+                    // EOF - return the last entry if any
+                    self.finished = true;
+                    return self.current_entry.take();
+                }
+                Ok(_) => {
+                    // Remove trailing newline
+                    if line.ends_with('\n') {
+                        line.pop();
+                        if line.ends_with('\r') {
+                            line.pop();
+                        }
+                    }
+
+                    if let Some(caps) = re.captures(&line) {
+                        let date = match caps.get(1) {
+                            Some(d) => d.as_str().to_string(),
+                            None => continue,
+                        };
+                        let msg = match caps.get(3) {
+                            Some(m) => m.as_str().to_string(),
+                            None => continue,
+                        };
+
+                        // Return the previous entry and start a new one
+                        let prev = self.current_entry.take();
+                        self.current_entry = Some((date, msg));
+
+                        if prev.is_some() {
+                            return prev;
+                        }
+                        // First entry - continue to read more
+                    } else {
+                        // Continuation line - append to current entry
+                        if let Some((_, ref mut msg)) = self.current_entry {
+                            msg.push('\n');
+                            msg.push_str(&line);
+                        }
+                    }
+                }
+                Err(_) => {
+                    self.finished = true;
+                    return self.current_entry.take();
+                }
+            }
+        }
     }
 }
 
@@ -204,10 +361,6 @@ impl Logs {
         let single_daemon = self.id.len() == 1;
         let has_time_filter = from.is_some() || to.is_some();
 
-        if self.raw {
-            return self.print_raw_lines(&log_files, from, to);
-        }
-
         if has_time_filter {
             let mut log_lines = self.collect_log_lines_forward(&log_files, from, to)?;
 
@@ -218,12 +371,12 @@ impl Logs {
                 }
             }
 
-            self.output_logs(log_lines, single_daemon, has_time_filter)?;
+            self.output_logs(log_lines, single_daemon, has_time_filter, self.raw)?;
         } else if let Some(n) = self.n {
             let log_lines = self.collect_log_lines_reverse(&log_files, Some(n))?;
-            self.output_logs(log_lines, single_daemon, has_time_filter)?;
+            self.output_logs(log_lines, single_daemon, has_time_filter, self.raw)?;
         } else {
-            self.stream_logs_to_pager(&log_files, single_daemon)?;
+            self.stream_logs_to_pager(&log_files, single_daemon, self.raw)?;
         }
 
         Ok(())
@@ -297,8 +450,17 @@ impl Logs {
         log_lines: Vec<(String, String, String)>,
         single_daemon: bool,
         has_time_filter: bool,
+        raw: bool,
     ) -> Result<()> {
         if log_lines.is_empty() {
+            return Ok(());
+        }
+
+        // Raw mode: output without formatting and without pager
+        if raw {
+            for (date, _, msg) in log_lines {
+                println!("{} {}", date, msg);
+            }
             return Ok(());
         }
 
@@ -360,60 +522,57 @@ impl Logs {
         &self,
         log_files: &BTreeMap<String, LogFile>,
         single_daemon: bool,
+        raw: bool,
     ) -> Result<()> {
-        if !io::stdout().is_terminal() || self.no_pager {
-            return self.stream_logs_direct(log_files, single_daemon);
+        if !io::stdout().is_terminal() || self.no_pager || raw {
+            return self.stream_logs_direct(log_files, single_daemon, raw);
         }
 
+        // Fast path: directly open file in pager without parsing
+        // This is much faster for large log files
         if log_files.len() == 1 {
             let (_, lf) = log_files.iter().next().unwrap();
             return self.open_file_in_pager(&lf.path);
         }
 
+        // Multiple files: use streaming merger for sorted/interleaved output
         let pager_config = PagerConfig::new(true); // start_at_end = true
 
         match pager_config.spawn_piped() {
             Ok(mut child) => {
                 if let Some(stdin) = child.stdin.take() {
-                    // Use a separate thread to stream data, so pager can start immediately
+                    // Collect file info for the streaming thread
                     let log_files_clone: Vec<_> = log_files
                         .iter()
                         .map(|(name, lf)| (name.clone(), lf.path.clone()))
                         .collect();
                     let single_daemon_clone = single_daemon;
 
-                    // Stream merged logs from multiple files
-                    // Note: This collects all lines into memory for sorting.
-                    // For very large log files, consider implementing a streaming merge
-                    // approach using a min-heap to merge sorted iterators.
+                    // Stream merged logs using a min-heap for efficient memory usage
                     std::thread::spawn(move || {
                         let mut writer = BufWriter::new(stdin);
 
-                        // Collect all log lines from all files and sort by timestamp
-                        let mut all_log_lines = Vec::new();
+                        // Create streaming merger
+                        let mut merger: StreamingMerger<StreamingLogParser> =
+                            StreamingMerger::new();
+
                         for (name, path) in log_files_clone {
                             let file = match File::open(&path) {
                                 Ok(f) => f,
                                 Err(_) => continue,
                             };
-
-                            let reader = BufReader::new(file);
-                            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-                            let parsed = parse_log_lines(&lines);
-
-                            for (date, msg) in parsed {
-                                all_log_lines.push((date, name.clone(), msg));
-                            }
+                            let parser = StreamingLogParser::new(file);
+                            merger.add_source(name, parser);
                         }
 
-                        // Sort by timestamp
-                        all_log_lines.sort_by_cached_key(|l| l.0.to_string());
+                        // Initialize the heap with first entry from each source
+                        merger.initialize();
 
-                        // Write sorted lines
-                        for (date, name, msg) in all_log_lines {
+                        // Stream merged entries to pager
+                        for (timestamp, daemon, message) in merger {
                             let output = format!(
                                 "{}\n",
-                                format_log_line(&date, &name, &msg, single_daemon_clone)
+                                format_log_line(&timestamp, &daemon, &message, single_daemon_clone)
                             );
                             if writer.write_all(output.as_bytes()).is_err() {
                                 return;
@@ -426,7 +585,7 @@ impl Logs {
                     let _ = child.wait();
                 } else {
                     debug!("Failed to get pager stdin, falling back to direct output");
-                    return self.stream_logs_direct(log_files, single_daemon);
+                    return self.stream_logs_direct(log_files, single_daemon, raw);
                 }
             }
             Err(e) => {
@@ -434,7 +593,7 @@ impl Logs {
                     "Failed to spawn pager: {}, falling back to direct output",
                     e
                 );
-                return self.stream_logs_direct(log_files, single_daemon);
+                return self.stream_logs_direct(log_files, single_daemon, raw);
             }
         }
 
@@ -456,9 +615,53 @@ impl Logs {
         &self,
         log_files: &BTreeMap<String, LogFile>,
         single_daemon: bool,
+        raw: bool,
     ) -> Result<()> {
-        // Collect all log lines from all files and sort by timestamp
-        let mut all_log_lines = Vec::new();
+        // Fast path for single daemon: directly output file content without parsing
+        // This avoids expensive regex parsing for each line in large log files
+        if log_files.len() == 1 {
+            let (name, lf) = log_files.iter().next().unwrap();
+            let file = match File::open(&lf.path) {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("{}: {}", lf.path.display(), e);
+                    return Ok(());
+                }
+            };
+            let reader = BufReader::new(file);
+            if raw {
+                // Raw mode: output lines as-is
+                for line in reader.lines() {
+                    match line {
+                        Ok(l) => {
+                            if io::stdout().write_all(l.as_bytes()).is_err()
+                                || io::stdout().write_all(b"\n").is_err()
+                            {
+                                return Ok(());
+                            }
+                        }
+                        Err(_) => continue,
+                    }
+                }
+            } else {
+                // Formatted mode: parse and format each line
+                let parser = StreamingLogParser::new(File::open(&lf.path).into_diagnostic()?);
+                for (timestamp, message) in parser {
+                    let output = format!(
+                        "{}\n",
+                        format_log_line(&timestamp, name, &message, single_daemon)
+                    );
+                    if io::stdout().write_all(output.as_bytes()).is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Multiple daemons: use streaming merger for sorted output
+        let mut merger: StreamingMerger<StreamingLogParser> = StreamingMerger::new();
+
         for (name, lf) in log_files {
             let file = match File::open(&lf.path) {
                 Ok(f) => f,
@@ -467,107 +670,25 @@ impl Logs {
                     continue;
                 }
             };
-
-            let reader = BufReader::new(file);
-            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-            let parsed = parse_log_lines(&lines);
-
-            for (date, msg) in parsed {
-                all_log_lines.push((date, name.clone(), msg));
-            }
+            let parser = StreamingLogParser::new(file);
+            merger.add_source(name.clone(), parser);
         }
 
-        // Sort by timestamp
-        all_log_lines.sort_by_cached_key(|l| l.0.to_string());
+        // Initialize the heap with first entry from each source
+        merger.initialize();
 
-        // Write sorted lines
-        for (date, name, msg) in all_log_lines {
-            let output = format!("{}\n", format_log_line(&date, &name, &msg, single_daemon));
+        // Stream merged entries to stdout
+        for (timestamp, daemon, message) in merger {
+            let output = if raw {
+                format!("{} {}\n", timestamp, message)
+            } else {
+                format!(
+                    "{}\n",
+                    format_log_line(&timestamp, &daemon, &message, single_daemon)
+                )
+            };
             if io::stdout().write_all(output.as_bytes()).is_err() {
                 return Ok(());
-            }
-        }
-
-        Ok(())
-    }
-
-    fn print_raw_lines(
-        &self,
-        log_files: &BTreeMap<String, LogFile>,
-        from: Option<DateTime<Local>>,
-        to: Option<DateTime<Local>>,
-    ) -> Result<()> {
-        // Derive has_time_filter internally instead of passing as parameter
-        let has_time_filter = from.is_some() || to.is_some();
-        if has_time_filter {
-            let mut all_lines: Vec<String> = log_files
-                .iter()
-                .flat_map(
-                    |(_, lf)| match read_lines_in_time_range(&lf.path, from, to) {
-                        Ok(lines) => lines,
-                        Err(e) => {
-                            error!("{}: {}", lf.path.display(), e);
-                            vec![]
-                        }
-                    },
-                )
-                .collect();
-
-            if let Some(n) = self.n {
-                let len = all_lines.len();
-                if len > n {
-                    all_lines = all_lines.into_iter().skip(len - n).collect();
-                }
-            }
-
-            for line in all_lines {
-                println!("{}", line);
-            }
-        } else if let Some(n) = self.n {
-            let mut all_lines: Vec<String> = log_files
-                .iter()
-                .flat_map(|(_, lf)| {
-                    let rev = match xx::file::open(&lf.path) {
-                        Ok(f) => rev_lines::RevLines::new(f),
-                        Err(e) => {
-                            error!("{}: {}", lf.path.display(), e);
-                            return vec![];
-                        }
-                    };
-                    rev.into_iter()
-                        .filter_map(Result::ok)
-                        .take(n)
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-
-            all_lines.reverse();
-
-            let len = all_lines.len();
-            if len > n {
-                all_lines = all_lines.into_iter().skip(len - n).collect();
-            }
-
-            for line in all_lines {
-                println!("{}", line);
-            }
-        } else {
-            for lf in log_files.values() {
-                let file = match File::open(&lf.path) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        error!("{}: {}", lf.path.display(), e);
-                        continue;
-                    }
-                };
-
-                let reader = BufReader::new(file);
-                for line in reader.lines() {
-                    match line {
-                        Ok(l) => println!("{}", l),
-                        Err(_) => continue,
-                    }
-                }
             }
         }
 
@@ -758,29 +879,6 @@ fn extract_timestamp(line: &str) -> Option<DateTime<Local>> {
         .and_then(|m| parse_datetime(m.as_str()).ok())
 }
 
-fn parse_log_lines(lines: &[String]) -> Vec<(String, String)> {
-    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w)+ (.*)$");
-    lines
-        .iter()
-        .fold(vec![], |mut acc, line| match re.captures(line) {
-            Some(caps) => {
-                let (date, msg) = match (caps.get(1), caps.get(3)) {
-                    (Some(d), Some(m)) => (d.as_str().to_string(), m.as_str().to_string()),
-                    _ => return acc,
-                };
-                acc.push((date, msg));
-                acc
-            }
-            None => {
-                if let Some(l) = acc.last_mut() {
-                    l.1.push('\n');
-                    l.1.push_str(line);
-                }
-                acc
-            }
-        })
-}
-
 fn merge_log_lines(id: &str, lines: Vec<String>, reverse: bool) -> Vec<(String, String, String)> {
     let lines = if reverse {
         lines.into_iter().rev().collect()
@@ -788,7 +886,7 @@ fn merge_log_lines(id: &str, lines: Vec<String>, reverse: bool) -> Vec<(String, 
         lines
     };
 
-    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w)+ (.*)$");
+    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+) (.*)$");
     lines
         .into_iter()
         .fold(vec![], |mut acc, line| match re.captures(&line) {
