@@ -814,12 +814,10 @@ fn binary_search_log_position(
                     } else {
                         high = line_start;
                     }
+                } else if lt <= target_time {
+                    low = line_start + bytes_read as u64;
                 } else {
-                    if lt <= target_time {
-                        low = line_start + bytes_read as u64;
-                    } else {
-                        high = line_start;
-                    }
+                    high = line_start;
                 }
             }
             None => {
