@@ -94,8 +94,11 @@ async fn run_app<B: Backend>(
                         Ok(r) if r.any_failed => {
                             app.set_message(format!("Failed to start {id}"));
                         }
-                        Ok(_) => {
+                        Ok(r) if !r.started.is_empty() => {
                             app.set_message(format!("Started {id}"));
+                        }
+                        Ok(_) => {
+                            app.set_message(format!("No daemons were started for {id}"));
                         }
                         Err(e) => {
                             app.set_message(format!("Failed to start {id}: {e}"));

@@ -29,7 +29,7 @@ fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
     daemon
         .cmd
         .as_ref()
-        .map(|cmd| shell_words::join(cmd))
+        .map(shell_words::join)
         .unwrap_or_else(|| "-".to_string())
 }
 
