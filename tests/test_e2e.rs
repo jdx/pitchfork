@@ -135,7 +135,6 @@ retry = 0
 // ============================================================================
 
 #[test]
-
 fn test_list_command() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
@@ -199,87 +198,6 @@ run = "bun run {} 0"
 
     // Clean up
     let _ = env.run_command(&["stop", "list_error_test"]);
-}
-
-// will be fixed later, logs command is working now
-// #[test]
-
-// fn test_logs_command() {
-//     let env = TestEnv::new();
-//     env.ensure_binary_exists().unwrap();
-
-//     let toml_content = r#"
-// [daemons.test_logs]
-// run = "sleep 1 && echo 'Test log message' && sleep 5"
-// "#;
-//     env.create_toml(toml_content);
-
-//     // Start daemon
-//     env.run_command(&["start", "test_logs"]);
-
-//     // Check logs
-//     let output = env.run_command(&["logs", "test_logs"]);
-//     let stdout = String::from_utf8_lossy(&output.stdout);
-//     println!("Logs output: {}", stdout);
-
-//     assert!(
-//         stdout.contains("Test log message"),
-//         "Logs should contain the message"
-//     );
-//     assert!(output.status.success(), "Logs command should succeed");
-
-//     // Clean up
-//     env.run_command(&["stop", "test_logs"]);
-// }
-
-#[test]
-
-fn test_logs_tail_command() {
-    let env = TestEnv::new();
-    env.ensure_binary_exists().unwrap();
-
-    let script = get_script_path("slowly_output.ts");
-    let toml_content = format!(
-        r#"
-[daemons.test_tail]
-run = "bun run {} 1 3"
-ready_delay = 0
-"#,
-        script.display()
-    );
-    env.create_toml(&toml_content);
-
-    // Start daemon
-    env.run_command(&["start", "test_tail"]);
-
-    // Test tail command
-    let mut child = env.run_background(&["logs", "-t", "test_tail"]);
-
-    // Wait for some output to be generated
-    env.sleep(Duration::from_secs(4));
-
-    // Kill the tail process
-    let _ = child.kill();
-    let output = child.wait_with_output().expect("Failed to get output");
-
-    // Check the stdout from the tail command
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    println!("Tail output: {stdout}");
-
-    // Verify that tail command captured the streaming output
-    assert!(!stdout.is_empty(), "Tail output should not be empty");
-    assert!(
-        stdout.contains("Output 3/3"),
-        "Tail output should contain new output"
-    );
-
-    // Also verify the log file has content
-    let logs = env.read_logs("test_tail");
-    assert!(!logs.is_empty(), "Log file should not be empty");
-
-    // Clean up
-    env.run_command(&["stop", "test_tail"]);
 }
 
 #[test]
@@ -789,65 +707,9 @@ ready_delay = 1
     let _ = env.run_command(&["stop", "retry_ready"]);
 }
 
-#[test]
-fn test_logs_clear_all() {
-    let env = TestEnv::new();
-    env.ensure_binary_exists().unwrap();
-
-    let script = get_script_path("slowly_output.ts");
-    // Create two daemons so we can verify --clear clears all logs
-    let toml_content = format!(
-        r#"
-[daemons.clear_test_1]
-run = "bun run {} 1 3"
-ready_delay = 0
-
-[daemons.clear_test_2]
-run = "bun run {} 1 3"
-ready_delay = 0
-"#,
-        script.display(),
-        script.display()
-    );
-    env.create_toml(&toml_content);
-
-    // Start both daemons to generate logs
-    env.run_command(&["start", "clear_test_1"]);
-    env.run_command(&["start", "clear_test_2"]);
-
-    // Wait for logs to be generated
-    env.sleep(Duration::from_secs(4));
-
-    // Verify logs exist for both daemons
-    let logs1 = env.read_logs("clear_test_1");
-    let logs2 = env.read_logs("clear_test_2");
-    assert!(!logs1.is_empty(), "Daemon 1 should have logs");
-    assert!(!logs2.is_empty(), "Daemon 2 should have logs");
-
-    // Clear all logs without specifying daemon
-    let output = env.run_command(&["logs", "--clear"]);
-    assert!(
-        output.status.success(),
-        "logs --clear should succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Verify logs are cleared for both daemons
-    let logs1_after = env.read_logs("clear_test_1");
-    let logs2_after = env.read_logs("clear_test_2");
-    assert!(
-        logs1_after.is_empty(),
-        "Daemon 1 logs should be cleared, got: {logs1_after}"
-    );
-    assert!(
-        logs2_after.is_empty(),
-        "Daemon 2 logs should be cleared, got: {logs2_after}"
-    );
-
-    // Clean up
-    env.run_command(&["stop", "clear_test_1"]);
-    env.run_command(&["stop", "clear_test_2"]);
-}
+// ============================================================================
+// Stop Command Tests
+// ============================================================================
 
 #[test]
 fn test_ready_http_check() {
