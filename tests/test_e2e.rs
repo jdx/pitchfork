@@ -854,6 +854,10 @@ fn test_ready_http_check() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
+    // Clean up any stray processes on port 18081
+    #[cfg(unix)]
+    env.kill_port(18081);
+
     let script = get_script_path("http_server.ts");
     // Server starts listening after 1 second delay
     let toml_content = format!(
@@ -907,6 +911,10 @@ ready_http = "http://localhost:18081/health"
 fn test_ready_port_check() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
+
+    // Clean up any stray processes on port 18082
+    #[cfg(unix)]
+    env.kill_port(18082);
 
     let script = get_script_path("http_server.ts");
     // Server starts listening after 1 second delay
@@ -1167,4 +1175,160 @@ ready_delay = 1
         Some("stopped".to_string()),
         "Daemon should remain stopped"
     );
+}
+
+// ============================================================================
+// Ad-hoc Daemon Tests
+// ============================================================================
+
+/// Test that ad-hoc daemons (started via `pitchfork run`) can now be restarted
+/// because their startup command is saved in the state file.
+#[test]
+fn test_adhoc_daemon_can_be_restarted() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Create an empty toml (ad-hoc daemon won't be in it)
+    env.create_toml("");
+
+    // Start an ad-hoc daemon using `pitchfork run`
+    let output = env.run_command(&["run", "adhoc_test", "--delay", "1", "--", "sleep", "60"]);
+    println!("run stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("run stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success(), "Ad-hoc run should succeed");
+
+    // Verify daemon is running
+    let status = env.get_daemon_status("adhoc_test");
+    println!("Status after run: {status:?}");
+    assert_eq!(
+        status,
+        Some("running".to_string()),
+        "Ad-hoc daemon should be running"
+    );
+
+    // Get the original PID
+    let original_pid = env.get_daemon_pid("adhoc_test");
+    println!("Original PID: {original_pid:?}");
+
+    // Restart the ad-hoc daemon - it should now succeed
+    let output = env.run_command(&["restart", "adhoc_test"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    println!("restart stdout: {stdout}");
+    println!("restart stderr: {stderr}");
+
+    // Give some time for restart to complete
+    env.sleep(Duration::from_secs(2));
+
+    // The ad-hoc daemon should be running with a new PID
+    let status = env.get_daemon_status("adhoc_test");
+    println!("Status after restart: {status:?}");
+    assert_eq!(
+        status,
+        Some("running".to_string()),
+        "Ad-hoc daemon should be running after restart"
+    );
+
+    // Verify PID changed (daemon was actually restarted)
+    let new_pid = env.get_daemon_pid("adhoc_test");
+    println!("New PID after restart: {new_pid:?}");
+    assert_ne!(original_pid, new_pid, "PID should change after restart");
+
+    // Clean up
+    env.run_command(&["stop", "adhoc_test"]);
+}
+
+/// Test that `restart --all` also restarts ad-hoc daemons
+/// (since they now have saved commands)
+#[test]
+fn test_restart_all_includes_adhoc_daemons() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Create a config with one daemon
+    let toml_content = r#"
+[daemons.config_daemon]
+run = "sleep 60"
+ready_delay = 1
+"#;
+    env.create_toml(toml_content);
+
+    // Start the config-based daemon
+    let output = env.run_command(&["start", "config_daemon"]);
+    assert!(
+        output.status.success(),
+        "Config daemon start should succeed"
+    );
+
+    // Start an ad-hoc daemon
+    let output = env.run_command(&["run", "adhoc_daemon", "--delay", "1", "--", "sleep", "60"]);
+    assert!(output.status.success(), "Ad-hoc run should succeed");
+
+    // Verify both are running
+    assert_eq!(
+        env.get_daemon_status("config_daemon"),
+        Some("running".to_string()),
+        "Config daemon should be running"
+    );
+    assert_eq!(
+        env.get_daemon_status("adhoc_daemon"),
+        Some("running".to_string()),
+        "Ad-hoc daemon should be running"
+    );
+
+    // Get original PIDs
+    let config_pid = env.get_daemon_pid("config_daemon");
+    let adhoc_pid = env.get_daemon_pid("adhoc_daemon");
+    println!("Original config_daemon PID: {config_pid:?}");
+    println!("Original adhoc_daemon PID: {adhoc_pid:?}");
+
+    // Restart all daemons
+    let output = env.run_command(&["restart", "--all"]);
+    println!(
+        "restart --all stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "restart --all stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Give some time for restart to complete
+    env.sleep(Duration::from_secs(2));
+
+    // Config daemon should still be running (was restarted)
+    let status = env.get_daemon_status("config_daemon");
+    println!("Config daemon status after restart --all: {status:?}");
+    assert_eq!(
+        status,
+        Some("running".to_string()),
+        "Config daemon should be running after restart --all"
+    );
+
+    // Ad-hoc daemon should also be running (was restarted with saved command)
+    let status = env.get_daemon_status("adhoc_daemon");
+    println!("Ad-hoc daemon status after restart --all: {status:?}");
+    assert_eq!(
+        status,
+        Some("running".to_string()),
+        "Ad-hoc daemon should be running after restart --all"
+    );
+
+    // Verify both PIDs changed (both were restarted)
+    let new_config_pid = env.get_daemon_pid("config_daemon");
+    let new_adhoc_pid = env.get_daemon_pid("adhoc_daemon");
+    println!("New config_daemon PID: {new_config_pid:?}");
+    println!("New adhoc_daemon PID: {new_adhoc_pid:?}");
+
+    assert_ne!(
+        config_pid, new_config_pid,
+        "Config daemon PID should change after restart"
+    );
+    assert_ne!(
+        adhoc_pid, new_adhoc_pid,
+        "Ad-hoc daemon PID should change after restart"
+    );
+
+    // Clean up
+    env.run_command(&["stop", "--all"]);
 }

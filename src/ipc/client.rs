@@ -1,5 +1,6 @@
 use crate::daemon::{Daemon, RunOptions};
 use crate::error::IpcError;
+use crate::ipc::batch::RunResult;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
 use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
@@ -121,18 +122,18 @@ impl IpcClient {
         deserialize(&bytes).wrap_err("failed to deserialize IPC response")
     }
 
-    async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
+    pub(crate) async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
         self.request_with_timeout(msg, REQUEST_TIMEOUT).await
     }
 
-    fn unexpected_response(expected: &str, actual: &IpcResponse) -> IpcError {
+    pub(crate) fn unexpected_response(expected: &str, actual: &IpcResponse) -> IpcError {
         IpcError::UnexpectedResponse {
             expected: expected.to_string(),
             actual: format!("{actual:?}"),
         }
     }
 
-    async fn request_with_timeout(
+    pub(crate) async fn request_with_timeout(
         &self,
         msg: IpcRequest,
         timeout: Duration,
@@ -141,15 +142,19 @@ impl IpcClient {
         self.read(timeout).await
     }
 
+    // =========================================================================
+    // Low-level IPC operations
+    // =========================================================================
+
     pub async fn enable(&self, id: String) -> Result<bool> {
         let rsp = self.request(IpcRequest::Enable { id: id.clone() }).await?;
         match rsp {
             IpcResponse::Yes => {
-                info!("enabled daemon {id}");
+                info!("Enabled daemon {id}");
                 Ok(true)
             }
             IpcResponse::No => {
-                info!("daemon {id} already enabled");
+                info!("Daemon {id} already enabled");
                 Ok(false)
             }
             rsp => Err(Self::unexpected_response("Yes or No", &rsp).into()),
@@ -160,40 +165,46 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::Disable { id: id.clone() }).await?;
         match rsp {
             IpcResponse::Yes => {
-                info!("disabled daemon {id}");
+                info!("Disabled daemon {id}");
                 Ok(true)
             }
             IpcResponse::No => {
-                info!("daemon {id} already disabled");
+                info!("Daemon {id} already disabled");
                 Ok(false)
             }
             rsp => Err(Self::unexpected_response("Yes or No", &rsp).into()),
         }
     }
 
-    pub async fn run(&self, opts: RunOptions) -> Result<(Vec<String>, Option<i32>)> {
-        info!("starting daemon {}", opts.id);
+    /// Run a single daemon with the given options (low-level operation)
+    pub async fn run(&self, opts: RunOptions) -> Result<RunResult> {
         let start_time = chrono::Local::now();
         // Use longer timeout for daemon start - ready_delay can be up to 60s+
         let timeout = Duration::from_secs(opts.ready_delay.unwrap_or(3) + 60);
         let rsp = self
             .request_with_timeout(IpcRequest::Run(opts.clone()), timeout)
             .await?;
-        let mut started_daemons = vec![];
-        let mut exit_code = None;
+
         match rsp {
             IpcResponse::DaemonStart { daemon } => {
-                started_daemons.push(daemon.id.clone());
-                info!("started {}", daemon.id);
+                info!("Started {}", daemon.id);
+                Ok(RunResult {
+                    started: true,
+                    exit_code: None,
+                    start_time,
+                })
             }
             IpcResponse::DaemonReady { daemon } => {
-                started_daemons.push(daemon.id.clone());
-                info!("started {}", daemon.id);
+                info!("Started {}", daemon.id);
+                Ok(RunResult {
+                    started: true,
+                    exit_code: None,
+                    start_time,
+                })
             }
-            IpcResponse::DaemonFailedWithCode { exit_code: code } => {
-                let code = code.unwrap_or(1);
-                exit_code = Some(code);
-                error!("daemon {} failed with exit code {}", opts.id, code);
+            IpcResponse::DaemonFailedWithCode { exit_code } => {
+                let code = exit_code.unwrap_or(1);
+                error!("Daemon {} failed with exit code {}", opts.id, code);
 
                 // Print logs from the time we started this specific daemon
                 if let Err(e) =
@@ -201,13 +212,22 @@ impl IpcClient {
                 {
                     error!("Failed to print logs: {e}");
                 }
+                Ok(RunResult {
+                    started: false,
+                    exit_code: Some(code),
+                    start_time,
+                })
             }
             IpcResponse::DaemonAlreadyRunning => {
-                warn!("daemon {} already running", opts.id);
+                warn!("Daemon {} already running", opts.id);
+                Ok(RunResult {
+                    started: false,
+                    exit_code: None,
+                    start_time,
+                })
             }
             IpcResponse::DaemonFailed { error } => {
                 error!("Failed to start daemon {}: {}", opts.id, error);
-                exit_code = Some(1);
 
                 // Print logs from the time we started this specific daemon
                 if let Err(e) =
@@ -215,12 +235,14 @@ impl IpcClient {
                 {
                     error!("Failed to print logs: {e}");
                 }
+                Ok(RunResult {
+                    started: false,
+                    exit_code: Some(1),
+                    start_time,
+                })
             }
-            rsp => {
-                return Err(Self::unexpected_response("DaemonStart or DaemonReady", &rsp).into());
-            }
+            rsp => Err(Self::unexpected_response("DaemonStart or DaemonReady", &rsp).into()),
         }
-        Ok((started_daemons, exit_code))
     }
 
     pub async fn active_daemons(&self) -> Result<Vec<Daemon>> {
@@ -251,7 +273,7 @@ impl IpcClient {
         let rsp = self.request(IpcRequest::Clean).await?;
         match rsp {
             IpcResponse::Ok => {
-                trace!("cleaned");
+                info!("Cleaned up stopped/failed daemons");
             }
             rsp => return Err(Self::unexpected_response("Ok", &rsp).into()),
         }
@@ -274,27 +296,28 @@ impl IpcClient {
         }
     }
 
-    pub async fn stop(&self, id: String) -> Result<()> {
+    /// Stop a single daemon (low-level operation)
+    pub async fn stop(&self, id: String) -> Result<bool> {
         let rsp = self.request(IpcRequest::Stop { id: id.clone() }).await?;
         match rsp {
             IpcResponse::Ok => {
-                info!("stopped daemon {id}");
-                Ok(())
+                info!("Stopped daemon {id}");
+                Ok(true)
             }
             IpcResponse::DaemonNotRunning => {
-                warn!("daemon {id} is not running");
-                Ok(())
+                warn!("Daemon {id} is not running");
+                Ok(false)
             }
             IpcResponse::DaemonNotFound => {
-                warn!("daemon {id} not found");
-                Ok(())
+                warn!("Daemon {id} not found");
+                Ok(false)
             }
             IpcResponse::DaemonWasNotRunning => {
-                warn!("daemon {id} was not running (process may have exited unexpectedly)");
-                Ok(())
+                warn!("Daemon {id} was not running (process may have exited unexpectedly)");
+                Ok(false)
             }
             IpcResponse::DaemonStopFailed { error } => {
-                error!("failed to stop daemon {id}: {error}");
+                error!("Failed to stop daemon {id}: {error}");
                 Err(crate::error::DaemonError::StopFailed {
                     id: id.clone(),
                     error,

@@ -62,6 +62,8 @@ pub struct Daemon {
     pub shell_pid: Option<u32>,
     pub status: DaemonStatus,
     pub dir: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cmd: Option<Vec<String>>,
     pub autostop: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cron_schedule: Option<String>,

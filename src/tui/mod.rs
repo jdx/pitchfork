@@ -3,6 +3,7 @@ mod event;
 mod ui;
 
 use crate::Result;
+use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -13,6 +14,7 @@ use log::LevelFilter;
 use miette::IntoDiagnostic;
 use ratatui::prelude::*;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub use app::App;
@@ -52,7 +54,7 @@ pub async fn run() -> Result<()> {
 
 async fn run_with_cleanup<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
     // Connect to supervisor (auto-start if needed)
-    let client = IpcClient::connect(true).await?;
+    let client = Arc::new(IpcClient::connect(true).await?);
 
     // Create app state
     let mut app = App::new();
@@ -65,7 +67,7 @@ async fn run_with_cleanup<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> 
 async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    client: &IpcClient,
+    client: &Arc<IpcClient>,
 ) -> Result<()> {
     let mut last_refresh = std::time::Instant::now();
 
@@ -82,12 +84,25 @@ async fn run_app<B: Backend>(
                 event::Action::Start(id) => {
                     app.start_loading(format!("Starting {id}..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                    // Handle start errors gracefully (don't crash TUI)
-                    if let Err(e) = app.start_daemon(client, &id).await {
-                        app.stop_loading();
-                        app.set_message(format!("Failed to start {id}: {e}"));
-                    } else {
-                        app.stop_loading();
+
+                    let result = client
+                        .start_daemons(std::slice::from_ref(&id), StartOptions::default())
+                        .await;
+
+                    app.stop_loading();
+                    match result {
+                        Ok(r) if r.any_failed => {
+                            app.set_message(format!("Failed to start {id}"));
+                        }
+                        Ok(r) if !r.started.is_empty() => {
+                            app.set_message(format!("Started {id}"));
+                        }
+                        Ok(_) => {
+                            app.set_message(format!("No daemons were started for {id}"));
+                        }
+                        Err(e) => {
+                            app.set_message(format!("Failed to start {id}: {e}"));
+                        }
                     }
                     app.refresh(client).await?;
                 }
@@ -103,15 +118,26 @@ async fn run_app<B: Backend>(
                     let count = ids.len();
                     app.start_loading(format!("Starting {count} daemons..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                    let mut started = 0;
-                    for id in &ids {
-                        if app.start_daemon(client, id).await.is_ok() {
-                            started += 1;
-                        }
-                    }
+
+                    let result = client.start_daemons(&ids, StartOptions::default()).await;
+
                     app.stop_loading();
                     app.clear_selection();
-                    app.set_message(format!("Started {started}/{count} daemons"));
+                    match result {
+                        Ok(r) => {
+                            let started = r.started.len();
+                            if r.any_failed {
+                                app.set_message(format!(
+                                    "Started {started}/{count} daemons (some failed)"
+                                ));
+                            } else {
+                                app.set_message(format!("Started {started} daemons"));
+                            }
+                        }
+                        Err(e) => {
+                            app.set_message(format!("Failed to start daemons: {e}"));
+                        }
+                    }
                     app.refresh(client).await?;
                 }
                 event::Action::BatchEnable(ids) => {
@@ -167,24 +193,39 @@ async fn run_app<B: Backend>(
                             app::PendingAction::Stop(id) => {
                                 app.start_loading(format!("Stopping {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                client.stop(id.clone()).await?;
+                                let result = client.stop(id.clone()).await;
                                 app.stop_loading();
-                                app.set_message(format!("Stopped {id}"));
+                                match result {
+                                    Ok(true) => app.set_message(format!("Stopped {id}")),
+                                    Ok(false) => {
+                                        app.set_message(format!("Daemon {id} was not running"))
+                                    }
+                                    Err(e) => app.set_message(format!("Failed to stop {id}: {e}")),
+                                }
                             }
                             app::PendingAction::Restart(id) => {
                                 app.start_loading(format!("Restarting {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                client.stop(id.clone()).await?;
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-                                // Handle start errors gracefully (don't crash TUI)
-                                if let Err(e) = app.start_daemon(client, &id).await {
-                                    app.stop_loading();
-                                    app.set_message(format!(
-                                        "Stopped {id} but failed to restart: {e}"
-                                    ));
-                                } else {
-                                    app.stop_loading();
-                                    app.set_message(format!("Restarted {id}"));
+
+                                // Restart is just start --force
+                                let opts = StartOptions {
+                                    force: true,
+                                    ..Default::default()
+                                };
+                                let result =
+                                    client.start_daemons(std::slice::from_ref(&id), opts).await;
+
+                                app.stop_loading();
+                                match result {
+                                    Ok(r) if r.any_failed => {
+                                        app.set_message(format!("Failed to restart {id}"));
+                                    }
+                                    Ok(_) => {
+                                        app.set_message(format!("Restarted {id}"));
+                                    }
+                                    Err(e) => {
+                                        app.set_message(format!("Failed to restart {id}: {e}"));
+                                    }
                                 }
                             }
                             app::PendingAction::Disable(id) => {
@@ -198,32 +239,52 @@ async fn run_app<B: Backend>(
                                 let count = ids.len();
                                 app.start_loading(format!("Stopping {count} daemons..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                for id in &ids {
-                                    let _ = client.stop(id.clone()).await;
-                                }
+                                let result = client.stop_daemons(&ids).await;
                                 app.stop_loading();
                                 app.clear_selection();
-                                app.set_message(format!("Stopped {count} daemons"));
+                                match result {
+                                    Ok(r) if r.any_failed => {
+                                        app.set_message(format!(
+                                            "Stopped {count} daemons (some failed)"
+                                        ));
+                                    }
+                                    Ok(_) => {
+                                        app.set_message(format!("Stopped {count} daemons"));
+                                    }
+                                    Err(e) => {
+                                        app.set_message(format!("Failed to stop daemons: {e}"));
+                                    }
+                                }
                             }
                             app::PendingAction::BatchRestart(ids) => {
                                 let count = ids.len();
                                 app.start_loading(format!("Restarting {count} daemons..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                // Stop all first
-                                for id in &ids {
-                                    let _ = client.stop(id.clone()).await;
-                                }
-                                tokio::time::sleep(Duration::from_millis(500)).await;
-                                // Start all
-                                let mut started = 0;
-                                for id in &ids {
-                                    if app.start_daemon(client, id).await.is_ok() {
-                                        started += 1;
-                                    }
-                                }
+
+                                // Restart is just start --force
+                                let opts = StartOptions {
+                                    force: true,
+                                    ..Default::default()
+                                };
+                                let result = client.start_daemons(&ids, opts).await;
+
                                 app.stop_loading();
                                 app.clear_selection();
-                                app.set_message(format!("Restarted {started}/{count} daemons"));
+                                match result {
+                                    Ok(r) => {
+                                        let restarted = r.started.len();
+                                        if r.any_failed {
+                                            app.set_message(format!("Restarted {restarted}/{count} daemons (some failed)"));
+                                        } else {
+                                            app.set_message(format!(
+                                                "Restarted {restarted} daemons"
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app.set_message(format!("Failed to restart daemons: {e}"));
+                                    }
+                                }
                             }
                             app::PendingAction::BatchDisable(ids) => {
                                 let count = ids.len();

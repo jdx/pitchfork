@@ -212,6 +212,56 @@ impl TestEnv {
         None
     }
 
+    /// Get daemon PID by running `pitchfork status <id>`
+    #[allow(dead_code)]
+    pub fn get_daemon_pid(&self, daemon_id: &str) -> Option<u32> {
+        let output = self.run_command(&["status", daemon_id]);
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse output like:
+        // Name: docs
+        // PID: 51580
+        // Status: running
+        for line in stdout.lines() {
+            if line.trim().starts_with("PID:") {
+                let pid_str = line.split(':').nth(1)?.trim();
+                if pid_str == "-" || pid_str.is_empty() {
+                    return None;
+                }
+                return pid_str.parse().ok();
+            }
+        }
+        None
+    }
+
+    /// Kill any process listening on the specified port
+    #[cfg(unix)]
+    pub fn kill_port(&self, port: u16) {
+        use std::process::Command;
+        // Use lsof to find process using the port, then kill it
+        let output = Command::new("lsof")
+            .args(["-ti", &format!(":{port}")])
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for pid in pids.lines() {
+                    if let Ok(pid) = pid.trim().parse::<i32>() {
+                        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+                    }
+                }
+                // Give the OS time to release the port
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
     /// Cleanup all processes and supervisor
     pub fn cleanup(&self) {
         let _ = self.run_command(&["supervisor", "stop"]);

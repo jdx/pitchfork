@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::daemon::{Daemon, RunOptions};
+use crate::daemon::Daemon;
 use crate::env::PITCHFORK_LOGS_DIR;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
@@ -8,10 +8,10 @@ use crate::pitchfork_toml::{
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use miette::bail;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Maximum number of stat samples to keep for each daemon (e.g., 60 samples at 2s intervals = 2 minutes)
@@ -1112,7 +1112,7 @@ impl App {
         self.stats_history.get(daemon_id)
     }
 
-    pub async fn refresh(&mut self, client: &IpcClient) -> Result<()> {
+    pub async fn refresh(&mut self, client: &Arc<IpcClient>) -> Result<()> {
         self.daemons = client.active_daemons().await?;
         // Filter out the pitchfork supervisor from the list (like web UI does)
         self.daemons.retain(|d| d.id != "pitchfork");
@@ -1164,6 +1164,7 @@ impl App {
                         shell_pid: None,
                         status: DaemonStatus::Stopped,
                         dir: None,
+                        cmd: None,
                         autostop: false,
                         cron_schedule: None,
                         cron_retrigger: None,
@@ -1389,52 +1390,6 @@ impl App {
 
     pub fn is_disabled(&self, daemon_id: &str) -> bool {
         self.disabled.contains(&daemon_id.to_string())
-    }
-
-    pub async fn start_daemon(&mut self, client: &IpcClient, daemon_id: &str) -> Result<()> {
-        // Find daemon config from pitchfork.toml files
-        let config = PitchforkToml::all_merged();
-        let daemon_config = config
-            .daemons
-            .get(daemon_id)
-            .ok_or_else(|| miette::miette!("Daemon '{}' not found in config", daemon_id))?;
-
-        let cmd = shell_words::split(&daemon_config.run)
-            .map_err(|e| miette::miette!("Failed to parse command: {}", e))?;
-
-        if cmd.is_empty() {
-            bail!("Daemon '{}' has empty run command", daemon_id);
-        }
-
-        let (cron_schedule, cron_retrigger) = daemon_config
-            .cron
-            .as_ref()
-            .map(|c| (Some(c.schedule.clone()), Some(c.retrigger)))
-            .unwrap_or((None, None));
-
-        let opts = RunOptions {
-            id: daemon_id.to_string(),
-            cmd,
-            force: false,
-            shell_pid: None,
-            dir: std::env::current_dir().unwrap_or_default(),
-            autostop: false,
-            cron_schedule,
-            cron_retrigger,
-            retry: daemon_config.retry.count(),
-            retry_count: 0,
-            ready_delay: daemon_config.ready_delay,
-            ready_output: daemon_config.ready_output.clone(),
-            ready_http: daemon_config.ready_http.clone(),
-            ready_port: daemon_config.ready_port,
-            ready_cmd: daemon_config.ready_cmd.clone(),
-            wait_ready: false,
-            depends: daemon_config.depends.clone(),
-        };
-
-        client.run(opts).await?;
-        self.set_message(format!("Started {daemon_id}"));
-        Ok(())
     }
 
     // Config editor methods
