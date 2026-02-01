@@ -4,8 +4,9 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::daemon::{RunOptions, is_valid_daemon_id};
+use crate::daemon::is_valid_daemon_id;
 use crate::env;
+use crate::ipc::batch::{StartOptions, build_run_options};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
@@ -21,6 +22,15 @@ fn html_escape(s: &str) -> String {
 
 fn url_encode(s: &str) -> String {
     urlencoding::encode(s).into_owned()
+}
+
+/// Get daemon command from the stored cmd field
+fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
+    daemon
+        .cmd
+        .as_ref()
+        .map(shell_words::join)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn base_html(title: &str, content: &str) -> String {
@@ -141,7 +151,7 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
 
     format!(
         r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-        <td><span class="daemon-name">{safe_id}</span> {disabled_badge}</td>
+        <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td>{cpu_display}</td>
@@ -184,7 +194,7 @@ async fn list_content() -> String {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><span class="daemon-name">{safe_id}</span></td>
+                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status stopped">-</span></td>
                 <td>-</td>
@@ -224,7 +234,7 @@ async fn list_content() -> String {
                 </tr>
             </thead>
             <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
-                {rows}
+            {rows}
             </tbody>
         </table>
     "##
@@ -254,7 +264,7 @@ pub async fn list_partial() -> Html<String> {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><span class="daemon-name">{safe_id}</span></td>
+                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status stopped">-</span></td>
                 <td>-</td>
@@ -350,7 +360,6 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                             <dt>Start Time</dt><dd>{}</dd>
                             <dt>Parent PID</dt><dd>{}</dd>
                             <dt>User</dt><dd>{}</dd>
-                            <dt>Command</dt><dd><code>{}</code></dd>
                         </dl>
                     </div>
                     {}
@@ -372,11 +381,6 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                         .map(|p| p.to_string())
                         .unwrap_or_else(|| "-".to_string()),
                     html_escape(stats.user_id.as_deref().unwrap_or("-")),
-                    html_escape(
-                        &config_info
-                            .map(|c| c.run.clone())
-                            .unwrap_or_else(|| stats.cmd_display())
-                    ),
                     if !stats.environ.is_empty() {
                         format!(
                             r#"<h2>Environment Variables (first 20)</h2>
@@ -445,6 +449,8 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                         <dt>Status</dt><dd><span class="status {status_class}">{}</span></dd>
                         <dt>PID</dt><dd>{}</dd>
                         <dt>Directory</dt><dd>{}</dd>
+                        <dt>Command</dt><dd><code>{}</code></dd>
+                        <dt>Ad-hoc</dt><dd>{}</dd>
                         <dt>Disabled</dt><dd>{}</dd>
                         <dt>Retry Count</dt><dd>{} / {}</dd>
                     </dl>
@@ -461,6 +467,8 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "-".into())
             ),
+            html_escape(&get_daemon_command(d)),
+            if config_info.is_none() { "Yes" } else { "No" },
             if is_disabled { "Yes" } else { "No" },
             d.retry_count,
             d.retry,
@@ -507,54 +515,29 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
     let from_detail = query.from.as_deref() == Some("detail");
 
     let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
-        let cmd = match shell_words::split(&daemon_config.run) {
-            Ok(cmd) => cmd,
+        // Use shared helper to build RunOptions from config
+        let opts = StartOptions::default();
+        let mut run_opts = match build_run_options(&id, daemon_config, &opts) {
+            Ok(opts) => opts,
             Err(e) => {
-                // Don't early return - let the error flow through proper handling below
-                // which respects from_detail for correct HTML structure
-                let error_msg = format!("Failed to parse command: {e}");
-                // Skip to error handling by returning early from the if-let block
                 return if from_detail {
-                    Html(format!(
-                        r#"<div class="error">{}</div>"#,
-                        html_escape(&error_msg)
-                    ))
+                    Html(format!(r#"<div class="error">{}</div>"#, html_escape(&e)))
                 } else {
                     Html(format!(
                         r#"<tr id="daemon-{safe_id}"><td colspan="8" class="error">{}</td></tr>"#,
-                        html_escape(&error_msg)
+                        html_escape(&e)
                     ))
                 };
             }
         };
-        let dir = daemon_config
-            .path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| env::CWD.clone());
 
-        let opts = RunOptions {
-            id: id.clone(),
-            cmd,
-            force: false,
-            shell_pid: None,
-            dir,
-            autostop: false,
-            cron_schedule: daemon_config.cron.as_ref().map(|c| c.schedule.clone()),
-            cron_retrigger: daemon_config.cron.as_ref().map(|c| c.retrigger),
-            retry: daemon_config.retry.count(),
-            retry_count: 0,
-            ready_delay: daemon_config.ready_delay.or(Some(3)),
-            ready_output: daemon_config.ready_output.clone(),
-            ready_http: daemon_config.ready_http.clone(),
-            ready_port: daemon_config.ready_port,
-            ready_cmd: daemon_config.ready_cmd.clone(),
-            wait_ready: false, // Don't block web request
-            depends: daemon_config.depends.clone(),
-        };
+        // Web UI specific: don't block on ready check, use CWD if no path
+        run_opts.wait_ready = false;
+        if run_opts.dir.as_os_str().is_empty() {
+            run_opts.dir = env::CWD.clone();
+        }
 
-        match SUPERVISOR.run(opts).await {
+        match SUPERVISOR.run(run_opts).await {
             Ok(_) => None,
             Err(e) => Some(format!("Failed to start: {e}")),
         }

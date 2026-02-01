@@ -5,6 +5,7 @@ use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
 use miette::{Context, IntoDiagnostic};
 use std::path::PathBuf;
 
+pub(crate) mod batch;
 pub(crate) mod client;
 pub(crate) mod server;
 
@@ -27,14 +28,28 @@ pub(crate) mod server;
 pub enum IpcRequest {
     Connect,
     Clean,
-    Stop { id: String },
+    Stop {
+        id: String,
+    },
     GetActiveDaemons,
     GetDisabledDaemons,
     Run(RunOptions),
-    Enable { id: String },
-    Disable { id: String },
-    UpdateShellDir { shell_pid: u32, dir: PathBuf },
+    Enable {
+        id: String,
+    },
+    Disable {
+        id: String,
+    },
+    UpdateShellDir {
+        shell_pid: u32,
+        dir: PathBuf,
+    },
     GetNotifications,
+    /// Invalid request (failed to deserialize)
+    #[serde(skip)]
+    Invalid {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]

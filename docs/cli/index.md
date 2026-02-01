@@ -23,7 +23,7 @@
 - [`pitchfork enable <ID>`](/cli/enable.md)
 - [`pitchfork list [--hide-header]`](/cli/list.md)
 - [`pitchfork logs [FLAGS] [ID]…`](/cli/logs.md)
-- [`pitchfork restart [-a --all] [-q --quiet] [ID]…`](/cli/restart.md)
+- [`pitchfork restart [FLAGS] [ID]…`](/cli/restart.md)
 - [`pitchfork run [FLAGS] <ID> [-- RUN]…`](/cli/run.md)
 - [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)

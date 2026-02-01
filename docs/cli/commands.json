@@ -540,7 +540,7 @@
         "full_cmd": [
           "restart"
         ],
-        "usage": "restart [-a --all] [-q --quiet] [ID]…",
+        "usage": "restart [FLAGS] [ID]…",
         "subcommands": {},
         "args": [
           {
@@ -570,6 +570,101 @@
             "global": false
           },
           {
+            "name": "delay",
+            "usage": "--delay <DELAY>",
+            "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "help_first_line": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "short": [],
+            "long": [
+              "delay"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DELAY",
+              "usage": "<DELAY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output",
+            "usage": "--output <OUTPUT>",
+            "help": "Wait until output matches this regex pattern before considering daemon ready",
+            "help_first_line": "Wait until output matches this regex pattern before considering daemon ready",
+            "short": [],
+            "long": [
+              "output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT",
+              "usage": "<OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "http",
+            "usage": "--http <HTTP>",
+            "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "help_first_line": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "short": [],
+            "long": [
+              "http"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "HTTP",
+              "usage": "<HTTP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "port",
+            "usage": "--port <PORT>",
+            "help": "Wait until TCP port is listening before considering daemon ready",
+            "help_first_line": "Wait until TCP port is listening before considering daemon ready",
+            "short": [],
+            "long": [
+              "port"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "PORT",
+              "usage": "<PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "cmd",
+            "usage": "--cmd <CMD>",
+            "help": "Shell command to poll for readiness (exit code 0 = ready)",
+            "help_first_line": "Shell command to poll for readiness (exit code 0 = ready)",
+            "short": [],
+            "long": [
+              "cmd"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "CMD",
+              "usage": "<CMD>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "quiet",
             "usage": "-q --quiet",
             "help": "Suppress startup log output",
@@ -587,7 +682,7 @@
         "mounts": [],
         "hide": false,
         "help": "Restarts a daemon (stops then starts it)",
-        "help_long": "Restarts a daemon (stops then starts it)\n\nSends SIGTERM to stop the daemon, then starts it again from the\npitchfork.toml configuration.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons",
+        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
         "name": "restart",
         "aliases": [],
         "hidden_aliases": [],

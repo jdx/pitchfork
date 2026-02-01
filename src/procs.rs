@@ -134,11 +134,6 @@ impl Procs {
                 name: p.name().to_string_lossy().to_string(),
                 exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
                 cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
-                cmd: p
-                    .cmd()
-                    .iter()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .collect(),
                 environ: p
                     .environ()
                     .iter()
@@ -198,7 +193,6 @@ pub struct ExtendedProcessStats {
     pub name: String,
     pub exe_path: Option<String>,
     pub cwd: Option<String>,
-    pub cmd: Vec<String>,
     pub environ: Vec<String>,
     pub status: String,
     pub cpu_percent: f32,
@@ -244,10 +238,6 @@ impl ExtendedProcessStats {
 
     pub fn disk_write_display(&self) -> String {
         format_bytes_per_sec(self.disk_write_bytes)
-    }
-
-    pub fn cmd_display(&self) -> String {
-        self.cmd.join(" ")
     }
 }
 

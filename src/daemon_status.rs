@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, strum::Display, strum::EnumIs)]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum DaemonStatus {
@@ -29,6 +31,37 @@ impl DaemonStatus {
             DaemonStatus::Errored(Some(code)) => Some(format!("exit code {code}")),
             DaemonStatus::Errored(None) => Some("unknown exit code".to_string()),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_daemon_status_json_roundtrip() {
+        let variants = vec![
+            ("running", DaemonStatus::Running),
+            ("stopped", DaemonStatus::Stopped),
+            ("waiting", DaemonStatus::Waiting),
+            ("stopping", DaemonStatus::Stopping),
+            ("failed", DaemonStatus::Failed("some error".to_string())),
+            ("errored_some", DaemonStatus::Errored(Some(1))),
+            ("errored_none", DaemonStatus::Errored(None)),
+        ];
+
+        for (name, status) in variants {
+            let json_str = serde_json::to_string(&status)
+                .unwrap_or_else(|_| panic!("Failed to serialize {name}"));
+            println!("Status {name}: {json_str}");
+
+            let result: Result<DaemonStatus, _> = serde_json::from_str(&json_str);
+            assert!(
+                result.is_ok(),
+                "Failed to deserialize {name}: {:?}",
+                result.err()
+            );
         }
     }
 }

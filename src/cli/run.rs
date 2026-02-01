@@ -1,8 +1,7 @@
 use crate::cli::logs::print_startup_logs;
-use crate::daemon::RunOptions;
+use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::{Result, env};
-use chrono::Local;
 use miette::bail;
 
 /// Runs a one-off daemon
@@ -71,37 +70,30 @@ impl Run {
         }
 
         let ipc = IpcClient::connect(true).await?;
-        let start_time = Local::now();
 
-        let (_started, exit_code) = ipc
-            .run(RunOptions {
-                id: self.id.clone(),
-                cmd: self.run.clone(),
-                shell_pid: None,
-                force: self.force,
-                dir: env::CWD.clone(),
-                autostop: false,
-                cron_schedule: None,
-                cron_retrigger: None,
-                retry: self.retry,
-                retry_count: 0,
-                ready_delay: self.delay.or(Some(3)),
-                ready_output: self.output.clone(),
-                ready_http: self.http.clone(),
-                ready_port: self.port,
-                ready_cmd: self.cmd.clone(),
-                wait_ready: true,
-                depends: vec![],
-            })
+        let opts = StartOptions {
+            force: self.force,
+            shell_pid: None,
+            delay: self.delay,
+            output: self.output.clone(),
+            http: self.http.clone(),
+            port: self.port,
+            cmd: self.cmd.clone(),
+            retry: Some(self.retry),
+        };
+
+        let result = ipc
+            .run_adhoc(self.id.clone(), self.run.clone(), env::CWD.clone(), opts)
             .await?;
 
-        if exit_code.is_some() {
+        if result.exit_code.is_some() {
             std::process::exit(1);
         }
 
         // Show startup logs on success (unless --quiet)
         if !self.quiet
-            && let Err(e) = print_startup_logs(&self.id, start_time)
+            && result.started
+            && let Err(e) = print_startup_logs(&self.id, result.start_time)
         {
             debug!("Failed to print startup logs: {e}");
         }
