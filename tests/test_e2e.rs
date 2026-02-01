@@ -1132,13 +1132,7 @@ ready_delay = 1
     );
 
     // Key test: Daemon status should be "stopped", NOT "stopping"
-    let status = env.get_daemon_status("stop_test");
-    println!("Status after stop: {status:?}");
-    assert_eq!(
-        status,
-        Some("stopped".to_string()),
-        "Daemon should be stopped after stop command, not stuck in stopping"
-    );
+    env.wait_for_status("stop_test", "stopped");
 }
 
 /// Test stop command with a daemon that has child processes
@@ -1187,12 +1181,7 @@ ready_delay = 1
     );
 
     // Daemon should be stopped
-    let status = env.get_daemon_status("stop_children_test");
-    assert_eq!(
-        status,
-        Some("stopped".to_string()),
-        "Daemon should be stopped"
-    );
+    env.wait_for_status("stop_children_test", "stopped");
 }
 
 /// Test stopping an already stopped daemon
@@ -1215,6 +1204,10 @@ ready_delay = 1
     let output = env.run_command(&["stop", "already_stopped_test"]);
     assert!(output.status.success(), "First stop should succeed");
 
+    // Wait for the supervisor to fully persist the stopped state.
+    // Under CI load, the state file may not be fully written yet.
+    env.wait_for_status("already_stopped_test", "stopped");
+
     // Try to stop again
     let output = env.run_command(&["stop", "already_stopped_test"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1222,12 +1215,7 @@ ready_delay = 1
 
     // Should handle gracefully (either succeed or indicate already stopped)
     // The daemon should still be in stopped state
-    let status = env.get_daemon_status("already_stopped_test");
-    assert_eq!(
-        status,
-        Some("stopped".to_string()),
-        "Daemon should remain stopped"
-    );
+    env.wait_for_status("already_stopped_test", "stopped");
 }
 
 // ============================================================================

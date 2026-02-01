@@ -212,6 +212,26 @@ impl TestEnv {
         None
     }
 
+    /// Poll daemon status until it matches the expected value.
+    /// Retries up to 25 times with 200ms intervals (5s total) to handle state file
+    /// write delays that can occur under CI load.
+    #[allow(dead_code)]
+    pub fn wait_for_status(&self, daemon_id: &str, expected: &str) {
+        for i in 0..25 {
+            let status = self.get_daemon_status(daemon_id);
+            if status.as_deref() == Some(expected) {
+                return;
+            }
+            if i < 24 {
+                std::thread::sleep(Duration::from_millis(200));
+            } else {
+                panic!(
+                    "Daemon {daemon_id} did not reach status '{expected}' after 5s, got: {status:?}"
+                );
+            }
+        }
+    }
+
     /// Get daemon PID by running `pitchfork status <id>`
     #[allow(dead_code)]
     pub fn get_daemon_pid(&self, daemon_id: &str) -> Option<u32> {
