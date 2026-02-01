@@ -195,9 +195,62 @@ run = "bun run {} 0"
         "List should show the exit code error message, got: {stdout}"
     );
     assert!(output.status.success(), "List command should succeed");
+}
+
+#[test]
+fn test_list_shows_available_daemons() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.available_daemon]
+run = "sleep 10"
+
+[daemons.running_daemon]
+run = "sleep 10"
+"#;
+    env.create_toml(toml_content);
+
+    // Start only one daemon, leaving the other as "available"
+    env.run_command(&["start", "running_daemon"]);
+    env.sleep(Duration::from_millis(500));
+
+    // Run list command
+    let output = env.run_command(&["list"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    println!("List output: {stdout}");
+
+    // Check that both daemons are shown
+    assert!(
+        stdout.contains("available_daemon"),
+        "List should show the available daemon"
+    );
+    assert!(
+        stdout.contains("running_daemon"),
+        "List should show the running daemon"
+    );
+
+    // Check that available daemon is marked as "available"
+    assert!(
+        stdout.contains("available_daemon") && stdout.contains("available"),
+        "Available daemon should be marked as 'available', got: {stdout}"
+    );
+
+    // Check that running daemon is not marked as "available"
+    let lines: Vec<&str> = stdout.lines().collect();
+    let running_line = lines
+        .iter()
+        .find(|line| line.contains("running_daemon"))
+        .expect("Should find running_daemon line");
+    assert!(
+        !running_line.contains("available"),
+        "Running daemon should not be marked as 'available', got: {running_line}"
+    );
+
+    assert!(output.status.success(), "List command should succeed");
 
     // Clean up
-    let _ = env.run_command(&["stop", "list_error_test"]);
+    env.run_command(&["stop", "running_daemon"]);
 }
 
 #[test]

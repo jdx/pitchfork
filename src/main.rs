@@ -4,6 +4,7 @@ extern crate log;
 mod boot_manager;
 mod cli;
 mod daemon;
+mod daemon_list;
 mod daemon_status;
 mod deps;
 mod env;
