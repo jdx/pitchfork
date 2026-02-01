@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/jdx/pitchfork/compare/v1.2.0...v1.3.0) - 2026-02-01
+
+### Added
+
+- *(list)* show available daemons and align logics with TUI ([#206](https://github.com/jdx/pitchfork/pull/206))
+- *(logs)* support `--since <humantime>`, use pager by default ([#204](https://github.com/jdx/pitchfork/pull/204))
+- support `pitchfork.local.toml` ([#198](https://github.com/jdx/pitchfork/pull/198))
+- impl `stop --all` ([#195](https://github.com/jdx/pitchfork/pull/195))
+- beautify web ui ([#191](https://github.com/jdx/pitchfork/pull/191))
+- add ready_cmd option ([#187](https://github.com/jdx/pitchfork/pull/187))
+
+### Fixed
+
+- refactor the logic of stopping a daemon and add tests ([#192](https://github.com/jdx/pitchfork/pull/192))
+
+### Other
+
+- re-order code to suit for multi-frontend structure ([#197](https://github.com/jdx/pitchfork/pull/197))
+- *(deps)* update rust crate xx to v2.3.1 ([#203](https://github.com/jdx/pitchfork/pull/203))
+- *(deps)* update rust crate clap to v4.5.56 ([#202](https://github.com/jdx/pitchfork/pull/202))
+- *(ci)* run linting on all files in CI ([#196](https://github.com/jdx/pitchfork/pull/196))
+- Update README.md logo ([#184](https://github.com/jdx/pitchfork/pull/184))
+
 ## [1.2.0](https://github.com/jdx/pitchfork/compare/v1.1.0...v1.2.0) - 2026-01-19
 
 ### Added
