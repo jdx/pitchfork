@@ -47,13 +47,6 @@ impl PagerConfig {
             .stdin(Stdio::piped())
             .spawn()
     }
-
-    /// Spawn the pager with a file argument
-    fn spawn_with_file(&self, path: &Path) -> io::Result<std::process::ExitStatus> {
-        let mut args = self.args.clone();
-        args.push(path.to_string_lossy().to_string());
-        Command::new(&self.command).args(&args).status()
-    }
 }
 
 /// Format a single log line for output.
@@ -528,14 +521,6 @@ impl Logs {
             return self.stream_logs_direct(log_files, single_daemon, raw);
         }
 
-        // Fast path: directly open file in pager without parsing
-        // This is much faster for large log files
-        if log_files.len() == 1 {
-            let (_, lf) = log_files.iter().next().unwrap();
-            return self.open_file_in_pager(&lf.path);
-        }
-
-        // Multiple files: use streaming merger for sorted/interleaved output
         let pager_config = PagerConfig::new(true); // start_at_end = true
 
         match pager_config.spawn_piped() {
@@ -548,11 +533,37 @@ impl Logs {
                         .collect();
                     let single_daemon_clone = single_daemon;
 
-                    // Stream merged logs using a min-heap for efficient memory usage
+                    // Stream logs using a background thread to avoid blocking
                     std::thread::spawn(move || {
                         let mut writer = BufWriter::new(stdin);
 
-                        // Create streaming merger
+                        // Single file: stream directly without merge overhead
+                        if log_files_clone.len() == 1 {
+                            let (name, path) = &log_files_clone[0];
+                            let file = match File::open(path) {
+                                Ok(f) => f,
+                                Err(_) => return,
+                            };
+                            let parser = StreamingLogParser::new(file);
+                            for (timestamp, message) in parser {
+                                let output = format!(
+                                    "{}\n",
+                                    format_log_line(
+                                        &timestamp,
+                                        name,
+                                        &message,
+                                        single_daemon_clone
+                                    )
+                                );
+                                if writer.write_all(output.as_bytes()).is_err() {
+                                    return;
+                                }
+                            }
+                            let _ = writer.flush();
+                            return;
+                        }
+
+                        // Multiple files: use streaming merger for sorted/interleaved output
                         let mut merger: StreamingMerger<StreamingLogParser> =
                             StreamingMerger::new();
 
@@ -600,17 +611,6 @@ impl Logs {
         Ok(())
     }
 
-    fn open_file_in_pager(&self, path: &Path) -> Result<()> {
-        let pager_config = PagerConfig::new(true); // start_at_end = true
-
-        let status = pager_config.spawn_with_file(path).into_diagnostic()?;
-
-        if !status.success() {
-            return Err(miette::miette!("Pager exited with error"));
-        }
-
-        Ok(())
-    }
     fn stream_logs_direct(
         &self,
         log_files: &BTreeMap<String, LogFile>,
