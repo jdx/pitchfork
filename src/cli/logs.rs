@@ -333,12 +333,12 @@ impl Logs {
         }
 
         let from = if let Some(since) = self.since.as_ref() {
-            Some(parse_time_input(since)?)
+            Some(parse_time_input(since, true)?)
         } else {
             None
         };
         let to = if let Some(until) = self.until.as_ref() {
-            Some(parse_time_input(until)?)
+            Some(parse_time_input(until, false)?)
         } else {
             None
         };
@@ -712,15 +712,7 @@ fn get_terminal_height() -> Option<usize> {
         return Some(h);
     }
 
-    if let Ok(output) = Command::new("tput").arg("lines").output()
-        && output.status.success()
-        && let Ok(s) = String::from_utf8(output.stdout)
-        && let Ok(h) = s.trim().parse::<usize>()
-    {
-        return Some(h);
-    }
-
-    None
+    crossterm::terminal::size().ok().map(|(_, h)| h as usize)
 }
 
 fn read_lines_in_time_range(
@@ -1006,7 +998,12 @@ fn parse_datetime(s: &str) -> Result<DateTime<Local>> {
         .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'. ", s))
 }
 
-fn parse_time_input(s: &str) -> Result<DateTime<Local>> {
+/// Parse time input string into DateTime.
+///
+/// `is_since` indicates whether this is for --since (true) or --until (false).
+/// The "yesterday fallback" only applies to --since: if the time is in the future,
+/// assume the user meant yesterday. For --until, future times are kept as-is.
+fn parse_time_input(s: &str, is_since: bool) -> Result<DateTime<Local>> {
     let s = s.trim();
 
     // Try full datetime first (YYYY-MM-DD HH:MM:SS)
@@ -1035,7 +1032,9 @@ fn parse_time_input(s: &str) -> Result<DateTime<Local>> {
             .ok_or_else(|| miette::miette!("Invalid or ambiguous datetime: '{}'", s))?;
 
         // If the interpreted time for today is in the future, assume the user meant yesterday
-        if dt > now
+        // BUT only for --since. For --until, a future time today is valid.
+        if is_since
+            && dt > now
             && let Some(yesterday) = today.pred_opt()
         {
             naive_dt = NaiveDateTime::new(yesterday, time);
