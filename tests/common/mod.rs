@@ -213,20 +213,20 @@ impl TestEnv {
     }
 
     /// Poll daemon status until it matches the expected value.
-    /// Retries up to 10 times with 200ms intervals to handle state file write delays
-    /// that can occur under CI load.
+    /// Retries up to 25 times with 200ms intervals (5s total) to handle state file
+    /// write delays that can occur under CI load.
     #[allow(dead_code)]
     pub fn wait_for_status(&self, daemon_id: &str, expected: &str) {
-        for i in 0..10 {
+        for i in 0..25 {
             let status = self.get_daemon_status(daemon_id);
             if status.as_deref() == Some(expected) {
                 return;
             }
-            if i < 9 {
+            if i < 24 {
                 std::thread::sleep(Duration::from_millis(200));
             } else {
                 panic!(
-                    "Daemon {daemon_id} did not reach status '{expected}' after 2s, got: {status:?}"
+                    "Daemon {daemon_id} did not reach status '{expected}' after 5s, got: {status:?}"
                 );
             }
         }
