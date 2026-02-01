@@ -9,16 +9,20 @@ List all daemons
 Displays a table of all tracked daemons with their PIDs, status,
 whether they are disabled, and any error messages.
 
+This command shows both:
+- Active daemons (currently running or stopped)
+- Available daemons (defined in config but not yet started)
+
 Example:
   pitchfork list
   pitchfork ls                    Alias for 'list'
   pitchfork list --hide-header    Output without column headers
 
 Output:
-  Name    PID    Status   Error
+  Name    PID    Status     Error
   api     12345  running
-  worker  -      errored  exit code 1
-  db      -      stopped  disabled
+  worker         available
+  db             errored    exit code 127
 
 ## Flags
 

@@ -1113,13 +1113,35 @@ impl App {
     }
 
     pub async fn refresh(&mut self, client: &Arc<IpcClient>) -> Result<()> {
-        self.daemons = client.active_daemons().await?;
-        // Filter out the pitchfork supervisor from the list (like web UI does)
-        self.daemons.retain(|d| d.id != "pitchfork");
-        self.disabled = client.get_disabled_daemons().await?;
+        use crate::daemon_list::get_all_daemons;
 
-        // Load config daemons and add placeholder entries for ones not currently active
-        self.refresh_config_daemons();
+        // Get all daemons using shared logic (includes both active and available)
+        let all_entries = get_all_daemons(client).await?;
+
+        // Clear current lists
+        self.daemons.clear();
+        self.disabled.clear();
+        self.config_daemon_ids.clear();
+
+        // Populate daemons list based on show_available setting
+        for entry in all_entries {
+            // Track disabled daemons
+            if entry.is_disabled {
+                self.disabled.push(entry.id.clone());
+            }
+
+            // Track config-only daemons
+            if entry.is_available {
+                self.config_daemon_ids.insert(entry.id.clone());
+            }
+
+            // Add to daemons list if:
+            // - It's an active daemon (not available), OR
+            // - It's available and show_available is enabled
+            if !entry.is_available || self.show_available {
+                self.daemons.push(entry.daemon);
+            }
+        }
 
         // Refresh process stats (CPU, memory, uptime)
         self.refresh_process_stats();
@@ -1141,48 +1163,6 @@ impl App {
         }
 
         Ok(())
-    }
-
-    fn refresh_config_daemons(&mut self) {
-        use crate::daemon_status::DaemonStatus;
-
-        let config = PitchforkToml::all_merged();
-        let active_ids: HashSet<String> = self.daemons.iter().map(|d| d.id.clone()).collect();
-
-        // Find daemons in config that aren't currently active
-        self.config_daemon_ids.clear();
-        for daemon_id in config.daemons.keys() {
-            if !active_ids.contains(daemon_id) && daemon_id != "pitchfork" {
-                self.config_daemon_ids.insert(daemon_id.clone());
-
-                // Add a placeholder daemon entry if show_available is enabled
-                if self.show_available {
-                    let placeholder = Daemon {
-                        id: daemon_id.clone(),
-                        title: None,
-                        pid: None,
-                        shell_pid: None,
-                        status: DaemonStatus::Stopped,
-                        dir: None,
-                        cmd: None,
-                        autostop: false,
-                        cron_schedule: None,
-                        cron_retrigger: None,
-                        last_cron_triggered: None,
-                        last_exit_success: None,
-                        retry: 0,
-                        retry_count: 0,
-                        ready_delay: None,
-                        ready_output: None,
-                        ready_http: None,
-                        ready_port: None,
-                        ready_cmd: None,
-                        depends: vec![],
-                    };
-                    self.daemons.push(placeholder);
-                }
-            }
-        }
     }
 
     /// Check if a daemon is from config only (not currently active)
