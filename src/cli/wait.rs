@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::cli::logs;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use tokio::time;
@@ -31,15 +32,18 @@ pub struct Wait {
 
 impl Wait {
     pub async fn run(&self) -> Result<()> {
+        // Resolve the daemon ID to a qualified ID
+        let qualified_id = PitchforkToml::resolve_id(&self.id)?;
+
         let sf = StateFile::get();
-        let pid = if let Some(pid) = sf.daemons.get(&self.id).and_then(|d| d.pid) {
+        let pid = if let Some(pid) = sf.daemons.get(&qualified_id).and_then(|d| d.pid) {
             pid
         } else {
-            warn!("{} is not running", self.id);
+            warn!("{} is not running", qualified_id);
             return Ok(());
         };
 
-        let tail_names = vec![self.id.to_string()];
+        let tail_names = vec![qualified_id.clone()];
         tokio::spawn(async move {
             logs::tail_logs(&tail_names).await.unwrap_or_default();
         });

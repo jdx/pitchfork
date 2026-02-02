@@ -1,6 +1,7 @@
 use crate::cli::logs::print_startup_logs;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::{Result, env};
 use miette::bail;
 
@@ -82,8 +83,10 @@ impl Run {
             retry: Some(self.retry),
         };
 
+        // Parse the daemon ID using current directory for namespace resolution
+        let daemon_id = PitchforkToml::resolve_id(&self.id)?;
         let result = ipc
-            .run_adhoc(self.id.clone(), self.run.clone(), env::CWD.clone(), opts)
+            .run_adhoc(daemon_id.clone(), self.run.clone(), env::CWD.clone(), opts)
             .await?;
 
         if result.exit_code.is_some() {
@@ -93,7 +96,7 @@ impl Run {
         // Show startup logs on success (unless --quiet)
         if !self.quiet
             && result.started
-            && let Err(e) = print_startup_logs(&self.id, result.start_time)
+            && let Err(e) = print_startup_logs(&daemon_id, result.start_time)
         {
             debug!("Failed to print startup logs: {e}");
         }

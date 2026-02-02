@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
+use crate::daemon_id::DaemonId;
 use crate::env;
 use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
 use miette::{Context, IntoDiagnostic};
@@ -29,16 +30,16 @@ pub enum IpcRequest {
     Connect,
     Clean,
     Stop {
-        id: String,
+        id: DaemonId,
     },
     GetActiveDaemons,
     GetDisabledDaemons,
     Run(RunOptions),
     Enable {
-        id: String,
+        id: DaemonId,
     },
     Disable {
-        id: String,
+        id: DaemonId,
     },
     UpdateShellDir {
         shell_pid: u32,
@@ -60,7 +61,7 @@ pub enum IpcResponse {
     Error(String),
     Notifications(Vec<(log::LevelFilter, String)>),
     ActiveDaemons(Vec<Daemon>),
-    DisabledDaemons(Vec<String>),
+    DisabledDaemons(Vec<DaemonId>),
     DaemonAlreadyRunning,
     DaemonStart {
         daemon: Daemon,
