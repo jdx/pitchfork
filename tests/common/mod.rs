@@ -46,17 +46,12 @@ impl TestEnv {
         }
     }
 
-    /// Get the project directory path
+    /// Get the project directory path (canonicalized to handle symlinks)
     pub fn project_dir(&self) -> PathBuf {
-        let p = self.temp_dir.path().join("project");
-        // Canonicalize the path if it exists to resolve symlinks
-        // This is important on macOS where /var is a symlink to /private/var
-        // The file watcher sees the canonical path, so we must configure daemons with it too
-        if p.exists() {
-            p.canonicalize().unwrap_or(p)
-        } else {
-            p
-        }
+        // First canonicalize the temp_dir base to resolve symlinks like /var -> /private/var
+        let base = fs::canonicalize(self.temp_dir.path())
+            .unwrap_or_else(|_| self.temp_dir.path().to_path_buf());
+        base.join("project")
     }
 
     /// Create the project directory
@@ -144,17 +139,37 @@ impl TestEnv {
     }
 
     /// Read log file for a daemon
+    ///
+    /// The daemon_id can be either:
+    /// - A short ID (e.g., "api") - will look for logs in the "project" namespace
+    /// - A qualified ID (e.g., "project/api") - will convert to filesystem-safe path
     pub fn read_logs(&self, daemon_id: &str) -> String {
+        // If the ID doesn't contain a namespace, assume it's from the project directory
+        let qualified_id = if daemon_id.contains('/') {
+            daemon_id.to_string()
+        } else {
+            format!("project/{}", daemon_id)
+        };
+
+        // Convert to filesystem-safe path (replace "/" with "--")
+        let safe_id = qualified_id.replace('/', "--");
+
         let log_path = self
             .home_dir
             .join(".local")
             .join("state")
             .join("pitchfork")
             .join("logs")
-            .join(daemon_id)
-            .join(format!("{daemon_id}.log"));
+            .join(&safe_id)
+            .join(format!("{safe_id}.log"));
 
         fs::read_to_string(log_path).unwrap_or_default()
+    }
+
+    /// Get the home directory for this test environment
+    #[allow(dead_code)]
+    pub fn home_dir(&self) -> &PathBuf {
+        &self.home_dir
     }
 
     /// Get the state file path
@@ -199,9 +214,13 @@ impl TestEnv {
     }
 
     /// Create an alternate directory (for testing directory changes)
+    /// Returns the canonicalized path to handle symlinks on macOS (/var -> /private/var)
     #[allow(dead_code)]
     pub fn create_other_dir(&self) -> PathBuf {
-        let other_dir = self.temp_dir.path().join("other");
+        // Use canonicalized base path to resolve symlinks
+        let base = fs::canonicalize(self.temp_dir.path())
+            .unwrap_or_else(|_| self.temp_dir.path().to_path_buf());
+        let other_dir = base.join("other");
         fs::create_dir_all(&other_dir).unwrap();
         other_dir
     }

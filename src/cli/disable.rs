@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::ipc::client::IpcClient;
+use crate::pitchfork_toml::PitchforkToml;
 
 /// Prevent a daemon from restarting
 #[derive(Debug, clap::Args)]
@@ -25,8 +26,9 @@ pub struct Disable {
 
 impl Disable {
     pub async fn run(&self) -> Result<()> {
+        let id = PitchforkToml::resolve_id(&self.id)?;
         let ipc = IpcClient::connect(false).await?;
-        ipc.disable(self.id.clone()).await?;
+        ipc.disable(id).await?;
         Ok(())
     }
 }

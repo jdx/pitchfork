@@ -22,6 +22,14 @@ pub enum DaemonIdError {
     )]
     Empty,
 
+    #[error("daemon ID {component} cannot be empty")]
+    #[diagnostic(
+        code(pitchfork::daemon::empty_component),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("both namespace and name must be non-empty")
+    )]
+    EmptyComponent { component: String },
+
     #[error("daemon ID '{id}' contains path separator '{sep}'")]
     #[diagnostic(
         code(pitchfork::daemon::path_separator),
@@ -37,6 +45,14 @@ pub enum DaemonIdError {
         help("daemon IDs cannot contain '..' to prevent path traversal")
     )]
     ParentDirRef { id: String },
+
+    #[error("daemon ID '{id}' contains reserved sequence '--'")]
+    #[diagnostic(
+        code(pitchfork::daemon::reserved_sequence),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("'--' is reserved for internal path encoding; use single dashes instead")
+    )]
+    ReservedSequence { id: String },
 
     #[error("daemon ID '{id}' contains spaces")]
     #[diagnostic(
@@ -63,6 +79,21 @@ pub enum DaemonIdError {
         )
     )]
     InvalidChars { id: String },
+
+    #[error("daemon ID '{id}' is missing namespace (expected format: namespace/name)")]
+    #[diagnostic(
+        code(pitchfork::daemon::missing_namespace),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("use qualified format like 'global/myapp' or 'project-name/daemon'")
+    )]
+    MissingNamespace { id: String },
+
+    #[error("invalid safe path format '{path}' (expected namespace--name)")]
+    #[diagnostic(
+        code(pitchfork::daemon::invalid_safe_path),
+        help("safe paths use '--' to separate namespace and name")
+    )]
+    InvalidSafePath { path: String },
 }
 
 /// Errors related to daemon operations.
@@ -112,23 +143,90 @@ pub enum DependencyError {
 
 /// Error for TOML configuration parse failures with source code highlighting.
 #[derive(Debug, Error, Diagnostic)]
-#[error("failed to parse configuration")]
-#[diagnostic(code(pitchfork::config::parse_error))]
-pub struct ConfigParseError {
-    /// The source file contents for display
-    #[source_code]
-    pub src: NamedSource<String>,
+pub enum ConfigParseError {
+    #[error("failed to parse configuration")]
+    #[diagnostic(code(pitchfork::config::parse_error))]
+    TomlError {
+        /// The source file contents for display
+        #[source_code]
+        src: NamedSource<String>,
 
-    /// The location of the error in the source
-    #[label("{message}")]
-    pub span: SourceSpan,
+        /// The location of the error in the source
+        #[label("{message}")]
+        span: SourceSpan,
 
-    /// The error message from the TOML parser
-    pub message: String,
+        /// The error message from the TOML parser
+        message: String,
 
-    /// Additional help text
-    #[help]
-    pub help: Option<String>,
+        /// Additional help text
+        #[help]
+        help: Option<String>,
+    },
+
+    #[error("invalid daemon name '{name}' in {}", path.display())]
+    #[diagnostic(
+        code(pitchfork::config::invalid_daemon_name),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("daemon names must be valid identifiers without spaces, '--', or special characters")
+    )]
+    InvalidDaemonName {
+        name: String,
+        path: PathBuf,
+        reason: String,
+    },
+
+    #[error(
+        "invalid dependency '{dependency}' in daemon '{daemon}' ({}): {reason}",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::invalid_dependency),
+        url("https://pitchfork.jdx.dev/configuration#depends"),
+        help(
+            "dependency IDs must be valid daemon IDs; use 'name' for same namespace or 'namespace/name' for cross-namespace"
+        )
+    )]
+    InvalidDependency {
+        daemon: String,
+        dependency: String,
+        path: PathBuf,
+        reason: String,
+    },
+
+    #[error(
+        "namespace collision: '{}' and '{}' both resolve to namespace '{ns}'",
+        path_a.display(),
+        path_b.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::namespace_collision),
+        url("https://pitchfork.jdx.dev/concepts/namespaces"),
+        help(
+            "rename one of the directories so that no two project configs share the same namespace"
+        )
+    )]
+    NamespaceCollision {
+        path_a: PathBuf,
+        path_b: PathBuf,
+        ns: String,
+    },
+
+    #[error(
+        "invalid namespace '{namespace}' in {}: {reason}",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::invalid_namespace),
+        url("https://pitchfork.jdx.dev/concepts/namespaces"),
+        help(
+            "set a valid top-level namespace in your pitchfork.toml, e.g. namespace = \"my-project\""
+        )
+    )]
+    InvalidNamespace {
+        path: PathBuf,
+        namespace: String,
+        reason: String,
+    },
 }
 
 impl ConfigParseError {
@@ -142,7 +240,7 @@ impl ConfigParseError {
             .map(|r| SourceSpan::from(r.start..r.end))
             .unwrap_or_else(|| SourceSpan::from(0..0));
 
-        Self {
+        Self::TomlError {
             src: NamedSource::new(path.display().to_string(), contents),
             span,
             message,

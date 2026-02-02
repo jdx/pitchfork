@@ -17,7 +17,8 @@ read_toml() {
 @test "config add with positional arguments creates correct toml" {
   run pitchfork config add api bun run server/index.ts
   assert_success
-  assert_output --partial "added api"
+  assert_output --partial "added "
+  assert_output --partial "/api to "
   assert [ -f pitchfork.toml ]
   
   run read_toml

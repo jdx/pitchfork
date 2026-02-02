@@ -3,12 +3,14 @@
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
 use super::hooks::{HookType, fire_hook};
-use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts};
+use super::{SUPERVISOR, Supervisor};
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
 use crate::shell::Shell;
+use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use itertools::Itertools;
 use miette::IntoDiagnostic;
@@ -102,7 +104,7 @@ impl Supervisor {
                             );
                             fire_hook(
                                 HookType::OnRetry,
-                                id.to_string(),
+                                id.clone(),
                                 opts.dir.clone(),
                                 attempt + 1,
                                 opts.env.clone(),
@@ -142,7 +144,7 @@ impl Supervisor {
             .chain(cmd.into_iter())
             .collect_vec();
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
-        let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
+        let log_path = id.log_path();
         if let Some(parent) = log_path.parent() {
             xx::file::mkdirp(parent)?;
         }
@@ -165,7 +167,7 @@ impl Supervisor {
         }
 
         // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
-        cmd.env("PITCHFORK_DAEMON_ID", id);
+        cmd.env("PITCHFORK_DAEMON_ID", id.name());
         cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
 
         // Put each daemon in its own session/process group so we can kill the
@@ -192,32 +194,34 @@ impl Supervisor {
         };
         info!("started daemon {id} with pid {pid}");
         let daemon = self
-            .upsert_daemon(UpsertDaemonOpts {
-                id: id.to_string(),
-                pid: Some(pid),
-                status: DaemonStatus::Running,
-                shell_pid: opts.shell_pid,
-                dir: Some(opts.dir.clone()),
-                cmd: Some(original_cmd),
-                autostop: opts.autostop,
-                cron_schedule: opts.cron_schedule.clone(),
-                cron_retrigger: opts.cron_retrigger,
-                last_exit_success: None,
-                retry: Some(opts.retry),
-                retry_count: Some(opts.retry_count),
-                ready_delay: opts.ready_delay,
-                ready_output: opts.ready_output.clone(),
-                ready_http: opts.ready_http.clone(),
-                ready_port: opts.ready_port,
-                ready_cmd: opts.ready_cmd.clone(),
-                depends: Some(opts.depends.clone()),
-                env: opts.env.clone(),
-                watch: Some(opts.watch.clone()),
-                watch_base_dir: opts.watch_base_dir.clone(),
-            })
+            .upsert_daemon(
+                UpsertDaemonOpts::builder(id.clone())
+                    .set(|o| {
+                        o.pid = Some(pid);
+                        o.status = DaemonStatus::Running;
+                        o.shell_pid = opts.shell_pid;
+                        o.dir = Some(opts.dir.clone());
+                        o.cmd = Some(original_cmd);
+                        o.autostop = opts.autostop;
+                        o.cron_schedule = opts.cron_schedule.clone();
+                        o.cron_retrigger = opts.cron_retrigger;
+                        o.retry = Some(opts.retry);
+                        o.retry_count = Some(opts.retry_count);
+                        o.ready_delay = opts.ready_delay;
+                        o.ready_output = opts.ready_output.clone();
+                        o.ready_http = opts.ready_http.clone();
+                        o.ready_port = opts.ready_port;
+                        o.ready_cmd = opts.ready_cmd.clone();
+                        o.depends = Some(opts.depends.clone());
+                        o.env = opts.env.clone();
+                        o.watch = Some(opts.watch.clone());
+                        o.watch_base_dir = opts.watch_base_dir.clone();
+                    })
+                    .build(),
+            )
             .await?;
 
-        let id_clone = id.to_string();
+        let id_clone = id.clone();
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
@@ -549,13 +553,15 @@ impl Supervisor {
                     // If stopping, always mark as Stopped with success
                     // This allows monitoring task to clear PID after stop() was called
                     if let Err(e) = SUPERVISOR
-                        .upsert_daemon(UpsertDaemonOpts {
-                            id: id.clone(),
-                            pid: None, // Clear PID now that process has exited
-                            status: DaemonStatus::Stopped,
-                            last_exit_success: Some(status.success()),
-                            ..Default::default()
-                        })
+                        .upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None; // Clear PID now that process has exited
+                                    o.status = DaemonStatus::Stopped;
+                                    o.last_exit_success = Some(status.success());
+                                })
+                                .build(),
+                        )
                         .await
                     {
                         error!("Failed to update daemon state for {id}: {e}");
@@ -566,13 +572,15 @@ impl Supervisor {
                     let exit_code = status.code().unwrap_or(-1);
                     let err_status = DaemonStatus::Errored(exit_code);
                     if let Err(e) = SUPERVISOR
-                        .upsert_daemon(UpsertDaemonOpts {
-                            id: id.clone(),
-                            pid: None,
-                            status: err_status,
-                            last_exit_success: Some(false),
-                            ..Default::default()
-                        })
+                        .upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = err_status;
+                                    o.last_exit_success = Some(false);
+                                })
+                                .build(),
+                        )
                         .await
                     {
                         error!("Failed to update daemon state for {id}: {e}");
@@ -593,26 +601,30 @@ impl Supervisor {
                 // Process was being intentionally stopped but child.wait() returned
                 // an error (e.g. due to sysinfo reaping the process first)
                 if let Err(e) = SUPERVISOR
-                    .upsert_daemon(UpsertDaemonOpts {
-                        id: id.clone(),
-                        pid: None,
-                        status: DaemonStatus::Stopped,
-                        last_exit_success: Some(true),
-                        ..Default::default()
-                    })
+                    .upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                                o.last_exit_success = Some(true);
+                            })
+                            .build(),
+                    )
                     .await
                 {
                     error!("Failed to update daemon state for {id}: {e}");
                 }
             } else {
                 if let Err(e) = SUPERVISOR
-                    .upsert_daemon(UpsertDaemonOpts {
-                        id: id.clone(),
-                        pid: None,
-                        status: DaemonStatus::Errored(-1),
-                        last_exit_success: Some(false),
-                        ..Default::default()
-                    })
+                    .upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Errored(-1);
+                                o.last_exit_success = Some(false);
+                            })
+                            .build(),
+                    )
                     .await
                 {
                     error!("Failed to update daemon state for {id}: {e}");
@@ -653,8 +665,9 @@ impl Supervisor {
     }
 
     /// Stop a running daemon
-    pub async fn stop(&self, id: &str) -> Result<IpcResponse> {
-        if id == "pitchfork" {
+    pub async fn stop(&self, id: &DaemonId) -> Result<IpcResponse> {
+        let pitchfork_id = DaemonId::pitchfork();
+        if *id == pitchfork_id {
             return Ok(IpcResponse::Error(
                 "Cannot stop supervisor via stop command".into(),
             ));
@@ -667,12 +680,14 @@ impl Supervisor {
                 PROCS.refresh_processes();
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
-                    self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
-                        pid: Some(pid),
-                        status: DaemonStatus::Stopping,
-                        ..Default::default()
-                    })
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = Some(pid);
+                                o.status = DaemonStatus::Stopping;
+                            })
+                            .build(),
+                    )
                     .await?;
 
                     // Kill the entire process group atomically (daemon PID == PGID
@@ -684,12 +699,14 @@ impl Supervisor {
                         if PROCS.is_running(pid) {
                             // Process still running after kill attempt - set back to Running
                             debug!("failed to stop pid {pid}: process still running after kill");
-                            self.upsert_daemon(UpsertDaemonOpts {
-                                id: id.to_string(),
-                                pid: Some(pid), // Preserve PID to avoid orphaning the process
-                                status: DaemonStatus::Running,
-                                ..Default::default()
-                            })
+                            self.upsert_daemon(
+                                UpsertDaemonOpts::builder(id.clone())
+                                    .set(|o| {
+                                        o.pid = Some(pid); // Preserve PID to avoid orphaning the process
+                                        o.status = DaemonStatus::Running;
+                                    })
+                                    .build(),
+                            )
                             .await?;
                             return Ok(IpcResponse::DaemonStopFailed {
                                 error: format!(
@@ -703,24 +720,28 @@ impl Supervisor {
                     // Note: kill_async uses SIGTERM -> wait ~3s -> SIGKILL strategy,
                     // and also detects zombie processes, so by the time it returns,
                     // the process should be fully terminated.
-                    self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
-                        pid: None,
-                        status: DaemonStatus::Stopped,
-                        last_exit_success: Some(true), // Manual stop is considered successful
-                        ..Default::default()
-                    })
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                                o.last_exit_success = Some(true); // Manual stop is considered successful
+                            })
+                            .build(),
+                    )
                     .await?;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
                     // Process already dead, directly mark as stopped
                     // Note that the cleanup logic is handled in monitor task
-                    self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
-                        pid: None,
-                        status: DaemonStatus::Stopped,
-                        ..Default::default()
-                    })
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                            })
+                            .build(),
+                    )
                     .await?;
                     return Ok(IpcResponse::DaemonWasNotRunning);
                 }

@@ -7,7 +7,9 @@
 
 use super::{SUPERVISOR, Supervisor, interval_duration};
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
 use crate::{Result, env};
 use notify::RecursiveMode;
@@ -18,7 +20,7 @@ use tokio::time;
 
 impl Supervisor {
     /// Get all watch configurations from the current state of daemons.
-    pub(crate) async fn get_all_watch_configs(&self) -> Vec<(String, Vec<String>, PathBuf)> {
+    pub(crate) async fn get_all_watch_configs(&self) -> Vec<(DaemonId, Vec<String>, PathBuf)> {
         let state = self.state_file.lock().await;
         state
             .daemons
@@ -70,7 +72,7 @@ impl Supervisor {
         let now = chrono::Local::now();
 
         // Collect only IDs of daemons with cron schedules (avoids cloning entire HashMap)
-        let cron_daemon_ids: Vec<String> = {
+        let cron_daemon_ids: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -200,6 +202,55 @@ impl Supervisor {
     /// Watch files for daemons that have `watch` patterns configured.
     /// When a watched file changes, the daemon is automatically restarted.
     pub(crate) fn daemon_file_watch(&self) -> Result<()> {
+        let pt = PitchforkToml::all_merged()?;
+
+        // Collect all daemons with watch patterns and their base directories
+        let watch_configs: Vec<(DaemonId, Vec<String>, std::path::PathBuf)> = pt
+            .daemons
+            .iter()
+            .filter(|(_, d)| !d.watch.is_empty())
+            .map(|(id, d)| {
+                let base_dir = d
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| env::CWD.clone());
+                (id.clone(), d.watch.clone(), base_dir)
+            })
+            .collect();
+
+        if watch_configs.is_empty() {
+            debug!("No daemons with watch patterns configured");
+            return Ok(());
+        }
+
+        info!(
+            "Setting up file watching for {} daemon(s)",
+            watch_configs.len()
+        );
+
+        // Collect all directories to watch
+        let mut all_dirs = std::collections::HashSet::new();
+        for (id, patterns, base_dir) in &watch_configs {
+            match expand_watch_patterns(patterns, base_dir) {
+                Ok(dirs) => {
+                    for dir in &dirs {
+                        debug!("Watching {} for daemon {}", dir.display(), id);
+                    }
+                    all_dirs.extend(dirs);
+                }
+                Err(e) => {
+                    warn!("Failed to expand watch patterns for {id}: {e}");
+                }
+            }
+        }
+
+        if all_dirs.is_empty() {
+            debug!("No directories to watch after expanding patterns");
+            return Ok(());
+        }
+
         // Spawn the file watcher task
         tokio::spawn(async move {
             let mut wf = match WatchFiles::new(Duration::from_secs(1)) {
@@ -219,7 +270,7 @@ impl Supervisor {
 
                 // Collect all required directories and track which daemons need them
                 let mut required_dirs = HashSet::new();
-                let mut dir_to_daemons: HashMap<PathBuf, Vec<String>> = HashMap::new();
+                let mut dir_to_daemons: HashMap<PathBuf, Vec<DaemonId>> = HashMap::new();
 
                 for (id, patterns, base_dir) in &watch_configs {
                     match expand_watch_patterns(patterns, base_dir) {
@@ -247,7 +298,12 @@ impl Supervisor {
                 for dir in required_dirs.difference(&watched_dirs) {
                     let daemon_ids = dir_to_daemons
                         .get(dir)
-                        .map(|ids| ids.join(", "))
+                        .map(|ids| {
+                            ids.iter()
+                                .map(|id| id.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
                         .unwrap_or_default();
                     debug!("Watching {} for daemon(s): {}", dir.display(), daemon_ids);
                     if let Err(e) = wf.watch(dir, RecursiveMode::Recursive) {
@@ -300,7 +356,7 @@ impl Supervisor {
 
     /// Restart a daemon that is being watched for file changes.
     /// Only restarts if the daemon is currently running.
-    pub(crate) async fn restart_watched_daemon(&self, id: &str) -> Result<()> {
+    pub(crate) async fn restart_watched_daemon(&self, id: &DaemonId) -> Result<()> {
         // Check if daemon is running
         let daemon = self.get_daemon(id).await;
         let Some(daemon) = daemon else {
@@ -347,7 +403,7 @@ impl Supervisor {
 
         // Restart the daemon
         let run_opts = RunOptions {
-            id: id.to_string(),
+            id: id.clone(),
             cmd,
             force: true,
             shell_pid,

@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::ipc::client::IpcClient;
+use crate::pitchfork_toml::PitchforkToml;
 
 /// Allow a daemon to start
 #[derive(Debug, clap::Args)]
@@ -23,8 +24,9 @@ pub struct Enable {
 
 impl Enable {
     pub async fn run(&self) -> Result<()> {
+        let id = PitchforkToml::resolve_id(&self.id)?;
         let ipc = IpcClient::connect(false).await?;
-        ipc.enable(self.id.clone()).await?;
+        ipc.enable(id).await?;
         Ok(())
     }
 }

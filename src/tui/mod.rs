@@ -82,7 +82,7 @@ async fn run_app<B: Backend>(
             match action {
                 event::Action::Quit => break,
                 event::Action::Start(id) => {
-                    app.start_loading(format!("Starting {id}..."));
+                    app.start_loading(format!("Starting {}...", id));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
 
                     let result = client
@@ -107,7 +107,7 @@ async fn run_app<B: Backend>(
                     app.refresh(client).await?;
                 }
                 event::Action::Enable(id) => {
-                    app.start_loading(format!("Enabling {id}..."));
+                    app.start_loading(format!("Enabling {}...", id));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                     client.enable(id.clone()).await?;
                     app.stop_loading();
@@ -191,7 +191,7 @@ async fn run_app<B: Backend>(
                     if let Some(pending) = app.take_pending_action() {
                         match pending {
                             app::PendingAction::Stop(id) => {
-                                app.start_loading(format!("Stopping {id}..."));
+                                app.start_loading(format!("Stopping {}...", id));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 let result = client.stop(id.clone()).await;
                                 app.stop_loading();
@@ -204,7 +204,7 @@ async fn run_app<B: Backend>(
                                 }
                             }
                             app::PendingAction::Restart(id) => {
-                                app.start_loading(format!("Restarting {id}..."));
+                                app.start_loading(format!("Restarting {}...", id));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
 
                                 // Restart is just start --force
@@ -229,7 +229,7 @@ async fn run_app<B: Backend>(
                                 }
                             }
                             app::PendingAction::Disable(id) => {
-                                app.start_loading(format!("Disabling {id}..."));
+                                app.start_loading(format!("Disabling {}...", id));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
                                 client.disable(id.clone()).await?;
                                 app.stop_loading();
