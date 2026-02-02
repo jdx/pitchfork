@@ -7,6 +7,7 @@
 
 use super::{SUPERVISOR, Supervisor, interval_duration};
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
@@ -55,7 +56,7 @@ impl Supervisor {
         let now = chrono::Local::now();
 
         // Collect only IDs of daemons with cron schedules (avoids cloning entire HashMap)
-        let cron_daemon_ids: Vec<String> = {
+        let cron_daemon_ids: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -186,7 +187,7 @@ impl Supervisor {
         let pt = PitchforkToml::all_merged();
 
         // Collect all daemons with watch patterns and their base directories
-        let watch_configs: Vec<(String, Vec<String>, std::path::PathBuf)> = pt
+        let watch_configs: Vec<(DaemonId, Vec<String>, std::path::PathBuf)> = pt
             .daemons
             .iter()
             .filter(|(_, d)| !d.watch.is_empty())
@@ -285,7 +286,7 @@ impl Supervisor {
 
     /// Restart a daemon that is being watched for file changes.
     /// Only restarts if the daemon is currently running.
-    pub(crate) async fn restart_watched_daemon(&self, id: &str) -> Result<()> {
+    pub(crate) async fn restart_watched_daemon(&self, id: &DaemonId) -> Result<()> {
         // Check if daemon is running
         let daemon = self.get_daemon(id).await;
         let is_running = daemon
@@ -338,7 +339,7 @@ impl Supervisor {
 
         // Restart the daemon
         let run_opts = RunOptions {
-            id: id.to_string(),
+            id: id.clone(),
             cmd,
             force: true,
             shell_pid,

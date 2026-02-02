@@ -4,6 +4,7 @@
 
 use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
@@ -133,7 +134,7 @@ impl Supervisor {
             .chain(cmd.into_iter())
             .collect_vec();
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
-        let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
+        let log_path = id.log_path();
         if let Some(parent) = log_path.parent() {
             xx::file::mkdirp(parent)?;
         }
@@ -168,7 +169,7 @@ impl Supervisor {
         info!("started daemon {id} with pid {pid}");
         let daemon = self
             .upsert_daemon(UpsertDaemonOpts {
-                id: id.to_string(),
+                id: id.clone(),
                 pid: Some(pid),
                 status: DaemonStatus::Running,
                 shell_pid: opts.shell_pid,
@@ -190,7 +191,7 @@ impl Supervisor {
             })
             .await?;
 
-        let id_clone = id.to_string();
+        let id_clone = id.clone();
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
@@ -593,8 +594,9 @@ impl Supervisor {
     }
 
     /// Stop a running daemon
-    pub async fn stop(&self, id: &str) -> Result<IpcResponse> {
-        if id == "pitchfork" {
+    pub async fn stop(&self, id: &DaemonId) -> Result<IpcResponse> {
+        let pitchfork_id = DaemonId::pitchfork();
+        if *id == pitchfork_id {
             return Ok(IpcResponse::Error(
                 "Cannot stop supervisor via stop command".into(),
             ));
@@ -608,7 +610,7 @@ impl Supervisor {
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
+                        id: id.clone(),
                         pid: Some(pid),
                         status: DaemonStatus::Stopping,
                         ..Default::default()
@@ -632,7 +634,7 @@ impl Supervisor {
                             // Process still running after kill attempt - set back to Running
                             debug!("failed to stop pid {pid}: process still running after kill");
                             self.upsert_daemon(UpsertDaemonOpts {
-                                id: id.to_string(),
+                                id: id.clone(),
                                 pid: Some(pid), // Preserve PID to avoid orphaning the process
                                 status: DaemonStatus::Running,
                                 ..Default::default()
@@ -674,7 +676,7 @@ impl Supervisor {
 
                     // Process successfully stopped
                     self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
+                        id: id.clone(),
                         pid: None,
                         status: DaemonStatus::Stopped,
                         last_exit_success: Some(true), // Manual stop is considered successful
@@ -686,7 +688,7 @@ impl Supervisor {
                     // Process already dead, directly mark as stopped
                     // Note that the cleanup logic is handled in monitor task
                     self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
+                        id: id.clone(),
                         pid: None,
                         status: DaemonStatus::Stopped,
                         ..Default::default()

@@ -4,6 +4,7 @@
 
 use crate::Result;
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::deps::resolve_dependencies;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
@@ -25,7 +26,7 @@ pub struct RunResult {
 #[derive(Debug)]
 pub struct StartResult {
     /// Daemons that were successfully started (id, start_time)
-    pub started: Vec<(String, DateTime<Local>)>,
+    pub started: Vec<(DaemonId, DateTime<Local>)>,
     /// Whether any daemon failed to start
     pub any_failed: bool,
 }
@@ -66,7 +67,7 @@ pub struct StartOptions {
 /// - Extracting all config values (cron, retry, ready checks, depends, etc.)
 /// - Merging CLI/API overrides with config defaults
 pub fn build_run_options(
-    id: &str,
+    id: &DaemonId,
     daemon_config: &PitchforkTomlDaemon,
     opts: &StartOptions,
 ) -> std::result::Result<RunOptions, String> {
@@ -76,7 +77,7 @@ pub fn build_run_options(
     let dir = resolve_daemon_dir(daemon_config.dir.as_deref(), daemon_config.path.as_deref());
 
     Ok(RunOptions {
-        id: id.to_string(),
+        id: id.clone(),
         cmd,
         shell_pid: opts.shell_pid,
         force: opts.force,
@@ -105,7 +106,7 @@ impl IpcClient {
     // =========================================================================
 
     /// Get all configured daemon IDs from pitchfork.toml files
-    pub fn get_all_configured_daemons() -> Vec<String> {
+    pub fn get_all_configured_daemons() -> Vec<DaemonId> {
         PitchforkToml::all_merged()
             .daemons
             .keys()
@@ -114,7 +115,7 @@ impl IpcClient {
     }
 
     /// Get IDs of currently running daemons
-    pub async fn get_running_daemons(&self) -> Result<Vec<String>> {
+    pub async fn get_running_daemons(&self) -> Result<Vec<DaemonId>> {
         Ok(self
             .active_daemons()
             .await?
@@ -131,6 +132,7 @@ impl IpcClient {
     /// Start daemons by ID with dependency resolution
     ///
     /// Handles:
+    /// - ID resolution (short ID to qualified ID based on current directory)
     /// - Dependency resolution (starts dependencies first)
     /// - Disabled daemon filtering
     /// - Already running daemon detection
@@ -138,7 +140,7 @@ impl IpcClient {
     /// - Ad-hoc daemon restart using saved commands
     pub async fn start_daemons(
         self: &Arc<Self>,
-        ids: &[String],
+        ids: &[DaemonId],
         opts: StartOptions,
     ) -> Result<StartResult> {
         let pt = PitchforkToml::all_merged();
@@ -146,18 +148,18 @@ impl IpcClient {
 
         // Get all active daemons for ad-hoc restart support
         let all_daemons = self.active_daemons().await?;
-        let adhoc_daemons: HashMap<String, crate::daemon::Daemon> = all_daemons
+        let adhoc_daemons: HashMap<DaemonId, crate::daemon::Daemon> = all_daemons
             .into_iter()
             .filter(|d| !pt.daemons.contains_key(&d.id))
             .map(|d| (d.id.clone(), d))
             .collect();
 
         // Filter out disabled daemons from the requested list
-        let requested_ids: Vec<String> = ids
+        let requested_ids: Vec<DaemonId> = ids
             .iter()
             .filter(|id| {
-                if disabled_daemons.contains(*id) {
-                    warn!("Daemon {id} is disabled");
+                if disabled_daemons.contains(id) {
+                    warn!("Daemon {} is disabled", id);
                     false
                 } else {
                     true
@@ -174,12 +176,12 @@ impl IpcClient {
         }
 
         // Separate config-based daemons from ad-hoc daemons
-        let (config_ids, adhoc_ids): (Vec<String>, Vec<String>) = requested_ids
+        let (config_ids, adhoc_ids): (Vec<DaemonId>, Vec<DaemonId>) = requested_ids
             .into_iter()
             .partition(|id| pt.daemons.contains_key(id));
 
         // Get currently running daemons
-        let running_daemons: HashSet<String> = self
+        let running_daemons: HashSet<DaemonId> = self
             .active_daemons()
             .await?
             .iter()
@@ -188,11 +190,11 @@ impl IpcClient {
             .collect();
 
         // Collect set of explicitly requested IDs for force restart check
-        let explicitly_requested: HashSet<String> = ids.iter().cloned().collect();
+        let explicitly_requested: HashSet<DaemonId> = ids.iter().cloned().collect();
 
         // Start daemons level by level
         let mut any_failed = false;
-        let mut successful_daemons: Vec<(String, DateTime<Local>)> = Vec::new();
+        let mut successful_daemons: Vec<(DaemonId, DateTime<Local>)> = Vec::new();
 
         // First, handle config-based daemons with dependency resolution
         if !config_ids.is_empty() {
@@ -201,30 +203,32 @@ impl IpcClient {
 
             for level in dep_order.levels {
                 // Filter daemons to start in this level
-                let to_start: Vec<String> = level
+                let to_start: Vec<DaemonId> = level
                     .into_iter()
                     .filter(|id| {
                         // Skip disabled daemons (dependencies might be disabled)
                         if disabled_daemons.contains(id) {
-                            debug!("Skipping disabled dependency: {id}");
+                            warn!("Skipping disabled daemon {} (dependency)", id);
                             return false;
                         }
 
-                        // Skip already running daemons unless force is set AND they were explicitly requested
+                        // Skip already running daemons unless they are explicitly requested
+                        // with force=true
                         if running_daemons.contains(id) {
                             if opts.force && explicitly_requested.contains(id) {
                                 debug!("Force restarting explicitly requested daemon: {id}");
-                                return true;
-                            }
-                            if explicitly_requested.contains(id) {
-                                info!("Daemon {id} is already running, use --force to restart");
+                                true // Allow restart if force is set AND explicitly requested
                             } else {
-                                debug!("Daemon {id} is already running, skipping");
+                                if explicitly_requested.contains(id) {
+                                    info!("Daemon {id} is already running, use --force to restart");
+                                } else {
+                                    debug!("Skipping already running daemon {}", id);
+                                }
+                                false
                             }
-                            return false;
+                        } else {
+                            true
                         }
-
-                        true
                     })
                     .collect();
 
@@ -345,11 +349,11 @@ impl IpcClient {
     /// - IPC communication with supervisor
     fn spawn_start_task(
         ipc: Arc<Self>,
-        id: String,
+        id: DaemonId,
         daemon_config: &PitchforkTomlDaemon,
         is_explicitly_requested: bool,
         opts: &StartOptions,
-    ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>)> {
+    ) -> tokio::task::JoinHandle<(DaemonId, Option<DateTime<Local>>, Option<i32>)> {
         // Build options with force only if explicitly requested
         let mut start_opts = opts.clone();
         start_opts.force = opts.force && is_explicitly_requested;
@@ -389,13 +393,13 @@ impl IpcClient {
     /// via `pitchfork run` command.
     fn spawn_adhoc_start_task(
         ipc: Arc<Self>,
-        id: String,
+        id: DaemonId,
         cmd: Vec<String>,
         dir: PathBuf,
         env: Option<IndexMap<String, String>>,
         is_explicitly_requested: bool,
         opts: &StartOptions,
-    ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>)> {
+    ) -> tokio::task::JoinHandle<(DaemonId, Option<DateTime<Local>>, Option<i32>)> {
         let force = opts.force && is_explicitly_requested;
         let delay = opts.delay;
         let output = opts.output.clone();
@@ -450,8 +454,8 @@ impl IpcClient {
     /// within the same dependency level.
     fn spawn_stop_task(
         ipc: Arc<Self>,
-        id: String,
-    ) -> tokio::task::JoinHandle<(String, Result<()>)> {
+        id: DaemonId,
+    ) -> tokio::task::JoinHandle<(DaemonId, Result<()>)> {
         tokio::spawn(async move {
             let result = ipc.stop(id.clone()).await.map(|_| ());
             (id, result)
@@ -461,14 +465,15 @@ impl IpcClient {
     /// Stop daemons by ID with dependency resolution
     ///
     /// Handles:
+    /// - ID resolution (short ID to qualified ID based on current directory)
     /// - Dependency resolution (stops dependents first, in reverse order)
     /// - Ad-hoc daemon handling (no dependencies)
     /// - Parallel execution within dependency levels
-    pub async fn stop_daemons(self: &Arc<Self>, ids: &[String]) -> Result<StopResult> {
+    pub async fn stop_daemons(self: &Arc<Self>, ids: &[DaemonId]) -> Result<StopResult> {
         let pt = PitchforkToml::all_merged();
 
         // Get currently running daemons
-        let running_daemons: HashSet<String> = self
+        let running_daemons: HashSet<DaemonId> = self
             .active_daemons()
             .await?
             .iter()
@@ -477,11 +482,11 @@ impl IpcClient {
             .collect();
 
         // Filter to only running daemons
-        let requested_ids: Vec<String> = ids
+        let requested_ids: Vec<DaemonId> = ids
             .iter()
             .filter(|id| {
                 if !running_daemons.contains(*id) {
-                    warn!("Daemon {id} is not running");
+                    warn!("Daemon {} is not running", id);
                     false
                 } else {
                     true
@@ -496,7 +501,7 @@ impl IpcClient {
         }
 
         // Separate config-based daemons from ad-hoc daemons
-        let (config_daemons, adhoc_daemons): (Vec<String>, Vec<String>) = requested_ids
+        let (config_daemons, adhoc_daemons): (Vec<DaemonId>, Vec<DaemonId>) = requested_ids
             .into_iter()
             .partition(|id| pt.daemons.contains_key(id));
 
@@ -507,11 +512,11 @@ impl IpcClient {
             let dep_order = resolve_dependencies(&config_daemons, &pt.daemons)?;
 
             // Reverse the levels: stop dependents first, then their dependencies
-            let reversed_levels: Vec<Vec<String>> = dep_order.levels.into_iter().rev().collect();
+            let reversed_levels: Vec<Vec<DaemonId>> = dep_order.levels.into_iter().rev().collect();
 
             for level in reversed_levels {
                 // Filter to only running daemons in this level
-                let to_stop: Vec<String> = level
+                let to_stop: Vec<DaemonId> = level
                     .into_iter()
                     .filter(|id| running_daemons.contains(id))
                     .collect();
@@ -578,7 +583,7 @@ impl IpcClient {
     /// Run a one-off daemon (not from config)
     pub async fn run_adhoc(
         &self,
-        id: String,
+        id: DaemonId,
         cmd: Vec<String>,
         dir: PathBuf,
         opts: StartOptions,

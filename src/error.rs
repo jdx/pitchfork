@@ -22,6 +22,14 @@ pub enum DaemonIdError {
     )]
     Empty,
 
+    #[error("daemon ID {component} cannot be empty")]
+    #[diagnostic(
+        code(pitchfork::daemon::empty_component),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("both namespace and name must be non-empty")
+    )]
+    EmptyComponent { component: String },
+
     #[error("daemon ID '{id}' contains path separator '{sep}'")]
     #[diagnostic(
         code(pitchfork::daemon::path_separator),
@@ -37,6 +45,14 @@ pub enum DaemonIdError {
         help("daemon IDs cannot contain '..' to prevent path traversal")
     )]
     ParentDirRef { id: String },
+
+    #[error("daemon ID '{id}' contains reserved sequence '--'")]
+    #[diagnostic(
+        code(pitchfork::daemon::reserved_sequence),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("'--' is reserved for internal path encoding; use single dashes instead")
+    )]
+    ReservedSequence { id: String },
 
     #[error("daemon ID '{id}' contains spaces")]
     #[diagnostic(
@@ -63,6 +79,21 @@ pub enum DaemonIdError {
         )
     )]
     InvalidChars { id: String },
+
+    #[error("daemon ID '{id}' is missing namespace (expected format: namespace/name)")]
+    #[diagnostic(
+        code(pitchfork::daemon::missing_namespace),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help("use qualified format like 'global/myapp' or 'project-name/daemon'")
+    )]
+    MissingNamespace { id: String },
+
+    #[error("invalid safe path format '{path}' (expected namespace--name)")]
+    #[diagnostic(
+        code(pitchfork::daemon::invalid_safe_path),
+        help("safe paths use '--' to separate namespace and name")
+    )]
+    InvalidSafePath { path: String },
 }
 
 /// Errors related to daemon operations.

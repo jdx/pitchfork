@@ -1,7 +1,24 @@
+use pitchfork_cli::daemon_id::DaemonId;
 use pitchfork_cli::*;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+/// Helper function to get a daemon by name from a PitchforkToml
+fn get_daemon_by_name<'a>(
+    pt: &'a pitchfork_toml::PitchforkToml,
+    name: &str,
+) -> Option<&'a pitchfork_toml::PitchforkTomlDaemon> {
+    pt.daemons
+        .iter()
+        .find(|(k, _)| k.name() == name)
+        .map(|(_, v)| v)
+}
+
+/// Helper function to check if daemons contains a daemon with given name
+fn daemons_contains_name(pt: &pitchfork_toml::PitchforkToml, name: &str) -> bool {
+    pt.daemons.keys().any(|k| k.name() == name)
+}
 
 /// Test creating a new empty PitchforkToml
 #[test]
@@ -31,9 +48,9 @@ retry = 3
 
     assert_eq!(pt.path, Some(toml_path));
     assert_eq!(pt.daemons.len(), 1);
-    assert!(pt.daemons.contains_key("test_daemon"));
+    assert!(daemons_contains_name(&pt, "test_daemon"));
 
-    let daemon = pt.daemons.get("test_daemon").unwrap();
+    let daemon = get_daemon_by_name(&pt, "test_daemon").unwrap();
     assert_eq!(daemon.run, "echo 'hello world'");
     assert_eq!(daemon.retry.count(), 3);
 
@@ -66,7 +83,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
     use indexmap::IndexMap;
     let mut daemons = IndexMap::new();
     daemons.insert(
-        "test_daemon".to_string(),
+        DaemonId::new("global", "test_daemon"),
         pitchfork_toml::PitchforkTomlDaemon {
             run: "echo 'test'".to_string(),
             auto: vec![],
@@ -93,7 +110,8 @@ fn test_write_pitchfork_toml() -> Result<()> {
 
     let pt_read = pitchfork_toml::PitchforkToml::read(&toml_path)?;
     assert_eq!(pt_read.daemons.len(), 1);
-    assert!(pt_read.daemons.contains_key("test_daemon"));
+    // Note: namespace depends on the temp directory path, so we just check by daemon name
+    assert!(daemons_contains_name(&pt_read, "test_daemon"));
 
     Ok(())
 }
@@ -113,7 +131,7 @@ auto = ["start"]
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("auto_daemon").unwrap();
+    let daemon = get_daemon_by_name(&pt, "auto_daemon").unwrap();
 
     assert_eq!(daemon.auto.len(), 1);
     assert_eq!(daemon.auto[0], pitchfork_toml::PitchforkTomlAuto::Start);
@@ -139,7 +157,7 @@ retrigger = "always"
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("cron_daemon").unwrap();
+    let daemon = get_daemon_by_name(&pt, "cron_daemon").unwrap();
 
     assert!(daemon.cron.is_some());
     let cron = daemon.cron.as_ref().unwrap();
@@ -168,7 +186,7 @@ ready_cmd = "test -f /tmp/ready"
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("ready_daemon").unwrap();
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
 
     assert_eq!(daemon.ready_delay, Some(5000));
     assert_eq!(daemon.ready_output, Some("Server is ready".to_string()));
@@ -206,12 +224,15 @@ auto = ["start", "stop"]
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
 
     assert_eq!(pt.daemons.len(), 3);
-    assert!(pt.daemons.contains_key("daemon1"));
-    assert!(pt.daemons.contains_key("daemon2"));
-    assert!(pt.daemons.contains_key("daemon3"));
+    assert!(daemons_contains_name(&pt, "daemon1"));
+    assert!(daemons_contains_name(&pt, "daemon2"));
+    assert!(daemons_contains_name(&pt, "daemon3"));
 
-    assert_eq!(pt.daemons.get("daemon2").unwrap().retry.count(), 10);
-    assert_eq!(pt.daemons.get("daemon3").unwrap().auto.len(), 2);
+    assert_eq!(
+        get_daemon_by_name(&pt, "daemon2").unwrap().retry.count(),
+        10
+    );
+    assert_eq!(get_daemon_by_name(&pt, "daemon3").unwrap().auto.len(), 2);
 
     Ok(())
 }
@@ -245,7 +266,7 @@ retrigger = "{variant_name}"
         fs::write(&toml_path, toml_content).unwrap();
 
         let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-        let daemon = pt.daemons.get("test").unwrap();
+        let daemon = get_daemon_by_name(&pt, "test").unwrap();
         let cron = daemon.cron.as_ref().unwrap();
 
         assert_eq!(cron.retrigger, expected);
@@ -312,13 +333,13 @@ retry = 15
 
     // Verify all daemons are present
     assert_eq!(merged.daemons.len(), 4);
-    assert!(merged.daemons.contains_key("system_daemon"));
-    assert!(merged.daemons.contains_key("user_daemon"));
-    assert!(merged.daemons.contains_key("project_daemon"));
-    assert!(merged.daemons.contains_key("shared_daemon"));
+    assert!(daemons_contains_name(&merged, "system_daemon"));
+    assert!(daemons_contains_name(&merged, "user_daemon"));
+    assert!(daemons_contains_name(&merged, "project_daemon"));
+    assert!(daemons_contains_name(&merged, "shared_daemon"));
 
     // Verify that project config overrides user and system
-    let shared = merged.daemons.get("shared_daemon").unwrap();
+    let shared = get_daemon_by_name(&merged, "shared_daemon").unwrap();
     assert_eq!(shared.run, "echo 'from project'");
     assert_eq!(shared.retry.count(), 15);
 
@@ -353,7 +374,7 @@ retry = 5
     merged.merge(pitchfork_toml::PitchforkToml::read(&user_config)?);
 
     assert_eq!(merged.daemons.len(), 1);
-    let web = merged.daemons.get("web").unwrap();
+    let web = get_daemon_by_name(&merged, "web").unwrap();
     assert_eq!(web.run, "python -m http.server 9000");
     assert_eq!(web.retry.count(), 5);
 
@@ -411,7 +432,7 @@ ready_output = "ready to accept connections"
     merged.merge(pitchfork_toml::PitchforkToml::read(&project_config)?);
 
     assert_eq!(merged.daemons.len(), 1);
-    let db = merged.daemons.get("database").unwrap();
+    let db = get_daemon_by_name(&merged, "database").unwrap();
     assert_eq!(db.run, "postgres -D ./data");
     assert_eq!(db.retry.count(), 10);
     assert_eq!(db.ready_delay, Some(3000));
@@ -458,7 +479,7 @@ run = "echo 'hello'"
     merged.merge(project);
 
     assert_eq!(merged.daemons.len(), 1);
-    assert!(merged.daemons.contains_key("app"));
+    assert!(daemons_contains_name(&merged, "app"));
 
     Ok(())
 }
@@ -503,13 +524,14 @@ run = "echo 'second updated'"
     let keys: Vec<_> = merged.daemons.keys().collect();
     // "first" and "second" come from config1, "third" and updated "second" from config2
     // Since we use IndexMap, insertion order is preserved
-    assert!(keys.contains(&&"first".to_string()));
-    assert!(keys.contains(&&"second".to_string()));
-    assert!(keys.contains(&&"third".to_string()));
+    assert!(keys.iter().any(|k| k.name() == "first"));
+    assert!(keys.iter().any(|k| k.name() == "second"));
+    assert!(keys.iter().any(|k| k.name() == "third"));
 
-    // Verify second was updated
+    // Verify second was updated - find key with name "second"
+    let second_key = keys.iter().find(|k| k.name() == "second").unwrap();
     assert_eq!(
-        merged.daemons.get("second").unwrap().run,
+        merged.daemons.get(*second_key).unwrap().run,
         "echo 'second updated'"
     );
 
@@ -539,18 +561,19 @@ depends = ["postgres", "redis"]
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
 
     // Check postgres has no dependencies
-    let postgres = pt.daemons.get("postgres").unwrap();
+    let postgres = get_daemon_by_name(&pt, "postgres").unwrap();
     assert!(postgres.depends.is_empty());
 
     // Check redis has no dependencies
-    let redis = pt.daemons.get("redis").unwrap();
+    let redis = get_daemon_by_name(&pt, "redis").unwrap();
     assert!(redis.depends.is_empty());
 
     // Check api has correct dependencies
-    let api = pt.daemons.get("api").unwrap();
+    let api_key = pt.daemons.keys().find(|k| k.name() == "api").unwrap();
+    let api = pt.daemons.get(api_key).unwrap();
     assert_eq!(api.depends.len(), 2);
-    assert!(api.depends.contains(&"postgres".to_string()));
-    assert!(api.depends.contains(&"redis".to_string()));
+    assert!(api.depends.iter().any(|d| d.name() == "postgres"));
+    assert!(api.depends.iter().any(|d| d.name() == "redis"));
 
     Ok(())
 }
@@ -570,7 +593,7 @@ depends = []
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("standalone").unwrap();
+    let daemon = get_daemon_by_name(&pt, "standalone").unwrap();
 
     assert!(daemon.depends.is_empty());
 
@@ -602,19 +625,19 @@ retry = 5
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
 
     // Test infinite retry (true = u32::MAX)
-    let infinite = pt.daemons.get("infinite_retry").unwrap();
+    let infinite = get_daemon_by_name(&pt, "infinite_retry").unwrap();
     assert!(infinite.retry.is_infinite());
     assert_eq!(infinite.retry.count(), u32::MAX);
     assert_eq!(infinite.retry.to_string(), "infinite");
 
     // Test no retry (false = 0)
-    let no_retry = pt.daemons.get("no_retry").unwrap();
+    let no_retry = get_daemon_by_name(&pt, "no_retry").unwrap();
     assert!(!no_retry.retry.is_infinite());
     assert_eq!(no_retry.retry.count(), 0);
     assert_eq!(no_retry.retry.to_string(), "0");
 
     // Test numeric retry
-    let numeric = pt.daemons.get("numeric_retry").unwrap();
+    let numeric = get_daemon_by_name(&pt, "numeric_retry").unwrap();
     assert!(!numeric.retry.is_infinite());
     assert_eq!(numeric.retry.count(), 5);
     assert_eq!(numeric.retry.to_string(), "5");
@@ -665,10 +688,10 @@ dir = "/opt/api"
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
 
-    let frontend = pt.daemons.get("frontend").unwrap();
+    let frontend = get_daemon_by_name(&pt, "frontend").unwrap();
     assert_eq!(frontend.dir, Some("frontend".to_string()));
 
-    let api = pt.daemons.get("api").unwrap();
+    let api = get_daemon_by_name(&pt, "api").unwrap();
     assert_eq!(api.dir, Some("/opt/api".to_string()));
 
     Ok(())
@@ -688,7 +711,7 @@ run = "echo test"
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("test").unwrap();
+    let daemon = get_daemon_by_name(&pt, "test").unwrap();
     assert!(daemon.dir.is_none());
 
     Ok(())
@@ -709,7 +732,7 @@ env = { NODE_ENV = "development", PORT = "3000" }
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("api").unwrap();
+    let daemon = get_daemon_by_name(&pt, "api").unwrap();
 
     let env = daemon.env.as_ref().unwrap();
     assert_eq!(env.len(), 2);
@@ -738,7 +761,7 @@ LOG_LEVEL = "debug"
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("worker").unwrap();
+    let daemon = get_daemon_by_name(&pt, "worker").unwrap();
 
     let env = daemon.env.as_ref().unwrap();
     assert_eq!(env.len(), 3);
@@ -766,7 +789,7 @@ run = "echo test"
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("test").unwrap();
+    let daemon = get_daemon_by_name(&pt, "test").unwrap();
     assert!(daemon.env.is_none());
 
     Ok(())
@@ -788,7 +811,7 @@ env = { NODE_ENV = "development", PORT = "5173" }
     fs::write(&toml_path, toml_content).unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt.daemons.get("frontend").unwrap();
+    let daemon = get_daemon_by_name(&pt, "frontend").unwrap();
 
     assert_eq!(daemon.dir, Some("frontend".to_string()));
 
@@ -807,9 +830,9 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
 
     let mut pt = pitchfork_toml::PitchforkToml::new(toml_path.clone());
     use indexmap::IndexMap;
-    let mut daemons = IndexMap::new();
+    let mut daemons: IndexMap<DaemonId, pitchfork_toml::PitchforkTomlDaemon> = IndexMap::new();
     daemons.insert(
-        "test".to_string(),
+        DaemonId::new("global", "test"),
         pitchfork_toml::PitchforkTomlDaemon {
             run: "echo test".to_string(),
             auto: vec![],
@@ -833,7 +856,7 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
 
     // Re-read and verify dir/env are still None (not serialized)
     let pt2 = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt2.daemons.get("test").unwrap();
+    let daemon = get_daemon_by_name(&pt2, "test").unwrap();
     assert!(daemon.dir.is_none(), "dir should not be set when None");
     assert!(daemon.env.is_none(), "env should not be set when None");
 
@@ -859,7 +882,7 @@ env = { FOO = "bar", BAZ = "qux" }
     pt.write()?;
 
     let pt2 = pitchfork_toml::PitchforkToml::read(&toml_path)?;
-    let daemon = pt2.daemons.get("test").unwrap();
+    let daemon = get_daemon_by_name(&pt2, "test").unwrap();
     assert_eq!(daemon.dir, Some("subdir".to_string()));
 
     let env = daemon.env.as_ref().unwrap();
@@ -916,6 +939,9 @@ fn test_all_merged_from_local_toml() {
     let toml_path = temp_dir.path().join("pitchfork.toml");
     let local_path = temp_dir.path().join("pitchfork.local.toml");
 
+    // Get the namespace (directory name)
+    let ns = temp_dir.path().file_name().unwrap().to_str().unwrap();
+
     // Scenario 1: local.toml overrides base config and adds new daemons
     let toml_content = r#"
 [daemons.api]
@@ -940,18 +966,23 @@ run = "npm run debug"
 
     let pt = pitchfork_toml::PitchforkToml::all_merged_from(temp_dir.path());
 
+    // Daemon IDs should be qualified with namespace
+    let api_key = DaemonId::parse(&format!("{ns}/api")).unwrap();
+    let worker_key = DaemonId::parse(&format!("{ns}/worker")).unwrap();
+    let debug_key = DaemonId::parse(&format!("{ns}/debug")).unwrap();
+
     // api should be overridden by local
-    let api = pt.daemons.get("api").unwrap();
+    let api = pt.daemons.get(&api_key).unwrap();
     assert_eq!(api.run, "npm run dev");
     assert_eq!(api.ready_port, Some(3001));
 
     // worker should remain from base
-    let worker = pt.daemons.get("worker").unwrap();
+    let worker = pt.daemons.get(&worker_key).unwrap();
     assert_eq!(worker.run, "npm run worker");
 
     // debug should be added from local
-    assert!(pt.daemons.contains_key("debug"));
-    assert_eq!(pt.daemons.get("debug").unwrap().run, "npm run debug");
+    assert!(pt.daemons.contains_key(&debug_key));
+    assert_eq!(pt.daemons.get(&debug_key).unwrap().run, "npm run debug");
 
     // Scenario 2: Only local.toml exists (no base config)
     fs::remove_file(&toml_path).unwrap();
@@ -965,14 +996,18 @@ run = "echo local"
     .unwrap();
 
     let pt = pitchfork_toml::PitchforkToml::all_merged_from(temp_dir.path());
-    assert!(pt.daemons.contains_key("local_only"));
-    assert_eq!(pt.daemons.get("local_only").unwrap().run, "echo local");
+    let local_only_key = DaemonId::parse(&format!("{ns}/local_only")).unwrap();
+    assert!(pt.daemons.contains_key(&local_only_key));
+    assert_eq!(pt.daemons.get(&local_only_key).unwrap().run, "echo local");
 }
 
 /// Test nested directory structure with local.toml at different levels
 #[test]
 fn test_all_merged_from_nested_local_toml() {
     let temp_dir = TempDir::new().unwrap();
+
+    // Get the parent namespace
+    let parent_ns = temp_dir.path().file_name().unwrap().to_str().unwrap();
 
     // Parent directory has base config
     fs::write(
@@ -1011,17 +1046,23 @@ run = "echo local-only"
 
     let pt = pitchfork_toml::PitchforkToml::all_merged_from(&child_dir);
 
+    // Daemon IDs should be qualified with their respective namespaces
+    let shared_key = DaemonId::parse(&format!("{parent_ns}/shared")).unwrap();
+    let child_daemon_key = DaemonId::parse("child/child_daemon").unwrap();
+    let local_only_key = DaemonId::parse("child/local_only").unwrap();
+
     // Should have all three daemons
     assert!(
-        pt.daemons.contains_key("shared"),
-        "Should inherit from parent"
+        pt.daemons.contains_key(&shared_key),
+        "Should inherit from parent, got keys: {:?}",
+        pt.daemons.keys().collect::<Vec<_>>()
     );
-    assert!(pt.daemons.contains_key("child_daemon"));
-    assert!(pt.daemons.contains_key("local_only"));
+    assert!(pt.daemons.contains_key(&child_daemon_key));
+    assert!(pt.daemons.contains_key(&local_only_key));
 
     // child_daemon should be overridden by local
     assert_eq!(
-        pt.daemons.get("child_daemon").unwrap().run,
+        pt.daemons.get(&child_daemon_key).unwrap().run,
         "echo child-local"
     );
 }

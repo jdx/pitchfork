@@ -1276,10 +1276,36 @@ ready_delay = 1
 
     // Start and stop the daemon
     let output = env.run_command(&["start", "already_stopped_test"]);
+    println!("Start stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("Start stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert!(output.status.success(), "Start should succeed");
 
+    // Debug: check status immediately after start
+    let output_status = env.run_command(&["status", "already_stopped_test"]);
+    println!(
+        "Status after start stdout: {}",
+        String::from_utf8_lossy(&output_status.stdout)
+    );
+    println!(
+        "Status after start stderr: {}",
+        String::from_utf8_lossy(&output_status.stderr)
+    );
+
     let output = env.run_command(&["stop", "already_stopped_test"]);
+    println!("Stop stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("Stop stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert!(output.status.success(), "First stop should succeed");
+
+    // Debug: check status immediately after stop
+    let output_status = env.run_command(&["status", "already_stopped_test"]);
+    println!(
+        "Status after stop stdout: {}",
+        String::from_utf8_lossy(&output_status.stdout)
+    );
+    println!(
+        "Status after stop stderr: {}",
+        String::from_utf8_lossy(&output_status.stderr)
+    );
 
     // Wait for the supervisor to fully persist the stopped state.
     // Under CI load, the state file may not be fully written yet.

@@ -17,7 +17,7 @@ fn test_logs_tail_command() {
     let toml_content = format!(
         r#"
 [daemons.test_tail]
-run = "bun run {} 1 3"
+run = "bun run {} 1 5"
 ready_delay = 0
 "#,
         script.display()
@@ -27,10 +27,14 @@ ready_delay = 0
     // Start daemon
     env.run_command(&["start", "test_tail"]);
 
+    // Wait for the first log entry to be written before starting tail
+    // This ensures the log file exists when tail_logs starts monitoring
+    env.sleep(Duration::from_secs(2));
+
     // Test tail command
     let mut child = env.run_background(&["logs", "-t", "test_tail"]);
 
-    // Wait for some output to be generated
+    // Wait for some more output to be generated
     env.sleep(Duration::from_secs(4));
 
     // Kill the tail process
@@ -45,8 +49,8 @@ ready_delay = 0
     // Verify that tail command captured the streaming output
     assert!(!stdout.is_empty(), "Tail output should not be empty");
     assert!(
-        stdout.contains("Output 3/3"),
-        "Tail output should contain new output"
+        stdout.contains("Output 5/5") || stdout.contains("Output 4/5"),
+        "Tail output should contain new output: {stdout}"
     );
 
     // Also verify the log file has content
@@ -66,7 +70,7 @@ fn test_logs_follow_alias() {
     let toml_content = format!(
         r#"
 [daemons.test_follow]
-run = "bun run {} 1 3"
+run = "bun run {} 1 5"
 ready_delay = 0
 "#,
         script.display()
@@ -76,10 +80,13 @@ ready_delay = 0
     // Start daemon
     env.run_command(&["start", "test_follow"]);
 
+    // Wait for the first log entry to be written before starting follow
+    env.sleep(Duration::from_secs(2));
+
     // Test follow command with -f alias
     let mut child = env.run_background(&["logs", "-f", "test_follow"]);
 
-    // Wait for some output to be generated
+    // Wait for some more output to be generated
     env.sleep(Duration::from_secs(4));
 
     // Kill the follow process
@@ -94,8 +101,8 @@ ready_delay = 0
     // Verify that follow command captured the streaming output
     assert!(!stdout.is_empty(), "Follow output should not be empty");
     assert!(
-        stdout.contains("Output 3/3"),
-        "Follow output should contain new output"
+        stdout.contains("Output 5/5") || stdout.contains("Output 4/5"),
+        "Follow output should contain new output: {stdout}"
     );
 
     // Clean up

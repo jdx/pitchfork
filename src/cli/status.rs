@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 
 /// Display the status of a daemon
@@ -27,15 +28,19 @@ pub struct Status {
 
 impl Status {
     pub async fn run(&self) -> Result<()> {
-        let daemon = StateFile::get().daemons.get(&self.id);
+        // Resolve the daemon ID to a qualified ID
+        let qualified_id = PitchforkToml::resolve_id(&self.id)?;
+
+        let daemon = StateFile::get().daemons.get(&qualified_id);
         if let Some(daemon) = daemon {
-            println!("Name: {}", self.id);
+            // Display short name for cleaner output
+            println!("Name: {}", qualified_id.name());
             if let Some(pid) = &daemon.pid {
                 println!("PID: {pid}");
             }
             println!("Status: {}", daemon.status.style());
         } else {
-            miette::bail!("Daemon {} not found", self.id);
+            miette::bail!("Daemon {} not found", qualified_id.name());
         }
         Ok(())
     }
