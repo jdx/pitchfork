@@ -104,7 +104,11 @@ export default defineConfig({
     editLink: {
       pattern: 'https://github.com/jdx/pitchfork/edit/main/docs/:path',
       text: 'Edit this page on GitHub'
-    }
+    },
+
+    search: {
+      provider: "local",
+    },
   },
   head: [
     ["link", { rel: "icon", href: "/img/favicon.ico" }],
@@ -113,9 +117,7 @@ export default defineConfig({
     ["meta", { property: "og:title", content: "pitchfork" }],
     ["meta", { property: "og:description", content: "A devilishly good process manager for developers" }],
   ],
-  search: {
-    provider: "local",
-  },
+  
   // Ignore localhost URLs in CLI examples
   ignoreDeadLinks: [
     /^http:\/\/localhost/,
