@@ -42,8 +42,15 @@ prompt=$(
 	cat <<'INSTRUCTIONS'
 Write user-friendly release notes:
 
-1. Start with a single "# <pithy title>" heading - a short, catchy title summarizing this release (will become the GitHub release title)
-2. Follow with 1-2 paragraphs summarizing key changes
+1. Start with a single "# <pithy title>" heading - a short, catchy title summarizing this release (will become the GitHub release title). For smaller or less impactful releases, keep the title understated and modest.
+
+TONE CALIBRATION:
+- Match the tone and length to the actual significance of the changes
+- If the release is mostly small bug fixes or minor tweaks, be upfront about that—a sentence or two of summary is fine, don't write multiple paragraphs inflating the importance
+- Reserve enthusiastic, detailed write-ups for releases with genuinely significant features or changes
+- It's okay to say "This is a smaller release focused on bug fixes" when that's the case
+
+2. Follow with a summary proportional to the significance of the changes
 3. Organize into ### sections (Highlights, Bug Fixes, etc.)
 4. Explain WHY changes matter to users
 5. Include PR links and documentation links (https://pitchfork.jdx.dev/)
