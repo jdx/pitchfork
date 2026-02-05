@@ -175,6 +175,10 @@ mod tests {
             dir: None,
             env: None,
             path: None,
+            on_ready: None,
+            on_fail: None,
+            on_cron_trigger: None,
+            on_retry: None,
         }
     }
 
@@ -290,6 +294,10 @@ mod tests {
                 path: None,
                 dir: None,
                 env: None,
+                on_ready: None,
+                on_fail: None,
+                on_cron_trigger: None,
+                on_retry: None,
             },
         );
 

@@ -5,6 +5,7 @@
 //! - Cron scheduling
 //! - File watching for daemon auto-restart
 
+use super::hooks;
 use super::{SUPERVISOR, Supervisor, interval_duration};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
@@ -134,6 +135,9 @@ impl Supervisor {
 
                     if should_run {
                         info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
+                        // Execute on_cron_trigger hook before starting the daemon
+                        hooks::execute_on_cron_trigger(&id).await;
+
                         // Get the run command from pitchfork.toml
                         if let Some(run_cmd) = self.get_daemon_run_command(&id) {
                             let cmd = match shell_words::split(&run_cmd) {

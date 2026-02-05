@@ -270,6 +270,30 @@ cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
 - `schedule` - Cron expression (6 fields: second, minute, hour, day, month, weekday)
 - `retrigger` - Behavior when schedule fires: `"finish"` (default), `"always"`, `"success"`, `"fail"`
 
+### Hooks
+
+Hooks allow you to run commands at specific points in a daemon's lifecycle. Hooks are specified as simple command strings.
+
+| Hook | Trigger |
+|------|---------|
+| `on_ready` | When the daemon passes its ready check |
+| `on_fail` | When the daemon fails (exits with non-zero code) |
+| `on_cron_trigger` | When cron triggers (before starting the daemon) |
+| `on_retry` | Before each retry attempt |
+
+```toml
+[daemons.api]
+run = "npm run dev"
+ready_output = "listening"
+on_ready = "notify-send 'API Ready'"
+on_fail = "notify-send 'API Failed'"
+on_retry = "echo 'Retrying...'"
+```
+
+Hooks receive environment variables like `PITCHFORK_DAEMON_ID`, `PITCHFORK_EXIT_CODE` (for `on_fail`), and `PITCHFORK_RETRY_COUNT` (for `on_retry`).
+
+See [Hooks guide](/guides/hooks) for more details and examples.
+
 ## Complete Example
 
 ```toml
@@ -295,6 +319,8 @@ ready_http = "http://localhost:3000/health"
 auto = ["start", "stop"]
 retry = 5
 env = { NODE_ENV = "development", PORT = "3000" }
+on_ready = "notify-send 'API' 'Server is ready'"
+on_fail = "notify-send -u critical 'API' 'Server crashed!'"
 
 # Frontend dev server in a subdirectory
 [daemons.frontend]
@@ -302,8 +328,19 @@ run = "npm run dev"
 dir = "frontend"
 env = { PORT = "5173" }
 
+# Worker with custom shell
+[daemons.worker]
+run = "python worker.py"
+dir = "./services/worker"
+env = { "PYTHONUNBUFFERED" = "1" }
+depends = ["postgres"]
+on_retry = "echo 'Worker retrying...' >> /var/log/worker.log"
+
 # Scheduled backup
 [daemons.backup]
 run = "./scripts/backup.sh"
 cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
+on_cron_trigger = "echo 'Starting scheduled backup'"
+on_ready = "notify-send 'Backup' 'Completed successfully'"
+on_fail = "notify-send -u critical 'Backup' 'Failed!'"
 ```

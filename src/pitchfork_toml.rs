@@ -44,6 +44,15 @@ struct PitchforkTomlDaemonRaw {
     pub dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    // Hooks
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_ready: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_fail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_cron_trigger: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_retry: Option<String>,
 }
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files.
@@ -352,6 +361,10 @@ impl PitchforkToml {
                 dir: raw_daemon.dir,
                 env: raw_daemon.env,
                 path: Some(path.to_path_buf()),
+                on_ready: raw_daemon.on_ready,
+                on_fail: raw_daemon.on_fail,
+                on_cron_trigger: raw_daemon.on_cron_trigger,
+                on_retry: raw_daemon.on_retry,
             };
             pt.daemons.insert(id, daemon);
         }
@@ -397,6 +410,10 @@ impl PitchforkToml {
                     watch: daemon.watch.clone(),
                     dir: daemon.dir.clone(),
                     env: daemon.env.clone(),
+                    on_ready: daemon.on_ready.clone(),
+                    on_fail: daemon.on_fail.clone(),
+                    on_cron_trigger: daemon.on_cron_trigger.clone(),
+                    on_retry: daemon.on_retry.clone(),
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
@@ -463,6 +480,19 @@ pub struct PitchforkTomlDaemon {
     pub env: Option<IndexMap<String, String>>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
+    // Hooks
+    /// Command to run when the daemon passes its ready check
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_ready: Option<String>,
+    /// Command to run when the daemon fails (exits with non-zero code)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_fail: Option<String>,
+    /// Command to run when cron triggers (before starting the daemon)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_cron_trigger: Option<String>,
+    /// Command to run before each retry attempt
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_retry: Option<String>,
 }
 
 fn example_run_command() -> &'static str {

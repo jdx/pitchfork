@@ -51,6 +51,7 @@ export default defineConfig({
           { text: "File Watching", link: "/guides/file-watching" },
           { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
           { text: "Cron Scheduling", link: "/guides/scheduling" },
+          { text: "Hooks", link: "/guides/hooks" },
           { text: "Start on Boot", link: "/guides/boot-start" },
           { text: "Log Management", link: "/guides/logs" },
           { text: "TUI Dashboard", link: "/guides/tui" },

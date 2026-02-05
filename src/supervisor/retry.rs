@@ -2,6 +2,7 @@
 //!
 //! Handles automatic retrying of failed daemons based on retry configuration.
 
+use super::hooks;
 use super::{Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
@@ -51,6 +52,9 @@ impl Supervisor {
                 daemon.retry_count + 1,
                 daemon.retry
             );
+
+            // Execute on_retry hook before attempting retry
+            hooks::execute_on_retry(&id, daemon.retry_count + 1, daemon.retry).await;
 
             // Get command from pitchfork.toml
             if let Some(run_cmd) = self.get_daemon_run_command(&id) {

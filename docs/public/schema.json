@@ -138,6 +138,34 @@
             "type": "string"
           }
         },
+        "on_cron_trigger": {
+          "description": "Command to run when cron triggers (before starting the daemon)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_fail": {
+          "description": "Command to run when the daemon fails (exits with non-zero code)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_ready": {
+          "description": "Command to run when the daemon passes its ready check",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_retry": {
+          "description": "Command to run before each retry attempt",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",
           "type": [

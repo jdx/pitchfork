@@ -100,6 +100,10 @@ fn test_write_pitchfork_toml() -> Result<()> {
             dir: None,
             env: None,
             path: Some(toml_path.clone()),
+            on_ready: None,
+            on_fail: None,
+            on_cron_trigger: None,
+            on_retry: None,
         },
     );
     pt.daemons = daemons;
@@ -849,6 +853,10 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
             dir: None,
             env: None,
             path: None,
+            on_ready: None,
+            on_fail: None,
+            on_cron_trigger: None,
+            on_retry: None,
         },
     );
     pt.daemons = daemons;

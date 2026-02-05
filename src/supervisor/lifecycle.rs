@@ -2,6 +2,7 @@
 //!
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
+use super::hooks;
 use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
@@ -295,6 +296,8 @@ impl Supervisor {
                                 && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -315,6 +318,8 @@ impl Supervisor {
                                 && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -364,6 +369,8 @@ impl Supervisor {
                                 Ok(response) if response.status().is_success() => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -393,6 +400,8 @@ impl Supervisor {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -425,6 +434,8 @@ impl Supervisor {
                                 Ok(status) if status.success() => {
                                     info!("daemon {id} ready: readiness command succeeded");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
@@ -451,6 +462,8 @@ impl Supervisor {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
+                            // Execute on_ready hook
+                            hooks::execute_on_ready(&id).await;
                             // Flush logs before notifying so clients see logs immediately
                             let _ = log_appender.flush().await;
                             if let Some(tx) = ready_tx.take() {
@@ -526,15 +539,18 @@ impl Supervisor {
                 } else {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
-                    let status = match status.code() {
+                    let exit_code = status.code();
+                    let new_status = match exit_code {
                         Some(code) => DaemonStatus::Errored(code),
                         None => DaemonStatus::Errored(-1),
                     };
+                    // Execute on_fail hook
+                    hooks::execute_on_fail(&id, exit_code).await;
                     if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             pid: None,
-                            status,
+                            status: new_status,
                             last_exit_success: Some(false),
                             ..Default::default()
                         })
@@ -558,17 +574,22 @@ impl Supervisor {
                 {
                     error!("Failed to update daemon state for {id}: {e}");
                 }
-            } else if let Err(e) = SUPERVISOR
-                .upsert_daemon(UpsertDaemonOpts {
-                    id: id.clone(),
-                    pid: None,
-                    status: DaemonStatus::Errored(-1),
-                    last_exit_success: Some(false),
-                    ..Default::default()
-                })
-                .await
-            {
-                error!("Failed to update daemon state for {id}: {e}");
+            } else {
+                // Process exited abnormally (e.g., child.wait() returned an error)
+                // Execute on_fail hook for this error case
+                hooks::execute_on_fail(&id, None).await;
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(UpsertDaemonOpts {
+                        id: id.clone(),
+                        pid: None,
+                        status: DaemonStatus::Errored(-1),
+                        last_exit_success: Some(false),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    error!("Failed to update daemon state for {id}: {e}");
+                }
             }
         });
 

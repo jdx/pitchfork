@@ -328,6 +328,11 @@ pub struct EditorState {
     pub scroll_offset: usize,
     /// Preserved config field for ready_cmd (no form UI yet)
     preserved_ready_cmd: Option<String>,
+    /// Preserved hooks (no form UI yet)
+    preserved_on_ready: Option<String>,
+    preserved_on_fail: Option<String>,
+    preserved_on_cron_trigger: Option<String>,
+    preserved_on_retry: Option<String>,
 }
 
 impl EditorState {
@@ -344,6 +349,10 @@ impl EditorState {
             unsaved_changes: false,
             scroll_offset: 0,
             preserved_ready_cmd: None,
+            preserved_on_ready: None,
+            preserved_on_fail: None,
+            preserved_on_cron_trigger: None,
+            preserved_on_retry: None,
         }
     }
 
@@ -362,6 +371,10 @@ impl EditorState {
             unsaved_changes: false,
             scroll_offset: 0,
             preserved_ready_cmd: config.ready_cmd.clone(),
+            preserved_on_ready: config.on_ready.clone(),
+            preserved_on_fail: config.on_fail.clone(),
+            preserved_on_cron_trigger: config.on_cron_trigger.clone(),
+            preserved_on_retry: config.on_retry.clone(),
         }
     }
 
@@ -517,6 +530,10 @@ impl EditorState {
             dir: None,
             env: None,
             path: Some(self.config_path.clone()),
+            on_ready: self.preserved_on_ready.clone(),
+            on_fail: self.preserved_on_fail.clone(),
+            on_cron_trigger: self.preserved_on_cron_trigger.clone(),
+            on_retry: self.preserved_on_retry.clone(),
         };
 
         let mut cron_schedule: Option<String> = None;
