@@ -2,10 +2,12 @@ name: ci
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["autofix.ci"]
+    types: [completed]
   pull_request:
   push:
     tags: ["*"]
-    branches: ["main"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,6 +23,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
+        with:
+          # For workflow_run, checkout the commit from the triggering workflow
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
       - uses: jdx/mise-action@6d1e696aa24c1aa1bcc1adea0212707c71ab78a8 # v3
       - run: rm -rf .cargo
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
