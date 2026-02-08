@@ -116,6 +116,10 @@ export default defineConfig({
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "pitchfork" }],
     ["meta", { property: "og:description", content: "A devilishly good process manager for developers" }],
+    ["meta", { property: "og:site_name", content: "pitchfork" }],
+    ["meta", { property: "og:image", content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png" }],
+    ["meta", { name: "twitter:card", content: "summary" }],
+    ["meta", { name: "twitter:image", content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png" }],
   ],
   
   // Ignore localhost URLs in CLI examples
