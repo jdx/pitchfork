@@ -56,31 +56,42 @@ TONE CALIBRATION:
 5. Include PR links and documentation links (https://pitchfork.jdx.dev/)
 6. Include contributor usernames (@username). Do not thank @jdx since that is who is writing these notes.
 7. Skip internal changes
+
+Write your output to the file: /tmp/release-notes-output.md
+Do not output anything else — just write to the file.
 INSTRUCTIONS
 )
 
 # Use Claude Code to generate the release notes
-# Sandboxed: only read-only tools allowed (no Bash, Edit, Write)
+# Claude writes to a temp file via the Write tool to avoid formatting artifacts from stdout
 echo "Generating release notes with Claude..." >&2
 echo "Version: $tag" >&2
 echo "Previous version: ${prev_tag:-none}" >&2
 echo "Changelog length: ${#changelog} chars" >&2
 
-# Capture stderr separately to avoid polluting output
-stderr_file=$(mktemp)
-trap 'rm -f "$stderr_file"' EXIT
+output_file="/tmp/release-notes-output.md"
+rm -f "$output_file"
 
-if ! output=$(
-	printf '%s' "$prompt" | claude -p \
-		--model claude-opus-4-5-20251101 \
-		--permission-mode bypassPermissions \
-		--output-format text \
-		--allowedTools "Read,Grep,Glob" 2>"$stderr_file"
-); then
+stderr_file=$(mktemp)
+trap 'rm -f "$stderr_file" "$output_file"' EXIT
+
+if ! printf '%s' "$prompt" | claude -p \
+	--model claude-opus-4-6 \
+	--permission-mode bypassPermissions \
+	--allowedTools "Read,Grep,Glob,Write($output_file)" 2>"$stderr_file"; then
 	echo "Error: Claude CLI failed" >&2
 	cat "$stderr_file" >&2
 	exit 1
 fi
+
+# Validate the output file was created and is non-empty
+if [[ ! -s $output_file ]]; then
+	echo "Error: Claude did not write release notes to $output_file" >&2
+	cat "$stderr_file" >&2
+	exit 1
+fi
+
+output=$(cat "$output_file")
 
 # Extract title from "# ..." heading and separate from body
 title=""
