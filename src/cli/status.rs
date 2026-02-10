@@ -35,7 +35,7 @@ impl Status {
             }
             println!("Status: {}", daemon.status.style());
         } else {
-            warn!("Daemon {} not found", self.id);
+            miette::bail!("Daemon {} not found", self.id);
         }
         Ok(())
     }
