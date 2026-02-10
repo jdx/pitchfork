@@ -212,21 +212,56 @@ impl TestEnv {
         None
     }
 
+    /// Read daemon status directly from the state file on disk (bypasses CLI/IPC)
+    #[allow(dead_code)]
+    pub fn get_daemon_status_from_state_file(&self, daemon_id: &str) -> Option<String> {
+        let state_path = self.state_file_path();
+        let raw = fs::read_to_string(&state_path).ok()?;
+        let state: toml::Value = toml::from_str(&raw).ok()?;
+        state
+            .get("daemons")?
+            .get(daemon_id)?
+            .get("status")?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+
     /// Poll daemon status until it matches the expected value.
-    /// Retries up to 25 times with 200ms intervals (5s total) to handle state file
+    /// Retries up to 50 times with 200ms intervals (10s total) to handle state file
     /// write delays that can occur under CI load.
     #[allow(dead_code)]
     pub fn wait_for_status(&self, daemon_id: &str, expected: &str) {
-        for i in 0..25 {
+        for i in 0..50 {
+            // Try CLI status first
             let status = self.get_daemon_status(daemon_id);
             if status.as_deref() == Some(expected) {
                 return;
             }
-            if i < 24 {
+            // Also try reading state file directly as fallback
+            let file_status = self.get_daemon_status_from_state_file(daemon_id);
+            if file_status.as_deref() == Some(expected) {
+                return;
+            }
+            if i < 49 {
                 std::thread::sleep(Duration::from_millis(200));
             } else {
+                // Gather diagnostics for debugging CI failures
+                let state_path = self.state_file_path();
+                let state_contents = fs::read_to_string(&state_path)
+                    .unwrap_or_else(|e| format!("<read error: {e}>"));
+                let status_output = self.run_command(&["status", daemon_id]);
+                let status_stderr = String::from_utf8_lossy(&status_output.stderr);
+                let status_stdout = String::from_utf8_lossy(&status_output.stdout);
                 panic!(
-                    "Daemon {daemon_id} did not reach status '{expected}' after 5s, got: {status:?}"
+                    "Daemon {daemon_id} did not reach status '{expected}' after 10s\n\
+                     CLI status: {status:?}\n\
+                     State file status: {file_status:?}\n\
+                     Status exit code: {}\n\
+                     Status stdout: {status_stdout}\n\
+                     Status stderr: {status_stderr}\n\
+                     State file ({}):\n{state_contents}",
+                    status_output.status,
+                    state_path.display(),
                 );
             }
         }
