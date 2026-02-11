@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0](https://github.com/jdx/pitchfork/compare/v1.3.0...v1.4.0) - 2026-02-11
+
+### Added
+
+- *(config)* add `dir` and `env` fields for daemons ([#227](https://github.com/jdx/pitchfork/pull/227))
+
+### Fixed
+
+- *(status)* return error when daemon not found and improve test diagnostics ([#224](https://github.com/jdx/pitchfork/pull/224))
+
 ## [1.3.0](https://github.com/jdx/pitchfork/compare/v1.2.0...v1.3.0) - 2026-02-01
 
 ### Added
