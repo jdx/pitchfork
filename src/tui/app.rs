@@ -326,6 +326,9 @@ pub struct EditorState {
     pub unsaved_changes: bool,
     #[allow(dead_code)]
     pub scroll_offset: usize,
+    /// Preserved config fields that don't have form UI yet
+    preserved_dir: Option<String>,
+    preserved_env: Option<indexmap::IndexMap<String, String>>,
 }
 
 impl EditorState {
@@ -341,6 +344,8 @@ impl EditorState {
             config_path,
             unsaved_changes: false,
             scroll_offset: 0,
+            preserved_dir: None,
+            preserved_env: None,
         }
     }
 
@@ -358,6 +363,8 @@ impl EditorState {
             config_path,
             unsaved_changes: false,
             scroll_offset: 0,
+            preserved_dir: config.dir.clone(),
+            preserved_env: config.env.clone(),
         }
     }
 
@@ -482,8 +489,8 @@ impl EditorState {
             boot_start: None,
             depends: vec![],
             watch: vec![],
-            dir: None,
-            env: None,
+            dir: self.preserved_dir.clone(),
+            env: self.preserved_env.clone(),
             path: Some(self.config_path.clone()),
         };
 
