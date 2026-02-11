@@ -92,7 +92,7 @@ title=""
 body="$output"
 if echo "$output" | grep -q "^# "; then
 	title=$(echo "$output" | grep "^# " | head -1 | sed 's/^# //')
-	body=$(echo "$output" | sed "1,/^# /d")
+	body=$(echo "$output" | tail -n +2)
 fi
 
 # Validate we got non-empty output
