@@ -965,7 +965,7 @@ fn test_daemon_dir_relative() {
     let toml_content = format!(
         r#"
 [daemons.dir_test]
-run = "bash -c 'pwd > {} && sleep 60'"
+run = "bash -c 'pwd > \"{}\" && sleep 60'"
 dir = "mysubdir"
 ready_delay = 1
 "#,
@@ -1009,7 +1009,7 @@ fn test_daemon_dir_absolute() {
     let toml_content = format!(
         r#"
 [daemons.dir_abs_test]
-run = "bash -c 'pwd > {} && sleep 60'"
+run = "bash -c 'pwd > \"{}\" && sleep 60'"
 dir = "{}"
 ready_delay = 1
 "#,
@@ -1049,7 +1049,7 @@ fn test_daemon_env_vars() {
     let toml_content = format!(
         r#"
 [daemons.env_test]
-run = "bash -c 'echo $MY_TEST_VAR > {} && sleep 60'"
+run = "bash -c 'echo $MY_TEST_VAR > \"{}\" && sleep 60'"
 ready_delay = 1
 
 [daemons.env_test.env]
@@ -1089,7 +1089,7 @@ fn test_daemon_multiple_env_vars() {
     let toml_content = format!(
         r#"
 [daemons.multi_env_test]
-run = "bash -c 'echo $VAR_A:$VAR_B:$VAR_C > {} && sleep 60'"
+run = "bash -c 'echo $VAR_A:$VAR_B:$VAR_C > \"{}\" && sleep 60'"
 ready_delay = 1
 env = {{ VAR_A = "alpha", VAR_B = "beta", VAR_C = "gamma" }}
 "#,
@@ -1131,7 +1131,7 @@ fn test_daemon_dir_and_env_combined() {
     let toml_content = format!(
         r#"
 [daemons.combined_test]
-run = "bash -c 'echo $MY_PORT:$(pwd) > {} && sleep 60'"
+run = "bash -c 'echo $MY_PORT:$(pwd) > \"{}\" && sleep 60'"
 dir = "combined_test_dir"
 ready_delay = 1
 

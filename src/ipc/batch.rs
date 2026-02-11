@@ -615,12 +615,9 @@ pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> Path
     let base_dir = config_path
         .and_then(|p| p.parent())
         .map(|p| p.to_path_buf())
-        .unwrap_or_default();
+        .unwrap_or_else(|| crate::env::CWD.to_path_buf());
     match dir {
-        Some(d) => {
-            let p = PathBuf::from(d);
-            if p.is_absolute() { p } else { base_dir.join(p) }
-        }
+        Some(d) => base_dir.join(d),
         None => base_dir,
     }
 }
@@ -658,16 +655,16 @@ mod tests {
 
     #[test]
     fn test_resolve_daemon_dir_no_config_path() {
-        // No config path -> defaults to empty path
+        // No config path -> defaults to CWD
         let result = resolve_daemon_dir(None, None);
-        assert_eq!(result, PathBuf::from(""));
+        assert_eq!(result, crate::env::CWD.to_path_buf());
     }
 
     #[test]
     fn test_resolve_daemon_dir_relative_no_config_path() {
-        // Relative dir but no config path -> relative to empty base
+        // Relative dir but no config path -> relative to CWD
         let result = resolve_daemon_dir(Some("subdir"), None);
-        assert_eq!(result, PathBuf::from("subdir"));
+        assert_eq!(result, crate::env::CWD.join("subdir"));
     }
 
     #[test]

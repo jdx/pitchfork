@@ -831,9 +831,11 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
     pt.daemons = daemons;
     pt.write()?;
 
-    let raw = fs::read_to_string(&toml_path).unwrap();
-    assert!(!raw.contains("dir"), "dir should not appear when None");
-    assert!(!raw.contains("env"), "env should not appear when None");
+    // Re-read and verify dir/env are still None (not serialized)
+    let pt2 = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt2.daemons.get("test").unwrap();
+    assert!(daemon.dir.is_none(), "dir should not be set when None");
+    assert!(daemon.env.is_none(), "env should not be set when None");
 
     Ok(())
 }
