@@ -482,6 +482,8 @@ impl EditorState {
             boot_start: None,
             depends: vec![],
             watch: vec![],
+            dir: None,
+            env: None,
             path: Some(self.config_path.clone()),
         };
 

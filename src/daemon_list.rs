@@ -119,6 +119,7 @@ fn build_daemon_list(
             ready_port: None,
             ready_cmd: None,
             depends: vec![],
+            env: None,
         };
 
         entries.push(DaemonListEntry {

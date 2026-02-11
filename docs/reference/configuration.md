@@ -50,6 +50,41 @@ The command to execute.
 run = "npm run server"
 ```
 
+### `dir`
+
+Working directory for the daemon. Relative paths are resolved from the `pitchfork.toml` file location. If not set, defaults to the directory containing the `pitchfork.toml` file.
+
+```toml
+# Relative path (resolved from pitchfork.toml location)
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+
+# Absolute path
+[daemons.api]
+run = "npm run server"
+dir = "/opt/myapp/api"
+```
+
+### `env`
+
+Environment variables to set for the daemon process. Variables are passed as key-value string pairs.
+
+```toml
+[daemons.api]
+run = "npm run server"
+env = { NODE_ENV = "development", PORT = "3000" }
+
+# Multi-line format for many variables
+[daemons.worker]
+run = "python worker.py"
+
+[daemons.worker.env]
+DATABASE_URL = "postgres://localhost/mydb"
+REDIS_URL = "redis://localhost:6379"
+LOG_LEVEL = "debug"
+```
+
 ### `retry`
 
 Number of retry attempts on failure, or `true` for infinite retries. Default: `0`
@@ -239,11 +274,19 @@ ready_output = "Ready to accept connections"
 # API server - depends on database and cache, hot reloads on changes
 [daemons.api]
 run = "npm run server"
+dir = "api"
 depends = ["postgres", "redis"]
 watch = ["src/**/*.ts", "package.json"]
 ready_http = "http://localhost:3000/health"
 auto = ["start", "stop"]
 retry = 5
+env = { NODE_ENV = "development", PORT = "3000" }
+
+# Frontend dev server in a subdirectory
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+env = { PORT = "5173" }
 
 # Scheduled backup
 [daemons.backup]

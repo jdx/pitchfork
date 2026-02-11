@@ -8,6 +8,7 @@ use crate::daemon::Daemon;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::procs::PROCS;
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -32,6 +33,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
     pub depends: Option<Vec<String>>,
+    pub env: Option<IndexMap<String, String>>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -55,6 +57,7 @@ impl Default for UpsertDaemonOpts {
             ready_port: None,
             ready_cmd: None,
             depends: None,
+            env: None,
         }
     }
 }
@@ -107,6 +110,7 @@ impl Supervisor {
             depends: opts
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),
+            env: opts.env.or(existing.and_then(|d| d.env.clone())),
         };
         state_file
             .daemons

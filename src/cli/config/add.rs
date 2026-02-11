@@ -44,6 +44,8 @@ impl Add {
                 boot_start: None,
                 depends: vec![],
                 watch: vec![],
+                dir: None,
+                env: None,
                 path: None,
             },
         );

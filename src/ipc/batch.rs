@@ -8,8 +8,9 @@ use crate::deps::resolve_dependencies;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
 use chrono::{DateTime, Local};
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Result of a daemon run operation
@@ -72,12 +73,7 @@ pub fn build_run_options(
     let cmd = shell_words::split(&daemon_config.run)
         .map_err(|e| format!("Failed to parse command: {e}"))?;
 
-    let dir = daemon_config
-        .path
-        .as_ref()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
+    let dir = resolve_daemon_dir(daemon_config.dir.as_deref(), daemon_config.path.as_deref());
 
     Ok(RunOptions {
         id: id.to_string(),
@@ -99,6 +95,7 @@ pub fn build_run_options(
         ready_cmd: opts.cmd.clone().or(daemon_config.ready_cmd.clone()),
         wait_ready: true,
         depends: daemon_config.depends.clone(),
+        env: daemon_config.env.clone(),
     })
 }
 
@@ -301,6 +298,7 @@ impl IpcClient {
                             id,
                             cmd.clone(),
                             adhoc_daemon.dir.clone().unwrap_or_default(),
+                            adhoc_daemon.env.clone(),
                             is_explicit,
                             &opts,
                         );
@@ -394,6 +392,7 @@ impl IpcClient {
         id: String,
         cmd: Vec<String>,
         dir: PathBuf,
+        env: Option<IndexMap<String, String>>,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>)> {
@@ -424,6 +423,7 @@ impl IpcClient {
                 ready_cmd,
                 wait_ready: true,
                 depends: vec![],
+                env,
             };
 
             let result = ipc.run(run_opts).await;
@@ -601,7 +601,82 @@ impl IpcClient {
             ready_cmd: opts.cmd,
             wait_ready: true,
             depends: vec![],
+            env: None,
         })
         .await
+    }
+}
+
+/// Resolve the working directory for a daemon.
+///
+/// If `dir` is set in config, resolve it (absolute or relative to pitchfork.toml parent).
+/// Otherwise, use the pitchfork.toml parent directory.
+pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
+    let base_dir = config_path
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    match dir {
+        Some(d) => {
+            let p = PathBuf::from(d);
+            if p.is_absolute() { p } else { base_dir.join(p) }
+        }
+        None => base_dir,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_daemon_dir_none() {
+        // No dir set, config at /projects/myapp/pitchfork.toml -> /projects/myapp
+        let result = resolve_daemon_dir(None, Some(Path::new("/projects/myapp/pitchfork.toml")));
+        assert_eq!(result, PathBuf::from("/projects/myapp"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_relative() {
+        // Relative dir "frontend" from /projects/myapp/pitchfork.toml -> /projects/myapp/frontend
+        let result = resolve_daemon_dir(
+            Some("frontend"),
+            Some(Path::new("/projects/myapp/pitchfork.toml")),
+        );
+        assert_eq!(result, PathBuf::from("/projects/myapp/frontend"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_absolute() {
+        // Absolute dir overrides config path entirely
+        let result = resolve_daemon_dir(
+            Some("/opt/myapp"),
+            Some(Path::new("/projects/myapp/pitchfork.toml")),
+        );
+        assert_eq!(result, PathBuf::from("/opt/myapp"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_no_config_path() {
+        // No config path -> defaults to empty path
+        let result = resolve_daemon_dir(None, None);
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_relative_no_config_path() {
+        // Relative dir but no config path -> relative to empty base
+        let result = resolve_daemon_dir(Some("subdir"), None);
+        assert_eq!(result, PathBuf::from("subdir"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_nested_relative() {
+        // Nested relative path
+        let result = resolve_daemon_dir(
+            Some("services/api"),
+            Some(Path::new("/projects/myapp/pitchfork.toml")),
+        );
+        assert_eq!(result, PathBuf::from("/projects/myapp/services/api"));
     }
 }
