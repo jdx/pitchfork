@@ -29,7 +29,7 @@ impl DaemonStatus {
     pub fn error_message(&self) -> Option<String> {
         match self {
             DaemonStatus::Failed(msg) => Some(msg.clone()),
-            DaemonStatus::Errored(code) if *code >= 0 => Some(format!("exit code {code}")),
+            DaemonStatus::Errored(code) if *code != -1 => Some(format!("exit code {code}")),
             DaemonStatus::Errored(_) => Some("unknown exit code".to_string()),
             _ => None,
         }
