@@ -35,10 +35,14 @@ jobs:
       - name: Fetch tags
         if: ${{ steps.release-plz.outputs.releases }}
         run: git fetch --tags
+      - name: Install mise
+        if: ${{ steps.release-plz.outputs.releases }}
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
       - name: Install Claude Code
         if: ${{ steps.release-plz.outputs.releases }}
         run: npm install -g @anthropic-ai/claude-code
       - name: Editorialize release notes
+        continue-on-error: true
         if: ${{ steps.release-plz.outputs.releases }}
         run: |
           TAG="${{ fromJSON(steps.release-plz.outputs.releases)[0].tag }}"
@@ -53,17 +57,17 @@ jobs:
             PREV_TAG=""
           fi
 
+          OUTPUT_DIR=$(mktemp -d)
           echo "Generating editorialized release notes for $TAG (prev: ${PREV_TAG:-none})..."
-          OUTPUT=$(./scripts/gen-release-notes.sh "$TAG" "$PREV_TAG")
+          mise run gen-release-notes "$TAG" "$OUTPUT_DIR" "$PREV_TAG"
 
-          # Parse title (first line) and body (after ---)
-          TITLE=$(echo "$OUTPUT" | head -1)
-          NOTES=$(echo "$OUTPUT" | sed '1,/^---$/d')
+          TITLE=$(cat "$OUTPUT_DIR/title")
+          NOTES_FILE="$OUTPUT_DIR/notes"
 
           if [[ -n "$TITLE" ]]; then
-            gh release edit "$TAG" --title "$TAG: $TITLE" --notes "$NOTES"
+            gh release edit "$TAG" --title "$TAG: $TITLE" --notes-file "$NOTES_FILE"
           else
-            gh release edit "$TAG" --notes "$NOTES"
+            gh release edit "$TAG" --notes-file "$NOTES_FILE"
           fi
           echo "Release notes updated successfully"
         env:

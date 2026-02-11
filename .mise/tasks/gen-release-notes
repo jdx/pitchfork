@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
+#MISE description="Generate editorialized release notes with Claude Code"
+#USAGE arg "<tag>" help="Git tag to generate notes for"
+#USAGE arg "<output_dir>" help="Directory to write title and notes files"
+#USAGE arg "[prev_tag]" help="Previous git tag"
 set -euo pipefail
 
-# Generate rich release notes for GitHub releases using Claude Code
-# Usage: ./scripts/gen-release-notes.sh <tag> [prev_tag]
+tag="${usage_tag}"
+output_dir="${usage_output_dir}"
+prev_tag="${usage_prev_tag:-}"
 
-tag="${1:-}"
-prev_tag="${2:-}"
-
-if [[ -z $tag ]]; then
-	echo "Usage: $0 <tag> [prev_tag]" >&2
-	exit 1
-fi
+mkdir -p "$output_dir"
 
 # If no prev_tag provided, find the previous tag
 if [[ -z $prev_tag ]]; then
@@ -26,13 +25,11 @@ fi
 changelog=$(git log --pretty=format:"- %s (%h)" "${prev_tag}..${tag}" 2>/dev/null || git log --pretty=format:"- %s (%h)" "${tag}" 2>/dev/null || echo "")
 
 if [[ -z $changelog ]]; then
-	echo "Error: No commits found for release" >&2
+	echo "Error: No commits found for release"
 	exit 1
 fi
 
-output_file=$(mktemp /tmp/release-notes-XXXXXX.md)
-stderr_file=$(mktemp)
-trap 'rm -f "$stderr_file" "$output_file"' EXIT
+output_file="$output_dir/raw.md"
 
 # Build prompt safely using printf to avoid command substitution on backticks in changelog
 prompt=$(
@@ -66,27 +63,27 @@ INSTRUCTIONS
 )
 
 # Use Claude Code to generate the release notes
-# Claude writes to a temp file via the Write tool to avoid formatting artifacts from stdout
-echo "Generating release notes with Claude..." >&2
-echo "Version: $tag" >&2
-echo "Previous version: ${prev_tag:-none}" >&2
-echo "Changelog length: ${#changelog} chars" >&2
+echo "Generating release notes with Claude..."
+echo "Version: $tag"
+echo "Previous version: ${prev_tag:-none}"
+echo "Changelog length: ${#changelog} chars"
 
 if ! printf '%s' "$prompt" | claude -p \
 	--model claude-opus-4-6 \
 	--permission-mode bypassPermissions \
-	--allowedTools "Read,Grep,Glob,Write($output_file)" >/dev/null 2>"$stderr_file"; then
-	echo "Error: Claude CLI failed" >&2
-	cat "$stderr_file" >&2
+	--allowedTools "Read,Grep,Glob,Write($output_file)"; then
+	echo "Error: Claude CLI failed"
 	exit 1
 fi
 
 # Validate the output file was created and is non-empty
 if [[ ! -s $output_file ]]; then
-	echo "Error: Claude did not write release notes to $output_file" >&2
-	cat "$stderr_file" >&2
+	echo "Error: Claude did not write release notes to $output_file"
 	exit 1
 fi
+
+echo "Raw output:"
+cat "$output_file"
 
 output=$(cat "$output_file")
 
@@ -100,12 +97,11 @@ fi
 
 # Validate we got non-empty output
 if [[ -z $body ]]; then
-	echo "Error: Claude returned empty output" >&2
-	cat "$stderr_file" >&2
+	echo "Error: Empty body after parsing"
 	exit 1
 fi
 
-# Output format: title on first line, separator, then body
-echo "$title"
-echo "---"
-echo "$body"
+# Write parsed results to output directory
+echo "$title" >"$output_dir/title"
+echo "$body" >"$output_dir/notes"
+echo "Wrote title and notes to $output_dir"
