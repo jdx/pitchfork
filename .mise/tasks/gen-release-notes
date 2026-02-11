@@ -87,11 +87,11 @@ cat "$output_file"
 
 output=$(cat "$output_file")
 
-# Extract title from "# ..." heading and separate from body
+# Extract title from "# ..." heading on first line and separate from body
 title=""
 body="$output"
-if echo "$output" | grep -q "^# "; then
-	title=$(echo "$output" | grep "^# " | head -1 | sed 's/^# //')
+if echo "$output" | head -1 | grep -q "^# "; then
+	title=$(echo "$output" | head -1 | sed 's/^# //')
 	body=$(echo "$output" | tail -n +2)
 fi
 
