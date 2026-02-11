@@ -1376,7 +1376,7 @@
   "config": {
     "props": {}
   },
-  "version": "1.4.1",
+  "version": "1.4.2",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
