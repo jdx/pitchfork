@@ -542,6 +542,21 @@ impl Supervisor {
                         error!("Failed to update daemon state for {id}: {e}");
                     }
                 }
+            } else if is_stopping {
+                // Process was being intentionally stopped but child.wait() returned
+                // an error (e.g. due to sysinfo reaping the process first)
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(UpsertDaemonOpts {
+                        id: id.clone(),
+                        pid: None,
+                        status: DaemonStatus::Stopped,
+                        last_exit_success: Some(true),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    error!("Failed to update daemon state for {id}: {e}");
+                }
             } else if let Err(e) = SUPERVISOR
                 .upsert_daemon(UpsertDaemonOpts {
                     id: id.clone(),
