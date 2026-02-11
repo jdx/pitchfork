@@ -80,6 +80,8 @@ fn test_write_pitchfork_toml() -> Result<()> {
             boot_start: None,
             depends: vec![],
             watch: vec![],
+            dir: None,
+            env: None,
             path: Some(toml_path.clone()),
         },
     );
@@ -635,6 +637,234 @@ retry = 5
         raw.contains("retry = 0") || raw.contains("retry = false"),
         "zero retry should serialize as 0 or false"
     );
+
+    Ok(())
+}
+
+// =============================================================================
+// Tests for dir and env fields
+// =============================================================================
+
+/// Test daemon with dir configuration
+#[test]
+fn test_daemon_with_dir() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+
+[daemons.api]
+run = "npm run server"
+dir = "/opt/api"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+
+    let frontend = pt.daemons.get("frontend").unwrap();
+    assert_eq!(frontend.dir, Some("frontend".to_string()));
+
+    let api = pt.daemons.get("api").unwrap();
+    assert_eq!(api.dir, Some("/opt/api".to_string()));
+
+    Ok(())
+}
+
+/// Test daemon without dir defaults to None
+#[test]
+fn test_daemon_without_dir() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.test]
+run = "echo test"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("test").unwrap();
+    assert!(daemon.dir.is_none());
+
+    Ok(())
+}
+
+/// Test daemon with env configuration (inline format)
+#[test]
+fn test_daemon_with_env_inline() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.api]
+run = "npm run server"
+env = { NODE_ENV = "development", PORT = "3000" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("api").unwrap();
+
+    let env = daemon.env.as_ref().unwrap();
+    assert_eq!(env.len(), 2);
+    assert_eq!(env.get("NODE_ENV").unwrap(), "development");
+    assert_eq!(env.get("PORT").unwrap(), "3000");
+
+    Ok(())
+}
+
+/// Test daemon with env configuration (table format)
+#[test]
+fn test_daemon_with_env_table() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.worker]
+run = "python worker.py"
+
+[daemons.worker.env]
+DATABASE_URL = "postgres://localhost/mydb"
+REDIS_URL = "redis://localhost:6379"
+LOG_LEVEL = "debug"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("worker").unwrap();
+
+    let env = daemon.env.as_ref().unwrap();
+    assert_eq!(env.len(), 3);
+    assert_eq!(
+        env.get("DATABASE_URL").unwrap(),
+        "postgres://localhost/mydb"
+    );
+    assert_eq!(env.get("REDIS_URL").unwrap(), "redis://localhost:6379");
+    assert_eq!(env.get("LOG_LEVEL").unwrap(), "debug");
+
+    Ok(())
+}
+
+/// Test daemon without env defaults to None
+#[test]
+fn test_daemon_without_env() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.test]
+run = "echo test"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("test").unwrap();
+    assert!(daemon.env.is_none());
+
+    Ok(())
+}
+
+/// Test daemon with both dir and env
+#[test]
+fn test_daemon_with_dir_and_env() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+env = { NODE_ENV = "development", PORT = "5173" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("frontend").unwrap();
+
+    assert_eq!(daemon.dir, Some("frontend".to_string()));
+
+    let env = daemon.env.as_ref().unwrap();
+    assert_eq!(env.get("NODE_ENV").unwrap(), "development");
+    assert_eq!(env.get("PORT").unwrap(), "5173");
+
+    Ok(())
+}
+
+/// Test that dir and env are not serialized when None (skip_serializing_if)
+#[test]
+fn test_dir_env_not_serialized_when_none() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let mut pt = pitchfork_toml::PitchforkToml::new(toml_path.clone());
+    use indexmap::IndexMap;
+    let mut daemons = IndexMap::new();
+    daemons.insert(
+        "test".to_string(),
+        pitchfork_toml::PitchforkTomlDaemon {
+            run: "echo test".to_string(),
+            auto: vec![],
+            cron: None,
+            retry: pitchfork_toml::Retry::default(),
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
+            boot_start: None,
+            depends: vec![],
+            watch: vec![],
+            dir: None,
+            env: None,
+            path: None,
+        },
+    );
+    pt.daemons = daemons;
+    pt.write()?;
+
+    // Re-read and verify dir/env are still None (not serialized)
+    let pt2 = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt2.daemons.get("test").unwrap();
+    assert!(daemon.dir.is_none(), "dir should not be set when None");
+    assert!(daemon.env.is_none(), "env should not be set when None");
+
+    Ok(())
+}
+
+/// Test that dir and env are serialized in round-trip
+#[test]
+fn test_dir_env_serialization_roundtrip() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.test]
+run = "echo test"
+dir = "subdir"
+env = { FOO = "bar", BAZ = "qux" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    pt.write()?;
+
+    let pt2 = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt2.daemons.get("test").unwrap();
+    assert_eq!(daemon.dir, Some("subdir".to_string()));
+
+    let env = daemon.env.as_ref().unwrap();
+    assert_eq!(env.get("FOO").unwrap(), "bar");
+    assert_eq!(env.get("BAZ").unwrap(), "qux");
 
     Ok(())
 }

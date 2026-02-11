@@ -2,6 +2,7 @@ use crate::Result;
 use crate::daemon_status::DaemonStatus;
 use crate::error::DaemonIdError;
 use crate::pitchfork_toml::CronRetrigger;
+use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
@@ -89,6 +90,8 @@ pub struct Daemon {
     pub ready_cmd: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<IndexMap<String, String>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -111,6 +114,8 @@ pub struct RunOptions {
     pub wait_ready: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<IndexMap<String, String>>,
 }
 
 impl Display for Daemon {

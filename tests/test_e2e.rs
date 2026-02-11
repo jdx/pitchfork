@@ -945,6 +945,221 @@ ready_cmd = "test -f {marker_path}"
 }
 
 // ============================================================================
+// Dir and Env Config Tests
+// ============================================================================
+
+/// Test that `dir` config field sets the working directory for the daemon
+#[test]
+fn test_daemon_dir_relative() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Create a subdirectory in the project
+    let project_dir = env.project_dir();
+    let subdir = project_dir.join("mysubdir");
+    std::fs::create_dir_all(&subdir).unwrap();
+
+    let marker = env.marker_path("dir_test");
+
+    // The daemon writes its $PWD to a marker file
+    let toml_content = format!(
+        r#"
+[daemons.dir_test]
+run = "bash -c 'pwd > \"{}\" && sleep 60'"
+dir = "mysubdir"
+ready_delay = 1
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "dir_test"]);
+    assert!(
+        output.status.success(),
+        "Start should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Wait a moment for the file to be written
+    env.sleep(Duration::from_millis(500));
+
+    // Verify the daemon ran in the correct directory
+    let pwd = std::fs::read_to_string(&marker).unwrap();
+    let pwd = pwd.trim();
+    assert_eq!(
+        pwd,
+        subdir.to_str().unwrap(),
+        "Daemon should run in the subdirectory"
+    );
+
+    env.run_command(&["stop", "dir_test"]);
+}
+
+/// Test that `dir` config field works with absolute paths
+#[test]
+fn test_daemon_dir_absolute() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Create an absolute directory outside the project
+    let abs_dir = env.create_other_dir();
+
+    let marker = env.marker_path("dir_abs_test");
+
+    let toml_content = format!(
+        r#"
+[daemons.dir_abs_test]
+run = "bash -c 'pwd > \"{}\" && sleep 60'"
+dir = "{}"
+ready_delay = 1
+"#,
+        marker.display(),
+        abs_dir.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "dir_abs_test"]);
+    assert!(
+        output.status.success(),
+        "Start should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    env.sleep(Duration::from_millis(500));
+
+    let pwd = std::fs::read_to_string(&marker).unwrap();
+    let pwd = pwd.trim();
+    assert_eq!(
+        pwd,
+        abs_dir.to_str().unwrap(),
+        "Daemon should run in the absolute directory"
+    );
+
+    env.run_command(&["stop", "dir_abs_test"]);
+}
+
+/// Test that `env` config field sets environment variables for the daemon
+#[test]
+fn test_daemon_env_vars() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker = env.marker_path("env_test");
+
+    let toml_content = format!(
+        r#"
+[daemons.env_test]
+run = "bash -c 'echo $MY_TEST_VAR > \"{}\" && sleep 60'"
+ready_delay = 1
+
+[daemons.env_test.env]
+MY_TEST_VAR = "hello_from_pitchfork"
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "env_test"]);
+    assert!(
+        output.status.success(),
+        "Start should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    env.sleep(Duration::from_millis(500));
+
+    let value = std::fs::read_to_string(&marker).unwrap();
+    let value = value.trim();
+    assert_eq!(
+        value, "hello_from_pitchfork",
+        "Daemon should see the configured env var"
+    );
+
+    env.run_command(&["stop", "env_test"]);
+}
+
+/// Test that multiple env vars are all available to the daemon
+#[test]
+fn test_daemon_multiple_env_vars() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker = env.marker_path("multi_env_test");
+
+    let toml_content = format!(
+        r#"
+[daemons.multi_env_test]
+run = "bash -c 'echo $VAR_A:$VAR_B:$VAR_C > \"{}\" && sleep 60'"
+ready_delay = 1
+env = {{ VAR_A = "alpha", VAR_B = "beta", VAR_C = "gamma" }}
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "multi_env_test"]);
+    assert!(
+        output.status.success(),
+        "Start should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    env.sleep(Duration::from_millis(500));
+
+    let value = std::fs::read_to_string(&marker).unwrap();
+    let value = value.trim();
+    assert_eq!(
+        value, "alpha:beta:gamma",
+        "All env vars should be available"
+    );
+
+    env.run_command(&["stop", "multi_env_test"]);
+}
+
+/// Test that `dir` and `env` work together
+#[test]
+fn test_daemon_dir_and_env_combined() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let project_dir = env.project_dir();
+    let subdir = project_dir.join("combined_test_dir");
+    std::fs::create_dir_all(&subdir).unwrap();
+
+    let marker = env.marker_path("combined_test");
+
+    let toml_content = format!(
+        r#"
+[daemons.combined_test]
+run = "bash -c 'echo $MY_PORT:$(pwd) > \"{}\" && sleep 60'"
+dir = "combined_test_dir"
+ready_delay = 1
+
+[daemons.combined_test.env]
+MY_PORT = "8080"
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "combined_test"]);
+    assert!(
+        output.status.success(),
+        "Start should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    env.sleep(Duration::from_millis(500));
+
+    let value = std::fs::read_to_string(&marker).unwrap();
+    let value = value.trim();
+    let expected = format!("8080:{}", subdir.display());
+    assert_eq!(value, expected, "Both dir and env should work together");
+
+    env.run_command(&["stop", "combined_test"]);
+}
+
+// ============================================================================
 // Stop Command Tests
 // ============================================================================
 

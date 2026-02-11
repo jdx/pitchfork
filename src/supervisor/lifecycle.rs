@@ -150,6 +150,11 @@ impl Supervisor {
             cmd.env("PATH", path);
         }
 
+        // Apply custom environment variables from config
+        if let Some(ref env_vars) = opts.env {
+            cmd.envs(env_vars);
+        }
+
         let mut child = cmd.spawn().into_diagnostic()?;
         let pid = match child.id() {
             Some(p) => p,
@@ -181,6 +186,7 @@ impl Supervisor {
                 ready_port: opts.ready_port,
                 ready_cmd: opts.ready_cmd.clone(),
                 depends: Some(opts.depends.clone()),
+                env: opts.env.clone(),
             })
             .await?;
 

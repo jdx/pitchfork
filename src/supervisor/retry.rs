@@ -86,6 +86,7 @@ impl Supervisor {
                     ready_cmd: daemon.ready_cmd.clone(),
                     wait_ready: false,
                     depends: daemon.depends.clone(),
+                    env: daemon.env.clone(),
                 };
                 if let Err(e) = self.run(retry_opts).await {
                     error!("failed to retry daemon {id}: {e}");

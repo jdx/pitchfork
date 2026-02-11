@@ -165,6 +165,12 @@ pub struct PitchforkTomlDaemon {
     pub depends: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
+    /// Working directory for the daemon. Relative paths are resolved from the pitchfork.toml location.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dir: Option<String>,
+    /// Environment variables to set for the daemon process
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<IndexMap<String, String>>,
     #[serde(skip)]
     #[schemars(skip)]
     pub path: Option<PathBuf>,

@@ -326,6 +326,8 @@ pub struct EditorState {
     pub unsaved_changes: bool,
     #[allow(dead_code)]
     pub scroll_offset: usize,
+    /// Preserved config field for ready_cmd (no form UI yet)
+    preserved_ready_cmd: Option<String>,
 }
 
 impl EditorState {
@@ -341,6 +343,7 @@ impl EditorState {
             config_path,
             unsaved_changes: false,
             scroll_offset: 0,
+            preserved_ready_cmd: None,
         }
     }
 
@@ -358,6 +361,7 @@ impl EditorState {
             config_path,
             unsaved_changes: false,
             scroll_offset: 0,
+            preserved_ready_cmd: config.ready_cmd.clone(),
         }
     }
 
@@ -368,6 +372,16 @@ impl EditorState {
                 "Run Command",
                 "Command to execute. Prepend 'exec' to avoid shell overhead.",
                 true,
+            ),
+            FormField::optional_text(
+                "dir",
+                "Working Directory",
+                "Working directory for the daemon. Relative to pitchfork.toml location.",
+            ),
+            FormField::string_list(
+                "env",
+                "Environment Variables",
+                "Comma-separated KEY=VALUE pairs (e.g., NODE_ENV=dev, PORT=3000).",
             ),
             FormField::auto_behavior(
                 "auto",
@@ -434,6 +448,16 @@ impl EditorState {
         for field in &mut fields {
             match field.name {
                 "run" => field.value = FormFieldValue::Text(config.run.clone()),
+                "dir" => field.value = FormFieldValue::OptionalText(config.dir.clone()),
+                "env" => {
+                    field.value = FormFieldValue::StringList(
+                        config
+                            .env
+                            .as_ref()
+                            .map(|m| m.iter().map(|(k, v)| format!("{k}={v}")).collect())
+                            .unwrap_or_default(),
+                    );
+                }
                 "auto" => field.value = FormFieldValue::AutoBehavior(config.auto.clone()),
                 "retry" => field.value = FormFieldValue::Number(config.retry.count()),
                 "ready_delay" => field.value = FormFieldValue::OptionalNumber(config.ready_delay),
@@ -478,10 +502,12 @@ impl EditorState {
             ready_output: None,
             ready_http: None,
             ready_port: None,
-            ready_cmd: None,
+            ready_cmd: self.preserved_ready_cmd.clone(),
             boot_start: None,
             depends: vec![],
             watch: vec![],
+            dir: None,
+            env: None,
             path: Some(self.config_path.clone()),
         };
 
@@ -491,6 +517,20 @@ impl EditorState {
         for field in &self.fields {
             match (field.name, &field.value) {
                 ("run", FormFieldValue::Text(s)) => config.run = s.clone(),
+                ("dir", FormFieldValue::OptionalText(s)) => config.dir = s.clone(),
+                ("env", FormFieldValue::StringList(v)) => {
+                    if v.is_empty() {
+                        config.env = None;
+                    } else {
+                        let mut map = indexmap::IndexMap::new();
+                        for entry in v {
+                            if let Some((k, val)) = entry.split_once('=') {
+                                map.insert(k.trim().to_string(), val.trim().to_string());
+                            }
+                        }
+                        config.env = if map.is_empty() { None } else { Some(map) };
+                    }
+                }
                 ("auto", FormFieldValue::AutoBehavior(v)) => config.auto = v.clone(),
                 ("retry", FormFieldValue::Number(n)) => config.retry = Retry(*n),
                 ("ready_delay", FormFieldValue::OptionalNumber(n)) => config.ready_delay = *n,

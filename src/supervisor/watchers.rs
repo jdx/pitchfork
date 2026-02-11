@@ -164,6 +164,7 @@ impl Supervisor {
                                 ready_cmd: daemon.ready_cmd.clone(),
                                 wait_ready: false,
                                 depends: daemon.depends.clone(),
+                                env: daemon.env.clone(),
                             };
                             if let Err(e) = self.run(opts).await {
                                 error!("failed to run cron daemon {id}: {e}");
@@ -312,12 +313,10 @@ impl Supervisor {
             return Ok(());
         };
 
-        let dir = daemon_config
-            .path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| env::CWD.clone());
+        let dir = crate::ipc::batch::resolve_daemon_dir(
+            daemon_config.dir.as_deref(),
+            daemon_config.path.as_deref(),
+        );
 
         let cmd = match shell_words::split(&daemon_config.run) {
             Ok(cmd) => cmd,
@@ -356,6 +355,7 @@ impl Supervisor {
             ready_cmd: daemon_config.ready_cmd.clone(),
             wait_ready: false, // Don't block on file-triggered restarts
             depends: daemon_config.depends.clone(),
+            env: daemon_config.env.clone(),
         };
 
         match self.run(run_opts).await {
