@@ -385,8 +385,8 @@ fn status_display(status: &DaemonStatus) -> (String, Color) {
         DaemonStatus::Waiting => ("waiting".to_string(), YELLOW),
         DaemonStatus::Stopping => ("stopping".to_string(), YELLOW),
         DaemonStatus::Failed(_) => ("failed".to_string(), RED),
-        DaemonStatus::Errored(Some(code)) => (format!("errored ({code})"), RED),
-        DaemonStatus::Errored(None) => ("errored".to_string(), RED),
+        DaemonStatus::Errored(code) if *code >= 0 => (format!("errored ({code})"), RED),
+        DaemonStatus::Errored(_) => ("errored".to_string(), RED),
     }
 }
 
