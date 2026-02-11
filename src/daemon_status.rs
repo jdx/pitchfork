@@ -8,7 +8,8 @@ pub enum DaemonStatus {
     Waiting,
     Running,
     Stopping,
-    Errored(Option<i32>),
+    /// Exit code of the process, or -1 if unknown.
+    Errored(i32),
     Stopped,
 }
 
@@ -28,8 +29,8 @@ impl DaemonStatus {
     pub fn error_message(&self) -> Option<String> {
         match self {
             DaemonStatus::Failed(msg) => Some(msg.clone()),
-            DaemonStatus::Errored(Some(code)) => Some(format!("exit code {code}")),
-            DaemonStatus::Errored(None) => Some("unknown exit code".to_string()),
+            DaemonStatus::Errored(code) if *code != -1 => Some(format!("exit code {code}")),
+            DaemonStatus::Errored(_) => Some("unknown exit code".to_string()),
             _ => None,
         }
     }
@@ -39,27 +40,47 @@ impl DaemonStatus {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_daemon_status_json_roundtrip() {
-        let variants = vec![
+    fn all_variants() -> Vec<(&'static str, DaemonStatus)> {
+        vec![
             ("running", DaemonStatus::Running),
             ("stopped", DaemonStatus::Stopped),
             ("waiting", DaemonStatus::Waiting),
             ("stopping", DaemonStatus::Stopping),
             ("failed", DaemonStatus::Failed("some error".to_string())),
-            ("errored_some", DaemonStatus::Errored(Some(1))),
-            ("errored_none", DaemonStatus::Errored(None)),
-        ];
+            ("errored", DaemonStatus::Errored(1)),
+            ("errored_unknown", DaemonStatus::Errored(-1)),
+        ]
+    }
 
-        for (name, status) in variants {
+    #[test]
+    fn test_daemon_status_json_roundtrip() {
+        for (name, status) in all_variants() {
             let json_str = serde_json::to_string(&status)
                 .unwrap_or_else(|_| panic!("Failed to serialize {name}"));
-            println!("Status {name}: {json_str}");
-
             let result: Result<DaemonStatus, _> = serde_json::from_str(&json_str);
             assert!(
                 result.is_ok(),
                 "Failed to deserialize {name}: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_daemon_status_toml_roundtrip() {
+        #[derive(Serialize, Deserialize, Debug)]
+        struct Wrapper {
+            status: DaemonStatus,
+        }
+
+        for (name, status) in all_variants() {
+            let w = Wrapper { status };
+            let toml_str =
+                toml::to_string(&w).unwrap_or_else(|e| panic!("Failed to serialize {name}: {e}"));
+            let result: Result<Wrapper, _> = toml::from_str(&toml_str);
+            assert!(
+                result.is_ok(),
+                "Failed to deserialize {name}: {:?}\nTOML was: {toml_str:?}",
                 result.err()
             );
         }

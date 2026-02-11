@@ -526,8 +526,8 @@ impl Supervisor {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
                     let status = match status.code() {
-                        Some(code) => DaemonStatus::Errored(Some(code)),
-                        None => DaemonStatus::Errored(None),
+                        Some(code) => DaemonStatus::Errored(code),
+                        None => DaemonStatus::Errored(-1),
                     };
                     if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
@@ -542,11 +542,26 @@ impl Supervisor {
                         error!("Failed to update daemon state for {id}: {e}");
                     }
                 }
+            } else if is_stopping {
+                // Process was being intentionally stopped but child.wait() returned
+                // an error (e.g. due to sysinfo reaping the process first)
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(UpsertDaemonOpts {
+                        id: id.clone(),
+                        pid: None,
+                        status: DaemonStatus::Stopped,
+                        last_exit_success: Some(true),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    error!("Failed to update daemon state for {id}: {e}");
+                }
             } else if let Err(e) = SUPERVISOR
                 .upsert_daemon(UpsertDaemonOpts {
                     id: id.clone(),
                     pid: None,
-                    status: DaemonStatus::Errored(None),
+                    status: DaemonStatus::Errored(-1),
                     last_exit_success: Some(false),
                     ..Default::default()
                 })
