@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2](https://github.com/jdx/pitchfork/compare/v1.4.1...v1.4.2) - 2026-02-11
+
+### Fixed
+
+- *(state)* fix Errored(None) producing invalid TOML state file ([#231](https://github.com/jdx/pitchfork/pull/231))
+
 ## [1.4.0](https://github.com/jdx/pitchfork/compare/v1.3.0...v1.4.0) - 2026-02-11
 
 ### Added
