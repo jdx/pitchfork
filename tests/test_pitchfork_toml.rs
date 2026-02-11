@@ -742,7 +742,10 @@ LOG_LEVEL = "debug"
 
     let env = daemon.env.as_ref().unwrap();
     assert_eq!(env.len(), 3);
-    assert_eq!(env.get("DATABASE_URL").unwrap(), "postgres://localhost/mydb");
+    assert_eq!(
+        env.get("DATABASE_URL").unwrap(),
+        "postgres://localhost/mydb"
+    );
     assert_eq!(env.get("REDIS_URL").unwrap(), "redis://localhost:6379");
     assert_eq!(env.get("LOG_LEVEL").unwrap(), "debug");
 
