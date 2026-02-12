@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3](https://github.com/jdx/pitchfork/compare/v1.4.2...v1.4.3) - 2026-02-12
+
+### Other
+
+- release v1.4.3 ([#233](https://github.com/jdx/pitchfork/pull/233))
+
 ## [1.4.2](https://github.com/jdx/pitchfork/compare/v1.4.1...v1.4.2) - 2026-02-11
 
 ### Fixed
