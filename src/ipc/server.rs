@@ -1,4 +1,5 @@
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::settings::settings;
 use crate::{Result, env};
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
@@ -17,23 +18,23 @@ struct RateLimiter {
     requests: Vec<Instant>,
     /// Maximum requests allowed per window
     max_requests: usize,
-    /// Window duration in seconds
-    window_secs: u64,
+    /// Window duration in milliseconds
+    window_ms: u64,
 }
 
 impl RateLimiter {
-    fn new(max_requests: usize, window_secs: u64) -> Self {
+    fn new(max_requests: usize, window_ms: u64) -> Self {
         Self {
             requests: Vec::with_capacity(max_requests),
             max_requests,
-            window_secs,
+            window_ms,
         }
     }
 
     /// Check if a request is allowed. Returns true if allowed, false if rate limited.
     fn check(&mut self) -> bool {
         let now = Instant::now();
-        let window = std::time::Duration::from_secs(self.window_secs);
+        let window = std::time::Duration::from_millis(self.window_ms);
 
         // Remove expired timestamps
         self.requests.retain(|&t| now.duration_since(t) < window);
@@ -160,9 +161,12 @@ impl IpcServer {
         let mut recv = BufReader::new(recv);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
-            // Rate limit: 100 requests per second per connection
+            // Rate limit: use configured requests per configured window
             // This is generous for normal CLI usage but prevents flooding
-            let mut rate_limiter = RateLimiter::new(100, 1);
+            let s = settings();
+            let window_ms = u64::try_from(s.ipc_rate_limit_window().as_millis()).unwrap_or(1000);
+            let max_requests = usize::try_from(s.ipc.rate_limit).unwrap_or(100);
+            let mut rate_limiter = RateLimiter::new(max_requests, window_ms);
 
             loop {
                 // Check rate limit BEFORE reading to avoid wasting CPU on deserialization

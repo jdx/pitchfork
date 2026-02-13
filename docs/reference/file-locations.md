@@ -4,13 +4,13 @@ Where pitchfork stores its files.
 
 ## Configuration Files
 
+See [Configuration Hierarchy](/reference/configuration#configuration-hierarchy) for details on configuration file locations and precedence.
+
 | Location | Purpose |
 |----------|---------|
 | `/etc/pitchfork/config.toml` | System-wide configuration |
 | `~/.config/pitchfork/config.toml` | User configuration |
-| `pitchfork.toml` | Project configuration (in any directory) |
-
-Configuration files are merged in order, with later files overriding earlier ones.
+| `pitchfork.toml` / `pitchfork.local.toml` | Project configuration (in any directory) |
 
 ## State Directory
 

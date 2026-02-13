@@ -7,10 +7,10 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
+use crate::settings::settings;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -176,9 +176,9 @@ impl Supervisor {
                 .auto_bump_port
                 .unwrap_or(existing.map(|d| d.auto_bump_port).unwrap_or(false)),
             port_bump_attempts: opts.port_bump_attempts.unwrap_or(
-                existing
-                    .map(|d| d.port_bump_attempts)
-                    .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
+                existing.map(|d| d.port_bump_attempts).unwrap_or_else(|| {
+                    u32::try_from(settings().supervisor.port_bump_attempts).unwrap_or(10)
+                }),
             ),
             depends: opts
                 .depends

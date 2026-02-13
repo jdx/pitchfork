@@ -1,10 +1,11 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::env::{self, PITCHFORK_PORT_BUMP_ATTEMPTS};
+use crate::env;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
     PitchforkTomlHooks, Retry, namespace_from_path,
 };
+use crate::settings::settings;
 use indexmap::IndexMap;
 use miette::bail;
 use std::path::{Path, PathBuf};
@@ -237,7 +238,8 @@ impl Add {
                 ready_cmd: self.ready_cmd.clone(),
                 expected_port: self.expected_port.clone(),
                 auto_bump_port: self.auto_bump_port,
-                port_bump_attempts: *PITCHFORK_PORT_BUMP_ATTEMPTS,
+                port_bump_attempts: u32::try_from(settings().supervisor.port_bump_attempts)
+                    .unwrap_or(10),
                 boot_start,
                 depends: {
                     let namespace = daemon_id.namespace().to_string();

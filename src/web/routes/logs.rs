@@ -6,12 +6,13 @@ use axum::{
     },
 };
 use std::convert::Infallible;
-use std::time::Duration;
 
 use crate::daemon::daemon_log_path;
+use crate::daemon::is_valid_daemon_id;
 use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::web::bp;
 use crate::web::helpers::{html_escape, url_encode};
@@ -332,7 +333,15 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
 pub async fn stream_sse(
     Path(id): Path<String>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let sse_poll_interval = settings().web_sse_poll_interval();
+
     let stream = async_stream::stream! {
+        // Validate daemon ID to prevent path traversal before touching the filesystem
+        if !is_valid_daemon_id(&id) {
+            yield Ok(Event::default().event("error").data("invalid daemon id"));
+            return;
+        }
+
         let daemon_id = match DaemonId::parse(&id) {
             Ok(d) => d,
             Err(_) => {
@@ -344,7 +353,7 @@ pub async fn stream_sse(
         let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
 
         loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(sse_poll_interval).await;
 
             if let Ok(metadata) = std::fs::metadata(&log_path) {
                 let current_size = metadata.len();

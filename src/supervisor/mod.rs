@@ -20,6 +20,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::server::{IpcServer, IpcServerHandle};
 use crate::procs::PROCS;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::{Result, env};
 use duct::cmd;
@@ -50,7 +51,7 @@ pub struct Supervisor {
 }
 
 pub(crate) fn interval_duration() -> Duration {
-    Duration::from_secs(*env::PITCHFORK_INTERVAL_SECS)
+    settings().general_interval()
 }
 
 pub static SUPERVISOR: Lazy<Supervisor> =
@@ -118,10 +119,32 @@ impl Supervisor {
         self.signals()?;
         self.daemon_file_watch()?;
 
-        // Start web server if port is configured
-        if let Some(port) = web_port {
+        // Start web server: CLI --web-port takes priority, then settings.web.auto_start + bind_port
+        let s = settings();
+        let effective_port = web_port.or_else(|| {
+            if s.web.auto_start {
+                match u16::try_from(s.web.bind_port).ok().filter(|&p| p > 0) {
+                    Some(p) => Some(p),
+                    None => {
+                        error!(
+                            "web.bind_port {} is out of valid port range (1-65535), web UI disabled",
+                            s.web.bind_port
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        });
+        // CLI --web-path takes priority, then settings.web.base_path
+        let effective_path = web_path.or_else(|| {
+            let bp = s.web.base_path.clone();
+            if bp.is_empty() { None } else { Some(bp) }
+        });
+        if let Some(port) = effective_port {
             tokio::spawn(async move {
-                if let Err(e) = crate::web::serve(port, web_path).await {
+                if let Err(e) = crate::web::serve(port, effective_path).await {
                     error!("Web server error: {e}");
                 }
             });

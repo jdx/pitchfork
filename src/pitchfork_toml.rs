@@ -1,6 +1,7 @@
 use crate::daemon_id::DaemonId;
-use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::error::{ConfigParseError, DependencyError, FileError, find_similar_daemon};
+use crate::settings::SettingsPartial;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -16,6 +17,8 @@ struct PitchforkTomlRaw {
     pub namespace: Option<String>,
     #[serde(default)]
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
+    #[serde(default)]
+    pub settings: Option<SettingsPartial>,
 }
 
 /// Internal daemon config for reading (uses String for depends).
@@ -77,6 +80,9 @@ pub struct PitchforkToml {
     /// This applies to per-file read/write flows. Merged configs may contain
     /// daemons from multiple namespaces and leave this as `None`.
     pub namespace: Option<String>,
+    /// Settings configuration (merged from all config files)
+    #[serde(default)]
+    pub settings: SettingsPartial,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -556,6 +562,7 @@ impl PitchforkToml {
         Self {
             daemons: Default::default(),
             namespace: None,
+            settings: SettingsPartial::default(),
             path: Some(path),
         }
     }
@@ -657,9 +664,9 @@ impl PitchforkToml {
                 ready_cmd: raw_daemon.ready_cmd,
                 expected_port: raw_daemon.expected_port,
                 auto_bump_port: raw_daemon.auto_bump_port.unwrap_or(false),
-                port_bump_attempts: raw_daemon
-                    .port_bump_attempts
-                    .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
+                port_bump_attempts: raw_daemon.port_bump_attempts.unwrap_or_else(|| {
+                    u32::try_from(settings().supervisor.port_bump_attempts).unwrap_or(10)
+                }),
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
@@ -669,6 +676,11 @@ impl PitchforkToml {
                 path: Some(path.to_path_buf()),
             };
             pt.daemons.insert(id, daemon);
+        }
+
+        // Copy settings if present
+        if let Some(settings) = raw_config.settings {
+            pt.settings = settings;
         }
 
         Ok(pt)
@@ -767,10 +779,13 @@ impl PitchforkToml {
     /// Simple merge without namespace re-qualification.
     /// Used primarily for testing or when merging configs from the same namespace.
     /// Since read() already qualifies daemon IDs with namespace, this just inserts them.
+    /// Settings are also merged - later values override earlier ones.
     pub fn merge(&mut self, pt: Self) {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
+        // Merge settings - pt's values override self's values
+        self.settings.merge_from(&pt.settings);
     }
 }
 
@@ -803,7 +818,7 @@ pub struct PitchforkTomlDaemon {
     /// Can be a number (e.g., `3`) or `true` for infinite retries.
     #[schemars(default)]
     pub retry: Retry,
-    /// Delay in milliseconds before considering the daemon ready
+    /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in stdout/stderr to determine readiness
     pub ready_output: Option<String>,
@@ -846,7 +861,10 @@ fn example_run_command() -> &'static str {
 }
 
 fn default_port_bump_attempts() -> u32 {
-    *PITCHFORK_PORT_BUMP_ATTEMPTS
+    // Return a hardcoded default to avoid calling settings() during serde
+    // deserialization, which could cause a OnceLock re-entrancy deadlock.
+    // The runtime value from settings is applied later at each call site.
+    10
 }
 
 /// Cron scheduling configuration
