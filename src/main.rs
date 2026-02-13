@@ -14,6 +14,7 @@ mod ipc;
 mod logger;
 mod pitchfork_toml;
 mod procs;
+mod settings;
 mod shell;
 mod state_file;
 mod supervisor;

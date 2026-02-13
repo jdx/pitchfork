@@ -4,14 +4,14 @@
 //! and starting daemons configured with `boot_start = true`.
 
 use super::Supervisor;
+use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
-use crate::{Result, env};
+use crate::settings::settings;
 use log::LevelFilter::Info;
 use std::path::Path;
-use std::time::Duration;
 use tokio::time;
 
 impl Supervisor {
@@ -20,7 +20,7 @@ impl Supervisor {
         debug!("left dir {}", dir.display());
         let shell_dirs = self.get_dirs_with_shell_pids().await;
         let shell_dirs = shell_dirs.keys().collect::<Vec<_>>();
-        let delay_secs = *env::PITCHFORK_AUTOSTOP_DELAY;
+        let autostop_delay = settings().general_autostop_delay();
 
         for daemon in self.active_daemons().await {
             if !daemon.autostop {
@@ -33,7 +33,7 @@ impl Supervisor {
                 && daemon_dir.starts_with(dir)
                 && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
             {
-                if delay_secs == 0 {
+                if autostop_delay.is_zero() {
                     // No delay configured, stop immediately
                     info!("autostopping {daemon}");
                     self.stop(&daemon.id).await?;
@@ -41,10 +41,13 @@ impl Supervisor {
                         .await;
                 } else {
                     // Schedule autostop with delay
-                    let stop_at = time::Instant::now() + Duration::from_secs(delay_secs);
+                    let stop_at = time::Instant::now() + autostop_delay;
                     let mut pending = self.pending_autostops.lock().await;
                     if !pending.contains_key(&daemon.id) {
-                        info!("scheduling autostop for {} in {}s", daemon.id, delay_secs);
+                        info!(
+                            "scheduling autostop for {} in {:?}",
+                            daemon.id, autostop_delay
+                        );
                         pending.insert(daemon.id.clone(), stop_at);
                     }
                 }

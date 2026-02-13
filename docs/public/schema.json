@@ -20,6 +20,17 @@
         "string",
         "null"
       ]
+    },
+    "settings": {
+      "description": "Settings configuration (merged from all config files)",
+      "$ref": "#/$defs/SettingsPartial",
+      "default": {
+        "general": {},
+        "ipc": {},
+        "supervisor": {},
+        "tui": {},
+        "web": {}
+      }
     }
   },
   "required": [
@@ -159,7 +170,7 @@
           ]
         },
         "ready_delay": {
-          "description": "Delay in milliseconds before considering the daemon ready",
+          "description": "Delay in seconds before considering the daemon ready",
           "type": [
             "integer",
             "null"
@@ -248,6 +259,272 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "SettingsGeneralPartial": {
+      "type": "object",
+      "properties": {
+        "autostop_delay": {
+          "description": "Delay before auto-stopping daemons when leaving a directory",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interval": {
+          "description": "Supervisor background task refresh interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_file_level": {
+          "description": "File log level (trace, debug, info, warn, error)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_level": {
+          "description": "Console log level (trace, debug, info, warn, error)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SettingsIpcPartial": {
+      "type": "object",
+      "properties": {
+        "connect_attempts": {
+          "description": "Number of connection retry attempts",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "connect_max_delay": {
+          "description": "Maximum delay between connection retries",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connect_min_delay": {
+          "description": "Minimum delay between connection retries",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connect_timeout": {
+          "description": "Total timeout for connecting to the supervisor",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rate_limit": {
+          "description": "Maximum IPC requests per second per connection",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "rate_limit_window": {
+          "description": "Rate limit sliding window duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_timeout": {
+          "description": "Default timeout for IPC requests",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SettingsPartial": {
+      "type": "object",
+      "properties": {
+        "general": {
+          "$ref": "#/$defs/SettingsGeneralPartial",
+          "default": {}
+        },
+        "ipc": {
+          "$ref": "#/$defs/SettingsIpcPartial",
+          "default": {}
+        },
+        "supervisor": {
+          "$ref": "#/$defs/SettingsSupervisorPartial",
+          "default": {}
+        },
+        "tui": {
+          "$ref": "#/$defs/SettingsTuiPartial",
+          "default": {}
+        },
+        "web": {
+          "$ref": "#/$defs/SettingsWebPartial",
+          "default": {}
+        }
+      }
+    },
+    "SettingsSupervisorPartial": {
+      "type": "object",
+      "properties": {
+        "cron_check_interval": {
+          "description": "Interval for checking cron schedules",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file_watch_debounce": {
+          "description": "File watch debounce duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "http_client_timeout": {
+          "description": "Timeout for HTTP ready checks",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log_flush_interval": {
+          "description": "Daemon log buffer flush interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ready_check_interval": {
+          "description": "Interval between ready checks (HTTP, TCP, command)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "restart_delay": {
+          "description": "Delay between stop and start during restart",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stop_timeout": {
+          "description": "Maximum time to wait for daemon to stop gracefully",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "watch_interval": {
+          "description": "File watcher poll/refresh interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SettingsTuiPartial": {
+      "type": "object",
+      "properties": {
+        "message_duration": {
+          "description": "Status message display duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refresh_rate": {
+          "description": "Daemon list refresh interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stat_history": {
+          "description": "Number of stat samples to keep for graphs",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "tick_rate": {
+          "description": "Event loop tick rate",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SettingsWebPartial": {
+      "type": "object",
+      "properties": {
+        "auto_start": {
+          "description": "Automatically start web UI when supervisor starts",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "base_path": {
+          "description": "URL path prefix for the web UI (e.g. \"ps\" serves at /ps/)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bind_address": {
+          "description": "Web server bind address",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bind_port": {
+          "description": "Default web server port",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "log_lines": {
+          "description": "Initial number of log lines to display",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "port_attempts": {
+          "description": "Number of ports to try if default is in use",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "sse_poll_interval": {
+          "description": "Server-Sent Events poll interval for log streaming",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     }
   }
 }

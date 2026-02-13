@@ -1,5 +1,6 @@
 use crate::daemon_id::DaemonId;
 use crate::error::{ConfigParseError, DependencyError, FileError, find_similar_daemon};
+use crate::settings::SettingsPartial;
 use crate::state_file::StateFile;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -15,6 +16,8 @@ struct PitchforkTomlRaw {
     pub namespace: Option<String>,
     #[serde(default)]
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
+    #[serde(default)]
+    pub settings: Option<SettingsPartial>,
 }
 
 /// Internal daemon config for reading (uses String for depends).
@@ -70,6 +73,9 @@ pub struct PitchforkToml {
     /// This applies to per-file read/write flows. Merged configs may contain
     /// daemons from multiple namespaces and leave this as `None`.
     pub namespace: Option<String>,
+    /// Settings configuration (merged from all config files)
+    #[serde(default)]
+    pub settings: SettingsPartial,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -549,6 +555,7 @@ impl PitchforkToml {
         Self {
             daemons: Default::default(),
             namespace: None,
+            settings: SettingsPartial::default(),
             path: Some(path),
         }
     }
@@ -659,6 +666,11 @@ impl PitchforkToml {
             pt.daemons.insert(id, daemon);
         }
 
+        // Copy settings if present
+        if let Some(settings) = raw_config.settings {
+            pt.settings = settings;
+        }
+
         Ok(pt)
     }
 
@@ -752,10 +764,13 @@ impl PitchforkToml {
     /// Simple merge without namespace re-qualification.
     /// Used primarily for testing or when merging configs from the same namespace.
     /// Since read() already qualifies daemon IDs with namespace, this just inserts them.
+    /// Settings are also merged - later values override earlier ones.
     pub fn merge(&mut self, pt: Self) {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
+        // Merge settings - pt's values override self's values
+        self.settings.merge_from(&pt.settings);
     }
 }
 
@@ -788,7 +803,7 @@ pub struct PitchforkTomlDaemon {
     /// Can be a number (e.g., `3`) or `true` for infinite retries.
     #[schemars(default)]
     pub retry: Retry,
-    /// Delay in milliseconds before considering the daemon ready
+    /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in stdout/stderr to determine readiness
     pub ready_output: Option<String>,
