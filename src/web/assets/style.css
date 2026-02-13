@@ -425,12 +425,30 @@ tbody tr {
 
 .daemon-name {
     color: var(--color-text);
+    font-family: var(--font-mono);
     font-weight: 500;
     text-decoration: none;
 }
 
+/* Dim namespace in daemon names */
+.daemon-name .daemon-ns,
+.daemon-ns {
+    color: var(--color-text-dim);
+    font-weight: 400;
+}
+
+.clickable-row .daemon-name {
+    color: var(--color-text);
+    font-weight: 500;
+}
+
 .clickable-row:hover .daemon-name {
     color: var(--color-accent-bright);
+}
+
+.clickable-row:hover .daemon-name .daemon-ns {
+    color: var(--color-accent-bright);
+    opacity: 0.7;
 }
 
 .daemon-table .actions {
@@ -717,10 +735,16 @@ textarea:focus {
     text-transform: uppercase;
 }
 
-.daemon-name {
+.page-header .daemon-name {
     font-family: var(--font-mono);
     color: var(--color-accent-bright);
     font-weight: 700;
+}
+
+.page-header .daemon-name .daemon-ns {
+    color: var(--color-accent-bright);
+    opacity: 0.6;
+    font-weight: 500;
 }
 
 .daemon-detail {

@@ -35,12 +35,12 @@ cmd config help="manage/edit pitchfork.toml files" {
         alias a
         flag --autostart help="Autostart the daemon when entering the directory"
         flag --autostop help="Autostop the daemon when leaving the directory"
-        arg <ID> help="ID of the daemon to add"
+        arg <ID> help="ID of the daemon to add (e.g., \"api\" or \"namespace/api\")"
         arg "[ARGS]…" help="Arguments to pass to the daemon" required=#false double_dash=automatic var=#true
     }
     cmd remove help="Remove a daemon from pitchfork.toml" {
         alias rm
-        arg <ID> help="The ID of the daemon to remove"
+        arg <ID> help="The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")"
     }
 }
 cmd completion help="Generates shell completion scripts" {

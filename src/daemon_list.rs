@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::daemon::Daemon;
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
@@ -8,7 +9,7 @@ use std::collections::HashSet;
 /// Represents a daemon entry that can be either tracked (from state file) or available (from config only)
 #[derive(Debug, Clone)]
 pub struct DaemonListEntry {
-    pub id: String,
+    pub id: DaemonId,
     pub daemon: Daemon,
     pub is_disabled: bool,
     pub is_available: bool, // true if daemon is only in config, not in state
@@ -37,7 +38,7 @@ pub async fn get_all_daemons(client: &IpcClient) -> Result<Vec<DaemonListEntry>>
     let state_daemons: Vec<Daemon> = state_file.daemons.values().cloned().collect();
 
     let disabled_daemons = client.get_disabled_daemons().await?;
-    let disabled_set: HashSet<String> = disabled_daemons.into_iter().collect();
+    let disabled_set: HashSet<DaemonId> = disabled_daemons.into_iter().collect();
 
     build_daemon_list(state_daemons, disabled_set, config)
 }
@@ -61,7 +62,7 @@ pub async fn get_all_daemons_direct(
     // Note: Don't use supervisor.active_daemons() as it only returns daemons with PIDs
     let state_file = supervisor.state_file.lock().await;
     let state_daemons: Vec<Daemon> = state_file.daemons.values().cloned().collect();
-    let disabled_set: HashSet<String> = state_file.disabled.clone().into_iter().collect();
+    let disabled_set: HashSet<DaemonId> = state_file.disabled.clone().into_iter().collect();
     drop(state_file); // Release lock early
 
     build_daemon_list(state_daemons, disabled_set, config)
@@ -70,15 +71,18 @@ pub async fn get_all_daemons_direct(
 /// Internal helper to build the daemon list from state daemons and config
 fn build_daemon_list(
     state_daemons: Vec<Daemon>,
-    disabled_set: HashSet<String>,
+    disabled_set: HashSet<DaemonId>,
     config: PitchforkToml,
 ) -> Result<Vec<DaemonListEntry>> {
     let mut entries = Vec::new();
     let mut seen_ids = HashSet::new();
 
+    // Skip the supervisor itself
+    let pitchfork_id = DaemonId::pitchfork();
+
     // First, add all daemons from state file
     for daemon in state_daemons {
-        if daemon.id == "pitchfork" {
+        if daemon.id == pitchfork_id {
             continue; // Skip supervisor itself
         }
 
@@ -93,7 +97,7 @@ fn build_daemon_list(
 
     // Then, add daemons from config that aren't in state file (available daemons)
     for daemon_id in config.daemons.keys() {
-        if daemon_id == "pitchfork" || seen_ids.contains(daemon_id) {
+        if *daemon_id == pitchfork_id || seen_ids.contains(daemon_id) {
             continue;
         }
 

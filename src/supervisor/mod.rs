@@ -15,6 +15,7 @@ mod retry;
 mod state;
 mod watchers;
 
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::server::{IpcServer, IpcServerHandle};
 use crate::procs::PROCS;
@@ -42,7 +43,7 @@ pub struct Supervisor {
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
-    pub(crate) pending_autostops: Mutex<HashMap<String, time::Instant>>,
+    pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
 }
@@ -56,7 +57,7 @@ pub static SUPERVISOR: Lazy<Supervisor> =
 
 pub fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
-    if let Some(d) = sf.daemons.get("pitchfork")
+    if let Some(d) = sf.daemons.get(&DaemonId::pitchfork())
         && let Some(pid) = d.pid
         && PROCS.is_running(pid)
     {
@@ -91,7 +92,7 @@ impl Supervisor {
         info!("Starting supervisor with pid {pid}");
 
         self.upsert_daemon(UpsertDaemonOpts {
-            id: "pitchfork".to_string(),
+            id: DaemonId::pitchfork(),
             pid: Some(pid),
             status: DaemonStatus::Running,
             ..Default::default()
@@ -221,15 +222,16 @@ impl Supervisor {
     }
 
     pub(crate) async fn close(&self) {
+        let pitchfork_id = DaemonId::pitchfork();
         for daemon in self.active_daemons().await {
-            if daemon.id == "pitchfork" {
+            if daemon.id == pitchfork_id {
                 continue;
             }
             if let Err(err) = self.stop(&daemon.id).await {
                 error!("failed to stop daemon {daemon}: {err}");
             }
         }
-        let _ = self.remove_daemon("pitchfork").await;
+        let _ = self.remove_daemon(&pitchfork_id).await;
 
         // Signal IPC server to shut down gracefully
         if let Some(mut handle) = self.ipc_shutdown.lock().await.take() {

@@ -5,6 +5,7 @@
 use super::Supervisor;
 use crate::Result;
 use crate::daemon::Daemon;
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::procs::PROCS;
@@ -13,9 +14,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Options for upserting a daemon's state
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct UpsertDaemonOpts {
-    pub id: String,
+    pub id: DaemonId,
     pub pid: Option<u32>,
     pub status: DaemonStatus,
     pub shell_pid: Option<u32>,
@@ -32,34 +33,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
-    pub depends: Option<Vec<String>>,
+    pub depends: Option<Vec<DaemonId>>,
     pub env: Option<IndexMap<String, String>>,
-}
-
-impl Default for UpsertDaemonOpts {
-    fn default() -> Self {
-        Self {
-            id: "".to_string(),
-            pid: None,
-            status: DaemonStatus::Stopped,
-            shell_pid: None,
-            dir: None,
-            cmd: None,
-            autostop: false,
-            cron_schedule: None,
-            cron_retrigger: None,
-            last_exit_success: None,
-            retry: None,
-            retry_count: None,
-            ready_delay: None,
-            ready_output: None,
-            ready_http: None,
-            ready_port: None,
-            ready_cmd: None,
-            depends: None,
-            env: None,
-        }
-    }
 }
 
 impl Supervisor {
@@ -74,7 +49,7 @@ impl Supervisor {
         let mut state_file = self.state_file.lock().await;
         let existing = state_file.daemons.get(&opts.id);
         let daemon = Daemon {
-            id: opts.id.to_string(),
+            id: opts.id.clone(),
             title: opts.pid.and_then(|pid| PROCS.title(pid)),
             pid: opts.pid,
             status: opts.status,
@@ -112,9 +87,7 @@ impl Supervisor {
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),
             env: opts.env.or(existing.and_then(|d| d.env.clone())),
         };
-        state_file
-            .daemons
-            .insert(opts.id.to_string(), daemon.clone());
+        state_file.daemons.insert(opts.id.clone(), daemon.clone());
         if let Err(err) = state_file.write() {
             warn!("failed to update state file: {err:#}");
         }
@@ -122,16 +95,16 @@ impl Supervisor {
     }
 
     /// Enable a daemon (remove from disabled set)
-    pub async fn enable(&self, id: String) -> Result<bool> {
+    pub async fn enable(&self, id: &DaemonId) -> Result<bool> {
         info!("enabling daemon: {id}");
         let mut state_file = self.state_file.lock().await;
-        let result = state_file.disabled.remove(&id);
+        let result = state_file.disabled.remove(id);
         state_file.write()?;
         Ok(result)
     }
 
     /// Disable a daemon (add to disabled set)
-    pub async fn disable(&self, id: String) -> Result<bool> {
+    pub async fn disable(&self, id: DaemonId) -> Result<bool> {
         info!("disabling daemon: {id}");
         let mut state_file = self.state_file.lock().await;
         let result = state_file.disabled.insert(id);
@@ -140,24 +113,25 @@ impl Supervisor {
     }
 
     /// Get a daemon by ID
-    pub(crate) async fn get_daemon(&self, id: &str) -> Option<Daemon> {
+    pub(crate) async fn get_daemon(&self, id: &DaemonId) -> Option<Daemon> {
         self.state_file.lock().await.daemons.get(id).cloned()
     }
 
     /// Get all active daemons (those with PIDs, excluding pitchfork itself)
     pub(crate) async fn active_daemons(&self) -> Vec<Daemon> {
+        let pitchfork_id = DaemonId::pitchfork();
         self.state_file
             .lock()
             .await
             .daemons
             .values()
-            .filter(|d| d.pid.is_some() && d.id != "pitchfork")
+            .filter(|d| d.pid.is_some() && d.id != pitchfork_id)
             .cloned()
             .collect()
     }
 
     /// Remove a daemon from state
-    pub(crate) async fn remove_daemon(&self, id: &str) -> Result<()> {
+    pub(crate) async fn remove_daemon(&self, id: &DaemonId) -> Result<()> {
         self.state_file.lock().await.daemons.remove(id);
         if let Err(err) = self.state_file.lock().await.write() {
             warn!("failed to update state file: {err:#}");
