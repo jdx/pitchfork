@@ -1,5 +1,6 @@
 use crate::daemon_id::DaemonId;
 use crate::error::{ConfigParseError, FileError};
+use crate::settings::Settings;
 use crate::{Result, env};
 use indexmap::IndexMap;
 use miette::Context;
@@ -12,6 +13,8 @@ use std::path::{Path, PathBuf};
 struct PitchforkTomlRaw {
     #[serde(default)]
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
+    #[serde(default)]
+    pub settings: Option<Settings>,
 }
 
 /// Internal daemon config for reading (uses String for depends)
@@ -64,6 +67,9 @@ struct PitchforkTomlDaemonRaw {
 pub struct PitchforkToml {
     /// Map of daemon IDs to their configurations
     pub daemons: IndexMap<DaemonId, PitchforkTomlDaemon>,
+    /// Settings configuration (merged from all config files)
+    #[serde(default)]
+    pub settings: Settings,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -294,6 +300,7 @@ impl PitchforkToml {
     pub fn new(path: PathBuf) -> Self {
         Self {
             daemons: Default::default(),
+            settings: Settings::default(),
             path: Some(path),
         }
     }
@@ -369,6 +376,11 @@ impl PitchforkToml {
             pt.daemons.insert(id, daemon);
         }
 
+        // Copy settings if present
+        if let Some(settings) = raw_config.settings {
+            pt.settings = settings;
+        }
+
         Ok(pt)
     }
 
@@ -435,10 +447,13 @@ impl PitchforkToml {
     /// Simple merge without namespace re-qualification.
     /// Used primarily for testing or when merging configs from the same namespace.
     /// Since read() already qualifies daemon IDs with namespace, this just inserts them.
+    /// Settings are also merged - later values override earlier ones.
     pub fn merge(&mut self, pt: Self) {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
+        // Merge settings - pt's values override self's values
+        self.settings.merge_from(&pt.settings);
     }
 }
 
@@ -455,7 +470,7 @@ pub struct PitchforkTomlDaemon {
     /// Number of times to retry if the daemon fails.
     /// Can be a number (e.g., `3`) or `true` for infinite retries.
     pub retry: Retry,
-    /// Delay in milliseconds before considering the daemon ready
+    /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in stdout/stderr to determine readiness
     pub ready_output: Option<String>,

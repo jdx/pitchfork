@@ -20,6 +20,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::server::{IpcServer, IpcServerHandle};
 use crate::procs::PROCS;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::{Result, env};
 use duct::cmd;
@@ -50,7 +51,7 @@ pub struct Supervisor {
 }
 
 pub(crate) fn interval_duration() -> Duration {
-    Duration::from_secs(*env::PITCHFORK_INTERVAL_SECS)
+    settings().general_interval()
 }
 
 pub static SUPERVISOR: Lazy<Supervisor> =

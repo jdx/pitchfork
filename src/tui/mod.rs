@@ -6,6 +6,7 @@ use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use crate::settings::settings;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -16,12 +17,8 @@ use miette::IntoDiagnostic;
 use ratatui::prelude::*;
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
 
 pub use app::App;
-
-const REFRESH_RATE: Duration = Duration::from_secs(2);
-const TICK_RATE: Duration = Duration::from_millis(100);
 
 pub async fn run() -> Result<()> {
     // Suppress terminal logging while TUI is active (logs still go to file)
@@ -70,6 +67,9 @@ async fn run_app<B: Backend>(
     app: &mut App,
     client: &Arc<IpcClient>,
 ) -> Result<()> {
+    let s = settings();
+    let tick_rate = s.tui_tick_rate();
+    let refresh_rate = s.tui_refresh_rate();
     let mut last_refresh = std::time::Instant::now();
 
     loop {
@@ -77,7 +77,7 @@ async fn run_app<B: Backend>(
         terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
 
         // Handle events with timeout
-        if crossterm::event::poll(TICK_RATE).into_diagnostic()?
+        if crossterm::event::poll(tick_rate).into_diagnostic()?
             && let Some(action) = event::handle_event(app)?
         {
             match action {
@@ -362,7 +362,7 @@ async fn run_app<B: Backend>(
         }
 
         // Auto-refresh daemon list
-        if last_refresh.elapsed() >= REFRESH_RATE {
+        if last_refresh.elapsed() >= refresh_rate {
             app.refresh(client).await?;
             last_refresh = std::time::Instant::now();
         }

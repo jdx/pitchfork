@@ -9,6 +9,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
+use crate::settings::settings;
 use crate::shell::Shell;
 use crate::{Result, env};
 use itertools::Itertools;
@@ -242,28 +243,34 @@ impl Supervisor {
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
 
-            // Setup HTTP readiness check interval (poll every 500ms)
+            // Get settings for intervals
+            let s = settings();
+            let ready_check_interval = s.supervisor_ready_check_interval();
+            let http_client_timeout = s.supervisor_http_client_timeout();
+            let log_flush_interval_duration = s.supervisor_log_flush_interval();
+
+            // Setup HTTP readiness check interval
             let mut http_check_interval = ready_http
                 .as_ref()
-                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+                .map(|_| tokio::time::interval(ready_check_interval));
             let http_client = ready_http.as_ref().map(|_| {
                 reqwest::Client::builder()
-                    .timeout(Duration::from_secs(5))
+                    .timeout(http_client_timeout)
                     .build()
                     .unwrap_or_default()
             });
 
-            // Setup TCP port readiness check interval (poll every 500ms)
+            // Setup TCP port readiness check interval
             let mut port_check_interval =
-                ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
+                ready_port.map(|_| tokio::time::interval(ready_check_interval));
 
-            // Setup command readiness check interval (poll every 500ms)
+            // Setup command readiness check interval
             let mut cmd_check_interval = ready_cmd
                 .as_ref()
-                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+                .map(|_| tokio::time::interval(ready_check_interval));
 
-            // Setup periodic log flush interval (every 500ms - balances I/O reduction with responsiveness)
-            let mut log_flush_interval = tokio::time::interval(Duration::from_millis(500));
+            // Setup periodic log flush interval
+            let mut log_flush_interval = tokio::time::interval(log_flush_interval_duration);
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =

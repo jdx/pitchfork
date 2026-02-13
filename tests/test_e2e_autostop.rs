@@ -25,7 +25,7 @@ ready_delay = 1
     let shell_pid = std::process::id().to_string();
 
     // First, register the shell in the project directory
-    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=5 and fast interval
+    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=5s and fast interval
     println!("=== test_autostop_delay ===");
     println!("Project dir: {:?}", env.project_dir());
     println!("Other dir: {other_dir:?}");
@@ -34,8 +34,8 @@ ready_delay = 1
     let cd1_output = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
         &[
-            ("PITCHFORK_AUTOSTOP_DELAY", "5"),
-            ("PITCHFORK_INTERVAL_SECS", "2"),
+            ("PITCHFORK_AUTOSTOP_DELAY", "5s"),
+            ("PITCHFORK_INTERVAL", "2s"),
         ],
     );
     println!(
@@ -117,12 +117,12 @@ ready_delay = 1
     let shell_pid = std::process::id().to_string();
 
     // First, register the shell in the project directory
-    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=10 and fast interval
+    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=10s and fast interval
     let _ = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
         &[
-            ("PITCHFORK_AUTOSTOP_DELAY", "10"),
-            ("PITCHFORK_INTERVAL_SECS", "2"),
+            ("PITCHFORK_AUTOSTOP_DELAY", "10s"),
+            ("PITCHFORK_INTERVAL", "2s"),
         ],
     );
 
@@ -174,7 +174,7 @@ ready_delay = 1
     let _ = env.run_command(&["stop", "cancel_stop"]);
 }
 
-/// Test that autostop happens immediately when PITCHFORK_AUTOSTOP_DELAY=0
+/// Test that autostop happens immediately when PITCHFORK_AUTOSTOP_DELAY=0s
 #[test]
 fn test_autostop_immediate_with_zero_delay() {
     let env = TestEnv::new();
@@ -196,15 +196,15 @@ ready_delay = 1
     let shell_pid = std::process::id().to_string();
 
     // First, register the shell in the project directory
-    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=0 and fast interval
+    // This starts the supervisor with PITCHFORK_AUTOSTOP_DELAY=0s and fast interval
     println!("Project dir: {:?}", env.project_dir());
     println!("Other dir: {other_dir:?}");
 
     let cd_output = env.run_command_with_env(
         &["cd", "--shell-pid", &shell_pid],
         &[
-            ("PITCHFORK_AUTOSTOP_DELAY", "0"),
-            ("PITCHFORK_INTERVAL_SECS", "2"),
+            ("PITCHFORK_AUTOSTOP_DELAY", "0s"),
+            ("PITCHFORK_INTERVAL", "2s"),
         ],
     );
     println!(
@@ -275,7 +275,7 @@ ready_delay = 1
     let status = env.get_daemon_status("immediate_stop");
     assert!(
         status.as_deref() != Some("running"),
-        "Daemon should be stopped immediately with PITCHFORK_AUTOSTOP_DELAY=0, got: {status:?}"
+        "Daemon should be stopped immediately with PITCHFORK_AUTOSTOP_DELAY=0s, got: {status:?}"
     );
 
     // Clean up
