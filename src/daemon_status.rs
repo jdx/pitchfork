@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, strum::Display, strum::EnumIs)]
 #[strum(serialize_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DaemonStatus {
     Failed(String),
     Waiting,
@@ -10,6 +11,7 @@ pub enum DaemonStatus {
     Stopping,
     /// Exit code of the process, or -1 if unknown.
     Errored(i32),
+    #[default]
     Stopped,
 }
 

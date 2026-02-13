@@ -1,4 +1,5 @@
 use crate::daemon::{Daemon, RunOptions};
+use crate::daemon_id::DaemonId;
 use crate::error::IpcError;
 use crate::ipc::batch::RunResult;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
@@ -280,7 +281,7 @@ impl IpcClient {
         Ok(())
     }
 
-    pub async fn get_disabled_daemons(&self) -> Result<Vec<String>> {
+    pub async fn get_disabled_daemons(&self) -> Result<Vec<DaemonId>> {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {
             IpcResponse::DisabledDaemons(daemons) => Ok(daemons),
@@ -297,29 +298,32 @@ impl IpcClient {
     }
 
     /// Stop a single daemon (low-level operation)
-    pub async fn stop(&self, id: String) -> Result<bool> {
-        let rsp = self.request(IpcRequest::Stop { id: id.clone() }).await?;
+    pub async fn stop(&self, id: DaemonId) -> Result<bool> {
+        let id_str = id.qualified();
+        let rsp = self
+            .request(IpcRequest::Stop { id: id_str.clone() })
+            .await?;
         match rsp {
             IpcResponse::Ok => {
-                info!("Stopped daemon {id}");
+                info!("Stopped daemon {id_str}");
                 Ok(true)
             }
             IpcResponse::DaemonNotRunning => {
-                warn!("Daemon {id} is not running");
+                warn!("Daemon {id_str} is not running");
                 Ok(false)
             }
             IpcResponse::DaemonNotFound => {
-                warn!("Daemon {id} not found");
+                warn!("Daemon {id_str} not found");
                 Ok(false)
             }
             IpcResponse::DaemonWasNotRunning => {
-                warn!("Daemon {id} was not running (process may have exited unexpectedly)");
+                warn!("Daemon {id_str} was not running (process may have exited unexpectedly)");
                 Ok(false)
             }
             IpcResponse::DaemonStopFailed { error } => {
-                error!("Failed to stop daemon {id}: {error}");
+                error!("Failed to stop daemon {id_str}: {error}");
                 Err(crate::error::DaemonError::StopFailed {
-                    id: id.clone(),
+                    id: id_str.clone(),
                     error,
                 }
                 .into())
