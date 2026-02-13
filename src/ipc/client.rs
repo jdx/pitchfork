@@ -3,6 +3,7 @@ use crate::daemon_id::DaemonId;
 use crate::error::IpcError;
 use crate::ipc::batch::RunResult;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::settings::settings;
 use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
@@ -19,11 +20,6 @@ pub struct IpcClient {
     recv: Mutex<BufReader<RecvHalf>>,
     send: Mutex<SendHalf>,
 }
-
-const CONNECT_ATTEMPTS: u32 = 5;
-const CONNECT_MIN_DELAY: Duration = Duration::from_millis(100);
-const CONNECT_MAX_DELAY: Duration = Duration::from_secs(1);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl IpcClient {
     pub async fn connect(autostart: bool) -> Result<Self> {
@@ -46,44 +42,83 @@ impl IpcClient {
     }
 
     async fn connect_(id: &str, name: &str) -> Result<Self> {
-        for duration in Backoff::new(CONNECT_ATTEMPTS, CONNECT_MIN_DELAY, CONNECT_MAX_DELAY) {
-            match interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await {
-                Ok(conn) => {
-                    let (recv, send) = conn.split();
-                    let recv = BufReader::new(recv);
+        let s = settings();
+        let connect_attempts = u32::try_from(s.ipc.connect_attempts).unwrap_or_else(|_| {
+            warn!(
+                "ipc.connect_attempts value {} is out of range (0-{}), clamping to 5",
+                s.ipc.connect_attempts,
+                u32::MAX
+            );
+            5
+        });
+        let connect_min_delay = s.ipc_connect_min_delay();
+        let connect_max_delay = s.ipc_connect_max_delay();
 
-                    return Ok(Self {
-                        _id: id.to_string(),
-                        recv: Mutex::new(recv),
-                        send: Mutex::new(send),
-                    });
-                }
-                Err(err) => {
-                    if let Some(duration) = duration {
-                        debug!(
-                            "Failed to connect to IPC socket: {err:?}, retrying in {duration:?}"
-                        );
-                        tokio::time::sleep(duration).await;
-                        continue;
-                    } else {
-                        return Err(IpcError::ConnectionFailed {
-                            attempts: CONNECT_ATTEMPTS,
-                            source: Some(err),
-                            help:
-                                "ensure the supervisor is running with: pitchfork supervisor start"
-                                    .to_string(),
+        // Compute timeout from backoff parameters: sum the worst-case delays
+        // for each attempt (exponential backoff capped at connect_max_delay),
+        // plus a 1s buffer for connection overhead.
+        let connect_timeout = {
+            let mut total = Duration::from_secs(1); // buffer
+            let mut delay = connect_min_delay;
+            for _ in 0..connect_attempts {
+                total += delay;
+                delay = (delay * 2).min(connect_max_delay);
+            }
+            total
+        };
+
+        tokio::time::timeout(connect_timeout, async {
+            for duration in Backoff::new(connect_attempts, connect_min_delay, connect_max_delay) {
+                match interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await {
+                    Ok(conn) => {
+                        let (recv, send) = conn.split();
+                        let recv = BufReader::new(recv);
+
+                        return Ok(Self {
+                            _id: id.to_string(),
+                            recv: Mutex::new(recv),
+                            send: Mutex::new(send),
+                        });
+                    }
+                    Err(err) => {
+                        if let Some(duration) = duration {
+                            debug!(
+                                "Failed to connect to IPC socket: {err:?}, retrying in {duration:?}"
+                            );
+                            tokio::time::sleep(duration).await;
+                            continue;
+                        } else {
+                            return Err(IpcError::ConnectionFailed {
+                                attempts: connect_attempts,
+                                source: Some(err),
+                                help:
+                                    "ensure the supervisor is running with: pitchfork supervisor start"
+                                        .to_string(),
+                            }
+                            .into());
                         }
-                        .into());
                     }
                 }
             }
-        }
-        Err(IpcError::ConnectionFailed {
-            attempts: CONNECT_ATTEMPTS,
-            source: None,
-            help: "ensure the supervisor is running with: pitchfork supervisor start".to_string(),
-        }
-        .into())
+            Err(IpcError::ConnectionFailed {
+                attempts: connect_attempts,
+                source: None,
+                help: "ensure the supervisor is running with: pitchfork supervisor start"
+                    .to_string(),
+            }
+            .into())
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(IpcError::ConnectionFailed {
+                attempts: connect_attempts,
+                source: None,
+                help: format!(
+                    "connection timed out after {connect_timeout:?}; ensure the supervisor is running with: pitchfork supervisor start"
+                ),
+            }
+            .into())
+        })
     }
 
     pub async fn send(&self, msg: IpcRequest) -> Result<()> {
@@ -124,7 +159,8 @@ impl IpcClient {
     }
 
     pub(crate) async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
-        self.request_with_timeout(msg, REQUEST_TIMEOUT).await
+        self.request_with_timeout(msg, settings().ipc_request_timeout())
+            .await
     }
 
     pub(crate) fn unexpected_response(expected: &str, actual: &IpcResponse) -> IpcError {

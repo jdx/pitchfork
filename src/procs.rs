@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::settings::settings;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
@@ -103,8 +104,21 @@ impl Procs {
         }
 
         // Wait for graceful shutdown: fast initial check then slower polling.
-        let fast_checks = std::iter::repeat_n(std::time::Duration::from_millis(10), 10);
-        let slow_checks = std::iter::repeat_n(std::time::Duration::from_millis(50), 58);
+        // Use the configurable stop_timeout setting to govern total wait time.
+        let stop_timeout = settings().supervisor_stop_timeout();
+        let fast_ms = 10u64;
+        let fast_count = 10usize;
+        let slow_ms = 50u64;
+        let fast_total_ms = fast_ms * fast_count as u64;
+        let remaining_ms = stop_timeout
+            .as_millis()
+            .saturating_sub(fast_total_ms as u128) as u64;
+        let slow_count = (remaining_ms / slow_ms) as usize;
+
+        let fast_checks =
+            std::iter::repeat_n(std::time::Duration::from_millis(fast_ms), fast_count);
+        let slow_checks =
+            std::iter::repeat_n(std::time::Duration::from_millis(slow_ms), slow_count);
         let mut elapsed_ms = 0u64;
 
         for sleep_duration in fast_checks.chain(slow_checks) {
@@ -118,7 +132,10 @@ impl Procs {
         }
 
         // SIGKILL the entire process group as last resort
-        warn!("process group {pgid} did not respond to SIGTERM after ~3s, sending SIGKILL");
+        warn!(
+            "process group {pgid} did not respond to SIGTERM after {}ms, sending SIGKILL",
+            stop_timeout.as_millis()
+        );
         unsafe {
             libc::killpg(pgid, libc::SIGKILL);
         }
@@ -175,34 +192,47 @@ impl Procs {
             }
 
             // Fast check: 10ms intervals for first 100ms (for processes that exit immediately)
-            for i in 0..10 {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            let stop_timeout = settings().supervisor_stop_timeout();
+            let fast_ms = 10u64;
+            let fast_count = 10usize;
+            let slow_ms = 50u64;
+            let fast_total_ms = fast_ms * fast_count as u64;
+            let remaining_ms = stop_timeout
+                .as_millis()
+                .saturating_sub(fast_total_ms as u128) as u64;
+            let slow_count = (remaining_ms / slow_ms) as usize;
+
+            for i in 0..fast_count {
+                std::thread::sleep(std::time::Duration::from_millis(fast_ms));
                 self.refresh_pids(&[pid]);
                 if self.is_terminated_or_zombie(sysinfo_pid) {
                     debug!(
                         "process {pid} terminated after SIGTERM ({} ms)",
-                        (i + 1) * 10
+                        (i + 1) * fast_ms as usize
                     );
                     return true;
                 }
             }
 
-            // Slower check: 50ms intervals for up to ~3 more seconds (100ms + 2900ms = 3000ms total)
-            for i in 0..58 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
+            // Slower check: 50ms intervals for the remainder of stop_timeout
+            for i in 0..slow_count {
+                std::thread::sleep(std::time::Duration::from_millis(slow_ms));
                 self.refresh_pids(&[pid]);
                 if self.is_terminated_or_zombie(sysinfo_pid) {
                     debug!(
                         "process {pid} terminated after SIGTERM ({} ms)",
-                        100 + (i + 1) * 50
+                        fast_total_ms + (i + 1) as u64 * slow_ms
                     );
                     return true;
                 }
             }
 
-            // SIGKILL as last resort after ~3s
+            // SIGKILL as last resort after stop_timeout
             if let Some(process) = self.lock_system().process(sysinfo_pid) {
-                warn!("process {pid} did not respond to SIGTERM after ~3s, sending SIGKILL");
+                warn!(
+                    "process {pid} did not respond to SIGTERM after {}ms, sending SIGKILL",
+                    stop_timeout.as_millis()
+                );
                 process.kill_with(Signal::Kill);
                 process.wait();
             }

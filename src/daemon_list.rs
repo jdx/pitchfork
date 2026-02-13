@@ -2,9 +2,9 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use std::collections::HashSet;
 
 /// Represents a daemon entry that can be either tracked (from state file) or available (from config only)
@@ -126,11 +126,13 @@ fn build_daemon_list(
             expected_port: Vec::new(),
             resolved_port: Vec::new(),
             auto_bump_port: false,
-            port_bump_attempts: *PITCHFORK_PORT_BUMP_ATTEMPTS,
+            port_bump_attempts: u32::try_from(settings().supervisor.port_bump_attempts)
+                .unwrap_or(10),
             depends: vec![],
             env: None,
             watch: vec![],
             watch_base_dir: None,
+            mise: false,
         };
 
         entries.push(DaemonListEntry {

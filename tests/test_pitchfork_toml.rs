@@ -105,6 +105,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             dir: None,
             env: None,
             hooks: None,
+            mise: None,
             path: Some(toml_path.clone()),
         },
     );
@@ -859,6 +860,7 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
             dir: None,
             env: None,
             hooks: None,
+            mise: None,
             path: None,
         },
     );

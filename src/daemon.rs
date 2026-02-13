@@ -107,6 +107,8 @@ pub struct Daemon {
     pub watch: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub watch_base_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub mise: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -138,6 +140,8 @@ pub struct RunOptions {
     pub watch: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub watch_base_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub mise: bool,
 }
 
 impl Display for Daemon {

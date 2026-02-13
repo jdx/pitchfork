@@ -44,6 +44,6 @@ bun = "latest" # for docs and test
 cargo-binstall = "latest"
 communique = "latest"
 hk = "latest"
-pkl = "latest" # for hk config
+pkl = "latest"
 usage = "latest" # for rendering CLI usage
 "cargo:cargo-nextest" = "latest"
