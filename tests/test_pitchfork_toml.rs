@@ -1017,6 +1017,149 @@ run = "echo local"
     assert_eq!(pt.daemons.get(&local_only_key).unwrap().run, "echo local");
 }
 
+// =============================================================================
+// Tests for get_local_configured_daemons and get_global_configured_daemons
+// =============================================================================
+
+/// Test filtering daemons by namespace (local vs global)
+#[test]
+fn test_filter_daemons_by_namespace() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Get the namespace for the temp directory
+    let project_ns = temp_dir.path().file_name().unwrap().to_str().unwrap();
+
+    // Create a local config with some daemons
+    let local_toml = temp_dir.path().join("pitchfork.toml");
+    let local_content = r#"
+[daemons.api]
+run = "echo 'local api'"
+
+[daemons.worker]
+run = "echo 'local worker'"
+"#;
+    fs::write(&local_toml, local_content).unwrap();
+
+    // Read and merge config
+    let pt = pitchfork_toml::PitchforkToml::all_merged_from(temp_dir.path()).unwrap();
+
+    // All daemons should have the project namespace
+    assert_eq!(pt.daemons.len(), 2);
+    for (id, _) in &pt.daemons {
+        assert_eq!(
+            id.namespace(),
+            project_ns,
+            "All daemons should have local namespace"
+        );
+        assert_ne!(id.namespace(), "global", "None should be global");
+    }
+
+    // Verify we can filter by namespace
+    let local_daemons: Vec<_> = pt
+        .daemons
+        .iter()
+        .filter(|(id, _): &(&DaemonId, _)| id.namespace() != "global")
+        .collect();
+    assert_eq!(local_daemons.len(), 2);
+
+    let global_daemons: Vec<_> = pt
+        .daemons
+        .iter()
+        .filter(|(id, _): &(&DaemonId, _)| id.namespace() == "global")
+        .collect();
+    assert_eq!(global_daemons.len(), 0);
+
+    Ok(())
+}
+
+/// Test that daemons from global config have "global" namespace
+#[test]
+fn test_global_namespace_from_config_path() {
+    // Test the namespace_from_path function for global configs
+    use pitchfork_cli::pitchfork_toml::namespace_from_path;
+    use std::path::Path;
+
+    // User global config should return "global"
+    // Note: pitchfork uses ~/.config/pitchfork/config.toml (not dirs::config_dir())
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let user_global = Path::new(&home)
+        .join(".config")
+        .join("pitchfork")
+        .join("config.toml");
+
+    // Test that the function returns the expected namespace
+    let namespace = namespace_from_path(&user_global).unwrap();
+    assert_eq!(
+        namespace, "global",
+        "Global config path should return 'global' namespace, got: {namespace}"
+    );
+
+    // Test a random project path
+    let project_path = Path::new("/home/user/myproject/pitchfork.toml");
+    let project_ns = namespace_from_path(project_path).unwrap();
+    assert_eq!(project_ns, "myproject");
+
+    // Test system global config path
+    let system_global = Path::new("/etc/pitchfork/config.toml");
+    let system_ns = namespace_from_path(system_global).unwrap();
+    assert_eq!(
+        system_ns, "global",
+        "System config path should return 'global' namespace, got: {system_ns}"
+    );
+}
+
+/// Test filtering local vs global daemons in a merged config
+#[test]
+fn test_merged_config_local_global_separation() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create two config files with different namespaces
+    let config1_dir = temp_dir.path().join("project1");
+    fs::create_dir_all(&config1_dir).unwrap();
+    let config1 = config1_dir.join("pitchfork.toml");
+    fs::write(
+        &config1,
+        r#"
+[daemons.api]
+run = "echo 'project1 api'"
+"#,
+    )
+    .unwrap();
+
+    let config2_dir = temp_dir.path().join("project2");
+    fs::create_dir_all(&config2_dir).unwrap();
+    let config2 = config2_dir.join("pitchfork.toml");
+    fs::write(
+        &config2,
+        r#"
+[daemons.api]
+run = "echo 'project2 api'"
+"#,
+    )
+    .unwrap();
+
+    // Read and merge manually
+    let pt1 = pitchfork_toml::PitchforkToml::read(&config1)?;
+    let pt2 = pitchfork_toml::PitchforkToml::read(&config2)?;
+
+    let mut merged = pitchfork_toml::PitchforkToml::default();
+    merged.merge(pt1);
+    merged.merge(pt2);
+
+    // Both should have different namespaces
+    assert_eq!(merged.daemons.len(), 2);
+
+    let namespaces: std::collections::HashSet<_> =
+        merged.daemons.keys().map(|id| id.namespace()).collect();
+    assert!(namespaces.contains("project1"));
+    assert!(namespaces.contains("project2"));
+
+    // None should be "global" since they're all local project configs
+    assert!(!namespaces.contains("global"));
+
+    Ok(())
+}
+
 /// Test nested directory structure with local.toml at different levels
 #[test]
 fn test_all_merged_from_nested_local_toml() {

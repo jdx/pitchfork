@@ -12,7 +12,9 @@ The command waits for the daemon to be ready before returning.
 Examples:
   pitchfork start api           Start a single daemon
   pitchfork start api worker    Start multiple daemons
-  pitchfork start --all         Start all daemons in pitchfork.toml
+  pitchfork start -l            Start all local daemons in pitchfork.toml
+  pitchfork start -g            Start all global daemons in config.toml
+  pitchfork start -a            Start all daemons (local and global)
   pitchfork start api -f        Restart daemon if already running
   pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
   pitchfork start api --output 'Listening on'
@@ -30,9 +32,17 @@ ID of the daemon(s) in pitchfork.toml to start
 
 ## Flags
 
+### `-l --local`
+
+Start all local daemons in pitchfork.toml
+
+### `-g --global`
+
+Start all global daemons in ~/.config/pitchfork/config.toml
+
 ### `-a --all`
 
-Start all daemons in all pitchfork.tomls
+Start all daemons (both local and global)
 
 ### `-f --force`
 
