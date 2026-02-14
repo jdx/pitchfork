@@ -1,4 +1,5 @@
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::settings::settings;
 use crate::{Result, env};
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
@@ -160,9 +161,11 @@ impl IpcServer {
         let mut recv = BufReader::new(recv);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
-            // Rate limit: 100 requests per second per connection
+            // Rate limit: use configured requests per configured window
             // This is generous for normal CLI usage but prevents flooding
-            let mut rate_limiter = RateLimiter::new(100, 1);
+            let s = settings();
+            let window_secs = s.ipc_rate_limit_window().as_secs();
+            let mut rate_limiter = RateLimiter::new(s.ipc.rate_limit as usize, window_secs);
 
             loop {
                 // Check rate limit BEFORE reading to avoid wasting CPU on deserialization

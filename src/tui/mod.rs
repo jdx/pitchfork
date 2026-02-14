@@ -3,8 +3,10 @@ mod event;
 mod ui;
 
 use crate::Result;
+use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use crate::settings::settings;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -15,12 +17,8 @@ use miette::IntoDiagnostic;
 use ratatui::prelude::*;
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
 
 pub use app::App;
-
-const REFRESH_RATE: Duration = Duration::from_secs(2);
-const TICK_RATE: Duration = Duration::from_millis(100);
 
 pub async fn run() -> Result<()> {
     // Suppress terminal logging while TUI is active (logs still go to file)
@@ -69,6 +67,9 @@ async fn run_app<B: Backend>(
     app: &mut App,
     client: &Arc<IpcClient>,
 ) -> Result<()> {
+    let s = settings();
+    let tick_rate = s.tui_tick_rate();
+    let refresh_rate = s.tui_refresh_rate();
     let mut last_refresh = std::time::Instant::now();
 
     loop {
@@ -76,7 +77,7 @@ async fn run_app<B: Backend>(
         terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
 
         // Handle events with timeout
-        if crossterm::event::poll(TICK_RATE).into_diagnostic()?
+        if crossterm::event::poll(tick_rate).into_diagnostic()?
             && let Some(action) = event::handle_event(app)?
         {
             match action {
@@ -85,8 +86,10 @@ async fn run_app<B: Backend>(
                     app.start_loading(format!("Starting {id}..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
 
+                    let daemon_id = DaemonId::parse_or_default(&id, "global")
+                        .unwrap_or_else(|_| DaemonId::new("global", &id));
                     let result = client
-                        .start_daemons(std::slice::from_ref(&id), StartOptions::default())
+                        .start_daemons(std::slice::from_ref(&daemon_id), StartOptions::default())
                         .await;
 
                     app.stop_loading();
@@ -119,7 +122,16 @@ async fn run_app<B: Backend>(
                     app.start_loading(format!("Starting {count} daemons..."));
                     terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
 
-                    let result = client.start_daemons(&ids, StartOptions::default()).await;
+                    let daemon_ids: Vec<DaemonId> = ids
+                        .iter()
+                        .map(|id| {
+                            DaemonId::parse_or_default(id, "global")
+                                .unwrap_or_else(|_| DaemonId::new("global", id))
+                        })
+                        .collect();
+                    let result = client
+                        .start_daemons(&daemon_ids, StartOptions::default())
+                        .await;
 
                     app.stop_loading();
                     app.clear_selection();
@@ -162,7 +174,9 @@ async fn run_app<B: Backend>(
                     app.open_file_selector();
                 }
                 event::Action::OpenEditorEdit(id) => {
-                    app.open_editor_edit(&id);
+                    let daemon_id = DaemonId::parse_or_default(&id, "global")
+                        .unwrap_or_else(|_| DaemonId::new("global", &id));
+                    app.open_editor_edit(&daemon_id);
                 }
                 event::Action::SaveConfig => {
                     app.start_loading("Saving...");
@@ -193,7 +207,9 @@ async fn run_app<B: Backend>(
                             app::PendingAction::Stop(id) => {
                                 app.start_loading(format!("Stopping {id}..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                let result = client.stop(id.clone()).await;
+                                let daemon_id = DaemonId::parse_or_default(&id, "global")
+                                    .unwrap_or_else(|_| DaemonId::new("global", &id));
+                                let result = client.stop(daemon_id).await;
                                 app.stop_loading();
                                 match result {
                                     Ok(true) => app.set_message(format!("Stopped {id}")),
@@ -212,8 +228,11 @@ async fn run_app<B: Backend>(
                                     force: true,
                                     ..Default::default()
                                 };
-                                let result =
-                                    client.start_daemons(std::slice::from_ref(&id), opts).await;
+                                let daemon_id = DaemonId::parse_or_default(&id, "global")
+                                    .unwrap_or_else(|_| DaemonId::new("global", &id));
+                                let result = client
+                                    .start_daemons(std::slice::from_ref(&daemon_id), opts)
+                                    .await;
 
                                 app.stop_loading();
                                 match result {
@@ -239,7 +258,14 @@ async fn run_app<B: Backend>(
                                 let count = ids.len();
                                 app.start_loading(format!("Stopping {count} daemons..."));
                                 terminal.draw(|f| ui::draw(f, app)).into_diagnostic()?;
-                                let result = client.stop_daemons(&ids).await;
+                                let daemon_ids: Vec<DaemonId> = ids
+                                    .iter()
+                                    .map(|id| {
+                                        DaemonId::parse_or_default(id, "global")
+                                            .unwrap_or_else(|_| DaemonId::new("global", id))
+                                    })
+                                    .collect();
+                                let result = client.stop_daemons(&daemon_ids).await;
                                 app.stop_loading();
                                 app.clear_selection();
                                 match result {
@@ -266,7 +292,14 @@ async fn run_app<B: Backend>(
                                     force: true,
                                     ..Default::default()
                                 };
-                                let result = client.start_daemons(&ids, opts).await;
+                                let daemon_ids: Vec<DaemonId> = ids
+                                    .iter()
+                                    .map(|id| {
+                                        DaemonId::parse_or_default(id, "global")
+                                            .unwrap_or_else(|_| DaemonId::new("global", id))
+                                    })
+                                    .collect();
+                                let result = client.start_daemons(&daemon_ids, opts).await;
 
                                 app.stop_loading();
                                 app.clear_selection();
@@ -329,7 +362,7 @@ async fn run_app<B: Backend>(
         }
 
         // Auto-refresh daemon list
-        if last_refresh.elapsed() >= REFRESH_RATE {
+        if last_refresh.elapsed() >= refresh_rate {
             app.refresh(client).await?;
             last_refresh = std::time::Instant::now();
         }

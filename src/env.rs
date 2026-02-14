@@ -54,22 +54,8 @@ pub static IPC_SOCK_MAIN: Lazy<PathBuf> = Lazy::new(|| IPC_SOCK_DIR.join("main.s
 pub static ORIGINAL_PATH: Lazy<Option<String>> = Lazy::new(|| var("PATH").ok());
 pub static IPC_JSON: Lazy<bool> = Lazy::new(|| !var_false("IPC_JSON"));
 
-// Delay in seconds before autostopping daemons when leaving a directory
-// Set to 0 to disable the delay (stop immediately)
-pub static PITCHFORK_AUTOSTOP_DELAY: Lazy<u64> =
-    Lazy::new(|| var_u64("PITCHFORK_AUTOSTOP_DELAY").unwrap_or(60));
-
-// Interval in seconds for the supervisor's background watcher
-// Default: 10 seconds. Lower values useful for testing.
-pub static PITCHFORK_INTERVAL_SECS: Lazy<u64> =
-    Lazy::new(|| var_u64("PITCHFORK_INTERVAL_SECS").unwrap_or(10));
-
 fn var_path(name: &str) -> Option<PathBuf> {
     var(name).map(PathBuf::from).ok()
-}
-
-fn var_u64(name: &str) -> Option<u64> {
-    var(name).ok().and_then(|val| val.parse().ok())
 }
 
 fn var_log_level(name: &str) -> Option<log::LevelFilter> {

@@ -72,6 +72,19 @@ Configs merge in order (later overrides earlier):
 2. `~/.config/pitchfork/config.toml` (user)
 3. `pitchfork.toml` files from filesystem root to current directory (project)
 
+### Documentation Data Sources
+
+The documentation uses TOML files as single sources of truth for configuration reference pages:
+
+| File | Purpose | Docs Page |
+|------|---------|-----------|
+| `config.toml` | Daemon configuration options metadata | `/reference/configuration` |
+| `settings.toml` | User preference settings metadata | `/reference/settings` |
+
+**When modifying daemon configuration options** (in `src/pitchfork_toml.rs`), update `config.toml` to keep docs in sync.
+
+**When modifying user preference settings** (in `src/settings.rs` or `build/generate_settings.rs`), update `settings.toml` directly as it is the source of truth for settings generation.
+
 ## Code Patterns
 
 - **Async/Tokio**: All I/O is async; use `tokio::select!` for concurrent operations

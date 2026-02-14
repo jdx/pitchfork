@@ -1,14 +1,61 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pitchfork Configuration",
-  "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files",
+  "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files.\n\nNote: When read from a file, daemon keys are short names (e.g., \"api\").\nAfter merging, keys become qualified DaemonIds (e.g., \"project/api\").",
   "type": "object",
   "properties": {
     "daemons": {
-      "description": "Map of daemon names to their configurations",
+      "description": "Map of daemon IDs to their configurations",
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/PitchforkTomlDaemon"
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[\\w.-]+/[\\w.-]+$": {
+          "$ref": "#/$defs/PitchforkTomlDaemon"
+        }
+      }
+    },
+    "settings": {
+      "description": "Settings configuration (merged from all config files)",
+      "$ref": "#/$defs/Settings",
+      "default": {
+        "general": {
+          "autostop_delay": "1m",
+          "interval": "10s",
+          "log_file_level": "info",
+          "log_level": "info"
+        },
+        "ipc": {
+          "connect_attempts": 5,
+          "connect_max_delay": "1s",
+          "connect_min_delay": "100ms",
+          "connect_timeout": "5s",
+          "rate_limit": 100,
+          "rate_limit_window": "1s",
+          "request_timeout": "5s"
+        },
+        "supervisor": {
+          "cron_check_interval": "10s",
+          "file_watch_debounce": "1s",
+          "http_client_timeout": "5s",
+          "log_flush_interval": "500ms",
+          "ready_check_interval": "500ms",
+          "restart_delay": "100ms",
+          "stop_timeout": "5s"
+        },
+        "tui": {
+          "message_duration": "3s",
+          "refresh_rate": "2s",
+          "stat_history": 60,
+          "tick_rate": "100ms"
+        },
+        "web": {
+          "auto_start": false,
+          "bind_address": "127.0.0.1",
+          "default_port": 3120,
+          "log_lines": 100,
+          "port_attempts": 10,
+          "sse_poll_interval": "500ms"
+        }
       }
     }
   },
@@ -40,6 +87,11 @@
           "const": "fail"
         }
       ]
+    },
+    "DaemonId": {
+      "description": "Daemon ID in the format 'namespace/name'",
+      "type": "string",
+      "pattern": "^[\\w.-]+/[\\w.-]+$"
     },
     "PitchforkTomlAuto": {
       "description": "Automatic behavior triggered by shell hooks",
@@ -78,7 +130,7 @@
       ]
     },
     "PitchforkTomlDaemon": {
-      "description": "Configuration for a single daemon",
+      "description": "Configuration for a single daemon (internal representation with DaemonId)",
       "type": "object",
       "properties": {
         "auto": {
@@ -107,10 +159,10 @@
           ]
         },
         "depends": {
-          "description": "List of daemon names that must be started before this one",
+          "description": "List of daemon IDs that must be started before this one",
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/DaemonId"
           }
         },
         "dir": {
@@ -130,6 +182,34 @@
             "type": "string"
           }
         },
+        "on_cron_trigger": {
+          "description": "Command to run when cron triggers (before starting the daemon)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_fail": {
+          "description": "Command to run when the daemon fails (exits with non-zero code)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_ready": {
+          "description": "Command to run when the daemon passes its ready check",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_retry": {
+          "description": "Command to run before each retry attempt",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",
           "type": [
@@ -138,7 +218,7 @@
           ]
         },
         "ready_delay": {
-          "description": "Delay in milliseconds before considering the daemon ready",
+          "description": "Delay in seconds before considering the daemon ready",
           "type": [
             "integer",
             "null"
@@ -172,8 +252,7 @@
         },
         "retry": {
           "description": "Number of times to retry if the daemon fails.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
-          "$ref": "#/$defs/Retry",
-          "default": 0
+          "$ref": "#/$defs/Retry"
         },
         "run": {
           "description": "The command to run. Prepend with 'exec' to avoid shell process overhead.",
@@ -183,6 +262,7 @@
           ]
         },
         "watch": {
+          "description": "File patterns to watch for changes",
           "type": "array",
           "items": {
             "type": "string"
@@ -190,7 +270,11 @@
         }
       },
       "required": [
-        "run"
+        "run",
+        "auto",
+        "retry",
+        "depends",
+        "watch"
       ]
     },
     "Retry": {
@@ -198,6 +282,235 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "Settings": {
+      "type": "object",
+      "properties": {
+        "general": {
+          "$ref": "#/$defs/SettingsGeneral",
+          "default": {
+            "autostop_delay": "1m",
+            "interval": "10s",
+            "log_file_level": "info",
+            "log_level": "info"
+          }
+        },
+        "ipc": {
+          "$ref": "#/$defs/SettingsIpc",
+          "default": {
+            "connect_attempts": 5,
+            "connect_max_delay": "1s",
+            "connect_min_delay": "100ms",
+            "connect_timeout": "5s",
+            "rate_limit": 100,
+            "rate_limit_window": "1s",
+            "request_timeout": "5s"
+          }
+        },
+        "supervisor": {
+          "$ref": "#/$defs/SettingsSupervisor",
+          "default": {
+            "cron_check_interval": "10s",
+            "file_watch_debounce": "1s",
+            "http_client_timeout": "5s",
+            "log_flush_interval": "500ms",
+            "ready_check_interval": "500ms",
+            "restart_delay": "100ms",
+            "stop_timeout": "5s"
+          }
+        },
+        "tui": {
+          "$ref": "#/$defs/SettingsTui",
+          "default": {
+            "message_duration": "3s",
+            "refresh_rate": "2s",
+            "stat_history": 60,
+            "tick_rate": "100ms"
+          }
+        },
+        "web": {
+          "$ref": "#/$defs/SettingsWeb",
+          "default": {
+            "auto_start": false,
+            "bind_address": "127.0.0.1",
+            "default_port": 3120,
+            "log_lines": 100,
+            "port_attempts": 10,
+            "sse_poll_interval": "500ms"
+          }
+        }
+      }
+    },
+    "SettingsGeneral": {
+      "type": "object",
+      "properties": {
+        "autostop_delay": {
+          "description": "Delay before auto-stopping daemons when leaving a directory",
+          "type": "string",
+          "default": "1m"
+        },
+        "interval": {
+          "description": "Supervisor background task refresh interval",
+          "type": "string",
+          "default": "10s"
+        },
+        "log_file_level": {
+          "description": "File log level (trace, debug, info, warn, error)",
+          "type": "string",
+          "default": "info"
+        },
+        "log_level": {
+          "description": "Console log level (trace, debug, info, warn, error)",
+          "type": "string",
+          "default": "info"
+        }
+      }
+    },
+    "SettingsIpc": {
+      "type": "object",
+      "properties": {
+        "connect_attempts": {
+          "description": "Number of connection retry attempts",
+          "type": "integer",
+          "format": "int64",
+          "default": 5
+        },
+        "connect_max_delay": {
+          "description": "Maximum delay between connection retries",
+          "type": "string",
+          "default": "1s"
+        },
+        "connect_min_delay": {
+          "description": "Minimum delay between connection retries",
+          "type": "string",
+          "default": "100ms"
+        },
+        "connect_timeout": {
+          "description": "Total timeout for connecting to the supervisor",
+          "type": "string",
+          "default": "5s"
+        },
+        "rate_limit": {
+          "description": "Maximum IPC requests per second per connection",
+          "type": "integer",
+          "format": "int64",
+          "default": 100
+        },
+        "rate_limit_window": {
+          "description": "Rate limit sliding window duration",
+          "type": "string",
+          "default": "1s"
+        },
+        "request_timeout": {
+          "description": "Default timeout for IPC requests",
+          "type": "string",
+          "default": "5s"
+        }
+      }
+    },
+    "SettingsSupervisor": {
+      "type": "object",
+      "properties": {
+        "cron_check_interval": {
+          "description": "Interval for checking cron schedules",
+          "type": "string",
+          "default": "10s"
+        },
+        "file_watch_debounce": {
+          "description": "File watch debounce duration",
+          "type": "string",
+          "default": "1s"
+        },
+        "http_client_timeout": {
+          "description": "Timeout for HTTP ready checks",
+          "type": "string",
+          "default": "5s"
+        },
+        "log_flush_interval": {
+          "description": "Daemon log buffer flush interval",
+          "type": "string",
+          "default": "500ms"
+        },
+        "ready_check_interval": {
+          "description": "Interval between ready checks (HTTP, TCP, command)",
+          "type": "string",
+          "default": "500ms"
+        },
+        "restart_delay": {
+          "description": "Delay between stop and start during restart",
+          "type": "string",
+          "default": "100ms"
+        },
+        "stop_timeout": {
+          "description": "Maximum time to wait for daemon to stop gracefully",
+          "type": "string",
+          "default": "5s"
+        }
+      }
+    },
+    "SettingsTui": {
+      "type": "object",
+      "properties": {
+        "message_duration": {
+          "description": "Status message display duration",
+          "type": "string",
+          "default": "3s"
+        },
+        "refresh_rate": {
+          "description": "Daemon list refresh interval",
+          "type": "string",
+          "default": "2s"
+        },
+        "stat_history": {
+          "description": "Number of stat samples to keep for graphs",
+          "type": "integer",
+          "format": "int64",
+          "default": 60
+        },
+        "tick_rate": {
+          "description": "Event loop tick rate",
+          "type": "string",
+          "default": "100ms"
+        }
+      }
+    },
+    "SettingsWeb": {
+      "type": "object",
+      "properties": {
+        "auto_start": {
+          "description": "Automatically start web UI when supervisor starts",
+          "type": "boolean",
+          "default": false
+        },
+        "bind_address": {
+          "description": "Web server bind address",
+          "type": "string",
+          "default": "127.0.0.1"
+        },
+        "default_port": {
+          "description": "Default web server port",
+          "type": "integer",
+          "format": "int64",
+          "default": 3120
+        },
+        "log_lines": {
+          "description": "Initial number of log lines to display",
+          "type": "integer",
+          "format": "int64",
+          "default": 100
+        },
+        "port_attempts": {
+          "description": "Number of ports to try if default is in use",
+          "type": "integer",
+          "format": "int64",
+          "default": 10
+        },
+        "sse_poll_interval": {
+          "description": "Server-Sent Events poll interval for log streaming",
+          "type": "string",
+          "default": "500ms"
+        }
+      }
     }
   }
 }

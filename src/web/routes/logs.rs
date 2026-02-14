@@ -6,12 +6,14 @@ use axum::{
     },
 };
 use std::convert::Infallible;
-use std::time::Duration;
 
-use crate::daemon::is_valid_daemon_id;
+use crate::daemon::{daemon_log_path, is_valid_daemon_id};
+use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::state_file::StateFile;
+use crate::web::helpers::{html_escape, url_encode};
 
 fn base_html(title: &str, content: &str) -> String {
     format!(
@@ -59,16 +61,18 @@ pub async fn index() -> Html<String> {
     let pt = PitchforkToml::all_merged();
 
     // Collect all daemon IDs
+    let pitchfork_id = DaemonId::pitchfork();
     let mut ids: Vec<String> = state
         .daemons
         .keys()
-        .filter(|id| *id != "pitchfork")
-        .cloned()
+        .filter(|id| **id != pitchfork_id)
+        .map(|id| id.to_string())
         .collect();
 
     for id in pt.daemons.keys() {
-        if !ids.contains(id) {
-            ids.push(id.clone());
+        let id_str = id.to_string();
+        if !ids.contains(&id_str) {
+            ids.push(id_str);
         }
     }
 
@@ -100,7 +104,7 @@ pub async fn index() -> Html<String> {
             ));
 
             // Tab content
-            let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
+            let log_path = daemon_log_path(id);
 
             let initial_logs = if log_path.exists() {
                 match std::fs::read(&log_path) {
@@ -219,7 +223,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 
     let safe_id = html_escape(&id);
     let url_id = url_encode(&id);
-    let log_path = env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"));
+    let log_path = daemon_log_path(&id);
 
     let initial_logs = if log_path.exists() {
         match std::fs::read(&log_path) {
@@ -274,7 +278,7 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
         return Html(String::new());
     }
 
-    let log_path = env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"));
+    let log_path = daemon_log_path(&id);
 
     let logs = if log_path.exists() {
         match std::fs::read(&log_path) {
@@ -305,7 +309,7 @@ pub async fn stream_sse(
     let valid_id = is_valid_daemon_id(&id);
 
     let log_path = if valid_id {
-        env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"))
+        daemon_log_path(&id)
     } else {
         // Return a dummy path that won't exist - stream will just be empty
         std::path::PathBuf::from("/dev/null/invalid")
@@ -313,12 +317,13 @@ pub async fn stream_sse(
 
     // Track file position
     let initial_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+    let sse_poll_interval = settings().web_sse_poll_interval();
 
     let stream = async_stream::stream! {
         let mut last_size = initial_size;
 
         loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(sse_poll_interval).await;
 
             if let Ok(metadata) = std::fs::metadata(&log_path) {
                 let current_size = metadata.len();
@@ -358,21 +363,13 @@ pub async fn clear(Path(id): Path<String>) -> Html<String> {
         return Html("".to_string());
     }
 
-    let log_path = env::PITCHFORK_LOGS_DIR.join(&id).join(format!("{id}.log"));
+    let log_path = daemon_log_path(&id);
 
     if log_path.exists() {
         let _ = std::fs::write(&log_path, "");
     }
 
     Html("".to_string())
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 /// Escape a string for use inside JavaScript single-quoted string literals.
@@ -383,8 +380,4 @@ fn js_escape(s: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
-}
-
-fn url_encode(s: &str) -> String {
-    urlencoding::encode(s).into_owned()
 }

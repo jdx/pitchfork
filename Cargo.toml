@@ -7,11 +7,15 @@ edition = "2024"
 homepage = "https://pitchfork.jdx.dev"
 repository = "https://github.com/jdx/pitchfork"
 documentation = "https://pitchfork.jdx.dev"
+build = "build.rs"
 include = [
     "src/**/*.rs",
     "assets/**/*",
     "src/web/assets/**/*",
     "/pitchfork-extras.usage.kdl",
+    "/settings.toml",
+    "/build.rs",
+    "/build/**/*.rs",
 ]
 
 [[bin]]
@@ -73,6 +77,14 @@ humantime = "2"
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"
 libc = "0.2"
+
+[build-dependencies]
+toml = "0.9"
+quote = "1.0"
+proc-macro2 = "1.0"
+syn = "2.0"
+heck = "0.5"
+indexmap = "2"
 
 [dev-dependencies]
 tempfile = "3"

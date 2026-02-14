@@ -1,0 +1,578 @@
+# Pitchfork Daemon Configuration Schema
+# This file defines all daemon configuration options for pitchfork.toml.
+# It drives documentation generation for the configuration reference.
+
+# =============================================================================
+# Core Options
+# =============================================================================
+
+[run]
+type = "String"
+required = true
+description = "The command to execute"
+docs = """
+The shell command that starts the daemon process. The command is executed through
+the system shell (`sh -c` on Unix, `cmd /C` on Windows).
+
+**Tip:** Prepend with `exec` to avoid an extra shell process wrapper:
+```toml
+[daemons.api]
+run = "exec node server.js"
+```
+
+This is especially useful for proper signal handling and resource cleanup.
+"""
+example = "npm run server"
+
+[dir]
+type = "Path"
+required = false
+description = "Working directory for the daemon"
+docs = """
+Sets the working directory where the daemon runs. Paths can be:
+- **Relative:** Resolved from the `pitchfork.toml` file location
+- **Absolute:** Used as-is
+
+If not specified, defaults to the directory containing the `pitchfork.toml` file.
+
+**Examples:**
+```toml
+# Relative path (from pitchfork.toml location)
+[daemons.frontend]
+run = "npm run dev"
+dir = "frontend"
+
+# Absolute path
+[daemons.api]
+run = "npm run server"
+dir = "/opt/myapp/api"
+```
+"""
+example = "frontend"
+
+[env]
+type = "Map"
+required = false
+description = "Environment variables for the daemon process"
+docs = """
+Sets environment variables that will be passed to the daemon process.
+Variables are specified as key-value string pairs.
+
+**Inline format:**
+```toml
+[daemons.api]
+run = "npm run server"
+env = { NODE_ENV = "development", PORT = "3000" }
+```
+
+**Multi-line format** (for many variables):
+```toml
+[daemons.worker]
+run = "python worker.py"
+
+[daemons.worker.env]
+DATABASE_URL = "postgres://localhost/mydb"
+REDIS_URL = "redis://localhost:6379"
+LOG_LEVEL = "debug"
+```
+"""
+example = '{ NODE_ENV = "development" }'
+
+# =============================================================================
+# Lifecycle Options
+# =============================================================================
+
+[auto]
+type = "Array"
+required = false
+default = "[]"
+description = "Auto-start and auto-stop behavior with shell hooks"
+docs = """
+Controls automatic daemon lifecycle based on shell directory changes.
+Requires [shell hook integration](/guides/shell-hook).
+
+**Values:**
+- `"start"` - Automatically start when entering the daemon's directory
+- `"stop"` - Automatically stop when leaving the daemon's directory
+
+**Examples:**
+```toml
+# Auto-start only
+[daemons.api]
+run = "npm run server"
+auto = ["start"]
+
+# Both auto-start and auto-stop
+[daemons.dev]
+run = "npm run dev"
+auto = ["start", "stop"]
+```
+
+When using `auto = ["stop"]`, the daemon won't stop immediately—there's a
+configurable delay (default 1 minute) to prevent unnecessary restarts when
+briefly switching directories. See [settings.general.autostop_delay](/reference/settings#general-autostop_delay).
+"""
+example = '["start", "stop"]'
+
+[retry]
+type = "Integer|Boolean"
+required = false
+default = "0"
+description = "Number of retry attempts on failure"
+docs = """
+Configures automatic restart behavior when the daemon exits with an error.
+
+**Values:**
+- `0` or `false` - No retries (default)
+- A number (e.g., `3`) - Retry up to that many times
+- `true` - Retry indefinitely
+
+**Examples:**
+```toml
+# Retry up to 3 times
+[daemons.api]
+run = "npm run server"
+retry = 3
+
+# Retry forever (critical service)
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+retry = true
+```
+
+The daemon is considered "failed" when it exits with a non-zero exit code.
+Retries happen immediately after failure detection.
+"""
+example = "3"
+
+[depends]
+type = "Array"
+required = false
+default = "[]"
+description = "Daemons that must start before this one"
+docs = """
+Specifies dependencies that must be running before this daemon can start.
+Dependencies are automatically started in the correct order.
+
+**Behavior:**
+- **Auto-start:** `pitchfork start api` automatically starts all dependencies first
+- **Transitive:** If A depends on B, and B depends on C, starting A starts both B and C
+- **Parallel:** Independent dependencies start in parallel for faster startup
+- **Skip running:** Already-running dependencies are not restarted
+- **Circular detection:** Circular dependencies are detected and reported as errors
+
+**Example:**
+```toml
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+ready_port = 5432
+
+[daemons.cache]
+run = "redis-server"
+ready_port = 6379
+
+[daemons.api]
+run = "npm run server"
+depends = ["database", "cache"]
+```
+
+Running `pitchfork start api` starts daemons in order:
+1. `database` and `cache` (in parallel)
+2. `api` (after dependencies are ready)
+
+**Note:** Dependency names are resolved within the same namespace. For cross-namespace
+dependencies, use the full qualified name (e.g., `global/postgres`).
+"""
+example = '["postgres", "redis"]'
+
+[boot_start]
+type = "Boolean"
+required = false
+default = "false"
+description = "Start automatically on system boot"
+docs = """
+When enabled, this daemon starts automatically when your system boots,
+without needing to manually run `pitchfork start`.
+
+**Platform implementation:**
+- **macOS:** Creates a LaunchAgent (`~/Library/LaunchAgents/com.pitchfork.agent.plist`)
+- **Linux:** Creates a systemd user service (`~/.config/systemd/user/pitchfork.service`)
+- **Windows:** Adds a registry entry in `HKEY_CURRENT_USER\...\Run`
+
+**Example:**
+```toml
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+boot_start = true
+```
+
+See [Start on Boot guide](/guides/boot-start) for detailed setup instructions.
+"""
+example = "true"
+
+# =============================================================================
+# Ready Check Options
+# =============================================================================
+
+[ready_delay]
+type = "Integer"
+required = false
+default = "3"
+description = "Seconds to wait before considering the daemon ready"
+docs = """
+A simple time-based readiness check. The daemon is considered ready after
+waiting this many seconds, regardless of its actual state.
+
+**Use case:** For daemons where you know the approximate startup time and
+don't need precise readiness detection.
+
+```toml
+[daemons.api]
+run = "npm run server"
+ready_delay = 5
+```
+
+For more precise readiness detection, consider using `ready_http`, `ready_port`,
+`ready_output`, or `ready_cmd` instead.
+"""
+example = "5"
+
+[ready_output]
+type = "String"
+required = false
+description = "Regex pattern to match in output for readiness"
+docs = """
+Monitors the daemon's stdout/stderr for a pattern indicating readiness.
+The daemon is considered ready when the regex matches.
+
+**Examples:**
+```toml
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+ready_output = "ready to accept connections"
+
+[daemons.webpack]
+run = "npm run dev"
+ready_output = "Compiled successfully"
+```
+
+The pattern is matched against each line of output. Use standard regex syntax.
+"""
+example = '"ready to accept connections"'
+
+[ready_http]
+type = "URL"
+required = false
+description = "HTTP endpoint to poll for readiness"
+docs = """
+Polls an HTTP endpoint until it returns a 2xx status code.
+The daemon is considered ready when the health check succeeds.
+
+**Example:**
+```toml
+[daemons.api]
+run = "npm run server"
+ready_http = "http://localhost:3000/health"
+```
+
+The poll interval is controlled by `settings.supervisor.ready_check_interval`
+(default: 500ms). Timeout per request is controlled by
+`settings.supervisor.http_client_timeout` (default: 5s).
+"""
+example = '"http://localhost:3000/health"'
+
+[ready_port]
+type = "Integer"
+required = false
+description = "TCP port to check for readiness"
+docs = """
+Attempts TCP connections to the specified port until successful.
+The daemon is considered ready when the port is accepting connections.
+
+**Example:**
+```toml
+[daemons.api]
+run = "npm run server"
+ready_port = 3000
+
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+ready_port = 5432
+```
+
+This is useful for services that don't expose HTTP health endpoints.
+The port must be between 1 and 65535.
+"""
+example = "3000"
+
+[ready_cmd]
+type = "String"
+required = false
+description = "Shell command to poll for readiness"
+docs = """
+Executes a shell command repeatedly until it exits with code 0.
+The daemon is considered ready when the command succeeds.
+
+**Examples:**
+```toml
+[daemons.postgres]
+run = "postgres -D /var/lib/pgsql/data"
+ready_cmd = "pg_isready -h localhost"
+
+[daemons.redis]
+run = "redis-server"
+ready_cmd = "redis-cli ping"
+
+[daemons.mysql]
+run = "mysqld"
+ready_cmd = "mysqladmin ping -h localhost"
+```
+
+This is the most flexible option, allowing you to use service-specific
+CLI tools for health checking.
+"""
+example = '"pg_isready -h localhost"'
+
+# =============================================================================
+# File Watching
+# =============================================================================
+
+[watch]
+type = "Array"
+required = false
+default = "[]"
+description = "File patterns to watch for auto-restart"
+docs = """
+Glob patterns for files to monitor. When a matching file changes, the daemon
+is automatically restarted.
+
+**Pattern syntax:**
+- `*.js` - All `.js` files in the daemon's directory
+- `src/**/*.ts` - All `.ts` files in `src/` and subdirectories
+- `package.json` - Specific file
+- `config/*.yml` - All `.yml` files in `config/` directory
+
+**Example:**
+```toml
+[daemons.api]
+run = "npm run dev"
+watch = ["src/**/*.ts", "package.json", "tsconfig.json"]
+```
+
+**Behavior:**
+- Patterns are resolved relative to the `pitchfork.toml` file
+- Only running daemons are restarted (stopped daemons ignore changes)
+- Changes are debounced (default: 1 second) to avoid rapid restarts
+- The debounce duration is configurable via `settings.supervisor.file_watch_debounce`
+
+See [File Watching guide](/guides/file-watching) for more details.
+"""
+example = '["src/**/*.ts", "package.json"]'
+
+# =============================================================================
+# Cron Scheduling
+# =============================================================================
+
+[cron]
+type = "Object"
+required = false
+description = "Cron scheduling configuration"
+docs = """
+Configures periodic execution using cron expressions. The daemon runs on
+schedule instead of (or in addition to) manual start commands.
+
+**Fields:**
+- `schedule` - Cron expression (required)
+- `retrigger` - Behavior when schedule fires while previous run is active
+
+**Examples:**
+```toml
+# Run every hour
+[daemons.cleanup]
+run = "./cleanup.sh"
+cron = { schedule = "0 0 * * * *" }
+
+# Run at 2 AM daily
+[daemons.backup]
+run = "./backup.sh"
+cron = { schedule = "0 0 2 * * *" }
+
+# Run every 5 minutes, always restart if still running
+[daemons.healthcheck]
+run = "./check.sh"
+cron = { schedule = "0 */5 * * * *", retrigger = "always" }
+```
+
+See [Cron Scheduling guide](/guides/scheduling) for more details.
+"""
+example = '{ schedule = "0 0 2 * * *" }'
+
+[cron.schedule]
+type = "String"
+required = true
+description = "Cron expression for scheduling"
+docs = """
+A cron expression that defines when the daemon should run.
+
+**Format (6 fields):**
+```
+┌──────────── second (0-59)
+│ ┌────────── minute (0-59)
+│ │ ┌──────── hour (0-23)
+│ │ │ ┌────── day of month (1-31)
+│ │ │ │ ┌──── month (1-12)
+│ │ │ │ │ ┌── day of week (0-6, Sun-Sat)
+│ │ │ │ │ │
+* * * * * *
+```
+
+**Common patterns:**
+- `0 0 * * * *` - Every hour at minute 0
+- `0 0 2 * * *` - Daily at 2:00 AM
+- `0 */5 * * * *` - Every 5 minutes
+- `0 30 9 * * 1-5` - Weekdays at 9:30 AM
+- `0 0 0 1 * *` - First day of every month at midnight
+"""
+example = '"0 0 2 * * *"'
+
+[cron.retrigger]
+type = "String"
+required = false
+default = '"finish"'
+description = "Behavior when cron triggers while previous run is active"
+docs = """
+Controls what happens when the cron schedule fires while the daemon from
+a previous trigger is still running.
+
+**Options:**
+- `"finish"` (default) - Only run if the previous execution has completed (success or error)
+- `"always"` - Always run on schedule, stopping the previous run if still active
+- `"success"` - Only run if the previous execution succeeded (exit code 0)
+- `"fail"` - Only run if the previous execution failed (non-zero exit code)
+
+**Example:**
+```toml
+# Only re-run backup if the previous one finished
+[daemons.backup]
+run = "./backup.sh"
+cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
+
+# Always run health check, kill previous if stuck
+[daemons.healthcheck]
+run = "./check.sh"
+cron = { schedule = "0 */5 * * * *", retrigger = "always" }
+```
+"""
+example = '"finish"'
+
+# =============================================================================
+# Hooks
+# =============================================================================
+
+[on_ready]
+type = "String"
+required = false
+description = "Command to run when daemon becomes ready"
+docs = """
+A shell command that executes when the daemon passes its readiness check.
+
+Useful for:
+- Sending notifications
+- Triggering dependent actions
+- Logging startup events
+
+**Example:**
+```toml
+[daemons.api]
+run = "npm run server"
+ready_http = "http://localhost:3000/health"
+on_ready = "echo 'API started at $(date)' >> /var/log/api.log"
+
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+ready_port = 5432
+on_ready = "notify-send 'Database ready'"
+```
+"""
+example = '"echo \"Service ready\" >> /var/log/startup.log"'
+
+[on_fail]
+type = "String"
+required = false
+description = "Command to run when daemon fails"
+docs = """
+A shell command that executes when the daemon exits with a non-zero exit code.
+
+Useful for:
+- Alerting and monitoring
+- Cleanup tasks
+- Logging failures
+
+**Example:**
+```toml
+[daemons.api]
+run = "npm run server"
+on_fail = "curl -X POST https://alerts.example.com/api-down"
+
+[daemons.critical]
+run = "./critical-service"
+on_fail = "notify-send -u critical 'Critical service failed!'"
+```
+
+**Note:** This hook runs after each failure, before any retry attempt.
+"""
+example = '"curl -X POST https://alerts.example.com/service-down"'
+
+[on_cron_trigger]
+type = "String"
+required = false
+description = "Command to run when cron triggers"
+docs = """
+A shell command that executes when the cron schedule fires, before
+starting the daemon.
+
+Useful for:
+- Pre-execution setup
+- Logging cron events
+- Conditional execution checks
+
+**Example:**
+```toml
+[daemons.backup]
+run = "./backup.sh"
+cron = { schedule = "0 0 2 * * *" }
+on_cron_trigger = "echo 'Starting backup at $(date)' >> /var/log/backup.log"
+```
+
+**Note:** If this command fails (non-zero exit), the daemon still starts.
+"""
+example = '"echo \"Cron triggered at $(date)\" >> /var/log/cron.log"'
+
+[on_retry]
+type = "String"
+required = false
+description = "Command to run before each retry attempt"
+docs = """
+A shell command that executes before each retry attempt after a failure.
+
+Useful for:
+- Cleanup before retry
+- Logging retry attempts
+- Preparing state for retry
+
+**Example:**
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 3
+on_retry = "rm -rf /tmp/api-cache && echo 'Retrying...' >> /var/log/api.log"
+
+[daemons.worker]
+run = "./worker"
+retry = true
+on_retry = "sleep 5"  # Add delay between retries
+```
+
+**Note:** If this command fails (non-zero exit), the retry still proceeds.
+"""
+example = '"rm -rf /tmp/cache && echo \"Retrying...\" >> /var/log/service.log"'

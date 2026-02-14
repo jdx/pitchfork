@@ -4,7 +4,7 @@
 
 use super::{SUPERVISOR, Supervisor};
 use crate::Result;
-use crate::daemon::validate_daemon_id;
+use crate::daemon_id::DaemonId;
 use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
 
@@ -44,32 +44,33 @@ impl Supervisor {
                 IpcResponse::Ok
             }
             IpcRequest::Stop { id } => {
-                if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
-                self.stop(&id).await?
+                let daemon_id = match DaemonId::parse(&id) {
+                    Ok(id) => id,
+                    Err(e) => return Ok(IpcResponse::Error(e.to_string())),
+                };
+                self.stop(&daemon_id).await?
             }
             IpcRequest::Run(opts) => {
-                if let Err(e) = validate_daemon_id(&opts.id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
+                // opts.id is already DaemonId, no validation needed
                 self.run(opts).await?
             }
             IpcRequest::Enable { id } => {
-                if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
-                if self.enable(id).await? {
+                let daemon_id = match DaemonId::parse(&id) {
+                    Ok(id) => id,
+                    Err(e) => return Ok(IpcResponse::Error(e.to_string())),
+                };
+                if self.enable(&daemon_id).await? {
                     IpcResponse::Yes
                 } else {
                     IpcResponse::No
                 }
             }
             IpcRequest::Disable { id } => {
-                if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
-                if self.disable(id).await? {
+                let daemon_id = match DaemonId::parse(&id) {
+                    Ok(id) => id,
+                    Err(e) => return Ok(IpcResponse::Error(e.to_string())),
+                };
+                if self.disable(daemon_id).await? {
                     IpcResponse::Yes
                 } else {
                     IpcResponse::No
