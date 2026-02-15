@@ -986,9 +986,11 @@ ready_delay = 1
     // Verify the daemon ran in the correct directory
     let pwd = std::fs::read_to_string(&marker).unwrap();
     let pwd = pwd.trim();
+    // Canonicalize to resolve symlinks (e.g., /var -> /private/var on macOS)
+    let expected = subdir.canonicalize().unwrap();
     assert_eq!(
         pwd,
-        subdir.to_str().unwrap(),
+        expected.to_str().unwrap(),
         "Daemon should run in the subdirectory"
     );
 
@@ -1029,9 +1031,11 @@ ready_delay = 1
 
     let pwd = std::fs::read_to_string(&marker).unwrap();
     let pwd = pwd.trim();
+    // Canonicalize to resolve symlinks (e.g., /var -> /private/var on macOS)
+    let expected = abs_dir.canonicalize().unwrap();
     assert_eq!(
         pwd,
-        abs_dir.to_str().unwrap(),
+        expected.to_str().unwrap(),
         "Daemon should run in the absolute directory"
     );
 
@@ -1153,7 +1157,9 @@ MY_PORT = "8080"
 
     let value = std::fs::read_to_string(&marker).unwrap();
     let value = value.trim();
-    let expected = format!("8080:{}", subdir.display());
+    // Canonicalize to resolve symlinks (e.g., /var -> /private/var on macOS)
+    let canonical_subdir = subdir.canonicalize().unwrap();
+    let expected = format!("8080:{}", canonical_subdir.display());
     assert_eq!(value, expected, "Both dir and env should work together");
 
     env.run_command(&["stop", "combined_test"]);

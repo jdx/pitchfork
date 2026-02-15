@@ -11,8 +11,14 @@ use std::sync::Arc;
     long_about = "\
 Sends a stop signal to a daemon
 
-Sends SIGTERM to gracefully stop a running daemon. Use 'pitchfork status'
-to check if the daemon has stopped.
+Uses a graceful shutdown strategy:
+1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)
+2. If still running, send another SIGTERM and wait up to 2 more seconds
+3. If still running, send SIGKILL to force termination after ~5 seconds total
+
+Most processes will exit immediately after the first SIGTERM. The progressive
+escalation ensures stubborn processes are eventually terminated while giving
+well-behaved processes time to clean up resources.
 
 When using --all, daemons are stopped in reverse dependency order:
 dependents are stopped before the daemons they depend on.

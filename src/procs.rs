@@ -73,17 +73,93 @@ impl Procs {
         Ok(result)
     }
 
+    /// Kill a process with graceful shutdown strategy:
+    /// 1. Send SIGTERM and wait briefly (10ms intervals for first 100ms, then 50ms intervals up to 3s)
+    /// 2. If still running, send another SIGTERM and wait (up to 2s)
+    /// 3. If still running, send SIGKILL as last resort
+    ///
+    /// This ensures fast-exiting processes don't wait unnecessarily,
+    /// while stubborn processes eventually get forcefully terminated.
     fn kill(&self, pid: u32) -> bool {
-        if let Some(process) = self.lock_system().process(sysinfo::Pid::from_u32(pid)) {
-            debug!("killing process {pid}");
-            #[cfg(windows)]
-            process.kill();
-            #[cfg(unix)]
-            process.kill_with(Signal::Term);
-            process.wait();
+        let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+
+        // Check if process exists
+        if self.lock_system().process(sysinfo_pid).is_none() {
+            return false;
+        }
+
+        debug!("killing process {pid}");
+
+        #[cfg(windows)]
+        {
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                process.kill();
+                process.wait();
+            }
+            return true;
+        }
+
+        #[cfg(unix)]
+        {
+            // Phase 1: First SIGTERM with quick check intervals
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                debug!("sending SIGTERM to process {pid}");
+                process.kill_with(Signal::Term);
+            }
+
+            // Fast check: 10ms intervals for first 100ms (for processes that exit immediately)
+            for i in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                self.refresh_pids(&[pid]);
+                if self.lock_system().process(sysinfo_pid).is_none() {
+                    debug!(
+                        "process {pid} terminated after first SIGTERM ({} ms)",
+                        (i + 1) * 10
+                    );
+                    return true;
+                }
+            }
+
+            // Slower check: 50ms intervals for up to 3 more seconds (100ms + 2900ms = 3000ms total)
+            for i in 0..58 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.refresh_pids(&[pid]);
+                if self.lock_system().process(sysinfo_pid).is_none() {
+                    debug!(
+                        "process {pid} terminated after first SIGTERM ({} ms)",
+                        100 + (i + 1) * 50
+                    );
+                    return true;
+                }
+            }
+
+            // Phase 2: Second SIGTERM for processes that need more time
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                debug!("process {pid} still running after ~3s, sending second SIGTERM");
+                process.kill_with(Signal::Term);
+            }
+
+            // Wait up to 2 more seconds
+            for i in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.refresh_pids(&[pid]);
+                if self.lock_system().process(sysinfo_pid).is_none() {
+                    debug!(
+                        "process {pid} terminated after second SIGTERM ({} ms)",
+                        3000 + (i + 1) * 50
+                    );
+                    return true;
+                }
+            }
+
+            // Phase 3: SIGKILL as last resort
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                warn!("process {pid} did not respond to SIGTERM after 5s, sending SIGKILL");
+                process.kill_with(Signal::Kill);
+                process.wait();
+            }
+
             true
-        } else {
-            false
         }
     }
 
