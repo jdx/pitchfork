@@ -149,6 +149,37 @@ lsof -i :3000  # Replace 3000 with your port
    pitchfork start --all
    ```
 
+### Daemon Won't Stop
+
+**Symptoms:** `pitchfork stop` takes a long time or daemon remains running.
+
+**How stop works:**
+
+Pitchfork uses a graceful shutdown strategy:
+1. **SIGTERM** - Wait up to ~3 seconds for graceful shutdown (fast 10ms checks initially, then 50ms)
+2. **SIGKILL** - Force termination if process doesn't respond
+
+Most well-behaved processes exit within milliseconds of the first SIGTERM.
+If your daemon consistently takes 3+ seconds to stop, it may be ignoring
+SIGTERM signals or have a slow cleanup routine.
+
+**Check:**
+
+1. Verify the daemon handles SIGTERM:
+   ```bash
+   # Test manual SIGTERM
+   kill -TERM $(pitchfork status myapp --json | jq .pid)
+   ```
+
+2. Check debug logs for timing:
+   ```bash
+   PITCHFORK_LOG=debug pitchfork supervisor start --force
+   pitchfork stop myapp
+   pitchfork logs pitchfork | grep -i "sigterm\|sigkill\|terminated"
+   ```
+
+3. If the daemon ignores signals, you may need to fix the daemon's signal handling.
+
 ## Getting Help
 
 If you're still stuck:
