@@ -82,6 +82,7 @@ The supervisor runs independently and manages all daemons.
 |-------|---------|
 | Running | Process is alive |
 | Waiting | Waiting for ready check |
+| Stopping | Being terminated (SIGTERM sent) |
 | Stopped | Exited successfully (code 0) |
 | Errored | Exited with error (code ≠ 0) |
 
@@ -119,6 +120,21 @@ When starting a daemon:
 5. Record PID in state file
 6. Start monitoring for readiness
 
+## Process Termination
+
+When stopping a daemon, pitchfork uses a progressive shutdown strategy:
+
+1. **SIGTERM** - Send initial termination signal, wait up to ~3 seconds
+2. **SIGTERM** (retry) - Send again if process hasn't exited, wait up to 2 more seconds  
+3. **SIGKILL** - Force kill if process still running after 5 seconds total
+
+This ensures:
+- Fast-exiting processes don't cause unnecessary delays (checked every 10ms initially)
+- Well-behaved processes have time to clean up resources
+- Stubborn processes are eventually force-terminated
+
+Child processes are terminated before the parent process.
+
 ## Readiness Detection
 
 | Method | Trigger |
@@ -126,5 +142,7 @@ When starting a daemon:
 | Delay | Wait N seconds, still running = ready |
 | Output | Regex matches stdout/stderr |
 | HTTP | Endpoint returns 2xx |
+| Port | TCP port is listening |
+| Command | Shell command exits with code 0 |
 
 First check to succeed marks daemon as ready.

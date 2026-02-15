@@ -646,33 +646,9 @@ impl Supervisor {
                         }
                     }
 
-                    // Verify process is fully terminated before returning
-                    // This avoids race conditions where a new process starts before
-                    // the old one has fully released resources (ports, files, etc.)
-                    let mut process_terminated = false;
-                    for i in 0..10 {
-                        PROCS.refresh_pids(&[pid]);
-                        if !PROCS.is_running(pid) {
-                            process_terminated = true;
-                            break;
-                        }
-                        if i < 9 {
-                            debug!(
-                                "waiting for process {pid} to fully terminate ({}/10)",
-                                i + 1
-                            );
-                            time::sleep(Duration::from_millis(50)).await;
-                        }
-                    }
-
-                    if !process_terminated {
-                        warn!(
-                            "Process {pid} for daemon {id} did not terminate within 500ms after SIGTERM. \
-                             The process may take longer to release resources."
-                        );
-                    }
-
                     // Process successfully stopped
+                    // Note: kill_async uses SIGTERM -> SIGTERM -> SIGKILL strategy,
+                    // so by the time it returns, the process should be terminated.
                     self.upsert_daemon(UpsertDaemonOpts {
                         id: id.to_string(),
                         pid: None,
