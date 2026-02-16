@@ -86,15 +86,12 @@ impl Procs {
     fn kill_process_group(&self, pid: u32) -> bool {
         let pgid = pid as i32;
 
-        // Check if the leader process is still around
-        if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
-            return false;
-        }
-
         debug!("killing process group {pgid}");
 
-        // Send SIGTERM to the entire process group
-        // killpg sends to all processes in the group atomically
+        // Send SIGTERM to the entire process group.
+        // killpg sends to all processes in the group atomically.
+        // We intentionally skip the zombie check here because the leader may be
+        // a zombie while children in the group are still running.
         let ret = unsafe { libc::killpg(pgid, libc::SIGTERM) };
         if ret == -1 {
             let err = std::io::Error::last_os_error();
@@ -105,28 +102,17 @@ impl Procs {
             warn!("failed to send SIGTERM to process group {pgid}: {err}");
         }
 
-        // Fast check: 10ms intervals for first 100ms
-        for i in 0..10 {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            self.refresh_pids(&[pid]);
-            if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
-                debug!(
-                    "process group {pgid} terminated after SIGTERM ({} ms)",
-                    (i + 1) * 10
-                );
-                return true;
-            }
-        }
+        // Wait for graceful shutdown: fast initial check then slower polling.
+        let fast_checks = std::iter::repeat_n(std::time::Duration::from_millis(10), 10);
+        let slow_checks = std::iter::repeat_n(std::time::Duration::from_millis(50), 58);
+        let mut elapsed_ms = 0u64;
 
-        // Slower check: 50ms intervals for up to ~3 more seconds
-        for i in 0..58 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        for sleep_duration in fast_checks.chain(slow_checks) {
+            std::thread::sleep(sleep_duration);
             self.refresh_pids(&[pid]);
+            elapsed_ms += sleep_duration.as_millis() as u64;
             if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
-                debug!(
-                    "process group {pgid} terminated after SIGTERM ({} ms)",
-                    100 + (i + 1) * 50
-                );
+                debug!("process group {pgid} terminated after SIGTERM ({elapsed_ms} ms)",);
                 return true;
             }
         }
