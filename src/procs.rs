@@ -46,6 +46,9 @@ impl Procs {
             .is_some()
     }
 
+    /// Walk the /proc tree to find all descendant PIDs.
+    /// Kept for diagnostics/status display; no longer used in the kill path.
+    #[allow(dead_code)]
     pub fn all_children(&self, pid: u32) -> Vec<u32> {
         let system = self.lock_system();
         let all = system.processes();
@@ -64,6 +67,71 @@ impl Procs {
             }
         }
         children
+    }
+
+    pub async fn kill_process_group_async(&self, pid: u32) -> Result<bool> {
+        let result = tokio::task::spawn_blocking(move || PROCS.kill_process_group(pid))
+            .await
+            .into_diagnostic()?;
+        Ok(result)
+    }
+
+    /// Kill an entire process group with graceful shutdown strategy:
+    /// 1. Send SIGTERM to the process group (-pgid) and wait up to ~3s
+    /// 2. If any processes remain, send SIGKILL to the group
+    ///
+    /// Since daemons are spawned with setsid(), the daemon PID == PGID,
+    /// so this atomically signals all descendant processes.
+    #[cfg(unix)]
+    fn kill_process_group(&self, pid: u32) -> bool {
+        let pgid = pid as i32;
+
+        debug!("killing process group {pgid}");
+
+        // Send SIGTERM to the entire process group.
+        // killpg sends to all processes in the group atomically.
+        // We intentionally skip the zombie check here because the leader may be
+        // a zombie while children in the group are still running.
+        let ret = unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                debug!("process group {pgid} no longer exists");
+                return false;
+            }
+            warn!("failed to send SIGTERM to process group {pgid}: {err}");
+        }
+
+        // Wait for graceful shutdown: fast initial check then slower polling.
+        let fast_checks = std::iter::repeat_n(std::time::Duration::from_millis(10), 10);
+        let slow_checks = std::iter::repeat_n(std::time::Duration::from_millis(50), 58);
+        let mut elapsed_ms = 0u64;
+
+        for sleep_duration in fast_checks.chain(slow_checks) {
+            std::thread::sleep(sleep_duration);
+            self.refresh_pids(&[pid]);
+            elapsed_ms += sleep_duration.as_millis() as u64;
+            if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
+                debug!("process group {pgid} terminated after SIGTERM ({elapsed_ms} ms)",);
+                return true;
+            }
+        }
+
+        // SIGKILL the entire process group as last resort
+        warn!("process group {pgid} did not respond to SIGTERM after ~3s, sending SIGKILL");
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+
+        // Brief wait for SIGKILL to take effect
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        true
+    }
+
+    #[cfg(not(unix))]
+    fn kill_process_group(&self, pid: u32) -> bool {
+        // On non-unix platforms, fall back to single-process kill
+        self.kill(pid)
     }
 
     pub async fn kill_async(&self, pid: u32) -> Result<bool> {

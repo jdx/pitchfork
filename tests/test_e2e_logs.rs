@@ -1,6 +1,5 @@
 mod common;
 
-use chrono;
 use common::{TestEnv, get_script_path};
 use std::time::Duration;
 

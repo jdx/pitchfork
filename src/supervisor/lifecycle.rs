@@ -155,6 +155,18 @@ impl Supervisor {
             cmd.envs(env_vars);
         }
 
+        // Put each daemon in its own session/process group so we can kill the
+        // entire tree atomically with a single signal to the group.
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
         let mut child = cmd.spawn().into_diagnostic()?;
         let pid = match child.id() {
             Some(p) => p,
@@ -615,16 +627,9 @@ impl Supervisor {
                     })
                     .await?;
 
-                    // First kill child processes (should be ahead of parent)
-                    for child_pid in PROCS.all_children(pid) {
-                        debug!("killing child pid: {child_pid}");
-                        if let Err(e) = PROCS.kill_async(child_pid).await {
-                            warn!("failed to kill child pid {child_pid}: {e}");
-                        }
-                    }
-
-                    // Then kill the parent process
-                    if let Err(e) = PROCS.kill_async(pid).await {
+                    // Kill the entire process group atomically (daemon PID == PGID
+                    // because we called setsid() at spawn time)
+                    if let Err(e) = PROCS.kill_process_group_async(pid).await {
                         debug!("failed to kill pid {pid}: {e}");
                         // Check if the process is actually stopped despite the error
                         PROCS.refresh_processes();

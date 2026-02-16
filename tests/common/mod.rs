@@ -303,17 +303,17 @@ impl TestEnv {
             .args(["-ti", &format!(":{port}")])
             .output();
 
-        if let Ok(output) = output {
-            if output.status.success() {
-                let pids = String::from_utf8_lossy(&output.stdout);
-                for pid in pids.lines() {
-                    if let Ok(pid) = pid.trim().parse::<i32>() {
-                        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
-                    }
+        if let Ok(output) = output
+            && output.status.success()
+        {
+            let pids = String::from_utf8_lossy(&output.stdout);
+            for pid in pids.lines() {
+                if let Ok(pid) = pid.trim().parse::<i32>() {
+                    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
                 }
-                // Give the OS time to release the port
-                std::thread::sleep(Duration::from_millis(100));
             }
+            // Give the OS time to release the port
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 
