@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0](https://github.com/jdx/pitchfork/compare/v1.4.3...v1.5.0) - 2026-02-16
+
+### Added
+
+- *(supervisor)* use process groups for atomic daemon shutdown ([#239](https://github.com/jdx/pitchfork/pull/239))
+- SIGKILL after SIGTERM ([#238](https://github.com/jdx/pitchfork/pull/238))
+
 ## [1.4.2](https://github.com/jdx/pitchfork/compare/v1.4.1...v1.4.2) - 2026-02-11
 
 ### Fixed
