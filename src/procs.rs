@@ -73,17 +73,94 @@ impl Procs {
         Ok(result)
     }
 
+    /// Kill a process with graceful shutdown strategy:
+    /// 1. Send SIGTERM and wait up to ~3s (10ms intervals for first 100ms, then 50ms intervals)
+    /// 2. If still running, send SIGKILL to force termination
+    ///
+    /// This ensures fast-exiting processes don't wait unnecessarily,
+    /// while stubborn processes eventually get forcefully terminated.
     fn kill(&self, pid: u32) -> bool {
-        if let Some(process) = self.lock_system().process(sysinfo::Pid::from_u32(pid)) {
-            debug!("killing process {pid}");
-            #[cfg(windows)]
-            process.kill();
-            #[cfg(unix)]
-            process.kill_with(Signal::Term);
-            process.wait();
+        let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+
+        // Check if process exists or is a zombie (already terminated but not reaped)
+        if self.is_terminated_or_zombie(sysinfo_pid) {
+            return false;
+        }
+
+        debug!("killing process {pid}");
+
+        #[cfg(windows)]
+        {
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                process.kill();
+                process.wait();
+            }
+            return true;
+        }
+
+        #[cfg(unix)]
+        {
+            // Send SIGTERM for graceful shutdown
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                debug!("sending SIGTERM to process {pid}");
+                process.kill_with(Signal::Term);
+            }
+
+            // Fast check: 10ms intervals for first 100ms (for processes that exit immediately)
+            for i in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                self.refresh_pids(&[pid]);
+                if self.is_terminated_or_zombie(sysinfo_pid) {
+                    debug!(
+                        "process {pid} terminated after SIGTERM ({} ms)",
+                        (i + 1) * 10
+                    );
+                    return true;
+                }
+            }
+
+            // Slower check: 50ms intervals for up to ~3 more seconds (100ms + 2900ms = 3000ms total)
+            for i in 0..58 {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.refresh_pids(&[pid]);
+                if self.is_terminated_or_zombie(sysinfo_pid) {
+                    debug!(
+                        "process {pid} terminated after SIGTERM ({} ms)",
+                        100 + (i + 1) * 50
+                    );
+                    return true;
+                }
+            }
+
+            // SIGKILL as last resort after ~3s
+            if let Some(process) = self.lock_system().process(sysinfo_pid) {
+                warn!("process {pid} did not respond to SIGTERM after ~3s, sending SIGKILL");
+                process.kill_with(Signal::Kill);
+                process.wait();
+            }
+
             true
-        } else {
-            false
+        }
+    }
+
+    /// Check if a process is terminated or is a zombie.
+    /// On Linux, zombie processes still have /proc/[pid] entries but are effectively dead.
+    /// This prevents unnecessary signal escalation for processes that have already exited.
+    fn is_terminated_or_zombie(&self, sysinfo_pid: sysinfo::Pid) -> bool {
+        let system = self.lock_system();
+        match system.process(sysinfo_pid) {
+            None => true,
+            Some(process) => {
+                #[cfg(unix)]
+                {
+                    matches!(process.status(), sysinfo::ProcessStatus::Zombie)
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = process;
+                    false
+                }
+            }
         }
     }
 
