@@ -1,8 +1,18 @@
 use axum::{Form, extract::Query, response::Html};
+use indexmap::IndexMap;
 use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::pitchfork_toml::PitchforkToml;
+use crate::web::helpers::html_escape;
+
+/// Simple struct for TOML validation in the web UI
+/// This mirrors PitchforkTomlRaw but is only used for syntax validation
+#[derive(Deserialize)]
+struct ConfigTomlForValidation {
+    #[serde(default)]
+    daemons: IndexMap<String, toml::Value>,
+}
 
 fn base_html(title: &str, content: &str) -> String {
     format!(
@@ -223,7 +233,7 @@ pub struct ConfigForm {
 }
 
 pub async fn validate(Form(form): Form<ConfigForm>) -> Html<String> {
-    match toml::from_str::<PitchforkToml>(&form.content) {
+    match toml::from_str::<ConfigTomlForValidation>(&form.content) {
         Ok(config) => {
             let daemon_count = config.daemons.len();
             let daemon_names: Vec<String> = config.daemons.keys().map(|s| html_escape(s)).collect();
@@ -261,7 +271,7 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
     };
 
     // Validate TOML first
-    if let Err(e) = toml::from_str::<PitchforkToml>(&form.content) {
+    if let Err(e) = toml::from_str::<ConfigTomlForValidation>(&form.content) {
         return Html(format!(
             r#"
             <div class="validation-error">
@@ -305,12 +315,4 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
             html_escape(&e.to_string())
         )),
     }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
