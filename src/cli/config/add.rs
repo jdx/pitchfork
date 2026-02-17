@@ -1,11 +1,15 @@
 use crate::Result;
-use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto, PitchforkTomlDaemon, Retry};
+use crate::daemon_id::DaemonId;
+use crate::pitchfork_toml::{
+    PitchforkToml, PitchforkTomlAuto, PitchforkTomlDaemon, Retry, namespace_from_path,
+};
+use std::path::PathBuf;
 
 /// Add a new daemon to ./pitchfork.toml
 #[derive(Debug, clap::Args)]
 #[clap(visible_alias = "a", verbatim_doc_comment)]
 pub struct Add {
-    /// ID of the daemon to add
+    /// ID of the daemon to add (e.g., "api" or "namespace/api")
     pub id: String,
     /// Arguments to pass to the daemon
     #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
@@ -20,8 +24,9 @@ pub struct Add {
 
 impl Add {
     pub async fn run(&self) -> Result<()> {
-        let mut pt = PitchforkToml::read("pitchfork.toml").unwrap_or_default();
-        pt.path = pt.path.or(Some("pitchfork.toml".into()));
+        let config_path = PathBuf::from("pitchfork.toml");
+        let mut pt = PitchforkToml::read(&config_path).unwrap_or_default();
+        pt.path = pt.path.or(Some(config_path.clone()));
         let mut auto = vec![];
         if self.autostart {
             auto.push(PitchforkTomlAuto::Start);
@@ -29,8 +34,16 @@ impl Add {
         if self.autostop {
             auto.push(PitchforkTomlAuto::Stop);
         }
+        // Parse the daemon ID: if qualified, use it directly; otherwise use the
+        // namespace from the config file being edited (not global resolution)
+        let daemon_id = if self.id.contains('/') {
+            DaemonId::parse(&self.id)?
+        } else {
+            let namespace = namespace_from_path(&config_path);
+            DaemonId::new(&namespace, &self.id)
+        };
         pt.daemons.insert(
-            self.id.clone(),
+            daemon_id.clone(),
             PitchforkTomlDaemon {
                 run: shell_words::join(&self.args),
                 auto,
@@ -47,6 +60,10 @@ impl Add {
                 dir: None,
                 env: None,
                 path: None,
+                on_ready: None,
+                on_fail: None,
+                on_cron_trigger: None,
+                on_retry: None,
             },
         );
         pt.write()?;
@@ -55,7 +72,7 @@ impl Add {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "pitchfork.toml".to_string());
-        println!("added {} to {}", self.id, path_display);
+        println!("added {} to {}", daemon_id, path_display);
         Ok(())
     }
 }

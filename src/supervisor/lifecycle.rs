@@ -2,11 +2,14 @@
 //!
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
+use super::hooks;
 use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
+use crate::settings::settings;
 use crate::shell::Shell;
 use crate::{Result, env};
 use itertools::Itertools;
@@ -133,7 +136,7 @@ impl Supervisor {
             .chain(cmd.into_iter())
             .collect_vec();
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
-        let log_path = env::PITCHFORK_LOGS_DIR.join(id).join(format!("{id}.log"));
+        let log_path = id.log_path();
         if let Some(parent) = log_path.parent() {
             xx::file::mkdirp(parent)?;
         }
@@ -180,7 +183,7 @@ impl Supervisor {
         info!("started daemon {id} with pid {pid}");
         let daemon = self
             .upsert_daemon(UpsertDaemonOpts {
-                id: id.to_string(),
+                id: id.clone(),
                 pid: Some(pid),
                 status: DaemonStatus::Running,
                 shell_pid: opts.shell_pid,
@@ -202,7 +205,7 @@ impl Supervisor {
             })
             .await?;
 
-        let id_clone = id.to_string();
+        let id_clone = id.clone();
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
@@ -252,28 +255,34 @@ impl Supervisor {
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
 
-            // Setup HTTP readiness check interval (poll every 500ms)
+            // Get settings for intervals
+            let s = settings();
+            let ready_check_interval = s.supervisor_ready_check_interval();
+            let http_client_timeout = s.supervisor_http_client_timeout();
+            let log_flush_interval_duration = s.supervisor_log_flush_interval();
+
+            // Setup HTTP readiness check interval
             let mut http_check_interval = ready_http
                 .as_ref()
-                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+                .map(|_| tokio::time::interval(ready_check_interval));
             let http_client = ready_http.as_ref().map(|_| {
                 reqwest::Client::builder()
-                    .timeout(Duration::from_secs(5))
+                    .timeout(http_client_timeout)
                     .build()
                     .unwrap_or_default()
             });
 
-            // Setup TCP port readiness check interval (poll every 500ms)
+            // Setup TCP port readiness check interval
             let mut port_check_interval =
-                ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
+                ready_port.map(|_| tokio::time::interval(ready_check_interval));
 
-            // Setup command readiness check interval (poll every 500ms)
+            // Setup command readiness check interval
             let mut cmd_check_interval = ready_cmd
                 .as_ref()
-                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+                .map(|_| tokio::time::interval(ready_check_interval));
 
-            // Setup periodic log flush interval (every 500ms - balances I/O reduction with responsiveness)
-            let mut log_flush_interval = tokio::time::interval(Duration::from_millis(500));
+            // Setup periodic log flush interval
+            let mut log_flush_interval = tokio::time::interval(log_flush_interval_duration);
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
@@ -306,6 +315,8 @@ impl Supervisor {
                                 && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -326,6 +337,8 @@ impl Supervisor {
                                 && pattern.is_match(&line) {
                                     info!("daemon {id} ready: output matched pattern");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -375,6 +388,8 @@ impl Supervisor {
                                 Ok(response) if response.status().is_success() => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -404,6 +419,8 @@ impl Supervisor {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
@@ -436,6 +453,8 @@ impl Supervisor {
                                 Ok(status) if status.success() => {
                                     info!("daemon {id} ready: readiness command succeeded");
                                     ready_notified = true;
+                                    // Execute on_ready hook
+                                    hooks::execute_on_ready(&id).await;
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
@@ -462,6 +481,8 @@ impl Supervisor {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
+                            // Execute on_ready hook
+                            hooks::execute_on_ready(&id).await;
                             // Flush logs before notifying so clients see logs immediately
                             let _ = log_appender.flush().await;
                             if let Some(tx) = ready_tx.take() {
@@ -537,15 +558,18 @@ impl Supervisor {
                 } else {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
-                    let status = match status.code() {
+                    let exit_code = status.code();
+                    let new_status = match exit_code {
                         Some(code) => DaemonStatus::Errored(code),
                         None => DaemonStatus::Errored(-1),
                     };
+                    // Execute on_fail hook
+                    hooks::execute_on_fail(&id, exit_code).await;
                     if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             pid: None,
-                            status,
+                            status: new_status,
                             last_exit_success: Some(false),
                             ..Default::default()
                         })
@@ -569,17 +593,22 @@ impl Supervisor {
                 {
                     error!("Failed to update daemon state for {id}: {e}");
                 }
-            } else if let Err(e) = SUPERVISOR
-                .upsert_daemon(UpsertDaemonOpts {
-                    id: id.clone(),
-                    pid: None,
-                    status: DaemonStatus::Errored(-1),
-                    last_exit_success: Some(false),
-                    ..Default::default()
-                })
-                .await
-            {
-                error!("Failed to update daemon state for {id}: {e}");
+            } else {
+                // Process exited abnormally (e.g., child.wait() returned an error)
+                // Execute on_fail hook for this error case
+                hooks::execute_on_fail(&id, None).await;
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(UpsertDaemonOpts {
+                        id: id.clone(),
+                        pid: None,
+                        status: DaemonStatus::Errored(-1),
+                        last_exit_success: Some(false),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    error!("Failed to update daemon state for {id}: {e}");
+                }
             }
         });
 
@@ -605,8 +634,9 @@ impl Supervisor {
     }
 
     /// Stop a running daemon
-    pub async fn stop(&self, id: &str) -> Result<IpcResponse> {
-        if id == "pitchfork" {
+    pub async fn stop(&self, id: &DaemonId) -> Result<IpcResponse> {
+        let pitchfork_id = DaemonId::pitchfork();
+        if *id == pitchfork_id {
             return Ok(IpcResponse::Error(
                 "Cannot stop supervisor via stop command".into(),
             ));
@@ -620,7 +650,7 @@ impl Supervisor {
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
+                        id: id.clone(),
                         pid: Some(pid),
                         status: DaemonStatus::Stopping,
                         ..Default::default()
@@ -637,7 +667,7 @@ impl Supervisor {
                             // Process still running after kill attempt - set back to Running
                             debug!("failed to stop pid {pid}: process still running after kill");
                             self.upsert_daemon(UpsertDaemonOpts {
-                                id: id.to_string(),
+                                id: id.clone(),
                                 pid: Some(pid), // Preserve PID to avoid orphaning the process
                                 status: DaemonStatus::Running,
                                 ..Default::default()
@@ -656,7 +686,7 @@ impl Supervisor {
                     // and also detects zombie processes, so by the time it returns,
                     // the process should be fully terminated.
                     self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
+                        id: id.clone(),
                         pid: None,
                         status: DaemonStatus::Stopped,
                         last_exit_success: Some(true), // Manual stop is considered successful
@@ -668,7 +698,7 @@ impl Supervisor {
                     // Process already dead, directly mark as stopped
                     // Note that the cleanup logic is handled in monitor task
                     self.upsert_daemon(UpsertDaemonOpts {
-                        id: id.to_string(),
+                        id: id.clone(),
                         pid: None,
                         status: DaemonStatus::Stopped,
                         ..Default::default()

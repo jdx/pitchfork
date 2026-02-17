@@ -10,7 +10,7 @@ Add a new daemon to ./pitchfork.toml
 
 ### `<ID>`
 
-ID of the daemon to add
+ID of the daemon to add (e.g., "api" or "namespace/api")
 
 ### `[ARGS]…`
 

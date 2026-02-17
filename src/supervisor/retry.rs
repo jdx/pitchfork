@@ -2,8 +2,10 @@
 //!
 //! Handles automatic retrying of failed daemons based on retry configuration.
 
+use super::hooks;
 use super::{Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::{Result, env};
 
@@ -11,7 +13,7 @@ impl Supervisor {
     /// Check for daemons that need retrying and attempt to restart them
     pub(crate) async fn check_retry(&self) -> Result<()> {
         // Collect only IDs of daemons that need retrying (avoids cloning entire Daemon structs)
-        let ids_to_retry: Vec<String> = {
+        let ids_to_retry: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -50,6 +52,9 @@ impl Supervisor {
                 daemon.retry_count + 1,
                 daemon.retry
             );
+
+            // Execute on_retry hook before attempting retry
+            hooks::execute_on_retry(&id, daemon.retry_count + 1, daemon.retry).await;
 
             // Get command from pitchfork.toml
             if let Some(run_cmd) = self.get_daemon_run_command(&id) {
@@ -107,7 +112,7 @@ impl Supervisor {
     }
 
     /// Get the run command for a daemon from the pitchfork.toml configuration
-    pub(crate) fn get_daemon_run_command(&self, id: &str) -> Option<String> {
+    pub(crate) fn get_daemon_run_command(&self, id: &DaemonId) -> Option<String> {
         let pt = PitchforkToml::all_merged();
         pt.daemons.get(id).map(|d| d.run.clone())
     }

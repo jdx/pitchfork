@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::daemon_id::DaemonId;
 use crate::tui::app::{App, EditMode, PendingAction, View};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use miette::IntoDiagnostic;
@@ -141,10 +142,10 @@ fn handle_dashboard_event(
                 let ids: Vec<String> = app
                     .selected_daemon_ids()
                     .into_iter()
-                    .filter(|id| {
+                    .filter(|id_str| {
                         app.daemons
                             .iter()
-                            .find(|d| &d.id == id)
+                            .find(|d| d.id.to_string() == *id_str)
                             .map(|d| {
                                 d.status.is_stopped()
                                     || d.status.is_errored()
@@ -161,7 +162,7 @@ fn handle_dashboard_event(
                     || daemon.status.is_errored()
                     || daemon.status.is_failed())
             {
-                return Ok(Some(Action::Start(daemon.id.clone())));
+                return Ok(Some(Action::Start(daemon.id.to_string())));
             }
             Ok(None)
         }
@@ -171,10 +172,10 @@ fn handle_dashboard_event(
                 let ids: Vec<String> = app
                     .selected_daemon_ids()
                     .into_iter()
-                    .filter(|id| {
+                    .filter(|id_str| {
                         app.daemons
                             .iter()
-                            .find(|d| &d.id == id)
+                            .find(|d| d.id.to_string() == *id_str)
                             .map(|d| d.status.is_running() || d.status.is_waiting())
                             .unwrap_or(false)
                     })
@@ -185,7 +186,7 @@ fn handle_dashboard_event(
             } else if let Some(daemon) = app.selected_daemon()
                 && (daemon.status.is_running() || daemon.status.is_waiting())
             {
-                app.confirm_action(PendingAction::Stop(daemon.id.clone()));
+                app.confirm_action(PendingAction::Stop(daemon.id.to_string()));
             }
             Ok(None)
         }
@@ -194,12 +195,12 @@ fn handle_dashboard_event(
             if app.has_selection() {
                 let mut to_restart = Vec::new();
                 let mut to_start = Vec::new();
-                for id in app.selected_daemon_ids() {
-                    if let Some(d) = app.daemons.iter().find(|d| d.id == id) {
+                for id_str in app.selected_daemon_ids() {
+                    if let Some(d) = app.daemons.iter().find(|d| d.id.to_string() == id_str) {
                         if d.status.is_running() || d.status.is_waiting() {
-                            to_restart.push(id);
+                            to_restart.push(id_str);
                         } else {
-                            to_start.push(id);
+                            to_start.push(id_str);
                         }
                     }
                 }
@@ -211,10 +212,10 @@ fn handle_dashboard_event(
                 }
             } else if let Some(daemon) = app.selected_daemon() {
                 if daemon.status.is_running() || daemon.status.is_waiting() {
-                    app.confirm_action(PendingAction::Restart(daemon.id.clone()));
+                    app.confirm_action(PendingAction::Restart(daemon.id.to_string()));
                 } else {
                     // If not running, just start it (no confirmation needed)
-                    return Ok(Some(Action::Start(daemon.id.clone())));
+                    return Ok(Some(Action::Start(daemon.id.to_string())));
                 }
             }
             Ok(None)
@@ -224,7 +225,12 @@ fn handle_dashboard_event(
                 let ids: Vec<String> = app
                     .selected_daemon_ids()
                     .into_iter()
-                    .filter(|id| app.is_disabled(id))
+                    .filter(|id_str| {
+                        DaemonId::parse(id_str)
+                            .ok()
+                            .map(|id| app.is_disabled(&id))
+                            .unwrap_or(false)
+                    })
                     .collect();
                 if !ids.is_empty() {
                     return Ok(Some(Action::BatchEnable(ids)));
@@ -232,7 +238,7 @@ fn handle_dashboard_event(
             } else if let Some(daemon) = app.selected_daemon()
                 && app.is_disabled(&daemon.id)
             {
-                return Ok(Some(Action::Enable(daemon.id.clone())));
+                return Ok(Some(Action::Enable(daemon.id.to_string())));
             }
             Ok(None)
         }
@@ -242,7 +248,12 @@ fn handle_dashboard_event(
                 let ids: Vec<String> = app
                     .selected_daemon_ids()
                     .into_iter()
-                    .filter(|id| !app.is_disabled(id))
+                    .filter(|id_str| {
+                        DaemonId::parse(id_str)
+                            .ok()
+                            .map(|id| !app.is_disabled(&id))
+                            .unwrap_or(false)
+                    })
                     .collect();
                 if !ids.is_empty() {
                     app.confirm_action(PendingAction::BatchDisable(ids));
@@ -250,7 +261,7 @@ fn handle_dashboard_event(
             } else if let Some(daemon) = app.selected_daemon()
                 && !app.is_disabled(&daemon.id)
             {
-                app.confirm_action(PendingAction::Disable(daemon.id.clone()));
+                app.confirm_action(PendingAction::Disable(daemon.id.to_string()));
             }
             Ok(None)
         }
@@ -270,7 +281,7 @@ fn handle_dashboard_event(
         KeyCode::Char('E') => {
             // Edit selected daemon config
             if let Some(daemon) = app.selected_daemon() {
-                return Ok(Some(Action::OpenEditorEdit(daemon.id.clone())));
+                return Ok(Some(Action::OpenEditorEdit(daemon.id.to_string())));
             }
             Ok(None)
         }

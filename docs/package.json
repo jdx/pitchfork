@@ -5,6 +5,7 @@
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {
+    "marked": "^17.0.2",
     "vitepress": "^1.5.0"
   }
 }

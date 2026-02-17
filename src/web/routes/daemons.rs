@@ -5,6 +5,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::daemon::is_valid_daemon_id;
+use crate::daemon_id::DaemonId;
 use crate::daemon_list::get_all_daemons_direct;
 use crate::env;
 use crate::ipc::batch::{StartOptions, build_run_options};
@@ -12,18 +13,7 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-fn url_encode(s: &str) -> String {
-    urlencoding::encode(s).into_owned()
-}
+use crate::web::helpers::{css_safe_id, format_daemon_id_html, html_escape, url_encode};
 
 /// Get daemon command from the stored cmd field
 fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
@@ -89,9 +79,12 @@ fn base_html(title: &str, content: &str) -> String {
     )
 }
 
-fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
-    let safe_id = html_escape(id);
-    let url_id = url_encode(id);
+fn daemon_row(id: &DaemonId, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
+    let id_str = id.to_string();
+    let safe_id = css_safe_id(&id_str);
+    let confirm_id = html_escape(&id_str); // For display in confirm dialogs
+    let url_id = url_encode(&id_str);
+    let display_html = format_daemon_id_html(id);
     let status_class = match &d.status {
         crate::daemon_status::DaemonStatus::Running => "running",
         crate::daemon_status::DaemonStatus::Stopped => "stopped",
@@ -128,8 +121,8 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
-            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
+            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{confirm_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
+            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{confirm_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
         "##
         )
     } else {
@@ -146,13 +139,13 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
+            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{confirm_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
         )
     };
 
     format!(
         r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-        <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
+        <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{display_html}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td>{cpu_display}</td>
@@ -182,10 +175,12 @@ async fn list_content() -> String {
     for entry in entries {
         if entry.is_available {
             // Show available (config-only) daemons
-            let safe_id = html_escape(&entry.id);
-            let url_id = url_encode(&entry.id);
+            let id_str = entry.id.to_string();
+            let safe_id = css_safe_id(&id_str);
+            let url_id = url_encode(&id_str);
+            let display_html = format_daemon_id_html(&entry.id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{display_html}</a></td>
                 <td>-</td>
                 <td><span class="status available">available</span></td>
                 <td>-</td>
@@ -248,10 +243,12 @@ pub async fn list_partial() -> Html<String> {
     for entry in entries {
         if entry.is_available {
             // Show available (config-only) daemons
-            let safe_id = html_escape(&entry.id);
-            let url_id = url_encode(&entry.id);
+            let id_str = entry.id.to_string();
+            let safe_id = css_safe_id(&id_str);
+            let url_id = url_encode(&id_str);
+            let display_html = format_daemon_id_html(&entry.id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{display_html}</a></td>
                 <td>-</td>
                 <td><span class="status available">available</span></td>
                 <td>-</td>
@@ -283,17 +280,27 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         return Html(base_html("Error", content));
     }
 
+    // Parse daemon ID
+    let daemon_id = match DaemonId::parse(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            let content = r#"<h1>Error</h1><p class="error">Invalid daemon ID format.</p><a href="/" class="btn">Back</a>"#;
+            return Html(base_html("Error", content));
+        }
+    };
+
     // Refresh process info for accurate stats
     PROCS.refresh_processes();
 
     let safe_id = html_escape(&id);
+    let display_html = format_daemon_id_html(&daemon_id);
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
     let pt = PitchforkToml::all_merged();
 
-    let daemon_info = state.daemons.get(&id);
-    let config_info = pt.daemons.get(&id);
-    let is_disabled = state.disabled.contains(&id);
+    let daemon_info = state.daemons.get(&daemon_id);
+    let config_info = pt.daemons.get(&daemon_id);
+    let is_disabled = state.disabled.contains(&daemon_id);
 
     let url_id = url_encode(&id);
     let content = if let Some(d) = daemon_info {
@@ -426,7 +433,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             r#"
             <div class="page-header">
                 <div>
-                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{safe_id}</span></h1>
+                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{display_html}</span></h1>
                 </div>
                 <div class="header-actions">
                     <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> View Logs</a>
@@ -467,7 +474,11 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     } else if config_info.is_some() {
         format!(
             r##"
-            <h1>Daemon: {safe_id}</h1>
+            <div class="page-header">
+                <div>
+                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{display_html}</span></h1>
+                </div>
+            </div>
             <p>This daemon is configured but has not been started yet.</p>
             <div class="actions">
                 <button hx-post="/daemons/{url_id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
@@ -501,14 +512,23 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
+    // Parse daemon ID
+    let daemon_id = match DaemonId::parse(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let display_id = html_escape(&id);
     let pt = PitchforkToml::all_merged();
     let from_detail = query.from.as_deref() == Some("detail");
 
-    let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
+    let start_error = if let Some(daemon_config) = pt.daemons.get(&daemon_id) {
         // Use shared helper to build RunOptions from config
         let opts = StartOptions::default();
-        let mut run_opts = match build_run_options(&id, daemon_config, &opts) {
+        let mut run_opts = match build_run_options(&daemon_id, daemon_config, &opts) {
             Ok(opts) => opts,
             Err(e) => {
                 return if from_detail {
@@ -545,7 +565,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
     if from_detail {
         if let Some(err) = start_error {
             Html(format!(r#"<div class="error">{}</div>"#, html_escape(&err)))
-        } else if let Some(daemon) = state.daemons.get(&id) {
+        } else if let Some(daemon) = state.daemons.get(&daemon_id) {
             let status = &daemon.status;
             Html(format!(
                 r#"<div class="success">Started! Status: {status}</div><script>setTimeout(function(){{ window.location.href='/'; }}, 1000);</script>"#
@@ -555,9 +575,9 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         }
     } else {
         // Return table row for list page
-        if let Some(daemon) = state.daemons.get(&id) {
-            let is_disabled = state.disabled.contains(&id);
-            Html(daemon_row(&id, daemon, is_disabled))
+        if let Some(daemon) = state.daemons.get(&daemon_id) {
+            let is_disabled = state.disabled.contains(&daemon_id);
+            Html(daemon_row(&daemon_id, daemon, is_disabled))
         } else if let Some(err) = start_error {
             Html(format!(
                 r#"<tr id="daemon-{safe_id}"><td colspan="8" class="error">{}</td></tr>"#,
@@ -565,7 +585,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
             ))
         } else {
             Html(format!(
-                r#"<tr id="daemon-{safe_id}"><td colspan="8">Starting {safe_id}...</td></tr>"#
+                r#"<tr id="daemon-{safe_id}"><td colspan="8">Starting {display_id}...</td></tr>"#
             ))
         }
     }
@@ -577,16 +597,24 @@ pub async fn stop(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let _ = SUPERVISOR.stop(&id).await;
+    // Parse daemon ID
+    let daemon_id = match DaemonId::parse(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let _ = SUPERVISOR.stop(&daemon_id).await;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
 
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
+    if let Some(daemon) = state.daemons.get(&daemon_id) {
+        let is_disabled = state.disabled.contains(&daemon_id);
+        Html(daemon_row(&daemon_id, daemon, is_disabled))
     } else {
         Html(format!(
             r#"<tr id="daemon-{safe_id}"><td colspan="8">Stopped</td></tr>"#
@@ -600,7 +628,15 @@ pub async fn restart(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let _ = SUPERVISOR.stop(&id).await;
+    // Parse daemon ID
+    let daemon_id = match DaemonId::parse(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let _ = SUPERVISOR.stop(&daemon_id).await;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     start(Path(id), Query(StartQuery::default())).await
 }
@@ -611,14 +647,22 @@ pub async fn enable(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let _ = SUPERVISOR.enable(id.clone()).await;
+    // Parse daemon ID
+    let daemon_id = match DaemonId::parse(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let _ = SUPERVISOR.enable(&daemon_id).await;
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
+    if let Some(daemon) = state.daemons.get(&daemon_id) {
+        let is_disabled = state.disabled.contains(&daemon_id);
+        Html(daemon_row(&daemon_id, daemon, is_disabled))
     } else {
         Html(format!(
             r#"<tr id="daemon-{safe_id}"><td colspan="8">Enabled</td></tr>"#
@@ -632,14 +676,22 @@ pub async fn disable(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let _ = SUPERVISOR.disable(id.clone()).await;
+    // Parse daemon ID
+    let daemon_id = match DaemonId::parse(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let _ = SUPERVISOR.disable(daemon_id.clone()).await;
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
+    if let Some(daemon) = state.daemons.get(&daemon_id) {
+        let is_disabled = state.disabled.contains(&daemon_id);
+        Html(daemon_row(&daemon_id, daemon, is_disabled))
     } else {
         Html(format!(
             r#"<tr id="daemon-{safe_id}"><td colspan="8">Disabled</td></tr>"#

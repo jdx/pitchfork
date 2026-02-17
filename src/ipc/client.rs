@@ -1,7 +1,9 @@
 use crate::daemon::{Daemon, RunOptions};
+use crate::daemon_id::DaemonId;
 use crate::error::IpcError;
 use crate::ipc::batch::RunResult;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::settings::settings;
 use crate::{Result, supervisor};
 use exponential_backoff::Backoff;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
@@ -18,11 +20,6 @@ pub struct IpcClient {
     recv: Mutex<BufReader<RecvHalf>>,
     send: Mutex<SendHalf>,
 }
-
-const CONNECT_ATTEMPTS: u32 = 5;
-const CONNECT_MIN_DELAY: Duration = Duration::from_millis(100);
-const CONNECT_MAX_DELAY: Duration = Duration::from_secs(1);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl IpcClient {
     pub async fn connect(autostart: bool) -> Result<Self> {
@@ -45,7 +42,11 @@ impl IpcClient {
     }
 
     async fn connect_(id: &str, name: &str) -> Result<Self> {
-        for duration in Backoff::new(CONNECT_ATTEMPTS, CONNECT_MIN_DELAY, CONNECT_MAX_DELAY) {
+        let s = settings();
+        let connect_attempts = s.ipc.connect_attempts as u32;
+        let connect_min_delay = s.ipc_connect_min_delay();
+        let connect_max_delay = s.ipc_connect_max_delay();
+        for duration in Backoff::new(connect_attempts, connect_min_delay, connect_max_delay) {
             match interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await {
                 Ok(conn) => {
                     let (recv, send) = conn.split();
@@ -66,7 +67,7 @@ impl IpcClient {
                         continue;
                     } else {
                         return Err(IpcError::ConnectionFailed {
-                            attempts: CONNECT_ATTEMPTS,
+                            attempts: connect_attempts,
                             source: Some(err),
                             help:
                                 "ensure the supervisor is running with: pitchfork supervisor start"
@@ -78,7 +79,7 @@ impl IpcClient {
             }
         }
         Err(IpcError::ConnectionFailed {
-            attempts: CONNECT_ATTEMPTS,
+            attempts: connect_attempts,
             source: None,
             help: "ensure the supervisor is running with: pitchfork supervisor start".to_string(),
         }
@@ -123,7 +124,8 @@ impl IpcClient {
     }
 
     pub(crate) async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
-        self.request_with_timeout(msg, REQUEST_TIMEOUT).await
+        self.request_with_timeout(msg, settings().ipc_request_timeout())
+            .await
     }
 
     pub(crate) fn unexpected_response(expected: &str, actual: &IpcResponse) -> IpcError {
@@ -280,7 +282,7 @@ impl IpcClient {
         Ok(())
     }
 
-    pub async fn get_disabled_daemons(&self) -> Result<Vec<String>> {
+    pub async fn get_disabled_daemons(&self) -> Result<Vec<DaemonId>> {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {
             IpcResponse::DisabledDaemons(daemons) => Ok(daemons),
@@ -297,29 +299,32 @@ impl IpcClient {
     }
 
     /// Stop a single daemon (low-level operation)
-    pub async fn stop(&self, id: String) -> Result<bool> {
-        let rsp = self.request(IpcRequest::Stop { id: id.clone() }).await?;
+    pub async fn stop(&self, id: DaemonId) -> Result<bool> {
+        let id_str = id.qualified();
+        let rsp = self
+            .request(IpcRequest::Stop { id: id_str.clone() })
+            .await?;
         match rsp {
             IpcResponse::Ok => {
-                info!("Stopped daemon {id}");
+                info!("Stopped daemon {id_str}");
                 Ok(true)
             }
             IpcResponse::DaemonNotRunning => {
-                warn!("Daemon {id} is not running");
+                warn!("Daemon {id_str} is not running");
                 Ok(false)
             }
             IpcResponse::DaemonNotFound => {
-                warn!("Daemon {id} not found");
+                warn!("Daemon {id_str} not found");
                 Ok(false)
             }
             IpcResponse::DaemonWasNotRunning => {
-                warn!("Daemon {id} was not running (process may have exited unexpectedly)");
+                warn!("Daemon {id_str} was not running (process may have exited unexpectedly)");
                 Ok(false)
             }
             IpcResponse::DaemonStopFailed { error } => {
-                error!("Failed to stop daemon {id}: {error}");
+                error!("Failed to stop daemon {id_str}: {error}");
                 Err(crate::error::DaemonError::StopFailed {
-                    id: id.clone(),
+                    id: id_str.clone(),
                     error,
                 }
                 .into())

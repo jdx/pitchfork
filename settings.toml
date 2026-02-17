@@ -1,0 +1,394 @@
+# Pitchfork Settings Schema
+# This file defines all user-configurable settings for pitchfork.
+# It drives code generation, documentation, and JSON schema.
+
+# =============================================================================
+# General Settings
+# =============================================================================
+
+[general]
+# This is a nested group (no "type" field)
+
+[general.autostop_delay]
+type = "Duration"
+env = "PITCHFORK_AUTOSTOP_DELAY"
+default = "1m"
+description = "Delay before auto-stopping daemons when leaving a directory"
+docs = """
+When using shell hooks with `auto = ["stop"]`, this controls how long pitchfork waits
+before stopping a daemon after you leave its directory.
+
+This delay prevents unnecessary stop/start cycles when briefly switching directories.
+
+**Examples:**
+- `"0s"` - Stop immediately (no delay)
+- `"30s"` - Wait 30 seconds
+- `"1m"` - Wait 1 minute (default)
+- `"5m"` - Wait 5 minutes
+
+Set to `"0s"` to disable the delay and stop daemons immediately.
+"""
+
+[general.interval]
+type = "Duration"
+env = "PITCHFORK_INTERVAL"
+default = "10s"
+description = "Supervisor background task refresh interval"
+docs = """
+Controls how often the supervisor refreshes its internal state and checks for:
+- Daemon health status changes
+- Configuration file updates
+- Process state synchronization
+
+Lower values provide more responsive status updates but use more resources.
+
+**Recommended values:**
+- `"5s"` - For development/testing
+- `"10s"` - Default, balanced
+- `"30s"` - For production with many daemons
+"""
+
+[general.log_level]
+type = "String"
+env = "PITCHFORK_LOG"
+default = "info"
+description = "Console log level (trace, debug, info, warn, error)"
+docs = """
+Controls the verbosity of log output to the console.
+
+**Available levels:**
+- `"trace"` - Most verbose, includes all internal details
+- `"debug"` - Detailed information for debugging
+- `"info"` - Normal operation messages (default)
+- `"warn"` - Warnings and potential issues
+- `"error"` - Only errors
+"""
+
+[general.log_file_level]
+type = "String"
+env = "PITCHFORK_LOG_FILE_LEVEL"
+default = "info"
+description = "File log level (trace, debug, info, warn, error)"
+docs = """
+Controls the verbosity of log output written to log files.
+Can be set independently from `log_level` to have more verbose file logs.
+
+For example, set console to `"info"` but file to `"debug"` to keep
+detailed logs for troubleshooting without cluttering the console.
+"""
+
+# =============================================================================
+# IPC (Inter-Process Communication) Settings
+# =============================================================================
+
+[ipc]
+
+[ipc.connect_timeout]
+type = "Duration"
+env = "PITCHFORK_IPC_CONNECT_TIMEOUT"
+default = "5s"
+description = "Total timeout for connecting to the supervisor"
+docs = """
+Maximum time to wait when establishing a connection to the supervisor.
+This includes all retry attempts.
+
+Increase this value if you experience connection timeouts on slow systems
+or when the supervisor is under heavy load.
+"""
+
+[ipc.connect_attempts]
+type = "Integer"
+env = "PITCHFORK_IPC_CONNECT_ATTEMPTS"
+default = "5"
+description = "Number of connection retry attempts"
+docs = """
+How many times to retry connecting to the supervisor before giving up.
+Each attempt uses exponential backoff between `connect_min_delay` and `connect_max_delay`.
+"""
+
+[ipc.connect_min_delay]
+type = "Duration"
+env = "PITCHFORK_IPC_CONNECT_MIN_DELAY"
+default = "100ms"
+description = "Minimum delay between connection retries"
+docs = """
+The initial delay between connection retry attempts.
+The actual delay increases exponentially up to `connect_max_delay`.
+"""
+
+[ipc.connect_max_delay]
+type = "Duration"
+env = "PITCHFORK_IPC_CONNECT_MAX_DELAY"
+default = "1s"
+description = "Maximum delay between connection retries"
+docs = """
+The maximum delay between connection retry attempts.
+Exponential backoff will not exceed this value.
+"""
+
+[ipc.request_timeout]
+type = "Duration"
+env = "PITCHFORK_IPC_REQUEST_TIMEOUT"
+default = "5s"
+description = "Default timeout for IPC requests"
+docs = """
+Maximum time to wait for a response from the supervisor for most operations.
+
+Note: Daemon start operations may use a longer timeout calculated from
+the daemon's `ready_delay` setting plus a buffer.
+"""
+
+[ipc.rate_limit]
+type = "Integer"
+env = "PITCHFORK_IPC_RATE_LIMIT"
+default = "100"
+description = "Maximum IPC requests per second per connection"
+docs = """
+Rate limiting for IPC connections to prevent local DoS attacks.
+Uses a sliding window algorithm.
+
+Most users won't need to change this. Increase if you have automated
+tools making many rapid requests to the supervisor.
+"""
+
+[ipc.rate_limit_window]
+type = "Duration"
+env = "PITCHFORK_IPC_RATE_LIMIT_WINDOW"
+default = "1s"
+description = "Rate limit sliding window duration"
+docs = """
+The time window for rate limiting calculations.
+`rate_limit` requests are allowed within each window.
+"""
+
+# =============================================================================
+# Web UI Settings
+# =============================================================================
+
+[web]
+
+[web.auto_start]
+type = "Bool"
+env = "PITCHFORK_WEB_AUTO_START"
+default = "false"
+description = "Automatically start web UI when supervisor starts"
+docs = """
+When enabled, the web UI server will automatically start alongside the supervisor.
+
+By default, this is disabled. You can start the web UI manually with:
+```
+pitchfork web
+```
+
+Or enable auto-start via environment variable:
+```
+export PITCHFORK_WEB_AUTO_START=true
+```
+"""
+
+[web.bind_address]
+type = "String"
+env = "PITCHFORK_WEB_BIND_ADDRESS"
+default = "127.0.0.1"
+description = "Web server bind address"
+docs = """
+IP address for the web UI to listen on.
+
+**Security Warning:** The default `127.0.0.1` only allows local connections.
+Setting this to `0.0.0.0` will expose the web UI to your network.
+
+**Examples:**
+- `"127.0.0.1"` - Local only (default, recommended)
+- `"0.0.0.0"` - All interfaces (use with caution)
+- `"192.168.1.100"` - Specific interface
+"""
+
+[web.default_port]
+type = "Integer"
+env = "PITCHFORK_WEB_PORT"
+default = "3120"
+description = "Default web server port"
+docs = """
+The port number for the web UI. If this port is in use, pitchfork will
+try subsequent ports up to `port_attempts` times.
+"""
+
+[web.port_attempts]
+type = "Integer"
+env = "PITCHFORK_WEB_PORT_ATTEMPTS"
+default = "10"
+description = "Number of ports to try if default is in use"
+docs = """
+If the default port is occupied, pitchfork will try this many consecutive
+ports before giving up.
+
+For example, with `default_port = 3120` and `port_attempts = 10`,
+it will try ports 3120, 3121, 3122, ... up to 3129.
+"""
+
+[web.log_lines]
+type = "Integer"
+env = "PITCHFORK_WEB_LOG_LINES"
+default = "100"
+description = "Initial number of log lines to display"
+docs = """
+How many lines of logs to show initially when viewing daemon logs in the web UI.
+More lines means slower initial load but more history visible.
+"""
+
+[web.sse_poll_interval]
+type = "Duration"
+env = "PITCHFORK_WEB_SSE_POLL_INTERVAL"
+default = "500ms"
+description = "Server-Sent Events poll interval for log streaming"
+docs = """
+How often the web UI checks for new log lines when streaming logs.
+Lower values provide more real-time updates but use more resources.
+"""
+
+# =============================================================================
+# TUI (Terminal UI) Settings
+# =============================================================================
+
+[tui]
+
+[tui.refresh_rate]
+type = "Duration"
+env = "PITCHFORK_TUI_REFRESH_RATE"
+default = "2s"
+description = "Daemon list refresh interval"
+docs = """
+How often the TUI refreshes the daemon list and status information.
+
+Lower values provide more responsive updates but may increase CPU usage,
+especially with many daemons.
+
+**Recommended values:**
+- `"1s"` - More responsive
+- `"2s"` - Default, balanced
+- `"5s"` - Lower resource usage
+"""
+
+[tui.tick_rate]
+type = "Duration"
+env = "PITCHFORK_TUI_TICK_RATE"
+default = "100ms"
+description = "Event loop tick rate"
+docs = """
+How often the TUI checks for keyboard input and other events.
+This affects input responsiveness.
+
+Most users won't need to change this. Lower values make the UI more
+responsive but use more CPU.
+"""
+
+[tui.stat_history]
+type = "Integer"
+env = "PITCHFORK_TUI_STAT_HISTORY"
+default = "60"
+description = "Number of stat samples to keep for graphs"
+docs = """
+How many CPU/memory stat samples to keep for each daemon's graph.
+With the default refresh rate of 2s, 60 samples = ~2 minutes of history.
+
+Increase for longer history in graphs, at the cost of more memory.
+"""
+
+[tui.message_duration]
+type = "Duration"
+env = "PITCHFORK_TUI_MESSAGE_DURATION"
+default = "3s"
+description = "Status message display duration"
+docs = """
+How long status messages (like "Daemon started") remain visible
+in the TUI before automatically clearing.
+"""
+
+# =============================================================================
+# Supervisor Settings
+# =============================================================================
+
+[supervisor]
+
+[supervisor.ready_check_interval]
+type = "Duration"
+env = "PITCHFORK_READY_CHECK_INTERVAL"
+default = "500ms"
+description = "Interval between ready checks (HTTP, TCP, command)"
+docs = """
+How often to poll when checking if a daemon is ready using:
+- `ready_http` - HTTP health endpoint
+- `ready_port` - TCP port listening
+- `ready_cmd` - Shell command exit code
+
+Lower values detect readiness faster but use more resources.
+"""
+
+[supervisor.file_watch_debounce]
+type = "Duration"
+env = "PITCHFORK_FILE_WATCH_DEBOUNCE"
+default = "1s"
+description = "File watch debounce duration"
+docs = """
+When using `watch` patterns to auto-restart daemons on file changes,
+this controls how long to wait after the last change before triggering
+a restart.
+
+This prevents rapid restart cycles when many files change at once
+(e.g., during a build or git checkout).
+"""
+
+[supervisor.log_flush_interval]
+type = "Duration"
+env = "PITCHFORK_LOG_FLUSH_INTERVAL"
+default = "500ms"
+description = "Daemon log buffer flush interval"
+docs = """
+How often daemon log output is flushed to disk.
+Lower values mean logs appear faster in the UI but may impact performance.
+"""
+
+[supervisor.stop_timeout]
+type = "Duration"
+env = "PITCHFORK_STOP_TIMEOUT"
+default = "5s"
+description = "Maximum time to wait for daemon to stop gracefully"
+docs = """
+When stopping a daemon, pitchfork sends SIGTERM and waits this long
+for the process to exit gracefully before sending SIGKILL.
+
+Increase for daemons that need time to clean up (e.g., flush data).
+"""
+
+[supervisor.restart_delay]
+type = "Duration"
+env = "PITCHFORK_RESTART_DELAY"
+default = "100ms"
+description = "Delay between stop and start during restart"
+docs = """
+Brief pause after stopping a daemon before starting it again.
+Helps ensure resources (like ports) are fully released.
+"""
+
+[supervisor.cron_check_interval]
+type = "Duration"
+env = "PITCHFORK_CRON_CHECK_INTERVAL"
+default = "10s"
+description = "Interval for checking cron schedules"
+docs = """
+How often to check if any cron-scheduled daemons should be triggered.
+
+The default of 10 seconds supports sub-minute cron schedules.
+Increase for lower resource usage if you don't need fine-grained scheduling.
+"""
+
+[supervisor.http_client_timeout]
+type = "Duration"
+env = "PITCHFORK_HTTP_CLIENT_TIMEOUT"
+default = "5s"
+description = "Timeout for HTTP ready checks"
+docs = """
+Maximum time to wait for a response when checking `ready_http` endpoints.
+
+Increase if your services take a while to respond during startup.
+"""

@@ -3,7 +3,7 @@ mod common;
 use common::{TestEnv, get_script_path};
 use std::time::Duration;
 
-const FAST_INTERVAL: (&str, &str) = ("PITCHFORK_INTERVAL_SECS", "2");
+const FAST_INTERVAL: (&str, &str) = ("PITCHFORK_INTERVAL", "2s");
 
 #[test]
 fn test_interval_watch_long_running_task_stays_running() {
