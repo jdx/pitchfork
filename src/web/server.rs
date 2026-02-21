@@ -30,7 +30,9 @@ const PORT_ATTEMPTS: u16 = 10;
 
 pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
     let base_path = super::normalize_base_path(web_path.as_deref());
-    let _ = super::BASE_PATH.set(base_path.clone());
+    super::BASE_PATH
+        .set(base_path.clone())
+        .expect("BASE_PATH already set; serve() must only be called once per process");
 
     let inner = Router::new()
         // Dashboard
@@ -69,7 +71,7 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
         Router::new()
             .route(
                 "/",
-                get(move || async move { Redirect::permanent(&redirect_target) }),
+                get(move || async move { Redirect::temporary(&redirect_target) }),
             )
             .nest(&base_path, inner)
     };

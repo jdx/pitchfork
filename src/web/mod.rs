@@ -15,6 +15,7 @@ pub(crate) fn bp() -> &'static str {
 
 /// Normalize a user-provided base path into "/prefix" form (no trailing slash).
 /// Handles inputs like "ps", "/ps", "/ps/", etc.
+/// Panics if the path contains characters that are not alphanumeric, hyphens, or underscores.
 pub(crate) fn normalize_base_path(path: Option<&str>) -> String {
     match path {
         None => String::new(),
@@ -23,6 +24,12 @@ pub(crate) fn normalize_base_path(path: Option<&str>) -> String {
             if trimmed.is_empty() {
                 String::new()
             } else {
+                assert!(
+                    trimmed
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                    "PITCHFORK_WEB_PATH must contain only alphanumeric characters, hyphens, or underscores, got: {trimmed:?}"
+                );
                 format!("/{trimmed}")
             }
         }
