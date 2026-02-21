@@ -26,6 +26,11 @@ backend = "aqua:cargo-bins/cargo-binstall"
 version = "0.9.123-b.1"
 backend = "cargo:cargo-nextest"
 
+[[tools.communique]]
+version = "0.1.8"
+backend = "github:jdx/communique"
+"platforms.macos-arm64" = { checksum = "sha256:ff6b529ef3b5d74c741948dc9e571f34da77f65e45adfed867cbb42806609670", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-aarch64-apple-darwin.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980544"}
+
 [[tools.hk]]
 version = "1.29.0"
 backend = "aqua:jdx/hk"
