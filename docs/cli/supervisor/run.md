@@ -18,3 +18,7 @@ run as boot start (auto-start boot_start daemons)
 ### `--web-port <WEB_PORT>`
 
 Enable web UI on specified port (tries up to 10 ports if in use)
+
+### `--web-path <WEB_PATH>`
+
+Serve web UI under a path prefix (e.g. "ps" serves at /ps/)

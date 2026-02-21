@@ -12,6 +12,7 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
+use crate::web::bp;
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -35,6 +36,7 @@ fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
 }
 
 fn base_html(title: &str, content: &str) -> String {
+    let bp = bp();
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -42,18 +44,18 @@ fn base_html(title: &str, content: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - pitchfork</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="{bp}/static/favicon.ico">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{bp}/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand"><img src="/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
+        <a href="{bp}/" class="nav-brand"><img src="{bp}/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
         <div class="nav-links">
-            <a href="/">Dashboard</a>
-            <a href="/logs">Logs</a>
-            <a href="/config">Config</a>
+            <a href="{bp}/">Dashboard</a>
+            <a href="{bp}/logs">Logs</a>
+            <a href="{bp}/config">Config</a>
         </div>
     </nav>
     <main>
@@ -62,21 +64,21 @@ fn base_html(title: &str, content: &str) -> String {
     <script>
         // Initialize Lucide icons on page load
         lucide.createIcons();
-        
+
         // Re-initialize Lucide icons after HTMX swaps content
         document.body.addEventListener('htmx:afterSwap', function(evt) {{
             lucide.createIcons();
         }});
-        
+
         // Optimize HTMX updates to reduce flicker
         document.body.addEventListener('htmx:beforeSwap', function(evt) {{
             // Get the new content
             const newContent = evt.detail.xhr.responseText.trim();
             const currentContent = evt.detail.target.innerHTML.trim();
-            
+
             // Normalize whitespace for comparison
             const normalize = (str) => str.replace(/\\s+/g, ' ').trim();
-            
+
             // Only swap if content actually changed
             if (normalize(newContent) === normalize(currentContent)) {{
                 evt.detail.shouldSwap = false;
@@ -90,6 +92,7 @@ fn base_html(title: &str, content: &str) -> String {
 }
 
 fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
+    let bp = bp();
     let safe_id = html_escape(id);
     let url_id = url_encode(id);
     let status_class = match &d.status {
@@ -128,38 +131,38 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
-            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
+            <button hx-post="{bp}/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
+            <button hx-post="{bp}/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
         "##
         )
     } else {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+            <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
         "##
         )
     };
 
     let toggle_btn = if is_disabled {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
+            r##"<button hx-post="{bp}/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
+            r##"<button hx-post="{bp}/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
         )
     };
 
     format!(
-        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-        <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
+        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
+        <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td>{cpu_display}</td>
         <td>{mem_display}</td>
         <td>{uptime_display}</td>
         <td class="error-msg">{error_msg}</td>
-        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
+        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
     </tr>"#,
         d.status
     )
@@ -171,6 +174,7 @@ pub async fn list() -> Html<String> {
 }
 
 async fn list_content() -> String {
+    let bp = bp();
     // Refresh process info for accurate CPU/memory stats
     PROCS.refresh_processes();
 
@@ -184,8 +188,8 @@ async fn list_content() -> String {
             // Show available (config-only) daemons
             let safe_id = html_escape(&entry.id);
             let url_id = url_encode(&entry.id);
-            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
+                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status available">available</span></td>
                 <td>-</td>
@@ -193,8 +197,8 @@ async fn list_content() -> String {
                 <td>-</td>
                 <td></td>
                 <td class="actions" onclick="event.stopPropagation()">
-                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
-                    <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a>
+                    <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+                    <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a>
                 </td>
             </tr>"##));
         } else {
@@ -212,7 +216,7 @@ async fn list_content() -> String {
         <div class="page-header">
             <h1>Daemons</h1>
             <div class="header-actions">
-                <button hx-get="/daemons/_list" hx-target="#daemon-list" hx-swap="innerHTML" class="btn btn-sm">Refresh</button>
+                <button hx-get="{bp}/daemons/_list" hx-target="#daemon-list" hx-swap="innerHTML" class="btn btn-sm">Refresh</button>
             </div>
         </div>
         <table class="daemon-table">
@@ -228,7 +232,7 @@ async fn list_content() -> String {
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
+            <tbody id="daemon-list" hx-get="{bp}/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
             {rows}
             </tbody>
         </table>
@@ -237,6 +241,7 @@ async fn list_content() -> String {
 }
 
 pub async fn list_partial() -> Html<String> {
+    let bp = bp();
     // Refresh process info for accurate CPU/memory stats
     PROCS.refresh_processes();
 
@@ -250,8 +255,8 @@ pub async fn list_partial() -> Html<String> {
             // Show available (config-only) daemons
             let safe_id = html_escape(&entry.id);
             let url_id = url_encode(&entry.id);
-            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+            rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
+                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status available">available</span></td>
                 <td>-</td>
@@ -259,8 +264,8 @@ pub async fn list_partial() -> Html<String> {
                 <td>-</td>
                 <td></td>
                 <td class="actions" onclick="event.stopPropagation()">
-                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
-                    <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a>
+                    <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+                    <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a>
                 </td>
             </tr>"##));
         } else {
@@ -277,10 +282,13 @@ pub async fn list_partial() -> Html<String> {
 }
 
 pub async fn show(Path(id): Path<String>) -> Html<String> {
+    let bp = bp();
     // Validate daemon ID
     if !is_valid_daemon_id(&id) {
-        let content = r#"<h1>Error</h1><p class="error">Invalid daemon ID.</p><a href="/" class="btn">Back</a>"#;
-        return Html(base_html("Error", content));
+        let content = format!(
+            r#"<h1>Error</h1><p class="error">Invalid daemon ID.</p><a href="{bp}/" class="btn">Back</a>"#
+        );
+        return Html(base_html("Error", &content));
     }
 
     // Refresh process info for accurate stats
@@ -429,8 +437,8 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                     <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{safe_id}</span></h1>
                 </div>
                 <div class="header-actions">
-                    <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> View Logs</a>
-                    <a href="/" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>
+                    <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> View Logs</a>
+                    <a href="{bp}/" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>
                 </div>
             </div>
             <div class="daemon-detail">
@@ -470,8 +478,8 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             <h1>Daemon: {safe_id}</h1>
             <p>This daemon is configured but has not been started yet.</p>
             <div class="actions">
-                <button hx-post="/daemons/{url_id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
-                <a href="/" class="btn">Back to List</a>
+                <button hx-post="{bp}/daemons/{url_id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
+                <a href="{bp}/" class="btn">Back to List</a>
             </div>
             <div id="start-result"></div>
         "##
@@ -481,7 +489,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             r#"
             <h1>Daemon Not Found</h1>
             <p>No daemon with ID "{safe_id}" exists.</p>
-            <a href="/" class="btn">Back to List</a>
+            <a href="{bp}/" class="btn">Back to List</a>
         "#
         )
     };
@@ -496,6 +504,7 @@ pub struct StartQuery {
 }
 
 pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> Html<String> {
+    let bp = bp();
     // Validate daemon ID
     if !is_valid_daemon_id(&id) {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
@@ -548,10 +557,12 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         } else if let Some(daemon) = state.daemons.get(&id) {
             let status = &daemon.status;
             Html(format!(
-                r#"<div class="success">Started! Status: {status}</div><script>setTimeout(function(){{ window.location.href='/'; }}, 1000);</script>"#
+                r#"<div class="success">Started! Status: {status}</div><script>setTimeout(function(){{ window.location.href='{bp}/'; }}, 1000);</script>"#
             ))
         } else {
-            Html(r#"<div>Starting...</div><script>setTimeout(function(){ window.location.href='/'; }, 1000);</script>"#.to_string())
+            Html(format!(
+                r#"<div>Starting...</div><script>setTimeout(function(){{ window.location.href='{bp}/'; }}, 1000);</script>"#
+            ))
         }
     } else {
         // Return table row for list page

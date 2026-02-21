@@ -16,6 +16,9 @@ pub struct Run {
     /// Enable web UI on specified port (tries up to 10 ports if in use)
     #[clap(long, env = "PITCHFORK_WEB_PORT")]
     web_port: Option<u16>,
+    /// Serve web UI under a path prefix (e.g. "ps" serves at /ps/)
+    #[clap(long, env = "PITCHFORK_WEB_PATH")]
+    web_path: Option<String>,
 }
 
 impl Run {
@@ -28,6 +31,8 @@ impl Run {
             return Ok(());
         }
 
-        SUPERVISOR.start(self.boot, self.web_port).await
+        SUPERVISOR
+            .start(self.boot, self.web_port, self.web_path.clone())
+            .await
     }
 }
