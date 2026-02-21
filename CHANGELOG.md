@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/jdx/pitchfork/compare/v1.5.0...v1.6.0) - 2026-02-21
+
+### Added
+
+- *(web)* add PITCHFORK_WEB_PATH support for reverse proxy path prefixes ([#244](https://github.com/jdx/pitchfork/pull/244))
+- add daemon lifecycle hooks and retry count env vars ([#245](https://github.com/jdx/pitchfork/pull/245))
+
+### Fixed
+
+- pass cwd to ready_cmd spawning ([#243](https://github.com/jdx/pitchfork/pull/243))
+
 ## [1.5.0](https://github.com/jdx/pitchfork/compare/v1.4.3...v1.5.0) - 2026-02-16
 
 ### Added
