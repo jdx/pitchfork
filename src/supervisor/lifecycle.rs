@@ -159,14 +159,14 @@ impl Supervisor {
             cmd.env("PATH", path);
         }
 
-        // Inject pitchfork metadata env vars
-        cmd.env("PITCHFORK_DAEMON_ID", id);
-        cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
-
         // Apply custom environment variables from config
         if let Some(ref env_vars) = opts.env {
             cmd.envs(env_vars);
         }
+
+        // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
+        cmd.env("PITCHFORK_DAEMON_ID", id);
+        cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
 
         // Put each daemon in its own session/process group so we can kill the
         // entire tree atomically with a single signal to the group.

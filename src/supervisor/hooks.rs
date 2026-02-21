@@ -69,17 +69,21 @@ pub(crate) fn fire_hook(
         command
             .current_dir(&daemon_dir)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .env("PITCHFORK_DAEMON_ID", &daemon_id)
-            .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
+            .stderr(std::process::Stdio::null());
 
         if let Some(ref path) = *env::ORIGINAL_PATH {
             command.env("PATH", path);
         }
 
+        // Apply user env vars first
         if let Some(ref env_vars) = daemon_env {
             command.envs(env_vars);
         }
+
+        // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
+        command
+            .env("PITCHFORK_DAEMON_ID", &daemon_id)
+            .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
 
         for (key, value) in &extra_env {
             command.env(key, value);
