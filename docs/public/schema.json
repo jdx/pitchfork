@@ -130,6 +130,17 @@
             "type": "string"
           }
         },
+        "hooks": {
+          "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PitchforkTomlHooks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",
           "type": [
@@ -192,6 +203,33 @@
       "required": [
         "run"
       ]
+    },
+    "PitchforkTomlHooks": {
+      "description": "Lifecycle hooks for a daemon",
+      "type": "object",
+      "properties": {
+        "on_fail": {
+          "description": "Command to run when the daemon fails and all retries are exhausted",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_ready": {
+          "description": "Command to run when the daemon becomes ready",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_retry": {
+          "description": "Command to run before each retry attempt",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "Retry": {
       "description": "Retry configuration that accepts either a boolean or a count.\n- `true` means retry indefinitely (u32::MAX)\n- `false` or `0` means no retries\n- A number means retry that many times",

@@ -2,6 +2,7 @@
 //!
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
+use super::hooks::{HookType, fire_hook};
 use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
 use crate::daemon_status::DaemonStatus;
@@ -99,6 +100,14 @@ impl Supervisor {
                                 max_attempts,
                                 backoff_secs
                             );
+                            fire_hook(
+                                HookType::OnRetry,
+                                id.to_string(),
+                                opts.dir.clone(),
+                                attempt + 1,
+                                opts.env.clone(),
+                                vec![],
+                            );
                             time::sleep(Duration::from_secs(backoff_secs)).await;
                             continue;
                         } else {
@@ -155,6 +164,10 @@ impl Supervisor {
             cmd.envs(env_vars);
         }
 
+        // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
+        cmd.env("PITCHFORK_DAEMON_ID", id);
+        cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
+
         // Put each daemon in its own session/process group so we can kill the
         // entire tree atomically with a single signal to the group.
         #[cfg(unix)]
@@ -209,6 +222,9 @@ impl Supervisor {
         let ready_port = opts.ready_port;
         let ready_cmd = opts.ready_cmd.clone();
         let daemon_dir = opts.dir.clone();
+        let hook_retry_count = opts.retry_count;
+        let hook_retry = opts.retry;
+        let hook_daemon_env = opts.env.clone();
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -312,6 +328,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                 }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
@@ -332,6 +349,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                 }
                     },
                     Some(result) = exit_rx.recv() => {
@@ -381,6 +399,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                     // Stop checking once ready
                                     http_check_interval = None;
                                 }
@@ -410,6 +429,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                     // Stop checking once ready
                                     port_check_interval = None;
                                 }
@@ -442,6 +462,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                     // Stop checking once ready
                                     cmd_check_interval = None;
                                 }
@@ -469,6 +490,7 @@ impl Supervisor {
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                         }
                         // Disable timer after it fires
                         delay_timer = None;
@@ -539,21 +561,30 @@ impl Supervisor {
                 } else {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
-                    let status = match status.code() {
-                        Some(code) => DaemonStatus::Errored(code),
-                        None => DaemonStatus::Errored(-1),
-                    };
+                    let exit_code = status.code().unwrap_or(-1);
+                    let err_status = DaemonStatus::Errored(exit_code);
                     if let Err(e) = SUPERVISOR
                         .upsert_daemon(UpsertDaemonOpts {
                             id: id.clone(),
                             pid: None,
-                            status,
+                            status: err_status,
                             last_exit_success: Some(false),
                             ..Default::default()
                         })
                         .await
                     {
                         error!("Failed to update daemon state for {id}: {e}");
+                    }
+                    // Fire on_fail hook if retries are exhausted
+                    if hook_retry_count >= hook_retry {
+                        fire_hook(
+                            HookType::OnFail,
+                            id.clone(),
+                            daemon_dir.clone(),
+                            hook_retry_count,
+                            hook_daemon_env.clone(),
+                            vec![("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string())],
+                        );
                     }
                 }
             } else if is_stopping {
@@ -571,17 +602,30 @@ impl Supervisor {
                 {
                     error!("Failed to update daemon state for {id}: {e}");
                 }
-            } else if let Err(e) = SUPERVISOR
-                .upsert_daemon(UpsertDaemonOpts {
-                    id: id.clone(),
-                    pid: None,
-                    status: DaemonStatus::Errored(-1),
-                    last_exit_success: Some(false),
-                    ..Default::default()
-                })
-                .await
-            {
-                error!("Failed to update daemon state for {id}: {e}");
+            } else {
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(UpsertDaemonOpts {
+                        id: id.clone(),
+                        pid: None,
+                        status: DaemonStatus::Errored(-1),
+                        last_exit_success: Some(false),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    error!("Failed to update daemon state for {id}: {e}");
+                }
+                // Fire on_fail hook if retries are exhausted
+                if hook_retry_count >= hook_retry {
+                    fire_hook(
+                        HookType::OnFail,
+                        id.clone(),
+                        daemon_dir.clone(),
+                        hook_retry_count,
+                        hook_daemon_env.clone(),
+                        vec![("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string())],
+                    );
+                }
             }
         });
 

@@ -82,6 +82,7 @@ fn test_write_pitchfork_toml() -> Result<()> {
             watch: vec![],
             dir: None,
             env: None,
+            hooks: None,
             path: Some(toml_path.clone()),
         },
     );
@@ -825,6 +826,7 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
             watch: vec![],
             dir: None,
             env: None,
+            hooks: None,
             path: None,
         },
     );
@@ -1024,4 +1026,88 @@ run = "echo local-only"
         pt.daemons.get("child_daemon").unwrap().run,
         "echo child-local"
     );
+}
+
+// =============================================================================
+// Tests for hooks configuration
+// =============================================================================
+
+/// Test daemon with hooks configuration
+#[test]
+fn test_daemon_with_hooks() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.api]
+run = "node server.js"
+retry = 3
+
+[daemons.api.hooks]
+on_ready = "curl -X POST https://alerts.example.com/ready"
+on_fail = "./scripts/cleanup.sh"
+on_retry = "echo 'retrying...'"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("api").unwrap();
+
+    assert!(daemon.hooks.is_some());
+    let hooks = daemon.hooks.as_ref().unwrap();
+    assert_eq!(
+        hooks.on_ready,
+        Some("curl -X POST https://alerts.example.com/ready".to_string())
+    );
+    assert_eq!(hooks.on_fail, Some("./scripts/cleanup.sh".to_string()));
+    assert_eq!(hooks.on_retry, Some("echo 'retrying...'".to_string()));
+
+    Ok(())
+}
+
+/// Test daemon without hooks defaults to None
+#[test]
+fn test_daemon_without_hooks() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.test]
+run = "echo test"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("test").unwrap();
+    assert!(daemon.hooks.is_none());
+
+    Ok(())
+}
+
+/// Test daemon with partial hooks (only some hooks specified)
+#[test]
+fn test_daemon_with_partial_hooks() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.test]
+run = "echo test"
+
+[daemons.test.hooks]
+on_fail = "echo failed"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = pt.daemons.get("test").unwrap();
+    let hooks = daemon.hooks.as_ref().unwrap();
+    assert!(hooks.on_ready.is_none());
+    assert_eq!(hooks.on_fail, Some("echo failed".to_string()));
+    assert!(hooks.on_retry.is_none());
+
+    Ok(())
 }

@@ -158,6 +158,7 @@ mod tests {
             watch: vec![],
             dir: None,
             env: None,
+            hooks: None,
             path: None,
         }
     }

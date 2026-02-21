@@ -111,3 +111,7 @@ run = "postgres -D /var/lib/pgsql/data"
 retry = 3
 ready_output = "ready to accept connections"
 ```
+
+## Lifecycle Hooks
+
+You can run custom commands when daemons become ready, fail, or retry. See the [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
