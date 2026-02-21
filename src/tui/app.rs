@@ -508,6 +508,7 @@ impl EditorState {
             watch: vec![],
             dir: None,
             env: None,
+            hooks: None,
             path: Some(self.config_path.clone()),
         };
 

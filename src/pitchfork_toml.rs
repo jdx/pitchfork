@@ -125,6 +125,20 @@ impl PitchforkToml {
     }
 }
 
+/// Lifecycle hooks for a daemon
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
+pub struct PitchforkTomlHooks {
+    /// Command to run when the daemon becomes ready
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_ready: Option<String>,
+    /// Command to run when the daemon fails and all retries are exhausted
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_fail: Option<String>,
+    /// Command to run before each retry attempt
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_retry: Option<String>,
+}
+
 /// Configuration for a single daemon
 #[derive(Debug, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct PitchforkTomlDaemon {
@@ -171,6 +185,9 @@ pub struct PitchforkTomlDaemon {
     /// Environment variables to set for the daemon process
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    /// Lifecycle hooks (on_ready, on_fail, on_retry)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hooks: Option<PitchforkTomlHooks>,
     #[serde(skip)]
     #[schemars(skip)]
     pub path: Option<PathBuf>,

@@ -46,6 +46,7 @@ impl Add {
                 watch: vec![],
                 dir: None,
                 env: None,
+                hooks: None,
                 path: None,
             },
         );

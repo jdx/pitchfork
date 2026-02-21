@@ -2,6 +2,7 @@
 //!
 //! Handles automatic retrying of failed daemons based on retry configuration.
 
+use super::hooks::{HookType, fire_hook};
 use super::{Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
 use crate::pitchfork_toml::PitchforkToml;
@@ -68,12 +69,21 @@ impl Supervisor {
                         continue;
                     }
                 };
+                let dir = daemon.dir.unwrap_or_else(|| env::CWD.clone());
+                fire_hook(
+                    HookType::OnRetry,
+                    id.clone(),
+                    dir.clone(),
+                    daemon.retry_count + 1,
+                    daemon.env.clone(),
+                    vec![],
+                );
                 let retry_opts = RunOptions {
                     id: id.clone(),
                     cmd,
                     force: false,
                     shell_pid: daemon.shell_pid,
-                    dir: daemon.dir.unwrap_or_else(|| env::CWD.clone()),
+                    dir,
                     autostop: daemon.autostop,
                     cron_schedule: daemon.cron_schedule,
                     cron_retrigger: daemon.cron_retrigger,

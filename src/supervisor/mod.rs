@@ -9,6 +9,7 @@
 //! - `ipc_handlers`: IPC request dispatch
 
 mod autostop;
+mod hooks;
 mod ipc_handlers;
 mod lifecycle;
 mod retry;
