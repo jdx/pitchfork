@@ -2,16 +2,18 @@
 //!
 //! Handles automatic retrying of failed daemons based on retry configuration.
 
-use super::{Supervisor, UpsertDaemonOpts};
+use super::Supervisor;
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 
 impl Supervisor {
     /// Check for daemons that need retrying and attempt to restart them
     pub(crate) async fn check_retry(&self) -> Result<()> {
         // Collect only IDs of daemons that need retrying (avoids cloning entire Daemon structs)
-        let ids_to_retry: Vec<String> = {
+        let ids_to_retry: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -58,12 +60,14 @@ impl Supervisor {
                     Err(e) => {
                         error!("failed to parse command for daemon {id}: {e}");
                         // Mark as exhausted to prevent infinite retry loop, preserving error status
-                        self.upsert_daemon(UpsertDaemonOpts {
-                            id,
-                            status: daemon.status.clone(),
-                            retry_count: Some(daemon.retry),
-                            ..Default::default()
-                        })
+                        self.upsert_daemon(
+                            UpsertDaemonOpts::builder(id)
+                                .set(|o| {
+                                    o.status = daemon.status.clone();
+                                    o.retry_count = Some(daemon.retry);
+                                })
+                                .build(),
+                        )
                         .await?;
                         continue;
                     }
@@ -94,11 +98,13 @@ impl Supervisor {
             } else {
                 warn!("no run command found for daemon {id}, cannot retry");
                 // Mark as exhausted
-                self.upsert_daemon(UpsertDaemonOpts {
-                    id,
-                    retry_count: Some(daemon.retry),
-                    ..Default::default()
-                })
+                self.upsert_daemon(
+                    UpsertDaemonOpts::builder(id)
+                        .set(|o| {
+                            o.retry_count = Some(daemon.retry);
+                        })
+                        .build(),
+                )
                 .await?;
             }
         }
@@ -107,7 +113,7 @@ impl Supervisor {
     }
 
     /// Get the run command for a daemon from the pitchfork.toml configuration
-    pub(crate) fn get_daemon_run_command(&self, id: &str) -> Option<String> {
+    pub(crate) fn get_daemon_run_command(&self, id: &DaemonId) -> Option<String> {
         let pt = PitchforkToml::all_merged();
         pt.daemons.get(id).map(|d| d.run.clone())
     }

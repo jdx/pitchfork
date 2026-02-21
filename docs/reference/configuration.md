@@ -39,6 +39,20 @@ run = "command to execute"
 # ... other options
 ```
 
+### Daemon Naming Rules
+
+Daemon names must follow these rules:
+
+| Rule | Valid | Invalid |
+|------|-------|---------|
+| No double dashes | `my-app` | `my--app` |
+| No slashes | `api` | `api/v2` |
+| No spaces | `my_app` | `my app` |
+| No parent references | `myapp` | `..` or `foo..bar` |
+| ASCII only | `myapp123` | `myäpp` |
+
+The `--` sequence is reserved for internal use (namespace encoding). See [Namespaces](/concepts/namespaces) for details.
+
 ## Daemon Options
 
 ### `run` (required)

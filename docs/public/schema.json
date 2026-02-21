@@ -1,14 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Pitchfork Configuration",
-  "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files",
+  "description": "Configuration schema for pitchfork.toml daemon supervisor configuration files.\n\nNote: When read from a file, daemon keys are short names (e.g., \"api\").\nAfter merging, keys become qualified DaemonIds (e.g., \"project/api\").",
   "type": "object",
   "properties": {
     "daemons": {
-      "description": "Map of daemon names to their configurations",
+      "description": "Map of daemon IDs to their configurations",
       "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/PitchforkTomlDaemon"
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[\\w.-]+/[\\w.-]+$": {
+          "$ref": "#/$defs/PitchforkTomlDaemon"
+        }
       }
     }
   },
@@ -40,6 +43,11 @@
           "const": "fail"
         }
       ]
+    },
+    "DaemonId": {
+      "description": "Daemon ID in the format 'namespace/name'",
+      "type": "string",
+      "pattern": "^[\\w.-]+/[\\w.-]+$"
     },
     "PitchforkTomlAuto": {
       "description": "Automatic behavior triggered by shell hooks",
@@ -78,12 +86,13 @@
       ]
     },
     "PitchforkTomlDaemon": {
-      "description": "Configuration for a single daemon",
+      "description": "Configuration for a single daemon (internal representation with DaemonId)",
       "type": "object",
       "properties": {
         "auto": {
           "description": "Automatic start/stop behavior based on shell hooks",
           "type": "array",
+          "default": [],
           "items": {
             "$ref": "#/$defs/PitchforkTomlAuto"
           }
@@ -107,10 +116,11 @@
           ]
         },
         "depends": {
-          "description": "List of daemon names that must be started before this one",
+          "description": "List of daemon IDs that must be started before this one",
           "type": "array",
+          "default": [],
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/DaemonId"
           }
         },
         "dir": {
@@ -183,7 +193,9 @@
           ]
         },
         "watch": {
+          "description": "File patterns to watch for changes",
           "type": "array",
+          "default": [],
           "items": {
             "type": "string"
           }

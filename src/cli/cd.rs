@@ -1,3 +1,4 @@
+use crate::daemon_id::DaemonId;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto};
 use crate::{Result, env};
@@ -36,7 +37,7 @@ impl Cd {
                 self.shell_pid.to_string(),
             ];
 
-            let active_daemons: HashSet<String> = ipc
+            let active_daemons: HashSet<DaemonId> = ipc
                 .active_daemons()
                 .await?
                 .into_iter()
@@ -46,7 +47,7 @@ impl Cd {
                 if active_daemons.contains(id) {
                     continue;
                 }
-                args.push(id.clone());
+                args.push(id.qualified());
             }
             if args.len() > 3 {
                 cmd(&*env::PITCHFORK_BIN, args).run().into_diagnostic()?;

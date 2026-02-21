@@ -1,20 +1,21 @@
 use crate::Result;
+use crate::daemon_id::DaemonId;
 use crate::tui::app::{App, EditMode, PendingAction, View};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use miette::IntoDiagnostic;
 
 pub enum Action {
     Quit,
-    Start(String),
-    Enable(String),
+    Start(DaemonId),
+    Enable(DaemonId),
     Refresh,
     ConfirmPending,
     // Batch actions (operate on multi-select)
-    BatchStart(Vec<String>),
-    BatchEnable(Vec<String>),
+    BatchStart(Vec<DaemonId>),
+    BatchEnable(Vec<DaemonId>),
     // Config editor actions
     OpenEditorNew,
-    OpenEditorEdit(String),
+    OpenEditorEdit(DaemonId),
     SaveConfig,
     DeleteDaemon {
         id: String,
@@ -138,13 +139,13 @@ fn handle_dashboard_event(
         KeyCode::Char('s') => {
             // Batch start if multi-select is active
             if app.has_selection() {
-                let ids: Vec<String> = app
+                let ids: Vec<DaemonId> = app
                     .selected_daemon_ids()
                     .into_iter()
                     .filter(|id| {
                         app.daemons
                             .iter()
-                            .find(|d| &d.id == id)
+                            .find(|d| d.id == *id)
                             .map(|d| {
                                 d.status.is_stopped()
                                     || d.status.is_errored()
@@ -168,13 +169,13 @@ fn handle_dashboard_event(
         KeyCode::Char('x') => {
             // Stop requires confirmation
             if app.has_selection() {
-                let ids: Vec<String> = app
+                let ids: Vec<DaemonId> = app
                     .selected_daemon_ids()
                     .into_iter()
                     .filter(|id| {
                         app.daemons
                             .iter()
-                            .find(|d| &d.id == id)
+                            .find(|d| d.id == *id)
                             .map(|d| d.status.is_running() || d.status.is_waiting())
                             .unwrap_or(false)
                     })
@@ -221,7 +222,7 @@ fn handle_dashboard_event(
         }
         KeyCode::Char('e') => {
             if app.has_selection() {
-                let ids: Vec<String> = app
+                let ids: Vec<DaemonId> = app
                     .selected_daemon_ids()
                     .into_iter()
                     .filter(|id| app.is_disabled(id))
@@ -239,7 +240,7 @@ fn handle_dashboard_event(
         KeyCode::Char('d') => {
             // Disable requires confirmation
             if app.has_selection() {
-                let ids: Vec<String> = app
+                let ids: Vec<DaemonId> = app
                     .selected_daemon_ids()
                     .into_iter()
                     .filter(|id| !app.is_disabled(id))
