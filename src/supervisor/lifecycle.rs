@@ -208,6 +208,7 @@ impl Supervisor {
         let ready_http = opts.ready_http.clone();
         let ready_port = opts.ready_port;
         let ready_cmd = opts.ready_cmd.clone();
+        let daemon_dir = opts.dir.clone();
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -429,6 +430,7 @@ impl Supervisor {
                             // Run the readiness check command using the shell abstraction
                             let mut command = Shell::default_for_platform().command(cmd);
                             command
+                                .current_dir(&daemon_dir)
                                 .stdout(std::process::Stdio::null())
                                 .stderr(std::process::Stdio::null());
                             let result: std::io::Result<std::process::ExitStatus> = command.status().await;
