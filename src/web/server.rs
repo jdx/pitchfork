@@ -29,7 +29,7 @@ async fn csrf_protection(request: Request<Body>, next: Next) -> Result<Response,
 const PORT_ATTEMPTS: u16 = 10;
 
 pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
-    let base_path = super::normalize_base_path(web_path.as_deref());
+    let base_path = super::normalize_base_path(web_path.as_deref())?;
     super::BASE_PATH
         .set(base_path.clone())
         .expect("BASE_PATH already set; serve() must only be called once per process");
