@@ -242,6 +242,28 @@ run = "postgres -D /var/lib/pgsql/data"
 boot_start = true
 ```
 
+### `hooks`
+
+Lifecycle hooks that run shell commands in response to daemon events. Hooks are fire-and-forget — they run in the background and never block the daemon.
+
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 3
+
+[daemons.api.hooks]
+on_ready = "curl -X POST https://alerts.example.com/ready"
+on_fail = "./scripts/cleanup.sh"
+on_retry = "echo 'retrying...'"
+```
+
+**Fields:**
+- `on_ready` - Runs when the daemon becomes ready (passes readiness check)
+- `on_fail` - Runs when the daemon fails and all retries are exhausted
+- `on_retry` - Runs before each retry attempt
+
+Hook commands receive environment variables: `PITCHFORK_DAEMON_ID`, `PITCHFORK_RETRY_COUNT`, and (for `on_fail`) `PITCHFORK_EXIT_CODE`. See [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
+
 ### `cron`
 
 Cron scheduling configuration.
@@ -281,6 +303,10 @@ ready_http = "http://localhost:3000/health"
 auto = ["start", "stop"]
 retry = 5
 env = { NODE_ENV = "development", PORT = "3000" }
+
+[daemons.api.hooks]
+on_ready = "curl -X POST https://alerts.example.com/ready"
+on_fail = "./scripts/alert-failure.sh"
 
 # Frontend dev server in a subdirectory
 [daemons.frontend]

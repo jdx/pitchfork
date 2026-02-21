@@ -50,6 +50,7 @@ export default defineConfig({
           { text: "Ready Checks", link: "/guides/ready-checks" },
           { text: "File Watching", link: "/guides/file-watching" },
           { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
+          { text: "Lifecycle Hooks", link: "/guides/lifecycle-hooks" },
           { text: "Cron Scheduling", link: "/guides/scheduling" },
           { text: "Start on Boot", link: "/guides/boot-start" },
           { text: "Log Management", link: "/guides/logs" },
