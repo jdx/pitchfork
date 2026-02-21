@@ -41,6 +41,7 @@ run = [
 [tools]
 bun = "latest" # for docs and test
 cargo-binstall = "latest"
+communique = "latest"
 hk = "latest"
 pkl = "latest" # for hk config
 usage = "latest" # for rendering CLI usage

@@ -1,0 +1,4 @@
+context = "pitchfork is a daemon supervisor CLI for developers. It manages background processes with features like auto-start/stop, cron scheduling, retry logic, and HTTP ready checks."
+
+[defaults]
+emoji = false
