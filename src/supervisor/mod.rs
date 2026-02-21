@@ -86,7 +86,12 @@ impl Supervisor {
         })
     }
 
-    pub async fn start(&self, is_boot: bool, web_port: Option<u16>) -> Result<()> {
+    pub async fn start(
+        &self,
+        is_boot: bool,
+        web_port: Option<u16>,
+        web_path: Option<String>,
+    ) -> Result<()> {
         let pid = std::process::id();
         info!("Starting supervisor with pid {pid}");
 
@@ -112,7 +117,7 @@ impl Supervisor {
         // Start web server if port is configured
         if let Some(port) = web_port {
             tokio::spawn(async move {
-                if let Err(e) = crate::web::serve(port).await {
+                if let Err(e) = crate::web::serve(port, web_path).await {
                     error!("Web server error: {e}");
                 }
             });

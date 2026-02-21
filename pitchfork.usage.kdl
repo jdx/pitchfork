@@ -176,6 +176,9 @@ cmd supervisor subcommand_required=#true help="Start, stop, and check the status
         flag --web-port help="Enable web UI on specified port (tries up to 10 ports if in use)" {
             arg <WEB_PORT>
         }
+        flag --web-path help="Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)" {
+            arg <WEB_PATH>
+        }
     }
     cmd start help="Starts the internal pitchfork daemon in the background" {
         flag "-f --force" help="kill existing daemon"

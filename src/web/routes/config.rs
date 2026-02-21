@@ -3,8 +3,10 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 use crate::pitchfork_toml::PitchforkToml;
+use crate::web::bp;
 
 fn base_html(title: &str, content: &str) -> String {
+    let bp = bp();
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -12,18 +14,18 @@ fn base_html(title: &str, content: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - pitchfork</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="{bp}/static/favicon.ico">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{bp}/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand"><img src="/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
+        <a href="{bp}/" class="nav-brand"><img src="{bp}/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
         <div class="nav-links">
-            <a href="/">Dashboard</a>
-            <a href="/logs">Logs</a>
-            <a href="/config" class="active">Config</a>
+            <a href="{bp}/">Dashboard</a>
+            <a href="{bp}/logs">Logs</a>
+            <a href="{bp}/config" class="active">Config</a>
         </div>
     </nav>
     <main>
@@ -32,7 +34,7 @@ fn base_html(title: &str, content: &str) -> String {
     <script>
         // Initialize Lucide icons on page load
         lucide.createIcons();
-        
+
         // Re-initialize Lucide icons after HTMX swaps content
         document.body.addEventListener('htmx:afterSwap', function(evt) {{
             lucide.createIcons();
@@ -104,6 +106,7 @@ fn validate_path(path: &PathBuf) -> Option<PathBuf> {
 }
 
 pub async fn list() -> Html<String> {
+    let bp = bp();
     let paths = get_allowed_paths();
 
     let mut file_list = String::new();
@@ -121,7 +124,7 @@ pub async fn list() -> Html<String> {
                 <div class="config-path">{display}</div>
                 <div class="config-status">
                     <span class="status-badge {status_class}">{status_text}</span>
-                <a href="/config/edit?path={encoded_path}" class="btn btn-sm"><i data-lucide="edit" class="icon"></i> Edit</a>
+                <a href="{bp}/config/edit?path={encoded_path}" class="btn btn-sm"><i data-lucide="edit" class="icon"></i> Edit</a>
                 </div>
             </div>
         "#
@@ -154,18 +157,21 @@ pub struct EditQuery {
 }
 
 pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
+    let bp = bp();
     let path = PathBuf::from(&query.path);
 
     // Validate and get canonical path to prevent TOCTOU attacks
     let canonical_path = match validate_path(&path) {
         Some(p) => p,
         None => {
-            let content = r#"
+            let content = format!(
+                r#"
                 <h1>Error</h1>
                 <p class="error">This file path is not allowed.</p>
-        <a href="/config" class="btn"><i data-lucide="arrow-left" class="icon"></i> Back to Config List</a>
-            "#;
-            return Html(base_html("Error", content));
+        <a href="{bp}/config" class="btn"><i data-lucide="arrow-left" class="icon"></i> Back to Config List</a>
+            "#
+            );
+            return Html(base_html("Error", &content));
         }
     };
 
@@ -195,16 +201,16 @@ pub async fn edit(Query(query): Query<EditQuery>) -> Html<String> {
         <div class="page-header">
             <h1>Edit: {display_path}</h1>
             <div class="header-actions">
-            <a href="/config" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>
+            <a href="{bp}/config" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>
             </div>
         </div>
-        <form hx-post="/config/save" hx-target="#save-result">
+        <form hx-post="{bp}/config/save" hx-target="#save-result">
             <input type="hidden" name="path" value="{encoded_path}">
             <div class="form-group">
                 <textarea name="content" id="config-editor" rows="25">{content_value}</textarea>
             </div>
             <div class="form-actions">
-            <button type="button" hx-post="/config/validate" hx-include="#config-editor, input[name=path]" hx-target="#validation-result" class="btn"><i data-lucide="check-circle" class="icon"></i> Validate</button>
+            <button type="button" hx-post="{bp}/config/validate" hx-include="#config-editor, input[name=path]" hx-target="#validation-result" class="btn"><i data-lucide="check-circle" class="icon"></i> Validate</button>
             <button type="submit" class="btn btn-primary"><i data-lucide="save" class="icon"></i> Save</button>
             </div>
             <div id="validation-result"></div>

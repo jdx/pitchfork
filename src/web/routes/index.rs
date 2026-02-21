@@ -5,6 +5,7 @@ use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
+use crate::web::bp;
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -19,6 +20,7 @@ fn url_encode(s: &str) -> String {
 }
 
 fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
+    let bp = bp();
     let safe_id = html_escape(id);
     let url_id = url_encode(id);
     let status_class = match &d.status {
@@ -57,38 +59,38 @@ fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String 
     let actions = if d.status.is_running() {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
-            <button hx-post="/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
+            <button hx-post="{bp}/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
+            <button hx-post="{bp}/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
         "##
         )
     } else {
         format!(
             r##"
-            <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+            <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
         "##
         )
     };
 
     let toggle_btn = if is_disabled {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
+            r##"<button hx-post="{bp}/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
         )
     } else {
         format!(
-            r##"<button hx-post="/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
+            r##"<button hx-post="{bp}/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
         )
     };
 
     format!(
-        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-        <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
+        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
+        <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
         <td>{pid_display}</td>
         <td><span class="status {status_class}">{}</span></td>
         <td>{cpu_display}</td>
         <td>{mem_display}</td>
         <td>{uptime_display}</td>
         <td class="error-msg">{error_msg}</td>
-        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
+        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
     </tr>"#,
         d.status
     )
@@ -151,6 +153,8 @@ pub async fn stats_partial() -> Html<String> {
 }
 
 pub async fn index() -> Html<String> {
+    let bp = bp();
+
     // Refresh process info for accurate CPU/memory stats
     PROCS.refresh_processes();
 
@@ -201,8 +205,8 @@ pub async fn index() -> Html<String> {
             let safe_id = html_escape(id);
             let url_id = url_encode(id);
             rows.push_str(&format!(
-                r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='/daemons/{url_id}'">
-                <td><a href="/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+                r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
+                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
                 <td>-</td>
                 <td><span class="status stopped">stopped</span></td>
                 <td>-</td>
@@ -210,7 +214,7 @@ pub async fn index() -> Html<String> {
                 <td>-</td>
                 <td></td>
                 <td class="actions" onclick="event.stopPropagation()">
-                    <button hx-post="/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
+                    <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
                 </td>
             </tr>"##
             ));
@@ -228,22 +232,22 @@ pub async fn index() -> Html<String> {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>pitchfork</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="{bp}/static/favicon.ico">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/lucide@0.474.0"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{bp}/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand"><img src="/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
+        <a href="{bp}/" class="nav-brand"><img src="{bp}/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
         <div class="nav-links">
-            <a href="/" class="active">Dashboard</a>
-            <a href="/logs">Logs</a>
-            <a href="/config">Config</a>
+            <a href="{bp}/" class="active">Dashboard</a>
+            <a href="{bp}/logs">Logs</a>
+            <a href="{bp}/config">Config</a>
         </div>
     </nav>
     <main>
-        <div class="stats-grid" hx-get="/_stats" hx-trigger="every 5s" hx-swap="innerHTML swap:0.2s settle:0.2s">
+        <div class="stats-grid" hx-get="{bp}/_stats" hx-trigger="every 5s" hx-swap="innerHTML swap:0.2s settle:0.2s">
             <div class="stat-card">
                 <div class="stat-value">{total}</div>
                 <div class="stat-label">Total</div>
@@ -275,7 +279,7 @@ pub async fn index() -> Html<String> {
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody id="daemon-list" hx-get="/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
+            <tbody id="daemon-list" hx-get="{bp}/daemons/_list" hx-trigger="every 5s" hx-swap="innerHTML swap:0.1s settle:0.1s">
                 {rows}
             </tbody>
         </table>
@@ -283,35 +287,35 @@ pub async fn index() -> Html<String> {
     <script>
         // Initialize Lucide icons on page load
         lucide.createIcons();
-        
+
         // Re-initialize Lucide icons after HTMX swaps content
         document.body.addEventListener('htmx:afterSwap', function(evt) {{
             lucide.createIcons();
         }});
-        
+
         // Optimize HTMX updates to reduce flicker
         document.body.addEventListener('htmx:beforeSwap', function(evt) {{
             // Get the new content
             const newContent = evt.detail.xhr.responseText.trim();
             const currentContent = evt.detail.target.innerHTML.trim();
-            
+
             // Normalize whitespace for comparison
             const normalize = (str) => str.replace(/\\s+/g, ' ').trim();
-            
+
             // Only swap if content actually changed
             if (normalize(newContent) === normalize(currentContent)) {{
                 evt.detail.shouldSwap = false;
                 evt.preventDefault();
             }}
         }});
-        
+
         // Add smooth fade effect for stats updates
         document.body.addEventListener('htmx:beforeSwap', function(evt) {{
             if (evt.detail.target.classList.contains('stats-grid')) {{
                 evt.detail.target.style.opacity = '0.7';
             }}
         }});
-        
+
         document.body.addEventListener('htmx:afterSwap', function(evt) {{
             if (evt.detail.target.classList.contains('stats-grid')) {{
                 setTimeout(() => {{

@@ -1211,6 +1211,25 @@
                   "double_dash": "Optional",
                   "hide": false
                 }
+              },
+              {
+                "name": "web-path",
+                "usage": "--web-path <WEB_PATH>",
+                "help": "Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)",
+                "help_first_line": "Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)",
+                "short": [],
+                "long": [
+                  "web-path"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "WEB_PATH",
+                  "usage": "<WEB_PATH>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
               }
             ],
             "mounts": [],

@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
     middleware::{self, Next},
-    response::Response,
+    response::{Redirect, Response},
     routing::{get, post},
 };
 use std::net::SocketAddr;
@@ -28,8 +28,11 @@ async fn csrf_protection(request: Request<Body>, next: Next) -> Result<Response,
 /// Number of ports to try before giving up
 const PORT_ATTEMPTS: u16 = 10;
 
-pub async fn serve(port: u16) -> Result<()> {
-    let app = Router::new()
+pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
+    let base_path = super::normalize_base_path(web_path.as_deref());
+    let _ = super::BASE_PATH.set(base_path.clone());
+
+    let inner = Router::new()
         // Dashboard
         .route("/", get(routes::index::index))
         .route("/_stats", get(routes::index::stats_partial))
@@ -59,6 +62,18 @@ pub async fn serve(port: u16) -> Result<()> {
         // CSRF protection for all POST endpoints
         .layer(middleware::from_fn(csrf_protection));
 
+    let app = if base_path.is_empty() {
+        inner
+    } else {
+        let redirect_target = format!("{base_path}/");
+        Router::new()
+            .route(
+                "/",
+                get(move || async move { Redirect::permanent(&redirect_target) }),
+            )
+            .nest(&base_path, inner)
+    };
+
     // Try up to PORT_ATTEMPTS ports starting from the given port
     let mut last_error = None;
     for offset in 0..PORT_ATTEMPTS {
@@ -70,7 +85,11 @@ pub async fn serve(port: u16) -> Result<()> {
                 if offset > 0 {
                     info!("Port {port} was in use, using port {try_port} instead");
                 }
-                info!("Web UI listening on http://{addr}");
+                if base_path.is_empty() {
+                    info!("Web UI listening on http://{addr}");
+                } else {
+                    info!("Web UI listening on http://{addr}{base_path}/");
+                }
 
                 return axum::serve(listener, app)
                     .await

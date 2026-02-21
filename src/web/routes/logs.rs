@@ -12,8 +12,10 @@ use crate::daemon::is_valid_daemon_id;
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
+use crate::web::bp;
 
 fn base_html(title: &str, content: &str) -> String {
+    let bp = bp();
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -21,19 +23,19 @@ fn base_html(title: &str, content: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{title} - pitchfork</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="{bp}/static/favicon.ico">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <script src="https://unpkg.com/lucide@0.474.0"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="{bp}/static/style.css">
 </head>
 <body>
     <nav>
-        <a href="/" class="nav-brand"><img src="/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
+        <a href="{bp}/" class="nav-brand"><img src="{bp}/static/logo.png" alt="pitchfork" class="logo-icon"> pitchfork</a>
         <div class="nav-links">
-            <a href="/">Dashboard</a>
-            <a href="/logs" class="active">Logs</a>
-            <a href="/config">Config</a>
+            <a href="{bp}/">Dashboard</a>
+            <a href="{bp}/logs" class="active">Logs</a>
+            <a href="{bp}/config">Config</a>
         </div>
     </nav>
     <main>
@@ -42,7 +44,7 @@ fn base_html(title: &str, content: &str) -> String {
     <script>
         // Initialize Lucide icons on page load
         lucide.createIcons();
-        
+
         // Re-initialize Lucide icons after HTMX swaps content
         document.body.addEventListener('htmx:afterSwap', function(evt) {{
             lucide.createIcons();
@@ -54,6 +56,7 @@ fn base_html(title: &str, content: &str) -> String {
 }
 
 pub async fn index() -> Html<String> {
+    let bp = bp();
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
     let pt = PitchforkToml::all_merged();
@@ -126,13 +129,13 @@ pub async fn index() -> Html<String> {
                     <div class="page-header">
                         <h2>DAEMON: {safe_id}</h2>
                         <div class="header-actions">
-                            <button hx-post="/logs/{url_id}/clear" hx-swap="none" class="btn btn-sm"
+                            <button hx-post="{bp}/logs/{url_id}/clear" hx-swap="none" class="btn btn-sm"
                                 hx-confirm="Are you sure you want to clear the logs for {safe_id}?"
                                 onclick="clearTabLogs('{js_id}')"><i data-lucide="trash-2" class="icon"></i> Clear Logs</button>
                         </div>
                     </div>
                     <div class="log-viewer">
-                        <pre id="log-output-{safe_id}" hx-ext="sse" sse-connect="/logs/{url_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
+                        <pre id="log-output-{safe_id}" hx-ext="sse" sse-connect="{bp}/logs/{url_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
                     </div>
                 </div>
                 "#
@@ -153,18 +156,18 @@ pub async fn index() -> Html<String> {
                     // Hide all tabs
                     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
                     document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
-                    
+
                     // Show selected tab
                     document.getElementById('tab-' + tabId).classList.add('active');
                     evt.currentTarget.classList.add('active');
-                    
+
                     // Scroll to bottom
                     const logOutput = document.getElementById('log-output-' + tabId);
                     if (logOutput) {{
                         logOutput.scrollTop = logOutput.scrollHeight;
                     }}
                 }}
-                
+
                 function clearTabLogs(tabId) {{
                     const logOutput = document.getElementById('log-output-' + tabId);
                     if (logOutput) {{
@@ -173,7 +176,7 @@ pub async fn index() -> Html<String> {
                         }}, 100);
                     }}
                 }}
-                
+
                 // Auto-scroll first tab on load
                 window.addEventListener('load', function() {{
                     const firstLog = document.querySelector('.tab-content.active pre');
@@ -181,7 +184,7 @@ pub async fn index() -> Html<String> {
                         firstLog.scrollTop = firstLog.scrollHeight;
                     }}
                 }});
-                
+
                 // Setup clear event listeners for all tabs
                 {}
             </script>
@@ -195,7 +198,7 @@ pub async fn index() -> Html<String> {
                     let url_id = url_encode(id);
                     format!(
                         r#"
-                var clearSource_{idx} = new EventSource('/logs/{url_id}/stream');
+                var clearSource_{idx} = new EventSource('{bp}/logs/{url_id}/stream');
                 clearSource_{idx}.addEventListener('clear', function(e) {{
                     document.getElementById('log-output-' + '{js_id}').textContent = '';
                 }});
@@ -211,10 +214,13 @@ pub async fn index() -> Html<String> {
 }
 
 pub async fn show(Path(id): Path<String>) -> Html<String> {
+    let bp = bp();
     // Validate daemon ID to prevent path traversal
     if !is_valid_daemon_id(&id) {
-        let content = r#"<h1>Error</h1><p class="error">Invalid daemon ID.</p><a href="/logs" class="btn"><i data-lucide="arrow-left" class="icon"></i> Back</a>"#;
-        return Html(base_html("Error", content));
+        let content = format!(
+            r#"<h1>Error</h1><p class="error">Invalid daemon ID.</p><a href="{bp}/logs" class="btn"><i data-lucide="arrow-left" class="icon"></i> Back</a>"#
+        );
+        return Html(base_html("Error", &content));
     }
 
     let safe_id = html_escape(&id);
@@ -246,18 +252,18 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         <div class="page-header">
             <h1>Logs: {safe_id}</h1>
             <div class="header-actions">
-            <button hx-post="/logs/{url_id}/clear" hx-swap="none" class="btn btn-sm"
+            <button hx-post="{bp}/logs/{url_id}/clear" hx-swap="none" class="btn btn-sm"
                 hx-confirm="Are you sure you want to clear the logs for {safe_id}?"><i data-lucide="trash-2" class="icon"></i> Clear Logs</button>
-            <a href="/logs" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>            </div>
+            <a href="{bp}/logs" class="btn btn-sm"><i data-lucide="arrow-left" class="icon"></i> Back</a>            </div>
         </div>
         <div class="log-viewer">
-            <pre id="log-output" hx-ext="sse" sse-connect="/logs/{url_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
+            <pre id="log-output" hx-ext="sse" sse-connect="{bp}/logs/{url_id}/stream" sse-swap="message" hx-swap="beforeend scroll:bottom">{initial_logs}</pre>
         </div>
         <script>
             // Auto-scroll to bottom on load
             document.getElementById('log-output').scrollTop = document.getElementById('log-output').scrollHeight;
             // Listen for clear event using native EventSource (htmx-ext-sse only handles 'message' events)
-            var clearSource = new EventSource('/logs/{url_id}/stream');
+            var clearSource = new EventSource('{bp}/logs/{url_id}/stream');
             clearSource.addEventListener('clear', function(e) {{
                 document.getElementById('log-output').textContent = '';
             }});
