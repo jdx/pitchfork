@@ -44,7 +44,7 @@ jobs:
 
   enhance-release:
     name: Enhance release notes
-    needs: upload-assets
+    needs: [release-plz-release, upload-assets]
     if: ${{ needs.release-plz-release.outputs.tag != '' }}
     runs-on: ubuntu-latest
     steps:
