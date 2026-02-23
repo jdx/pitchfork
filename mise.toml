@@ -5,6 +5,7 @@ _.path = "target/debug"
 depends = ["lint", "build"]
 run = [
   "cargo nextest run",
+  "test/bats/bin/bats test",
 ]
 
 [tasks.docs]
