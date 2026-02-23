@@ -29,30 +29,53 @@ backend = "cargo:cargo-nextest"
 [[tools.communique]]
 version = "0.1.8"
 backend = "github:jdx/communique"
+"platforms.linux-arm64" = { checksum = "sha256:3388df35e8f8c5920698a0e0558ab175cde3db2a7606782f1d7a8170aaa6756a", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-aarch64-unknown-linux-gnu.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980531"}
+"platforms.linux-arm64-musl" = { checksum = "sha256:3388df35e8f8c5920698a0e0558ab175cde3db2a7606782f1d7a8170aaa6756a", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-aarch64-unknown-linux-gnu.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980531"}
 "platforms.linux-x64" = { checksum = "sha256:bca0dcb9588d6fc186641c8135efc660f6f2d45c56c28568279538fd04a7e757", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-unknown-linux-gnu.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980500"}
+"platforms.linux-x64-baseline" = { checksum = "sha256:bca0dcb9588d6fc186641c8135efc660f6f2d45c56c28568279538fd04a7e757", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-unknown-linux-gnu.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980500"}
+"platforms.linux-x64-musl" = { checksum = "sha256:bca0dcb9588d6fc186641c8135efc660f6f2d45c56c28568279538fd04a7e757", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-unknown-linux-gnu.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980500"}
+"platforms.linux-x64-musl-baseline" = { checksum = "sha256:bca0dcb9588d6fc186641c8135efc660f6f2d45c56c28568279538fd04a7e757", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-unknown-linux-gnu.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980500"}
 "platforms.macos-arm64" = { checksum = "sha256:ff6b529ef3b5d74c741948dc9e571f34da77f65e45adfed867cbb42806609670", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-aarch64-apple-darwin.tar.gz", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980544"}
+"platforms.windows-x64" = { checksum = "sha256:79bc907c655200c0fc456c63852db928bec272d76d154d85067c0f38211710d9", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-pc-windows-msvc.zip", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980700"}
+"platforms.windows-x64-baseline" = { checksum = "sha256:79bc907c655200c0fc456c63852db928bec272d76d154d85067c0f38211710d9", url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-pc-windows-msvc.zip", url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980700"}
 
 [[tools.hk]]
 version = "1.29.0"
 backend = "aqua:jdx/hk"
 "platforms.linux-arm64" = { checksum = "sha256:1917db964829c97731efb853a1ad080716b1908deb3ee1f297d3991a4c97798e", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-aarch64-unknown-linux-gnu.tar.gz"}
+"platforms.linux-arm64-musl" = { checksum = "sha256:1917db964829c97731efb853a1ad080716b1908deb3ee1f297d3991a4c97798e", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-aarch64-unknown-linux-gnu.tar.gz"}
 "platforms.linux-x64" = { checksum = "sha256:abf74f710639689dc7a7e9bf03c4ff14275d5261b018e1d497d0047abb2ef102", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-x86_64-unknown-linux-gnu.tar.gz"}
+"platforms.linux-x64-baseline" = { checksum = "sha256:abf74f710639689dc7a7e9bf03c4ff14275d5261b018e1d497d0047abb2ef102", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-x86_64-unknown-linux-gnu.tar.gz"}
+"platforms.linux-x64-musl" = { checksum = "sha256:abf74f710639689dc7a7e9bf03c4ff14275d5261b018e1d497d0047abb2ef102", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-x86_64-unknown-linux-gnu.tar.gz"}
+"platforms.linux-x64-musl-baseline" = { checksum = "sha256:abf74f710639689dc7a7e9bf03c4ff14275d5261b018e1d497d0047abb2ef102", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-x86_64-unknown-linux-gnu.tar.gz"}
 "platforms.macos-arm64" = { checksum = "sha256:1f610e9efbea3ec718449beeb94b5e13d4692758fd45467449767410751f1135", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-aarch64-apple-darwin.tar.gz"}
 "platforms.windows-x64" = { checksum = "sha256:d93be5bbef1df5338f10338af6cf547f16ff593f4aaf24dd1a6454a4d8ec829e", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-x86_64-pc-windows-msvc.zip"}
+"platforms.windows-x64-baseline" = { checksum = "sha256:d93be5bbef1df5338f10338af6cf547f16ff593f4aaf24dd1a6454a4d8ec829e", url = "https://github.com/jdx/hk/releases/download/v1.29.0/hk-x86_64-pc-windows-msvc.zip"}
 
 [[tools.pkl]]
 version = "0.30.2"
 backend = "aqua:apple/pkl"
 "platforms.linux-arm64" = { checksum = "sha256:8da3ae65104eb7058e35dc4a9fe46bd8ece2b6faf4b65d0b1054cadb2ede0246", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-linux-aarch64"}
+"platforms.linux-arm64-musl" = { checksum = "sha256:8da3ae65104eb7058e35dc4a9fe46bd8ece2b6faf4b65d0b1054cadb2ede0246", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-linux-aarch64"}
 "platforms.linux-x64" = { checksum = "sha256:474e5137d60a9e2320fde19a526f42c36d8e9d3b245139d59a9b8dff85283c76", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-linux-amd64"}
+"platforms.linux-x64-baseline" = { checksum = "sha256:474e5137d60a9e2320fde19a526f42c36d8e9d3b245139d59a9b8dff85283c76", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-linux-amd64"}
+"platforms.linux-x64-musl" = { checksum = "sha256:474e5137d60a9e2320fde19a526f42c36d8e9d3b245139d59a9b8dff85283c76", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-linux-amd64"}
+"platforms.linux-x64-musl-baseline" = { checksum = "sha256:474e5137d60a9e2320fde19a526f42c36d8e9d3b245139d59a9b8dff85283c76", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-linux-amd64"}
 "platforms.macos-arm64" = { checksum = "sha256:f1db44c0f6f859aee88c9d7d272f2371ae40ac95ec9957ae78eff51665158e04", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-macos-aarch64"}
 "platforms.macos-x64" = { checksum = "sha256:5f62ae7a7a34c15b3a83af17bda8e6b98516953f383a492340d4aa090caaa6d9", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-macos-amd64"}
+"platforms.macos-x64-baseline" = { checksum = "sha256:5f62ae7a7a34c15b3a83af17bda8e6b98516953f383a492340d4aa090caaa6d9", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-macos-amd64"}
 "platforms.windows-x64" = { checksum = "sha256:19e92aa59bcf4e54963b6e3b419af7e1b939f5793b44f4a08d60bab1217106f4", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-windows-amd64.exe"}
+"platforms.windows-x64-baseline" = { checksum = "sha256:19e92aa59bcf4e54963b6e3b419af7e1b939f5793b44f4a08d60bab1217106f4", url = "https://github.com/apple/pkl/releases/download/0.30.2/pkl-windows-amd64.exe"}
 
 [[tools.usage]]
 version = "2.9.0"
 backend = "aqua:jdx/usage"
 "platforms.linux-arm64" = { checksum = "sha256:c4d47dad7271bedd45e643fdf07bfd5b8b409e053d29ea25646010ce2d185d64", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-aarch64-unknown-linux-musl.tar.gz"}
+"platforms.linux-arm64-musl" = { checksum = "sha256:c4d47dad7271bedd45e643fdf07bfd5b8b409e053d29ea25646010ce2d185d64", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-aarch64-unknown-linux-musl.tar.gz"}
 "platforms.linux-x64" = { checksum = "sha256:186ac8aaeebd5cae856ac048c4da8aa20f4e81debe065a03db5082439647b8f9", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64-baseline" = { checksum = "sha256:186ac8aaeebd5cae856ac048c4da8aa20f4e81debe065a03db5082439647b8f9", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64-musl" = { checksum = "sha256:186ac8aaeebd5cae856ac048c4da8aa20f4e81debe065a03db5082439647b8f9", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64-musl-baseline" = { checksum = "sha256:186ac8aaeebd5cae856ac048c4da8aa20f4e81debe065a03db5082439647b8f9", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-x86_64-unknown-linux-musl.tar.gz"}
 "platforms.macos-arm64" = { checksum = "sha256:f91655abac0efdc56d608d2a846671f31dcc00a5304d64f99a095b0449bb7076", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-universal-apple-darwin.tar.gz"}
 "platforms.macos-x64" = { checksum = "sha256:f91655abac0efdc56d608d2a846671f31dcc00a5304d64f99a095b0449bb7076", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-universal-apple-darwin.tar.gz"}
+"platforms.macos-x64-baseline" = { checksum = "sha256:f91655abac0efdc56d608d2a846671f31dcc00a5304d64f99a095b0449bb7076", url = "https://github.com/jdx/usage/releases/download/v2.9.0/usage-universal-apple-darwin.tar.gz"}
