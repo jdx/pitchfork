@@ -212,6 +212,8 @@ impl Supervisor {
                 ready_cmd: opts.ready_cmd.clone(),
                 depends: Some(opts.depends.clone()),
                 env: opts.env.clone(),
+                watch: Some(opts.watch.clone()),
+                watch_base_dir: opts.watch_base_dir.clone(),
             })
             .await?;
 

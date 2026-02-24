@@ -92,6 +92,10 @@ pub struct Daemon {
     pub depends: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub watch: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub watch_base_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -116,6 +120,10 @@ pub struct RunOptions {
     pub depends: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub watch: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub watch_base_dir: Option<PathBuf>,
 }
 
 impl Display for Daemon {

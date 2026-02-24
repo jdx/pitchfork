@@ -34,6 +34,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_cmd: Option<String>,
     pub depends: Option<Vec<String>>,
     pub env: Option<IndexMap<String, String>>,
+    pub watch: Option<Vec<String>>,
+    pub watch_base_dir: Option<PathBuf>,
 }
 
 impl Default for UpsertDaemonOpts {
@@ -58,6 +60,8 @@ impl Default for UpsertDaemonOpts {
             ready_cmd: None,
             depends: None,
             env: None,
+            watch: None,
+            watch_base_dir: None,
         }
     }
 }
@@ -111,6 +115,12 @@ impl Supervisor {
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),
             env: opts.env.or(existing.and_then(|d| d.env.clone())),
+            watch: opts
+                .watch
+                .unwrap_or_else(|| existing.map(|d| d.watch.clone()).unwrap_or_default()),
+            watch_base_dir: opts
+                .watch_base_dir
+                .or(existing.and_then(|d| d.watch_base_dir.clone())),
         };
         state_file
             .daemons
