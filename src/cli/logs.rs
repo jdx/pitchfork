@@ -517,7 +517,7 @@ impl Logs {
         single_daemon: bool,
         raw: bool,
     ) -> Result<()> {
-        if !io::stdout().is_terminal() || self.no_pager || raw {
+        if !io::stdout().is_terminal() || self.no_pager || self.tail || raw {
             return self.stream_logs_direct(log_files, single_daemon, raw);
         }
 
