@@ -176,3 +176,168 @@ pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir:
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_normalize_watch_path_existing_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path().join("test_dir");
+        fs::create_dir(&dir_path).unwrap();
+
+        // Canonicalize should work for existing directories
+        let normalized = normalize_watch_path(&dir_path);
+        assert!(normalized.is_absolute());
+        assert!(normalized.exists());
+    }
+
+    #[test]
+    fn test_normalize_watch_path_nonexistent_path() {
+        let path = PathBuf::from("/nonexistent/path/to/dir");
+
+        // Should return the original path when canonicalization fails
+        let normalized = normalize_watch_path(&path);
+        assert_eq!(normalized, path);
+    }
+
+    #[test]
+    fn test_normalize_watch_path_deduplication() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path().join("test_dir");
+        fs::create_dir(&dir_path).unwrap();
+
+        // Create a subdirectory to test path traversal
+        let subdir = dir_path.join("subdir");
+        fs::create_dir(&subdir).unwrap();
+
+        // Create two different relative paths pointing to the same directory
+        // One is direct, the other uses parent/child traversal
+        let path1 = subdir.clone();
+        let path2 = subdir.join("..").join("subdir");
+
+        let normalized1 = normalize_watch_path(&path1);
+        let normalized2 = normalize_watch_path(&path2);
+
+        // Both should canonicalize to the same path
+        assert_eq!(normalized1, normalized2);
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_specific_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Create a test file
+        let test_file = base_dir.join("package.json");
+        fs::write(&test_file, "{}").unwrap();
+
+        // Expand pattern for a specific file
+        let patterns = vec!["package.json".to_string()];
+        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+
+        // Should watch the parent directory
+        assert_eq!(dirs.len(), 1);
+        let dir = dirs.iter().next().unwrap();
+        assert!(dir.is_absolute());
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_glob() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        let subdir = base_dir.join("src");
+        fs::create_dir(&subdir).unwrap();
+
+        // Create test files in src directory
+        fs::write(subdir.join("file1.rs"), "").unwrap();
+        fs::write(subdir.join("file2.rs"), "").unwrap();
+
+        // Expand glob pattern
+        let patterns = vec!["src/**/*.rs".to_string()];
+        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+
+        // Should watch the src directory
+        assert!(!dirs.is_empty());
+        for dir in &dirs {
+            assert!(dir.is_absolute());
+        }
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_nonexistent_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Pattern for a file that doesn't exist yet
+        let patterns = vec!["config.toml".to_string()];
+        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+
+        // Should still watch the parent directory (base_dir in this case)
+        assert_eq!(dirs.len(), 1);
+    }
+
+    #[test]
+    fn test_path_matches_patterns_simple() {
+        let base_dir = PathBuf::from("/tmp");
+
+        // Simple pattern match
+        assert!(path_matches_patterns(
+            Path::new("/tmp/test.txt"),
+            &["*.txt".to_string()],
+            &base_dir
+        ));
+
+        // Non-matching pattern
+        assert!(!path_matches_patterns(
+            Path::new("/tmp/test.rs"),
+            &["*.txt".to_string()],
+            &base_dir
+        ));
+    }
+
+    #[test]
+    fn test_path_matches_patterns_recursive_glob() {
+        let base_dir = PathBuf::from("/project");
+
+        // ** pattern should match any depth
+        assert!(path_matches_patterns(
+            Path::new("/project/src/deep/file.rs"),
+            &["src/**/*.rs".to_string()],
+            &base_dir
+        ));
+
+        // Should also match top-level
+        assert!(path_matches_patterns(
+            Path::new("/project/src/file.rs"),
+            &["src/**/*.rs".to_string()],
+            &base_dir
+        ));
+    }
+
+    #[test]
+    fn test_path_matches_patterns_multiple_patterns() {
+        let base_dir = PathBuf::from("/project");
+
+        // Multiple patterns - should match if any pattern matches
+        let patterns = vec!["*.rs".to_string(), "*.toml".to_string()];
+        assert!(path_matches_patterns(
+            Path::new("/project/Cargo.toml"),
+            &patterns,
+            &base_dir
+        ));
+        assert!(path_matches_patterns(
+            Path::new("/project/main.rs"),
+            &patterns,
+            &base_dir
+        ));
+        assert!(!path_matches_patterns(
+            Path::new("/project/README.md"),
+            &patterns,
+            &base_dir
+        ));
+    }
+}

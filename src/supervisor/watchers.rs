@@ -11,6 +11,8 @@ use crate::ipc::IpcResponse;
 use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
 use crate::{Result, env};
 use notify::RecursiveMode;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time;
 
@@ -18,7 +20,7 @@ impl Supervisor {
     /// Get all watch configurations from the current state of daemons.
     pub(crate) async fn get_all_watch_configs(
         &self,
-    ) -> Vec<(String, Vec<String>, std::path::PathBuf)> {
+    ) -> Vec<(String, Vec<String>, PathBuf)> {
         let state = self.state_file.lock().await;
         state
             .daemons
@@ -210,7 +212,7 @@ impl Supervisor {
                 }
             };
 
-            let mut watched_dirs = std::collections::HashSet::new();
+            let mut watched_dirs = HashSet::new();
             info!("File watcher started");
 
             loop {
@@ -218,9 +220,8 @@ impl Supervisor {
                 let watch_configs = SUPERVISOR.get_all_watch_configs().await;
 
                 // Collect all required directories and track which daemons need them
-                let mut required_dirs = std::collections::HashSet::new();
-                let mut dir_to_daemons: std::collections::HashMap<std::path::PathBuf, Vec<String>> =
-                    std::collections::HashMap::new();
+                let mut required_dirs = HashSet::new();
+                let mut dir_to_daemons: HashMap<PathBuf, Vec<String>> = HashMap::new();
 
                 for (id, patterns, base_dir) in &watch_configs {
                     match expand_watch_patterns(patterns, base_dir) {
@@ -240,17 +241,15 @@ impl Supervisor {
                 }
 
                 // Unwatch directories that are no longer needed
-                let mut still_watched = watched_dirs.clone();
                 for dir in watched_dirs.difference(&required_dirs) {
                     debug!("Unwatching directory {}", dir.display());
                     if let Err(e) = wf.unwatch(dir) {
                         warn!("Failed to unwatch directory {}: {}", dir.display(), e);
                     }
-                    still_watched.remove(dir);
                 }
 
                 // Watch new directories
-                for dir in required_dirs.difference(&still_watched) {
+                for dir in required_dirs.difference(&watched_dirs) {
                     let daemon_ids = dir_to_daemons
                         .get(dir)
                         .map(|ids| ids.join(", "))
@@ -270,7 +269,7 @@ impl Supervisor {
                         debug!("File changes detected: {changed_paths:?}");
 
                         // Find which daemons should be restarted based on the changed paths
-                        let mut daemons_to_restart = std::collections::HashSet::new();
+                        let mut daemons_to_restart = HashSet::new();
 
                         for changed_path in &changed_paths {
                             for (id, patterns, base_dir) in &watch_configs {
