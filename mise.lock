@@ -76,3 +76,14 @@ backend = "aqua:apple/pkl"
 [[tools.usage]]
 version = "2.18.0"
 backend = "aqua:jdx/usage"
+"platforms.linux-arm64" = { checksum = "sha256:3bfd30a1ab9c02268ccbae77e02b9e68aebff78da2d2d7644c77f6499c90ebcf", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-aarch64-unknown-linux-musl.tar.gz"}
+"platforms.linux-arm64-musl" = { checksum = "sha256:3bfd30a1ab9c02268ccbae77e02b9e68aebff78da2d2d7644c77f6499c90ebcf", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-aarch64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64" = { checksum = "sha256:84d12440f0982a01a607e99d73518334d9124f4b8ece58ca0351dd4c1306841d", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64-baseline" = { checksum = "sha256:84d12440f0982a01a607e99d73518334d9124f4b8ece58ca0351dd4c1306841d", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64-musl" = { checksum = "sha256:84d12440f0982a01a607e99d73518334d9124f4b8ece58ca0351dd4c1306841d", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.linux-x64-musl-baseline" = { checksum = "sha256:84d12440f0982a01a607e99d73518334d9124f4b8ece58ca0351dd4c1306841d", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-x86_64-unknown-linux-musl.tar.gz"}
+"platforms.macos-arm64" = { checksum = "sha256:d573fb1fc7622afd7b2e44d27c580f4c9b5655a9cf57098f6712804cfab2b7a5", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-universal-apple-darwin.tar.gz"}
+"platforms.macos-x64" = { checksum = "sha256:d573fb1fc7622afd7b2e44d27c580f4c9b5655a9cf57098f6712804cfab2b7a5", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-universal-apple-darwin.tar.gz"}
+"platforms.macos-x64-baseline" = { checksum = "sha256:d573fb1fc7622afd7b2e44d27c580f4c9b5655a9cf57098f6712804cfab2b7a5", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-universal-apple-darwin.tar.gz"}
+"platforms.windows-x64" = { checksum = "sha256:52c206bb1d33a8fbd80961b803bd16c7f23b60c38743d5ec3620366c5232a83d", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-x86_64-pc-windows-msvc.zip"}
+"platforms.windows-x64-baseline" = { checksum = "sha256:52c206bb1d33a8fbd80961b803bd16c7f23b60c38743d5ec3620366c5232a83d", url = "https://github.com/jdx/usage/releases/download/v2.18.0/usage-x86_64-pc-windows-msvc.zip"}

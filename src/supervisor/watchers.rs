@@ -25,10 +25,7 @@ impl Supervisor {
             .values()
             .filter(|d| !d.watch.is_empty())
             .map(|d| {
-                let base_dir = d
-                    .watch_base_dir
-                    .clone()
-                    .unwrap_or_else(|| env::CWD.clone());
+                let base_dir = d.watch_base_dir.clone().unwrap_or_else(|| env::CWD.clone());
                 (d.id.clone(), d.watch.clone(), base_dir)
             })
             .collect()

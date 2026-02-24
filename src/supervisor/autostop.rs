@@ -173,7 +173,10 @@ impl Supervisor {
                 depends: daemon.depends.clone(),
                 env: daemon.env.clone(),
                 watch: daemon.watch.clone(),
-                watch_base_dir: daemon.path.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf())),
+                watch_base_dir: daemon
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf())),
             };
 
             match self.run(run_opts).await {

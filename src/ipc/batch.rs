@@ -97,7 +97,10 @@ pub fn build_run_options(
         depends: daemon_config.depends.clone(),
         env: daemon_config.env.clone(),
         watch: daemon_config.watch.clone(),
-        watch_base_dir: daemon_config.path.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf())),
+        watch_base_dir: daemon_config
+            .path
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf())),
     })
 }
 

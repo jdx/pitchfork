@@ -1,7 +1,7 @@
+use crate::Result;
 use crate::daemon_status::DaemonStatus;
 use crate::error::DaemonIdError;
 use crate::pitchfork_toml::CronRetrigger;
-use crate::Result;
 use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -183,33 +183,47 @@ mod tests {
     fn test_validate_daemon_id_error_messages() {
         assert!(validate_daemon_id("myapp").is_ok());
 
-        assert!(validate_daemon_id("")
-            .unwrap_err()
-            .to_string()
-            .contains("daemon ID cannot be empty"));
-        assert!(validate_daemon_id("foo/bar")
-            .unwrap_err()
-            .to_string()
-            .contains("contains path separator"));
-        assert!(validate_daemon_id("foo\\bar")
-            .unwrap_err()
-            .to_string()
-            .contains("contains path separator"));
-        assert!(validate_daemon_id("..")
-            .unwrap_err()
-            .to_string()
-            .contains("contains parent directory reference"));
-        assert!(validate_daemon_id("my app")
-            .unwrap_err()
-            .to_string()
-            .contains("contains spaces"));
-        assert!(validate_daemon_id(".")
-            .unwrap_err()
-            .to_string()
-            .contains("daemon ID cannot be '.'"));
-        assert!(validate_daemon_id("my\x00app")
-            .unwrap_err()
-            .to_string()
-            .contains("non-printable or non-ASCII"));
+        assert!(
+            validate_daemon_id("")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot be empty")
+        );
+        assert!(
+            validate_daemon_id("foo/bar")
+                .unwrap_err()
+                .to_string()
+                .contains("contains path separator")
+        );
+        assert!(
+            validate_daemon_id("foo\\bar")
+                .unwrap_err()
+                .to_string()
+                .contains("contains path separator")
+        );
+        assert!(
+            validate_daemon_id("..")
+                .unwrap_err()
+                .to_string()
+                .contains("contains parent directory reference")
+        );
+        assert!(
+            validate_daemon_id("my app")
+                .unwrap_err()
+                .to_string()
+                .contains("contains spaces")
+        );
+        assert!(
+            validate_daemon_id(".")
+                .unwrap_err()
+                .to_string()
+                .contains("daemon ID cannot be '.'")
+        );
+        assert!(
+            validate_daemon_id("my\x00app")
+                .unwrap_err()
+                .to_string()
+                .contains("non-printable or non-ASCII")
+        );
     }
 }
