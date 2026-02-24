@@ -226,10 +226,7 @@ impl Supervisor {
                         Ok(dirs) => {
                             for dir in dirs {
                                 required_dirs.insert(dir.clone());
-                                dir_to_daemons
-                                    .entry(dir.clone())
-                                    .or_default()
-                                    .push(id.clone());
+                                dir_to_daemons.entry(dir).or_default().push(id.clone());
                             }
                         }
                         Err(e) => {

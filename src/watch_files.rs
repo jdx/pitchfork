@@ -61,10 +61,17 @@ impl WatchFiles {
     }
 }
 
-/// Normalize a path by canonicalizing it if it exists, or making it absolute otherwise.
-/// This ensures that different relative paths to the same directory are deduplicated.
+/// Normalize a path by attempting to canonicalize it. If that fails, it attempts
+/// to resolve it as an absolute path. This helps ensure that different relative
+/// paths to the same directory are deduplicated.
 fn normalize_watch_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            crate::env::CWD.join(path)
+        }
+    })
 }
 
 /// Expand glob patterns to actual file paths.
