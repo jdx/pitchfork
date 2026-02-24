@@ -217,18 +217,20 @@ impl Supervisor {
                 // Refresh watch configurations from state
                 let watch_configs = SUPERVISOR.get_all_watch_configs().await;
 
-                // Register any new directories with the watcher
+                // Collect all required directories and track which daemons need them
+                let mut required_dirs = std::collections::HashSet::new();
+                let mut dir_to_daemons: std::collections::HashMap<std::path::PathBuf, Vec<String>> =
+                    std::collections::HashMap::new();
+
                 for (id, patterns, base_dir) in &watch_configs {
                     match expand_watch_patterns(patterns, base_dir) {
                         Ok(dirs) => {
                             for dir in dirs {
-                                if !watched_dirs.contains(&dir) {
-                                    debug!("Watching {} for daemon {}", dir.display(), id);
-                                    if let Err(e) = wf.watch(&dir, RecursiveMode::Recursive) {
-                                        warn!("Failed to watch directory {}: {}", dir.display(), e);
-                                    }
-                                    watched_dirs.insert(dir);
-                                }
+                                required_dirs.insert(dir.clone());
+                                dir_to_daemons
+                                    .entry(dir.clone())
+                                    .or_default()
+                                    .push(id.clone());
                             }
                         }
                         Err(e) => {
@@ -236,6 +238,28 @@ impl Supervisor {
                         }
                     }
                 }
+
+                // Unwatch directories that are no longer needed
+                let mut still_watched = watched_dirs.clone();
+                for dir in watched_dirs.difference(&required_dirs) {
+                    debug!("Unwatching directory {}", dir.display());
+                    if let Err(e) = wf.unwatch(dir) {
+                        warn!("Failed to unwatch directory {}: {}", dir.display(), e);
+                    }
+                    still_watched.remove(dir);
+                }
+
+                // Watch new directories
+                for dir in required_dirs.difference(&still_watched) {
+                    let daemon_ids = dir_to_daemons.get(dir).map(|ids| ids.join(", ")).unwrap_or_default();
+                    debug!("Watching {} for daemon(s): {}", dir.display(), daemon_ids);
+                    if let Err(e) = wf.watch(dir, RecursiveMode::Recursive) {
+                        warn!("Failed to watch directory {}: {}", dir.display(), e);
+                    }
+                }
+
+                // Update the set of watched directories
+                watched_dirs = required_dirs;
 
                 // Wait for file changes or a refresh interval
                 tokio::select! {

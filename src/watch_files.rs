@@ -55,6 +55,17 @@ impl WatchFiles {
     pub fn watch(&mut self, path: &Path, recursive_mode: RecursiveMode) -> Result<()> {
         self.debouncer.watch(path, recursive_mode).into_diagnostic()
     }
+
+    pub fn unwatch(&mut self, path: &Path) -> Result<()> {
+        self.debouncer.unwatch(path).into_diagnostic()
+    }
+}
+
+/// Normalize a path by canonicalizing it if it exists, or making it absolute otherwise.
+/// This ensures that different relative paths to the same directory are deduplicated.
+fn normalize_watch_path(path: &Path) -> PathBuf {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Expand glob patterns to actual file paths.
@@ -78,7 +89,7 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
                     // Watch the parent directory of each matched file
                     // This allows us to detect new files that match the pattern
                     if let Some(parent) = entry.parent() {
-                        dirs_to_watch.insert(parent.to_path_buf());
+                        dirs_to_watch.insert(normalize_watch_path(parent));
                     }
                 }
             }
@@ -107,7 +118,7 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
             } else {
                 base_dir.to_path_buf()
             };
-            dirs_to_watch.insert(dir_to_watch);
+            dirs_to_watch.insert(normalize_watch_path(&dir_to_watch));
         } else {
             // Non-wildcard pattern (specific file like "package.json")
             // Always watch the parent directory, even if file doesn't exist yet
@@ -123,7 +134,7 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
                 } else {
                     base_dir.to_path_buf()
                 };
-                dirs_to_watch.insert(dir_to_watch);
+                dirs_to_watch.insert(normalize_watch_path(&dir_to_watch));
             }
         }
     }
