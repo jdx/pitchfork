@@ -18,9 +18,7 @@ use tokio::time;
 
 impl Supervisor {
     /// Get all watch configurations from the current state of daemons.
-    pub(crate) async fn get_all_watch_configs(
-        &self,
-    ) -> Vec<(String, Vec<String>, PathBuf)> {
+    pub(crate) async fn get_all_watch_configs(&self) -> Vec<(String, Vec<String>, PathBuf)> {
         let state = self.state_file.lock().await;
         state
             .daemons
