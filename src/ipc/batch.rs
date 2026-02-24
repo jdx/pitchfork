@@ -96,6 +96,8 @@ pub fn build_run_options(
         wait_ready: true,
         depends: daemon_config.depends.clone(),
         env: daemon_config.env.clone(),
+        watch: daemon_config.watch.clone(),
+        watch_base_dir: daemon_config.path.as_ref().and_then(|p| p.parent().map(|p| p.to_path_buf())),
     })
 }
 
@@ -403,13 +405,14 @@ impl IpcClient {
         let port = opts.port;
         let ready_cmd = opts.cmd.clone();
         let retry = opts.retry.unwrap_or(0);
+        let shell_pid = opts.shell_pid;
 
         tokio::spawn(async move {
             let run_opts = RunOptions {
                 id: id.clone(),
                 cmd,
-                shell_pid: None,
                 force,
+                shell_pid,
                 dir,
                 autostop: false,
                 cron_schedule: None,
@@ -424,6 +427,8 @@ impl IpcClient {
                 wait_ready: true,
                 depends: vec![],
                 env,
+                watch: vec![],
+                watch_base_dir: None,
             };
 
             let result = ipc.run(run_opts).await;
@@ -581,27 +586,29 @@ impl IpcClient {
         id: String,
         cmd: Vec<String>,
         dir: PathBuf,
-        opts: StartOptions,
+        _opts: StartOptions,
     ) -> Result<RunResult> {
         self.run(RunOptions {
             id,
             cmd,
-            shell_pid: opts.shell_pid,
-            force: opts.force,
+            force: true,
+            shell_pid: None,
             dir,
             autostop: false,
             cron_schedule: None,
             cron_retrigger: None,
-            retry: opts.retry.unwrap_or(0),
+            retry: 0,
             retry_count: 0,
-            ready_delay: opts.delay.or(Some(3)),
-            ready_output: opts.output,
-            ready_http: opts.http,
-            ready_port: opts.port,
-            ready_cmd: opts.cmd,
+            ready_delay: Some(0),
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
             wait_ready: true,
             depends: vec![],
             env: None,
+            watch: vec![],
+            watch_base_dir: None,
         })
         .await
     }

@@ -120,6 +120,8 @@ fn build_daemon_list(
             ready_cmd: None,
             depends: vec![],
             env: None,
+            watch: vec![],
+            watch_base_dir: None,
         };
 
         entries.push(DaemonListEntry {
