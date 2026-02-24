@@ -48,13 +48,23 @@ impl TestEnv {
 
     /// Get the project directory path
     pub fn project_dir(&self) -> PathBuf {
-        self.temp_dir.path().join("project")
+        let p = self.temp_dir.path().join("project");
+        // Canonicalize the path if it exists to resolve symlinks
+        // This is important on macOS where /var is a symlink to /private/var
+        // The file watcher sees the canonical path, so we must configure daemons with it too
+        if p.exists() {
+            p.canonicalize().unwrap_or(p)
+        } else {
+            p
+        }
     }
 
     /// Create a pitchfork.toml file with the given content
     pub fn create_toml(&self, content: &str) -> PathBuf {
         let project_dir = self.project_dir();
         fs::create_dir_all(&project_dir).unwrap();
+        // Now that it exists, project_dir() will return the canonical path
+        let project_dir = self.project_dir();
         let toml_path = project_dir.join("pitchfork.toml");
         fs::write(&toml_path, content).unwrap();
         toml_path
@@ -76,6 +86,8 @@ impl TestEnv {
             .current_dir(self.project_dir())
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
+            // Set fast watch interval for tests
+            .env("PITCHFORK_WATCH_INTERVAL_MS", "100")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -94,6 +106,8 @@ impl TestEnv {
             .current_dir(self.project_dir())
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
+            // Set fast watch interval for tests
+            .env("PITCHFORK_WATCH_INTERVAL_MS", "100")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -165,6 +179,8 @@ impl TestEnv {
             .current_dir(dir)
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
+            // Set fast watch interval for tests
+            .env("PITCHFORK_WATCH_INTERVAL_MS", "100")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -318,9 +334,40 @@ impl TestEnv {
     }
 
     /// Cleanup all processes and supervisor
+    ///
+    /// This runs during Drop, so it must not panic. Errors are logged to stderr
+    /// but swallowed to avoid masking the original test failure.
     pub fn cleanup(&self) {
-        let _ = self.run_command(&["supervisor", "stop"]);
-        std::thread::sleep(Duration::from_millis(500));
+        // Only try to stop supervisor if binary exists
+        if self.pitchfork_bin.exists() {
+            match Command::new(&self.pitchfork_bin)
+                .args(["supervisor", "stop"])
+                .env("HOME", &self.home_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+            {
+                Ok(output) => {
+                    // Check if it was actually stopped or just wasn't running
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !output.status.success() && !stderr.contains("not running") {
+                        // Log unexpected failures but don't panic
+                        eprintln!(
+                            "Warning: Supervisor stop failed during cleanup: {}",
+                            stderr.trim()
+                        );
+                    }
+                }
+                Err(e) => {
+                    // Log the error but don't panic during cleanup
+                    eprintln!(
+                        "Warning: Failed to execute supervisor stop during cleanup: {}",
+                        e
+                    );
+                }
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 }
 

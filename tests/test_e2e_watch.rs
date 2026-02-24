@@ -54,33 +54,39 @@ ready_port = {}
 
     // Get the original PID
     let original_pid = env.get_daemon_pid("watch_test");
-    println!("Original PID: {:?}", original_pid);
     assert!(original_pid.is_some(), "Daemon should have a PID");
 
     // Wait for daemon to be fully running
     env.wait_for_status("watch_test", "running");
 
+    // Give file watcher time to set up watches (much faster now with PITCHFORK_WATCH_INTERVAL_MS=100)
+    env.sleep(Duration::from_millis(500));
+
     // Modify the watched file to trigger a restart
     fs::write(&watched_file, "modified content").unwrap();
-    println!("Modified watched file: {}", watched_file.display());
 
-    // Wait for the file watcher to detect the change and restart
-    // File watcher checks every 1s (debounce) + some processing time
-    env.sleep(Duration::from_secs(3));
-
-    // Check if daemon was restarted by looking at the PID
-    let new_pid = env.get_daemon_pid("watch_test");
-    println!("New PID after modification: {:?}", new_pid);
+    // Poll for the daemon restart by checking PID change (up to 10 seconds)
+    let mut new_pid = None;
+    for _ in 0..20 {
+        new_pid = env.get_daemon_pid("watch_test");
+        if new_pid != original_pid {
+            break;
+        }
+        env.sleep(Duration::from_millis(500));
+    }
 
     // The daemon should be running with a different PID
     assert!(
         new_pid.is_some(),
         "Daemon should still be running after file change"
     );
+    assert_ne!(
+        new_pid, original_pid,
+        "Daemon PID should have changed after restart"
+    );
 
     // Verify the status is still "running"
     let status = env.get_daemon_status("watch_test");
-    println!("Daemon status after file change: {:?}", status);
     assert_eq!(
         status,
         Some("running".to_string()),
@@ -271,13 +277,30 @@ ready_port = {}
     // Wait for daemon to be running
     env.wait_for_status("glob_watch_test", "running");
 
+    // Give file watcher time to set up watches
+    env.sleep(Duration::from_millis(500));
+
     // Get original PID
     let original_pid = env.get_daemon_pid("glob_watch_test");
     assert!(original_pid.is_some(), "Daemon should have a PID");
 
     // Modify a file in lib directory
     fs::write(lib_dir.join("helper.ts"), "export const x = 1;").unwrap();
-    env.sleep(Duration::from_secs(3));
+
+    // Poll for daemon restart after lib file change (up to 10 seconds)
+    let mut pid_after_first_change = original_pid;
+    for _ in 0..20 {
+        pid_after_first_change = env.get_daemon_pid("glob_watch_test");
+        if pid_after_first_change != original_pid {
+            break;
+        }
+        env.sleep(Duration::from_millis(500));
+    }
+    assert_ne!(
+        pid_after_first_change, original_pid,
+        "Daemon should have restarted after lib file change"
+    );
+    assert!(pid_after_first_change.is_some());
 
     // Verify daemon is still running
     let status = env.get_daemon_status("glob_watch_test");
@@ -289,7 +312,21 @@ ready_port = {}
 
     // Modify config file
     fs::write(config_dir.join("app.json"), r#"{"port": 9090}"#).unwrap();
-    env.sleep(Duration::from_secs(3));
+
+    // Poll for daemon restart after config change (up to 5 seconds)
+    let mut pid_after_second_change = pid_after_first_change;
+    for _ in 0..10 {
+        pid_after_second_change = env.get_daemon_pid("glob_watch_test");
+        if pid_after_second_change != pid_after_first_change {
+            break;
+        }
+        env.sleep(Duration::from_millis(500));
+    }
+    assert_ne!(
+        pid_after_second_change, pid_after_first_change,
+        "Daemon should have restarted after config change"
+    );
+    assert!(pid_after_second_change.is_some());
 
     // Verify daemon is still running
     let status = env.get_daemon_status("glob_watch_test");
@@ -342,13 +379,31 @@ ready_port = {}
     // Wait for daemon to be running
     env.wait_for_status("relative_watch_test", "running");
 
+    // Give file watcher time to set up watches
+    env.sleep(Duration::from_millis(500));
+
     // Get original PID
     let original_pid = env.get_daemon_pid("relative_watch_test");
     assert!(original_pid.is_some(), "Daemon should have a PID");
 
     // Modify the watched file
     fs::write(&watched_file, "modified").unwrap();
-    env.sleep(Duration::from_secs(3));
+
+    // Poll for daemon restart by checking PID change (up to 10 seconds)
+    let mut new_pid = original_pid;
+    for _ in 0..20 {
+        new_pid = env.get_daemon_pid("relative_watch_test");
+        if new_pid != original_pid {
+            break;
+        }
+        env.sleep(Duration::from_millis(500));
+    }
+
+    assert_ne!(
+        new_pid, original_pid,
+        "Daemon should have restarted after file change"
+    );
+    assert!(new_pid.is_some());
 
     // Verify daemon is still running
     let status = env.get_daemon_status("relative_watch_test");

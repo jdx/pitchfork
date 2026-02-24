@@ -286,7 +286,12 @@ impl Supervisor {
                             }
                         }
                     }
-                    _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    _ = tokio::time::sleep(Duration::from_millis(
+                        std::env::var("PITCHFORK_WATCH_INTERVAL_MS")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(10_000),
+                    )) => {
                         // Periodically refresh watch configs to pick up new daemons
                         trace!("Refreshing file watch configurations");
                     }

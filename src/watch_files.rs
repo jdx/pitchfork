@@ -81,11 +81,14 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
     let mut dirs_to_watch = HashSet::new();
 
     for pattern in patterns {
+        // Strip leading "./" from patterns to handle relative path prefixes
+        let normalized_pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+
         // Make the pattern absolute by joining with base_dir
-        let full_pattern = if Path::new(pattern).is_absolute() {
-            normalize_path_for_glob(pattern)
+        let full_pattern = if Path::new(normalized_pattern).is_absolute() {
+            normalize_path_for_glob(normalized_pattern)
         } else {
-            normalize_path_for_glob(&base_dir.join(pattern).to_string_lossy())
+            normalize_path_for_glob(&base_dir.join(normalized_pattern).to_string_lossy())
         };
 
         // Expand the glob pattern
@@ -107,11 +110,11 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
         // For patterns with wildcards, watch the base directory (before the wildcard)
         // For non-wildcard patterns, watch the parent directory of the specific file
         // This ensures we catch new files even if they don't exist at startup
-        if pattern.contains('*') {
+        if normalized_pattern.contains('*') {
             // Find the first directory without wildcards
             // Normalize to use forward slashes for cross-platform compatibility
-            let normalized_pattern = normalize_path_for_glob(pattern);
-            let parts: Vec<&str> = normalized_pattern.split('/').collect();
+            let normalized_pattern_str = normalize_path_for_glob(normalized_pattern);
+            let parts: Vec<&str> = normalized_pattern_str.split('/').collect();
             let mut base = base_dir.to_path_buf();
             for part in parts {
                 if part.contains('*') {
@@ -130,10 +133,10 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
         } else {
             // Non-wildcard pattern (specific file like "package.json")
             // Always watch the parent directory, even if file doesn't exist yet
-            let full_path = if Path::new(pattern).is_absolute() {
-                PathBuf::from(pattern)
+            let full_path = if Path::new(normalized_pattern).is_absolute() {
+                PathBuf::from(normalized_pattern)
             } else {
-                base_dir.join(pattern)
+                base_dir.join(normalized_pattern)
             };
             if let Some(parent) = full_path.parent() {
                 // Watch the parent if it exists (or base_dir as fallback)
@@ -163,11 +166,14 @@ pub fn path_matches_patterns(changed_path: &Path, patterns: &[String], base_dir:
     let changed_path_str = normalize_path_for_glob(&changed_path.to_string_lossy());
 
     for pattern in patterns {
+        // Strip leading "./" from patterns to handle relative path prefixes
+        let normalized_pattern = pattern.strip_prefix("./").unwrap_or(pattern);
+
         // Build the full pattern and normalize to use forward slashes
-        let full_pattern = if Path::new(pattern).is_absolute() {
-            normalize_path_for_glob(pattern)
+        let full_pattern = if Path::new(normalized_pattern).is_absolute() {
+            normalize_path_for_glob(normalized_pattern)
         } else {
-            normalize_path_for_glob(&base_dir.join(pattern).to_string_lossy())
+            normalize_path_for_glob(&base_dir.join(normalized_pattern).to_string_lossy())
         };
 
         // Use globset which properly supports ** for recursive matching
@@ -291,62 +297,119 @@ mod tests {
 
     #[test]
     fn test_path_matches_patterns_simple() {
-        let base_dir = PathBuf::from("/tmp");
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Create test files
+        let test_txt = base_dir.join("test.txt");
+        let test_rs = base_dir.join("test.rs");
+        fs::write(&test_txt, "").unwrap();
+        fs::write(&test_rs, "").unwrap();
 
         // Simple pattern match
         assert!(path_matches_patterns(
-            Path::new("/tmp/test.txt"),
+            &test_txt,
             &["*.txt".to_string()],
-            &base_dir
+            base_dir
         ));
 
         // Non-matching pattern
         assert!(!path_matches_patterns(
-            Path::new("/tmp/test.rs"),
+            &test_rs,
             &["*.txt".to_string()],
-            &base_dir
+            base_dir
         ));
     }
 
     #[test]
     fn test_path_matches_patterns_recursive_glob() {
-        let base_dir = PathBuf::from("/project");
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        let src_dir = base_dir.join("src");
+        let deep_dir = src_dir.join("deep");
+        fs::create_dir_all(&deep_dir).unwrap();
+
+        // Create test files
+        let deep_file = deep_dir.join("file.rs");
+        let src_file = src_dir.join("file.rs");
+        fs::write(&deep_file, "").unwrap();
+        fs::write(&src_file, "").unwrap();
 
         // ** pattern should match any depth
         assert!(path_matches_patterns(
-            Path::new("/project/src/deep/file.rs"),
+            &deep_file,
             &["src/**/*.rs".to_string()],
-            &base_dir
+            base_dir
         ));
 
         // Should also match top-level
         assert!(path_matches_patterns(
-            Path::new("/project/src/file.rs"),
+            &src_file,
             &["src/**/*.rs".to_string()],
-            &base_dir
+            base_dir
         ));
     }
 
     #[test]
     fn test_path_matches_patterns_multiple_patterns() {
-        let base_dir = PathBuf::from("/project");
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Create test files
+        let cargo_toml = base_dir.join("Cargo.toml");
+        let main_rs = base_dir.join("main.rs");
+        let readme_md = base_dir.join("README.md");
+        fs::write(&cargo_toml, "").unwrap();
+        fs::write(&main_rs, "").unwrap();
+        fs::write(&readme_md, "").unwrap();
 
         // Multiple patterns - should match if any pattern matches
         let patterns = vec!["*.rs".to_string(), "*.toml".to_string()];
+        assert!(path_matches_patterns(&cargo_toml, &patterns, base_dir));
+        assert!(path_matches_patterns(&main_rs, &patterns, base_dir));
+        assert!(!path_matches_patterns(&readme_md, &patterns, base_dir));
+    }
+
+    #[test]
+    fn test_path_matches_patterns_relative_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Create a test file
+        let test_file = base_dir.join("config.json");
+        fs::write(&test_file, "{}").unwrap();
+
+        // Pattern with "./" prefix should match the file
         assert!(path_matches_patterns(
-            Path::new("/project/Cargo.toml"),
-            &patterns,
-            &base_dir
+            &test_file,
+            &["./config.json".to_string()],
+            base_dir
         ));
+
+        // Same pattern without prefix should also match
         assert!(path_matches_patterns(
-            Path::new("/project/main.rs"),
-            &patterns,
-            &base_dir
+            &test_file,
+            &["config.json".to_string()],
+            base_dir
         ));
-        assert!(!path_matches_patterns(
-            Path::new("/project/README.md"),
-            &patterns,
-            &base_dir
-        ));
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_relative_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Create a test file
+        let test_file = base_dir.join("config.json");
+        fs::write(&test_file, "{}").unwrap();
+
+        // Pattern with "./" prefix should expand correctly
+        let patterns = vec!["./config.json".to_string()];
+        let dirs = expand_watch_patterns(&patterns, base_dir).unwrap();
+
+        // Should watch the parent directory
+        assert_eq!(dirs.len(), 1);
+        let dir = dirs.iter().next().unwrap();
+        assert!(dir.is_absolute());
     }
 }
