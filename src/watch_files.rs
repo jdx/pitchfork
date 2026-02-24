@@ -76,9 +76,9 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
     for pattern in patterns {
         // Make the pattern absolute by joining with base_dir
         let full_pattern = if Path::new(pattern).is_absolute() {
-            pattern.clone()
+            normalize_path_for_glob(pattern)
         } else {
-            base_dir.join(pattern).to_string_lossy().to_string()
+            normalize_path_for_glob(&base_dir.join(pattern).to_string_lossy())
         };
 
         // Expand the glob pattern
@@ -102,7 +102,9 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
         // This ensures we catch new files even if they don't exist at startup
         if pattern.contains('*') {
             // Find the first directory without wildcards
-            let parts: Vec<&str> = pattern.split('/').collect();
+            // Normalize to use forward slashes for cross-platform compatibility
+            let normalized_pattern = normalize_path_for_glob(pattern);
+            let parts: Vec<&str> = normalized_pattern.split('/').collect();
             let mut base = base_dir.to_path_buf();
             for part in parts {
                 if part.contains('*') {
