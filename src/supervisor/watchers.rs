@@ -251,7 +251,10 @@ impl Supervisor {
 
                 // Watch new directories
                 for dir in required_dirs.difference(&still_watched) {
-                    let daemon_ids = dir_to_daemons.get(dir).map(|ids| ids.join(", ")).unwrap_or_default();
+                    let daemon_ids = dir_to_daemons
+                        .get(dir)
+                        .map(|ids| ids.join(", "))
+                        .unwrap_or_default();
                     debug!("Watching {} for daemon(s): {}", dir.display(), daemon_ids);
                     if let Err(e) = wf.watch(dir, RecursiveMode::Recursive) {
                         warn!("Failed to watch directory {}: {}", dir.display(), e);

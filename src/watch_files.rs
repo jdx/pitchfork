@@ -64,8 +64,7 @@ impl WatchFiles {
 /// Normalize a path by canonicalizing it if it exists, or making it absolute otherwise.
 /// This ensures that different relative paths to the same directory are deduplicated.
 fn normalize_watch_path(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Expand glob patterns to actual file paths.
