@@ -259,6 +259,7 @@ impl Supervisor {
                 watched_dirs = required_dirs;
 
                 // Wait for file changes or a refresh interval
+                let watch_interval = Duration::from_millis(*env::PITCHFORK_WATCH_INTERVAL_MS);
                 tokio::select! {
                     Some(changed_paths) = wf.rx.recv() => {
                         debug!("File changes detected: {changed_paths:?}");
@@ -286,12 +287,7 @@ impl Supervisor {
                             }
                         }
                     }
-                    _ = tokio::time::sleep(Duration::from_millis(
-                        std::env::var("PITCHFORK_WATCH_INTERVAL_MS")
-                            .ok()
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(10_000),
-                    )) => {
+                    _ = tokio::time::sleep(watch_interval) => {
                         // Periodically refresh watch configs to pick up new daemons
                         trace!("Refreshing file watch configurations");
                     }

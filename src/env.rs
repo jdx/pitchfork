@@ -64,6 +64,11 @@ pub static PITCHFORK_AUTOSTOP_DELAY: Lazy<u64> =
 pub static PITCHFORK_INTERVAL_SECS: Lazy<u64> =
     Lazy::new(|| var_u64("PITCHFORK_INTERVAL_SECS").unwrap_or(10));
 
+// Interval in milliseconds for the file watcher refresh
+// Default: 10000ms (10 seconds). Lower values useful for testing.
+pub static PITCHFORK_WATCH_INTERVAL_MS: Lazy<u64> =
+    Lazy::new(|| var_u64("PITCHFORK_WATCH_INTERVAL_MS").unwrap_or(10_000));
+
 fn var_path(name: &str) -> Option<PathBuf> {
     var(name).map(PathBuf::from).ok()
 }
