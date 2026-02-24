@@ -38,9 +38,6 @@ Pitchfork is a CLI for managing daemons with a focus on developer experience.
 - **Start on boot** - Automatically start daemons when your system boots
 - **Project configuration** - Define all your project's daemons in `pitchfork.toml`
 
-> [!WARNING]
-> This project is experimental. It works in basic situations but you'll undoubtedly encounter bugs.
-
 ## Use Cases
 
 - Launching development services like web APIs and databases
