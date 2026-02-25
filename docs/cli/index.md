@@ -16,7 +16,7 @@
 - [`pitchfork boot status`](/cli/boot/status.md)
 - [`pitchfork clean`](/cli/clean.md)
 - [`pitchfork config <SUBCOMMAND>`](/cli/config.md)
-- [`pitchfork config add [--autostart] [--autostop] <ID> [ARGS]…`](/cli/config/add.md)
+- [`pitchfork config add [FLAGS] <ID> [ARGS]…`](/cli/config/add.md)
 - [`pitchfork config remove <ID>`](/cli/config/remove.md)
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork disable <ID>`](/cli/disable.md)

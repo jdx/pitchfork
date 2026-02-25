@@ -59,6 +59,13 @@ impl TestEnv {
         }
     }
 
+    /// Create the project directory
+    pub fn create_project_dir(&self) -> PathBuf {
+        let project_dir = self.project_dir();
+        fs::create_dir_all(&project_dir).unwrap();
+        self.project_dir() // Return canonicalized path
+    }
+
     /// Create a pitchfork.toml file with the given content
     pub fn create_toml(&self, content: &str) -> PathBuf {
         let project_dir = self.project_dir();
