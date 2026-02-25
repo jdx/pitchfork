@@ -96,6 +96,11 @@ pub fn build_run_options(
         wait_ready: true,
         depends: daemon_config.depends.clone(),
         env: daemon_config.env.clone(),
+        watch: daemon_config.watch.clone(),
+        watch_base_dir: daemon_config
+            .path
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf())),
     })
 }
 
@@ -403,13 +408,14 @@ impl IpcClient {
         let port = opts.port;
         let ready_cmd = opts.cmd.clone();
         let retry = opts.retry.unwrap_or(0);
+        let shell_pid = opts.shell_pid;
 
         tokio::spawn(async move {
             let run_opts = RunOptions {
                 id: id.clone(),
                 cmd,
-                shell_pid: None,
                 force,
+                shell_pid,
                 dir,
                 autostop: false,
                 cron_schedule: None,
@@ -424,6 +430,8 @@ impl IpcClient {
                 wait_ready: true,
                 depends: vec![],
                 env,
+                watch: vec![],
+                watch_base_dir: None,
             };
 
             let result = ipc.run(run_opts).await;
@@ -602,6 +610,8 @@ impl IpcClient {
             wait_ready: true,
             depends: vec![],
             env: None,
+            watch: vec![],
+            watch_base_dir: None,
         })
         .await
     }
