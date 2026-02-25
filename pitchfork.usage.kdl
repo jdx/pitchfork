@@ -33,10 +33,60 @@ cmd config help="manage/edit pitchfork.toml files" {
     long_help "manage/edit pitchfork.toml files\n\nwithout a subcommand, lists all pitchfork.toml files from the current directory"
     cmd add help="Add a new daemon to ./pitchfork.toml" {
         alias a
+        long_help "Add a new daemon to ./pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork config add api bun run server\n                                Add daemon using positional args\n  pitchfork config add api --run 'npm start'\n                                Add daemon with explicit run command\n  pitchfork config add api -- bun run server\n                                Add daemon with explicit args after --\n  pitchfork config add api --run 'npm start' --retry 3\n                                Add with retry policy\n  pitchfork config add api --run 'npm start' --watch 'src/**/*.ts'\n                                Add with file watching\n  pitchfork config add api --run 'npm start' --autostart --autostop\n                                Add with auto start/stop hooks\n  pitchfork config add worker --run './worker' --depends api\n                                Add with daemon dependency\n"
+        flag --run help="Command to run (can also use positional args)" {
+            arg <RUN>
+        }
+        flag --retry help="Number of retry attempts on failure (use \\\"true\\\" for infinite)" {
+            arg <RETRY>
+        }
+        flag --watch help="Glob patterns to watch for changes (can be specified multiple times)" var=#true {
+            arg <WATCH>
+        }
+        flag --dir help="Working directory for the daemon" {
+            arg <DIR>
+        }
+        flag --env help="Environment variables in KEY=value format (can be specified multiple times)" var=#true {
+            arg <ENV>
+        }
+        flag --ready-delay help="Delay in seconds before considering daemon ready" {
+            arg <READY_DELAY>
+        }
+        flag --ready-output help="Regex pattern to match in output for readiness" {
+            arg <READY_OUTPUT>
+        }
+        flag --ready-http help="HTTP endpoint URL to poll for readiness" {
+            arg <READY_HTTP>
+        }
+        flag --ready-port help="TCP port to check for readiness" {
+            arg <READY_PORT>
+        }
+        flag --ready-cmd help="Shell command to poll for readiness" {
+            arg <READY_CMD>
+        }
+        flag --depends help="Daemon dependencies that must start first (can be specified multiple times)" var=#true {
+            arg <DEPENDS>
+        }
+        flag --boot-start help="Start this daemon automatically on system boot"
         flag --autostart help="Autostart the daemon when entering the directory"
         flag --autostop help="Autostop the daemon when leaving the directory"
+        flag --on-ready help="Command to run when daemon becomes ready" {
+            arg <ON_READY>
+        }
+        flag --on-fail help="Command to run when daemon fails" {
+            arg <ON_FAIL>
+        }
+        flag --on-retry help="Command to run before each retry attempt" {
+            arg <ON_RETRY>
+        }
+        flag --cron-schedule help="Cron schedule expression (6 fields: second minute hour day month weekday)" {
+            arg <CRON_SCHEDULE>
+        }
+        flag --cron-retrigger help="Cron retrigger behavior: finish, always, success, fail" {
+            arg <CRON_RETRIGGER>
+        }
         arg <ID> help="ID of the daemon to add"
-        arg "[ARGS]…" help="Arguments to pass to the daemon" required=#false double_dash=automatic var=#true
+        arg "[ARGS]…" help="Arguments to pass to the daemon (alternative to --run)" required=#false double_dash=automatic var=#true
     }
     cmd remove help="Remove a daemon from pitchfork.toml" {
         alias rm

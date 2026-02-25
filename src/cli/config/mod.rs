@@ -15,6 +15,7 @@ pub struct Config {
 }
 
 #[derive(Debug, clap::Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     Add(add::Add),
     Remove(remove::Remove),

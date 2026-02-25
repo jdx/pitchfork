@@ -10,5 +10,5 @@ without a subcommand, lists all pitchfork.toml files from the current directory
 
 ## Subcommands
 
-- [`pitchfork config add [--autostart] [--autostop] <ID> [ARGS]…`](/cli/config/add.md)
+- [`pitchfork config add [FLAGS] <ID> [ARGS]…`](/cli/config/add.md)
 - [`pitchfork config remove <ID>`](/cli/config/remove.md)

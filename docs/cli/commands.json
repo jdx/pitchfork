@@ -169,7 +169,7 @@
               "config",
               "add"
             ],
-            "usage": "config add [--autostart] [--autostop] <ID> [ARGS]…",
+            "usage": "config add [FLAGS] <ID> [ARGS]…",
             "subcommands": {},
             "args": [
               {
@@ -184,8 +184,8 @@
               {
                 "name": "ARGS",
                 "usage": "[ARGS]…",
-                "help": "Arguments to pass to the daemon",
-                "help_first_line": "Arguments to pass to the daemon",
+                "help": "Arguments to pass to the daemon (alternative to --run)",
+                "help_first_line": "Arguments to pass to the daemon (alternative to --run)",
                 "required": false,
                 "double_dash": "Automatic",
                 "var": true,
@@ -193,6 +193,230 @@
               }
             ],
             "flags": [
+              {
+                "name": "run",
+                "usage": "--run <RUN>",
+                "help": "Command to run (can also use positional args)",
+                "help_first_line": "Command to run (can also use positional args)",
+                "short": [],
+                "long": [
+                  "run"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "RUN",
+                  "usage": "<RUN>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "retry",
+                "usage": "--retry <RETRY>",
+                "help": "Number of retry attempts on failure (use \\\"true\\\" for infinite)",
+                "help_first_line": "Number of retry attempts on failure (use \\\"true\\\" for infinite)",
+                "short": [],
+                "long": [
+                  "retry"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "RETRY",
+                  "usage": "<RETRY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "watch",
+                "usage": "--watch… <WATCH>",
+                "help": "Glob patterns to watch for changes (can be specified multiple times)",
+                "help_first_line": "Glob patterns to watch for changes (can be specified multiple times)",
+                "short": [],
+                "long": [
+                  "watch"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "WATCH",
+                  "usage": "<WATCH>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "dir",
+                "usage": "--dir <DIR>",
+                "help": "Working directory for the daemon",
+                "help_first_line": "Working directory for the daemon",
+                "short": [],
+                "long": [
+                  "dir"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIR",
+                  "usage": "<DIR>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "env",
+                "usage": "--env… <ENV>",
+                "help": "Environment variables in KEY=value format (can be specified multiple times)",
+                "help_first_line": "Environment variables in KEY=value format (can be specified multiple times)",
+                "short": [],
+                "long": [
+                  "env"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ENV",
+                  "usage": "<ENV>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-delay",
+                "usage": "--ready-delay <READY_DELAY>",
+                "help": "Delay in seconds before considering daemon ready",
+                "help_first_line": "Delay in seconds before considering daemon ready",
+                "short": [],
+                "long": [
+                  "ready-delay"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_DELAY",
+                  "usage": "<READY_DELAY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-output",
+                "usage": "--ready-output <READY_OUTPUT>",
+                "help": "Regex pattern to match in output for readiness",
+                "help_first_line": "Regex pattern to match in output for readiness",
+                "short": [],
+                "long": [
+                  "ready-output"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_OUTPUT",
+                  "usage": "<READY_OUTPUT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-http",
+                "usage": "--ready-http <READY_HTTP>",
+                "help": "HTTP endpoint URL to poll for readiness",
+                "help_first_line": "HTTP endpoint URL to poll for readiness",
+                "short": [],
+                "long": [
+                  "ready-http"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_HTTP",
+                  "usage": "<READY_HTTP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-port",
+                "usage": "--ready-port <READY_PORT>",
+                "help": "TCP port to check for readiness",
+                "help_first_line": "TCP port to check for readiness",
+                "short": [],
+                "long": [
+                  "ready-port"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_PORT",
+                  "usage": "<READY_PORT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-cmd",
+                "usage": "--ready-cmd <READY_CMD>",
+                "help": "Shell command to poll for readiness",
+                "help_first_line": "Shell command to poll for readiness",
+                "short": [],
+                "long": [
+                  "ready-cmd"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_CMD",
+                  "usage": "<READY_CMD>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "depends",
+                "usage": "--depends… <DEPENDS>",
+                "help": "Daemon dependencies that must start first (can be specified multiple times)",
+                "help_first_line": "Daemon dependencies that must start first (can be specified multiple times)",
+                "short": [],
+                "long": [
+                  "depends"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DEPENDS",
+                  "usage": "<DEPENDS>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "boot-start",
+                "usage": "--boot-start",
+                "help": "Start this daemon automatically on system boot",
+                "help_first_line": "Start this daemon automatically on system boot",
+                "short": [],
+                "long": [
+                  "boot-start"
+                ],
+                "hide": false,
+                "global": false
+              },
               {
                 "name": "autostart",
                 "usage": "--autostart",
@@ -216,11 +440,107 @@
                 ],
                 "hide": false,
                 "global": false
+              },
+              {
+                "name": "on-ready",
+                "usage": "--on-ready <ON_READY>",
+                "help": "Command to run when daemon becomes ready",
+                "help_first_line": "Command to run when daemon becomes ready",
+                "short": [],
+                "long": [
+                  "on-ready"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_READY",
+                  "usage": "<ON_READY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-fail",
+                "usage": "--on-fail <ON_FAIL>",
+                "help": "Command to run when daemon fails",
+                "help_first_line": "Command to run when daemon fails",
+                "short": [],
+                "long": [
+                  "on-fail"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_FAIL",
+                  "usage": "<ON_FAIL>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-retry",
+                "usage": "--on-retry <ON_RETRY>",
+                "help": "Command to run before each retry attempt",
+                "help_first_line": "Command to run before each retry attempt",
+                "short": [],
+                "long": [
+                  "on-retry"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_RETRY",
+                  "usage": "<ON_RETRY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "cron-schedule",
+                "usage": "--cron-schedule <CRON_SCHEDULE>",
+                "help": "Cron schedule expression (6 fields: second minute hour day month weekday)",
+                "help_first_line": "Cron schedule expression (6 fields: second minute hour day month weekday)",
+                "short": [],
+                "long": [
+                  "cron-schedule"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CRON_SCHEDULE",
+                  "usage": "<CRON_SCHEDULE>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "cron-retrigger",
+                "usage": "--cron-retrigger <CRON_RETRIGGER>",
+                "help": "Cron retrigger behavior: finish, always, success, fail",
+                "help_first_line": "Cron retrigger behavior: finish, always, success, fail",
+                "short": [],
+                "long": [
+                  "cron-retrigger"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CRON_RETRIGGER",
+                  "usage": "<CRON_RETRIGGER>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
               }
             ],
             "mounts": [],
             "hide": false,
             "help": "Add a new daemon to ./pitchfork.toml",
+            "help_long": "Add a new daemon to ./pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork config add api bun run server\n                                Add daemon using positional args\n  pitchfork config add api --run 'npm start'\n                                Add daemon with explicit run command\n  pitchfork config add api -- bun run server\n                                Add daemon with explicit args after --\n  pitchfork config add api --run 'npm start' --retry 3\n                                Add with retry policy\n  pitchfork config add api --run 'npm start' --watch 'src/**/*.ts'\n                                Add with file watching\n  pitchfork config add api --run 'npm start' --autostart --autostop\n                                Add with auto start/stop hooks\n  pitchfork config add worker --run './worker' --depends api\n                                Add with daemon dependency\n",
             "name": "add",
             "aliases": [
               "a"
