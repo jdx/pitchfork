@@ -80,24 +80,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install mise
-        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
         uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
-      - name: Update generated docs
-        if: ${{ steps.release-plz.outputs.prs_created == 'true' }}
+      - name: Squash generated docs into release PR
         run: |
-          PR_BRANCH=$(echo '${{ steps.release-plz.outputs.pr }}' | jq -r '.head_branch')
+          if [ -n "${{ steps.release-plz.outputs.pr }}" ]; then
+            PR_BRANCH=$(echo '${{ steps.release-plz.outputs.pr }}' | jq -r '.head_branch // empty')
+          else
+            PR_BRANCH=$(gh pr list --state open --base main --json headRefName,updatedAt --jq 'sort_by(.updatedAt) | reverse | map(select(.headRefName | startswith("release-plz-")))[0].headRefName // empty' 2>/dev/null || true)
+          fi
+          if [ -z "$PR_BRANCH" ]; then
+            echo "No release PR branch found, skipping"
+            exit 0
+          fi
+          echo "Updating release PR on branch: $PR_BRANCH"
           git fetch origin "$PR_BRANCH"
           git checkout "$PR_BRANCH"
-          mise run render
-          if git diff --staged --quiet; then
+          mise run render ::: lint-fix
+          git add -A
+          if git diff --cached --quiet; then
             echo "No changes to commit"
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "chore: update generated docs for release"
-            git pull --rebase
-            git push
+            git commit --amend --no-edit
+            git push --force-with-lease origin "$PR_BRANCH"
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
