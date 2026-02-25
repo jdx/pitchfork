@@ -83,10 +83,10 @@ jobs:
         uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
       - name: Squash generated docs into release PR
         run: |
-          if [ -n '${{ steps.release-plz.outputs.pr }}' ]; then
-            PR_BRANCH=$(echo '${{ steps.release-plz.outputs.pr }}' | jq -r '.head_branch')
+          if [ -n "${{ steps.release-plz.outputs.pr }}" ]; then
+            PR_BRANCH=$(echo '${{ steps.release-plz.outputs.pr }}' | jq -r '.head_branch // empty')
           else
-            PR_BRANCH=$(gh pr list --json headRefName --jq '[.[] | select(.headRefName | startswith("release-plz-"))][0].headRefName' 2>/dev/null || true)
+            PR_BRANCH=$(gh pr list --state open --base main --json headRefName,updatedAt --jq 'sort_by(.updatedAt) | reverse | map(select(.headRefName | startswith("release-plz-")))[0].headRefName // empty' 2>/dev/null || true)
           fi
           if [ -z "$PR_BRANCH" ]; then
             echo "No release PR branch found, skipping"
