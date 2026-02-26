@@ -2,3 +2,5 @@
 run = "mise run -q docs"
 auto = ["start", "stop"]
 ready_output = "http://localhost:"
+port = [5173]
+auto_bump_port = true

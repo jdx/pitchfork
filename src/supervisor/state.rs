@@ -32,6 +32,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
+    pub port: Vec<u16>,
+    pub auto_bump_port: Option<bool>,
     pub depends: Option<Vec<String>>,
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
@@ -58,6 +60,8 @@ impl Default for UpsertDaemonOpts {
             ready_http: None,
             ready_port: None,
             ready_cmd: None,
+            port: Vec::new(),
+            auto_bump_port: None,
             depends: None,
             env: None,
             watch: None,
@@ -111,6 +115,14 @@ impl Supervisor {
             ready_cmd: opts
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),
+            port: if opts.port.is_empty() {
+                existing.map(|d| d.port.clone()).unwrap_or_default()
+            } else {
+                opts.port
+            },
+            auto_bump_port: opts
+                .auto_bump_port
+                .unwrap_or(existing.map(|d| d.auto_bump_port).unwrap_or(false)),
             depends: opts
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),

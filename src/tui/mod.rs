@@ -331,6 +331,12 @@ async fn run_app<B: Backend>(
         // Auto-refresh daemon list
         if last_refresh.elapsed() >= REFRESH_RATE {
             app.refresh(client).await?;
+
+            // Also refresh network data if viewing network view
+            if app.view == app::View::Network {
+                app.refresh_network().await;
+            }
+
             last_refresh = std::time::Instant::now();
         }
     }

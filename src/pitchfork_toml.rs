@@ -171,6 +171,12 @@ pub struct PitchforkTomlDaemon {
     /// Shell command to poll for readiness (exit code 0 = ready)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<String>,
+    /// TCP ports the daemon is expected to bind to
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub port: Vec<u16>,
+    /// Automatically find an available port if the specified port is in use
+    #[serde(default)]
+    pub auto_bump_port: bool,
     /// Whether to start this daemon automatically on system boot
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,

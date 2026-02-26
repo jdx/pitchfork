@@ -8,6 +8,7 @@ use crate::pitchfork_toml::{
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use listeners::Listener;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -80,6 +81,7 @@ impl StatsHistory {
 pub enum View {
     Dashboard,
     Logs,
+    Network,
     Help,
     Confirm,
     Loading,
@@ -503,6 +505,8 @@ impl EditorState {
             ready_http: None,
             ready_port: None,
             ready_cmd: self.preserved_ready_cmd.clone(),
+            port: Vec::new(),
+            auto_bump_port: false,
             boot_start: None,
             depends: vec![],
             watch: vec![],
@@ -853,6 +857,13 @@ pub struct App {
     pub editor_state: Option<EditorState>,
     // Config file selector state
     pub file_selector: Option<ConfigFileSelector>,
+    // Network view state
+    pub network_listeners: Vec<Listener>,
+    pub network_search_query: String,
+    pub network_search_active: bool,
+    pub network_selected: usize,
+    pub network_scroll_offset: usize,
+    pub network_selected_pid: Option<u32>, // Store PID to ensure correct targeting
 }
 
 impl App {
@@ -888,6 +899,12 @@ impl App {
             show_available: true, // Show available daemons by default
             editor_state: None,
             file_selector: None,
+            network_listeners: Vec::new(),
+            network_search_query: String::new(),
+            network_search_active: false,
+            network_selected: 0,
+            network_scroll_offset: 0,
+            network_selected_pid: None,
         }
     }
 
@@ -1204,6 +1221,87 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Refresh network listeners data (for Network view)
+    pub async fn refresh_network(&mut self) {
+        // Use spawn_blocking since listeners::get_all() is a blocking operation
+        let listeners: Vec<Listener> = tokio::task::spawn_blocking(|| {
+            listeners::get_all()
+                .map(|set| set.into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+
+        self.network_listeners = listeners;
+
+        // Keep selection in bounds - first calculate the filtered count
+        let filtered_count = self.filtered_network_listeners().len();
+
+        // Update selection index
+        if filtered_count > 0 && self.network_selected >= filtered_count {
+            self.network_selected = filtered_count - 1;
+        } else if filtered_count == 0 {
+            self.network_selected = 0;
+        }
+
+        // Get a fresh filtered list and update the stored PID
+        let selected_pid = self
+            .filtered_network_listeners()
+            .get(self.network_selected)
+            .map(|l| l.process.pid);
+        self.network_selected_pid = selected_pid;
+    }
+
+    /// Get filtered network listeners based on search query
+    pub fn filtered_network_listeners(&self) -> Vec<&listeners::Listener> {
+        if self.network_search_query.is_empty() {
+            return self.network_listeners.iter().collect();
+        }
+
+        let matcher = SkimMatcherV2::default();
+        let query = &self.network_search_query;
+
+        self.network_listeners
+            .iter()
+            .filter(|listener| {
+                // Search by process name, PID, or port
+                let search_text = format!(
+                    "{} {} {}",
+                    listener.process.name,
+                    listener.process.pid,
+                    listener.socket.port()
+                );
+                matcher.fuzzy_match(&search_text, query).is_some()
+            })
+            .collect()
+    }
+
+    /// Toggle network search active state
+    pub fn toggle_network_search(&mut self) {
+        self.network_search_active = !self.network_search_active;
+        if !self.network_search_active {
+            self.network_search_query.clear();
+        }
+        // Reset scroll and selection when toggling search
+        self.network_selected = 0;
+        self.network_scroll_offset = 0;
+        // Update PID for new selection
+        let filtered = self.filtered_network_listeners();
+        self.network_selected_pid = filtered.first().map(|l| l.process.pid);
+    }
+
+    /// Clear network search
+    pub fn clear_network_search(&mut self) {
+        self.network_search_query.clear();
+        self.network_search_active = false;
+        // Reset scroll and selection
+        self.network_selected = 0;
+        self.network_scroll_offset = 0;
+        // Update PID for new selection
+        let filtered = self.filtered_network_listeners();
+        self.network_selected_pid = filtered.first().map(|l| l.process.pid);
     }
 
     /// Check if a daemon is from config only (not currently active)
