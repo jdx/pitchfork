@@ -32,6 +32,9 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
+    /// Original ports requested (before auto-bump resolution)
+    pub original_port: Vec<u16>,
+    /// Resolved ports actually used (after auto-bump)
     pub port: Vec<u16>,
     pub auto_bump_port: Option<bool>,
     pub depends: Option<Vec<String>>,
@@ -60,6 +63,7 @@ impl Default for UpsertDaemonOpts {
             ready_http: None,
             ready_port: None,
             ready_cmd: None,
+            original_port: Vec::new(),
             port: Vec::new(),
             auto_bump_port: None,
             depends: None,
@@ -115,6 +119,13 @@ impl Supervisor {
             ready_cmd: opts
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),
+            original_port: if opts.original_port.is_empty() {
+                existing
+                    .map(|d| d.original_port.clone())
+                    .unwrap_or_default()
+            } else {
+                opts.original_port
+            },
             port: if opts.port.is_empty() {
                 existing.map(|d| d.port.clone()).unwrap_or_default()
             } else {

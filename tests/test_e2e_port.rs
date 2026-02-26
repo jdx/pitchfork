@@ -19,7 +19,7 @@ fn test_port_conflict_detection() {
         r#"
 [daemons.port_conflict]
 run = "python3 -m http.server {}"
-port = {}
+expected_port = [{}]
 "#,
         port, port
     );
@@ -95,7 +95,7 @@ sleep 30
         r#"
 [daemons.port_bump]
 run = "bash {}"
-port = {}
+expected_port = [{}]
 auto_bump_port = true
 ready_output = "ready"
 "#,
@@ -169,7 +169,7 @@ sleep 30
         r#"
 [daemons.port_env]
 run = "bash {}"
-port = {}
+expected_port = [{}]
 "#,
         script_path.display(),
         port
@@ -272,7 +272,7 @@ fn test_ready_port_sync() {
         r#"
 [daemons.ready_sync]
 run = "python3 -m http.server {}"
-port = {}
+expected_port = [{}]
 "#,
         port, port
     );

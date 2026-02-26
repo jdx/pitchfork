@@ -212,7 +212,7 @@ impl Add {
                 ready_http: self.ready_http.clone(),
                 ready_port: self.ready_port,
                 ready_cmd: self.ready_cmd.clone(),
-                port: self.port.clone(),
+                expected_port: self.port.clone(),
                 auto_bump_port: self.auto_bump_port,
                 boot_start,
                 depends: self.depends.clone(),

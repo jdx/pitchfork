@@ -173,7 +173,7 @@ pub struct PitchforkTomlDaemon {
     pub ready_cmd: Option<String>,
     /// TCP ports the daemon is expected to bind to
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub port: Vec<u16>,
+    pub expected_port: Vec<u16>,
     /// Automatically find an available port if the specified port is in use
     #[serde(default)]
     pub auto_bump_port: bool,

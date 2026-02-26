@@ -79,7 +79,7 @@ impl Run {
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),
-            expected_port: Vec::new(),
+            expected_port: None,
             auto_bump_port: false,
             retry: Some(self.retry),
         };

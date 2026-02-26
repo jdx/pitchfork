@@ -12,7 +12,7 @@ use crate::procs::PROCS;
 use crate::shell::Shell;
 use crate::{Result, env};
 use itertools::Itertools;
-use miette::IntoDiagnostic;
+use miette::{IntoDiagnostic, WrapErr};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -141,8 +141,9 @@ impl Supervisor {
         };
 
         // Check port availability and apply auto-bump if configured
+        let original_ports = opts.port.clone();
         let (resolved_ports, effective_ready_port) = if !opts.port.is_empty() {
-            match check_ports_available(&opts.port, opts.auto_bump_port) {
+            match check_ports_available(&opts.port, opts.auto_bump_port).await {
                 Ok(resolved) => {
                     let ready_port = opts.ready_port.or(resolved.first().copied());
                     info!(
@@ -153,6 +154,27 @@ impl Supervisor {
                 }
                 Err(e) => {
                     error!("daemon {id}: port check failed: {e}");
+                    // Convert PortError to structured IPC response
+                    if let Some(port_error) = e.downcast_ref::<PortError>() {
+                        match port_error {
+                            PortError::InUse { port, process, pid } => {
+                                return Ok(IpcResponse::PortConflict {
+                                    port: *port,
+                                    process: process.clone(),
+                                    pid: *pid,
+                                });
+                            }
+                            PortError::NoAvailablePort {
+                                start_port,
+                                attempts,
+                            } => {
+                                return Ok(IpcResponse::NoAvailablePort {
+                                    start_port: *start_port,
+                                    attempts: *attempts,
+                                });
+                            }
+                        }
+                    }
                     return Ok(IpcResponse::DaemonFailed {
                         error: e.to_string(),
                     });
@@ -244,6 +266,7 @@ impl Supervisor {
                 ready_http: opts.ready_http.clone(),
                 ready_port: effective_ready_port,
                 ready_cmd: opts.ready_cmd.clone(),
+                original_port: original_ports,
                 port: resolved_ports,
                 auto_bump_port: Some(opts.auto_bump_port),
                 depends: Some(opts.depends.clone()),
@@ -778,12 +801,12 @@ impl Supervisor {
 /// Returns the resolved ports (either the original or bumped ones).
 /// Returns an error if any port is in use and auto_bump is disabled,
 /// or if no available ports can be found after max attempts.
-fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Result<Vec<u16>> {
+async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Result<Vec<u16>> {
     if expected_ports.is_empty() {
         return Ok(Vec::new());
     }
 
-    const MAX_BUMP_ATTEMPTS: u32 = 3;
+    const MAX_BUMP_ATTEMPTS: u32 = 10;
 
     for bump_offset in 0..=MAX_BUMP_ATTEMPTS {
         let candidate_ports: Vec<u16> = expected_ports
@@ -796,15 +819,29 @@ fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Result<Vec<
         let mut conflicting_port = None;
 
         for &port in &candidate_ports {
-            match TcpListener::bind(("127.0.0.1", port)) {
-                Ok(listener) => {
-                    drop(listener);
-                }
-                Err(_) => {
-                    all_available = false;
-                    conflicting_port = Some(port);
-                    break;
-                }
+            // Port 0 is a special case - it requests an ephemeral port from the OS.
+            // Skip the availability check for port 0 since binding to it always succeeds.
+            if port == 0 {
+                continue;
+            }
+
+            // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks
+            let port_check =
+                tokio::task::spawn_blocking(move || match TcpListener::bind(("127.0.0.1", port)) {
+                    Ok(listener) => {
+                        drop(listener);
+                        true
+                    }
+                    Err(_) => false,
+                })
+                .await
+                .into_diagnostic()
+                .wrap_err("failed to check port availability")?;
+
+            if !port_check {
+                all_available = false;
+                conflicting_port = Some(port);
+                break;
             }
         }
 
@@ -843,11 +880,11 @@ fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Result<Vec<
             }
         }
 
-        // Check for overflow
-        if candidate_ports.contains(&0) {
+        // Check for overflow (port wrapped around to 0 due to saturating_add)
+        if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
             return Err(PortError::NoAvailablePort {
                 start_port: expected_ports[0],
-                attempts: bump_offset + 1,
+                attempts: MAX_BUMP_ATTEMPTS + 1,
             }
             .into());
         }
@@ -856,52 +893,18 @@ fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Result<Vec<
     // No available ports found after max attempts
     Err(PortError::NoAvailablePort {
         start_port: expected_ports[0],
-        attempts: MAX_BUMP_ATTEMPTS,
+        attempts: MAX_BUMP_ATTEMPTS + 1,
     }
     .into())
 }
 
-/// Get the process using a specific port using lsof (Unix only).
+/// Get the process using a specific port.
 ///
 /// Returns (pid, process_name) if found, None otherwise.
-#[cfg(unix)]
 fn get_process_using_port(port: u16) -> Option<(u32, String)> {
-    use std::process::Command;
-
-    // Use lsof to find the process using the port
-    // lsof -i :port -n -P -t returns just the PID
-    let output = Command::new("lsof")
-        .args(["-i", &format!(":{port}"), "-n", "-P", "-t"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let pid_str = String::from_utf8_lossy(&output.stdout);
-    let pid: u32 = pid_str.trim().parse().ok()?;
-
-    // Get the process name
-    let ps_output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
-        .output()
-        .ok()?;
-
-    let process_name = if ps_output.status.success() {
-        String::from_utf8_lossy(&ps_output.stdout)
-            .trim()
-            .to_string()
-    } else {
-        "unknown".to_string()
-    };
-
-    Some((pid, process_name))
-}
-
-#[cfg(not(unix))]
-fn get_process_using_port(_port: u16) -> Option<(u32, String)> {
-    // Windows implementation would use different APIs
-    // For now, return None to fall back to generic error
-    None
+    listeners::get_all()
+        .ok()?
+        .into_iter()
+        .find(|listener| listener.socket.port() == port)
+        .map(|listener| (listener.process.pid, listener.process.name))
 }

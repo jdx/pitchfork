@@ -153,7 +153,7 @@ mod tests {
             ready_http: None,
             ready_port: None,
             ready_cmd: None,
-            port: Vec::new(),
+            expected_port: Vec::new(),
             auto_bump_port: false,
             boot_start: None,
             depends: depends.into_iter().map(String::from).collect(),

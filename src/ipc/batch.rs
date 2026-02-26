@@ -55,8 +55,8 @@ pub struct StartOptions {
     pub port: Option<u16>,
     /// Override ready command
     pub cmd: Option<String>,
-    /// Ports the daemon is expected to bind to
-    pub expected_port: Vec<u16>,
+    /// Ports the daemon is expected to bind to (None = not specified, use config)
+    pub expected_port: Option<Vec<u16>>,
     /// Automatically find an available port if the expected port is in use
     pub auto_bump_port: bool,
     /// Number of times to retry on failure (for ad-hoc daemons)
@@ -98,11 +98,10 @@ pub fn build_run_options(
         ready_http: opts.http.clone().or(daemon_config.ready_http.clone()),
         ready_port: opts.port.or(daemon_config.ready_port),
         ready_cmd: opts.cmd.clone().or(daemon_config.ready_cmd.clone()),
-        port: if opts.expected_port.is_empty() {
-            daemon_config.port.clone()
-        } else {
-            opts.expected_port.clone()
-        },
+        port: opts
+            .expected_port
+            .clone()
+            .unwrap_or(daemon_config.expected_port.clone()),
         auto_bump_port: opts.auto_bump_port || daemon_config.auto_bump_port,
         wait_ready: true,
         depends: daemon_config.depends.clone(),
@@ -447,7 +446,7 @@ impl IpcClient {
                 ready_http: http,
                 ready_port: port,
                 ready_cmd,
-                port: expected_port,
+                port: expected_port.unwrap_or_default(),
                 auto_bump_port,
                 wait_ready: true,
                 depends: vec![],
@@ -634,7 +633,7 @@ impl IpcClient {
             ready_http: opts.http,
             ready_port: opts.port,
             ready_cmd: opts.cmd.clone(),
-            port: opts.expected_port,
+            port: opts.expected_port.unwrap_or_default(),
             auto_bump_port: opts.auto_bump_port,
             wait_ready: true,
             depends: vec![],

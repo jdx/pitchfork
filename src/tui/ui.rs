@@ -1508,10 +1508,10 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
             if !d.port.is_empty() {
                 d.port.clone()
             } else {
-                cfg.port.clone()
+                cfg.expected_port.clone()
             }
         } else {
-            cfg.port.clone()
+            cfg.expected_port.clone()
         };
 
         if !ports_to_show.is_empty() {

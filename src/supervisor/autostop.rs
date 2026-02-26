@@ -169,7 +169,7 @@ impl Supervisor {
                 ready_http: daemon.ready_http.clone(),
                 ready_port: daemon.ready_port,
                 ready_cmd: daemon.ready_cmd.clone(),
-                port: daemon.port.clone(),
+                port: daemon.expected_port.clone(),
                 auto_bump_port: daemon.auto_bump_port,
                 wait_ready: false, // Don't block on boot daemons
                 depends: daemon.depends.clone(),

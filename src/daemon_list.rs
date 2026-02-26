@@ -118,6 +118,7 @@ fn build_daemon_list(
             ready_http: None,
             ready_port: None,
             ready_cmd: None,
+            original_port: Vec::new(),
             port: Vec::new(),
             auto_bump_port: false,
             depends: vec![],
