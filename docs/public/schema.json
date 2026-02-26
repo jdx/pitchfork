@@ -135,6 +135,16 @@
             "type": "string"
           }
         },
+        "expected_port": {
+          "description": "TCP ports the daemon is expected to bind to",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
         "hooks": {
           "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
           "anyOf": [
@@ -145,16 +155,6 @@
               "type": "null"
             }
           ]
-        },
-        "port": {
-          "description": "TCP ports the daemon is expected to bind to",
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint16",
-            "maximum": 65535,
-            "minimum": 0
-          }
         },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",
