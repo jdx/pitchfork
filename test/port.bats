@@ -14,7 +14,7 @@ teardown() {
   assert_success
   
   run cat pitchfork.toml
-  assert_output --partial 'port = 8080'
+  assert_output --partial 'expected_port = [8080]'
   assert_output --partial 'auto_bump_port = true'
 }
 
@@ -23,7 +23,7 @@ teardown() {
   assert_success
   
   run cat pitchfork.toml
-  assert_output --partial 'port = 3000'
+  assert_output --partial 'expected_port = [3000]'
   refute_output --partial 'auto_bump_port = true'
 }
 
