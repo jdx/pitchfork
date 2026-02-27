@@ -177,7 +177,7 @@ impl Supervisor {
                                 ready_http: daemon.ready_http.clone(),
                                 ready_port: daemon.ready_port,
                                 ready_cmd: daemon.ready_cmd.clone(),
-                                port: daemon.port,
+                                expected_port: daemon.original_port.clone(),
                                 auto_bump_port: daemon.auto_bump_port,
                                 wait_ready: false,
                                 depends: daemon.depends.clone(),
@@ -364,7 +364,7 @@ impl Supervisor {
             ready_http: daemon.ready_http.clone(),
             ready_port: daemon.ready_port,
             ready_cmd: daemon.ready_cmd.clone(),
-            port: daemon.port,
+            expected_port: daemon.original_port.clone(),
             auto_bump_port: daemon.auto_bump_port,
             wait_ready: false, // Don't block on file-triggered restarts
             depends: daemon.depends.clone(),

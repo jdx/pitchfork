@@ -98,7 +98,7 @@ pub fn build_run_options(
         ready_http: opts.http.clone().or(daemon_config.ready_http.clone()),
         ready_port: opts.port.or(daemon_config.ready_port),
         ready_cmd: opts.cmd.clone().or(daemon_config.ready_cmd.clone()),
-        port: opts
+        expected_port: opts
             .expected_port
             .clone()
             .unwrap_or(daemon_config.expected_port.clone()),
@@ -446,7 +446,7 @@ impl IpcClient {
                 ready_http: http,
                 ready_port: port,
                 ready_cmd,
-                port: expected_port.unwrap_or_default(),
+                expected_port: expected_port.unwrap_or_default(),
                 auto_bump_port,
                 wait_ready: true,
                 depends: vec![],
@@ -633,7 +633,7 @@ impl IpcClient {
             ready_http: opts.http,
             ready_port: opts.port,
             ready_cmd: opts.cmd.clone(),
-            port: opts.expected_port.unwrap_or_default(),
+            expected_port: opts.expected_port.unwrap_or_default(),
             auto_bump_port: opts.auto_bump_port,
             wait_ready: true,
             depends: vec![],

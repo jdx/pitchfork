@@ -123,7 +123,7 @@ pub struct RunOptions {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
-    pub port: Vec<u16>,
+    pub expected_port: Vec<u16>,
     pub auto_bump_port: bool,
     pub wait_ready: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]

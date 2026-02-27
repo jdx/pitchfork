@@ -141,14 +141,14 @@ impl Supervisor {
         };
 
         // Check port availability and apply auto-bump if configured
-        let original_ports = opts.port.clone();
-        let (resolved_ports, effective_ready_port) = if !opts.port.is_empty() {
-            match check_ports_available(&opts.port, opts.auto_bump_port).await {
+        let original_ports = opts.expected_port.clone();
+        let (resolved_ports, effective_ready_port) = if !opts.expected_port.is_empty() {
+            match check_ports_available(&opts.expected_port, opts.auto_bump_port).await {
                 Ok(resolved) => {
                     let ready_port = opts.ready_port.or(resolved.first().copied());
                     info!(
                         "daemon {id}: ports {:?} resolved to {:?}",
-                        opts.port, resolved
+                        opts.expected_port, resolved
                     );
                     (resolved, ready_port)
                 }
@@ -826,8 +826,9 @@ async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Resul
             }
 
             // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks
+            // Bind to 0.0.0.0 to detect conflicts on all interfaces, not just localhost
             let port_check =
-                tokio::task::spawn_blocking(move || match TcpListener::bind(("127.0.0.1", port)) {
+                tokio::task::spawn_blocking(move || match TcpListener::bind(("0.0.0.0", port)) {
                     Ok(listener) => {
                         drop(listener);
                         true
