@@ -811,7 +811,7 @@ async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Resul
     for bump_offset in 0..=MAX_BUMP_ATTEMPTS {
         let candidate_ports: Vec<u16> = expected_ports
             .iter()
-            .map(|&p| p.saturating_add(bump_offset as u16))
+            .map(|&p| p.wrapping_add(bump_offset as u16))
             .collect();
 
         // Check if all ports in this set are available
@@ -860,7 +860,7 @@ async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Resul
         if bump_offset == 0 {
             // First attempt - try to get process info using lsof
             if let Some(port) = conflicting_port {
-                if let Some((pid, process_name)) = get_process_using_port(port) {
+                if let Some((pid, process_name)) = get_process_using_port(port).await {
                     if !auto_bump {
                         return Err(PortError::InUse {
                             port,
@@ -881,11 +881,11 @@ async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Resul
             }
         }
 
-        // Check for overflow (port wrapped around to 0 due to saturating_add)
+        // Check for overflow (port wrapped around to 0 due to wrapping_add)
         if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
             return Err(PortError::NoAvailablePort {
                 start_port: expected_ports[0],
-                attempts: MAX_BUMP_ATTEMPTS + 1,
+                attempts: bump_offset + 1,
             }
             .into());
         }
@@ -902,10 +902,15 @@ async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Resul
 /// Get the process using a specific port.
 ///
 /// Returns (pid, process_name) if found, None otherwise.
-fn get_process_using_port(port: u16) -> Option<(u32, String)> {
-    listeners::get_all()
-        .ok()?
-        .into_iter()
-        .find(|listener| listener.socket.port() == port)
-        .map(|listener| (listener.process.pid, listener.process.name))
+async fn get_process_using_port(port: u16) -> Option<(u32, String)> {
+    tokio::task::spawn_blocking(move || {
+        listeners::get_all()
+            .ok()?
+            .into_iter()
+            .find(|listener| listener.socket.port() == port)
+            .map(|listener| (listener.process.pid, listener.process.name))
+    })
+    .await
+    .ok()
+    .flatten()
 }

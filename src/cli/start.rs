@@ -90,11 +90,7 @@ impl Start {
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),
-            expected_port: if self.expected_port.is_empty() {
-                None
-            } else {
-                Some(self.expected_port.clone())
-            },
+            expected_port: (!self.expected_port.is_empty()).then_some(self.expected_port.clone()),
             auto_bump_port: self.auto_bump_port,
             ..Default::default()
         };

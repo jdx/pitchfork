@@ -1504,15 +1504,10 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         ]));
 
         // Show ports - use daemon's resolved ports if running, otherwise config ports
-        let ports_to_show = if let Some(d) = daemon {
-            if !d.port.is_empty() {
-                d.port.clone()
-            } else {
-                cfg.expected_port.clone()
-            }
-        } else {
-            cfg.expected_port.clone()
-        };
+        let ports_to_show = daemon
+            .filter(|d| !d.port.is_empty())
+            .map(|d| d.port.clone())
+            .unwrap_or_else(|| cfg.expected_port.clone());
 
         if !ports_to_show.is_empty() {
             let port_str = ports_to_show

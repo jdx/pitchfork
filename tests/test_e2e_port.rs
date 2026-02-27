@@ -12,7 +12,7 @@ fn test_port_conflict_detection() {
 
     // Bind to a specific port to create a conflict
     let port: u16 = 45678;
-    let _listener = TcpListener::bind(("127.0.0.1", port)).expect("Failed to bind to test port");
+    let _listener = TcpListener::bind(("0.0.0.0", port)).expect("Failed to bind to test port");
 
     // Create a daemon that expects to use the same port
     let toml_content = format!(
@@ -57,7 +57,7 @@ fn test_port_auto_bump() {
 
     // Bind to a specific port to create a conflict
     let port: u16 = 45679;
-    let _listener = TcpListener::bind(("127.0.0.1", port)).expect("Failed to bind to test port");
+    let _listener = TcpListener::bind(("0.0.0.0", port)).expect("Failed to bind to test port");
 
     // Create the project directory first
     env.create_project_dir();
@@ -211,7 +211,7 @@ fn test_cli_port_flags() {
     let port: u16 = 45681;
 
     // Bind to the port to create a conflict
-    let _listener = TcpListener::bind(("127.0.0.1", port)).expect("Failed to bind to test port");
+    let _listener = TcpListener::bind(("0.0.0.0", port)).expect("Failed to bind to test port");
 
     // Create a simple daemon
     let toml_content = r#"
