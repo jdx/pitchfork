@@ -177,6 +177,10 @@ cmd run help="Runs a one-off daemon" {
     flag --port help="Wait until TCP port is listening before considering daemon ready" {
         arg <PORT>
     }
+    flag --expected-port help="Port(s) the daemon is expected to bind to (can be specified multiple times)" var=#true {
+        arg <EXPECTED_PORT>
+    }
+    flag --auto-bump-port help="Automatically find an available port if the expected port is in use"
     flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
         arg <CMD>
     }

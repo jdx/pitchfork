@@ -1185,6 +1185,38 @@
             }
           },
           {
+            "name": "expected-port",
+            "usage": "--expected-port… <EXPECTED_PORT>",
+            "help": "Port(s) the daemon is expected to bind to (can be specified multiple times)",
+            "help_first_line": "Port(s) the daemon is expected to bind to (can be specified multiple times)",
+            "short": [],
+            "long": [
+              "expected-port"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "EXPECTED_PORT",
+              "usage": "<EXPECTED_PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "auto-bump-port",
+            "usage": "--auto-bump-port",
+            "help": "Automatically find an available port if the expected port is in use",
+            "help_first_line": "Automatically find an available port if the expected port is in use",
+            "short": [],
+            "long": [
+              "auto-bump-port"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
             "name": "cmd",
             "usage": "--cmd <CMD>",
             "help": "Shell command to poll for readiness (exit code 0 = ready)",
