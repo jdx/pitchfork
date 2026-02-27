@@ -101,7 +101,7 @@ pub fn build_run_options(
         expected_port: opts
             .expected_port
             .clone()
-            .unwrap_or(daemon_config.expected_port.clone()),
+            .unwrap_or_else(|| daemon_config.expected_port.clone()),
         auto_bump_port: opts.auto_bump_port || daemon_config.auto_bump_port,
         wait_ready: true,
         depends: daemon_config.depends.clone(),
