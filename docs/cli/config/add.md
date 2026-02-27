@@ -78,7 +78,7 @@ TCP port to check for readiness
 
 Shell command to poll for readiness
 
-### `--port… <PORT>`
+### `--expected-port… <EXPECTED_PORT>`
 
 Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
 

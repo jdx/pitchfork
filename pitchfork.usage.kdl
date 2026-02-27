@@ -64,8 +64,8 @@ cmd config help="manage/edit pitchfork.toml files" {
         flag --ready-cmd help="Shell command to poll for readiness" {
             arg <READY_CMD>
         }
-        flag --port help="Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)" var=#true {
-            arg <PORT>
+        flag --expected-port help="Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)" var=#true {
+            arg <EXPECTED_PORT>
         }
         flag --auto-bump-port help="Automatically find an available port if the expected port is in use"
         flag --depends help="Daemon dependencies that must start first (can be specified multiple times)" var=#true {

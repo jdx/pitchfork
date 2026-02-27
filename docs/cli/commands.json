@@ -386,20 +386,20 @@
                 }
               },
               {
-                "name": "port",
-                "usage": "--port… <PORT>",
+                "name": "expected-port",
+                "usage": "--expected-port… <EXPECTED_PORT>",
                 "help": "Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)",
                 "help_first_line": "Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)",
                 "short": [],
                 "long": [
-                  "port"
+                  "expected-port"
                 ],
                 "var": true,
                 "hide": false,
                 "global": false,
                 "arg": {
-                  "name": "PORT",
-                  "usage": "<PORT>",
+                  "name": "EXPECTED_PORT",
+                  "usage": "<EXPECTED_PORT>",
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false
