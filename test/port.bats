@@ -10,7 +10,7 @@ teardown() {
 }
 
 @test "config add with port and auto_bump_port" {
-  run pitchfork config add api --run "python3 -m http.server 8080" --port 8080 --auto-bump-port
+  run pitchfork config add api --run "python3 -m http.server 8080" --expected-port 8080 --auto-bump-port
   assert_success
   
   run cat pitchfork.toml
@@ -19,7 +19,7 @@ teardown() {
 }
 
 @test "config add with only port" {
-  run pitchfork config add api --run "python3 -m http.server 3000" --port 3000
+  run pitchfork config add api --run "python3 -m http.server 3000" --expected-port 3000
   assert_success
   
   run cat pitchfork.toml
@@ -72,19 +72,25 @@ EOF
 }
 
 @test "start fails when expected-port is in use without auto-bump" {
-  # Bind to a port first
+  # Bind to a port first (on all interfaces to match supervisor check)
   python3 -c "
 import socket
 import time
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.bind(('127.0.0.1', 38888))
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', 38888))
 s.listen(1)
 time.sleep(5)
 " &
   BLOCKER_PID=$!
-  
-  # Wait a bit for the port to be bound
-  sleep 0.5
+
+  # Wait for the port to be bound
+  for i in {1..20}; do
+    if nc -z 127.0.0.1 38888 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
   
   # Create a simple server script
   cat > server.sh <<'EOF'
@@ -112,12 +118,13 @@ EOF
 }
 
 @test "start succeeds when expected-port is in use with auto-bump" {
-  # Bind to a port first
+  # Bind to a port first (on all interfaces to match supervisor check)
   python3 -c "
 import socket
 import time
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.bind(('127.0.0.1', 38889))
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', 38889))
 s.listen(1)
 time.sleep(5)
 " &
@@ -162,7 +169,7 @@ sleep 30
 EOF
   chmod +x check_port.sh
   
-  run pitchfork config add port-test --run "./check_port.sh" --port 7777 --ready-output "ready" --retry 0
+  run pitchfork config add port-test --run "./check_port.sh" --expected-port 7777 --ready-output "ready" --retry 0
   assert_success
   
   run pitchfork start port-test
