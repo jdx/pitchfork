@@ -6,16 +6,18 @@ use super::hooks::{HookType, fire_hook};
 use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts};
 use crate::daemon::RunOptions;
 use crate::daemon_status::DaemonStatus;
+use crate::error::PortError;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
 use crate::shell::Shell;
 use crate::{Result, env};
 use itertools::Itertools;
-use miette::IntoDiagnostic;
+use miette::{IntoDiagnostic, WrapErr};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::iter::once;
+use std::net::TcpListener;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
 use tokio::select;
@@ -138,6 +140,56 @@ impl Supervisor {
             (None, None)
         };
 
+        // Check port availability and apply auto-bump if configured
+        let original_ports = opts.expected_port.clone();
+        let (resolved_ports, effective_ready_port) = if !opts.expected_port.is_empty() {
+            match check_ports_available(
+                &opts.expected_port,
+                opts.auto_bump_port,
+                opts.port_bump_attempts,
+            )
+            .await
+            {
+                Ok(resolved) => {
+                    let ready_port = opts.ready_port.or(resolved.first().copied());
+                    info!(
+                        "daemon {id}: ports {:?} resolved to {:?}",
+                        opts.expected_port, resolved
+                    );
+                    (resolved, ready_port)
+                }
+                Err(e) => {
+                    error!("daemon {id}: port check failed: {e}");
+                    // Convert PortError to structured IPC response
+                    if let Some(port_error) = e.downcast_ref::<PortError>() {
+                        match port_error {
+                            PortError::InUse { port, process, pid } => {
+                                return Ok(IpcResponse::PortConflict {
+                                    port: *port,
+                                    process: process.clone(),
+                                    pid: *pid,
+                                });
+                            }
+                            PortError::NoAvailablePort {
+                                start_port,
+                                attempts,
+                            } => {
+                                return Ok(IpcResponse::NoAvailablePort {
+                                    start_port: *start_port,
+                                    attempts: *attempts,
+                                });
+                            }
+                        }
+                    }
+                    return Ok(IpcResponse::DaemonFailed {
+                        error: e.to_string(),
+                    });
+                }
+            }
+        } else {
+            (Vec::new(), opts.ready_port)
+        };
+
         let cmd = once("exec".to_string())
             .chain(cmd.into_iter())
             .collect_vec();
@@ -167,6 +219,16 @@ impl Supervisor {
         // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
         cmd.env("PITCHFORK_DAEMON_ID", id);
         cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
+
+        // Inject the resolved ports for the daemon to use
+        if !resolved_ports.is_empty() {
+            // Set PORT to the first port for backward compatibility
+            cmd.env("PORT", resolved_ports[0].to_string());
+            // Set individual ports as PORT0, PORT1, etc.
+            for (i, port) in resolved_ports.iter().enumerate() {
+                cmd.env(format!("PORT{}", i), port.to_string());
+            }
+        }
 
         // Put each daemon in its own session/process group so we can kill the
         // entire tree atomically with a single signal to the group.
@@ -208,8 +270,12 @@ impl Supervisor {
                 ready_delay: opts.ready_delay,
                 ready_output: opts.ready_output.clone(),
                 ready_http: opts.ready_http.clone(),
-                ready_port: opts.ready_port,
+                ready_port: effective_ready_port,
                 ready_cmd: opts.ready_cmd.clone(),
+                original_port: original_ports,
+                port: resolved_ports,
+                auto_bump_port: Some(opts.auto_bump_port),
+                port_bump_attempts: Some(opts.port_bump_attempts),
                 depends: Some(opts.depends.clone()),
                 env: opts.env.clone(),
                 watch: Some(opts.watch.clone()),
@@ -221,7 +287,7 @@ impl Supervisor {
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
-        let ready_port = opts.ready_port;
+        let ready_port = effective_ready_port;
         let ready_cmd = opts.ready_cmd.clone();
         let daemon_dir = opts.dir.clone();
         let hook_retry_count = opts.retry_count;
@@ -734,4 +800,125 @@ impl Supervisor {
             Ok(IpcResponse::DaemonNotFound)
         }
     }
+}
+
+/// Check if multiple ports are available and optionally auto-bump to find available ports.
+///
+/// All ports are bumped by the same offset to maintain relative port spacing.
+/// Returns the resolved ports (either the original or bumped ones).
+/// Returns an error if any port is in use and auto_bump is disabled,
+/// or if no available ports can be found after max attempts.
+async fn check_ports_available(
+    expected_ports: &[u16],
+    auto_bump: bool,
+    max_attempts: u32,
+) -> Result<Vec<u16>> {
+    if expected_ports.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    for bump_offset in 0..=max_attempts {
+        let candidate_ports: Vec<u16> = expected_ports
+            .iter()
+            .map(|&p| p.wrapping_add(bump_offset as u16))
+            .collect();
+
+        // Check if all ports in this set are available
+        let mut all_available = true;
+        let mut conflicting_port = None;
+
+        for &port in &candidate_ports {
+            // Port 0 is a special case - it requests an ephemeral port from the OS.
+            // Skip the availability check for port 0 since binding to it always succeeds.
+            if port == 0 {
+                continue;
+            }
+
+            // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks
+            // Bind to 0.0.0.0 to detect conflicts on all interfaces, not just localhost
+            let port_check =
+                tokio::task::spawn_blocking(move || match TcpListener::bind(("0.0.0.0", port)) {
+                    Ok(listener) => {
+                        drop(listener);
+                        true
+                    }
+                    Err(_) => false,
+                })
+                .await
+                .into_diagnostic()
+                .wrap_err("failed to check port availability")?;
+
+            if !port_check {
+                all_available = false;
+                conflicting_port = Some(port);
+                break;
+            }
+        }
+
+        if all_available {
+            // Check for overflow (port wrapped around to 0 due to wrapping_add)
+            if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
+                return Err(PortError::NoAvailablePort {
+                    start_port: expected_ports[0],
+                    attempts: bump_offset + 1,
+                }
+                .into());
+            }
+            if bump_offset > 0 {
+                info!(
+                    "ports {:?} bumped by {} to {:?}",
+                    expected_ports, bump_offset, candidate_ports
+                );
+            }
+            return Ok(candidate_ports);
+        }
+
+        // Port is in use
+        if bump_offset == 0 {
+            // First attempt - try to get process info using lsof
+            if let Some(port) = conflicting_port {
+                if let Some((pid, process_name)) = get_process_using_port(port).await {
+                    if !auto_bump {
+                        return Err(PortError::InUse {
+                            port,
+                            process: process_name,
+                            pid,
+                        }
+                        .into());
+                    }
+                } else if !auto_bump {
+                    // Couldn't identify process, but port is definitely in use
+                    return Err(PortError::InUse {
+                        port,
+                        process: "unknown".to_string(),
+                        pid: 0,
+                    }
+                    .into());
+                }
+            }
+        }
+    }
+
+    // No available ports found after max attempts
+    Err(PortError::NoAvailablePort {
+        start_port: expected_ports[0],
+        attempts: max_attempts + 1,
+    }
+    .into())
+}
+
+/// Get the process using a specific port.
+///
+/// Returns (pid, process_name) if found, None otherwise.
+async fn get_process_using_port(port: u16) -> Option<(u32, String)> {
+    tokio::task::spawn_blocking(move || {
+        listeners::get_all()
+            .ok()?
+            .into_iter()
+            .find(|listener| listener.socket.port() == port)
+            .map(|listener| (listener.process.pid, listener.process.name))
+    })
+    .await
+    .ok()
+    .flatten()
 }

@@ -55,6 +55,12 @@ pub struct Run {
     /// Wait until TCP port is listening before considering daemon ready
     #[clap(long)]
     port: Option<u16>,
+    /// Port(s) the daemon is expected to bind to (can be specified multiple times)
+    #[clap(long = "expected-port")]
+    expected_port: Vec<u16>,
+    /// Automatically find an available port if the expected port is in use
+    #[clap(long)]
+    auto_bump_port: bool,
     /// Shell command to poll for readiness (exit code 0 = ready)
     #[clap(long)]
     cmd: Option<String>,
@@ -79,6 +85,9 @@ impl Run {
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),
+            expected_port: (!self.expected_port.is_empty()).then_some(self.expected_port.clone()),
+            auto_bump_port: self.auto_bump_port,
+            port_bump_attempts: None,
             retry: Some(self.retry),
         };
 

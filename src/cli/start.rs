@@ -2,6 +2,7 @@ use crate::Result;
 use crate::cli::logs::print_startup_logs;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
 
@@ -55,6 +56,12 @@ pub struct Start {
     /// Shell command to poll for readiness (exit code 0 = ready)
     #[clap(long)]
     cmd: Option<String>,
+    /// Ports the daemon is expected to bind to (can be specified multiple times)
+    #[clap(long, value_delimiter = ',')]
+    expected_port: Vec<u16>,
+    /// Automatically find an available port if the expected port is in use
+    #[clap(long)]
+    auto_bump_port: bool,
     /// Suppress startup log output
     #[clap(short, long)]
     quiet: bool,
@@ -84,6 +91,8 @@ impl Start {
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),
+            expected_port: (!self.expected_port.is_empty()).then_some(self.expected_port.clone()),
+            auto_bump_port: self.auto_bump_port,
             ..Default::default()
         };
 
@@ -91,9 +100,13 @@ impl Start {
 
         // Show startup logs for successful daemons (unless --quiet)
         if !self.quiet {
-            for (id, start_time) in &result.started {
+            for (id, start_time, resolved_ports) in &result.started {
                 if let Err(e) = print_startup_logs(id, *start_time) {
                     debug!("Failed to print startup logs for {id}: {e}");
+                }
+                if !resolved_ports.is_empty() {
+                    let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
+                    println!("Daemon '{id}' started on port(s): {port_str}");
                 }
             }
         }

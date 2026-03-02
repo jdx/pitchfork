@@ -88,6 +88,11 @@
             "$ref": "#/$defs/PitchforkTomlAuto"
           }
         },
+        "auto_bump_port": {
+          "description": "Automatically find an available port if the specified port is in use",
+          "type": "boolean",
+          "default": false
+        },
         "boot_start": {
           "description": "Whether to start this daemon automatically on system boot",
           "type": [
@@ -130,6 +135,16 @@
             "type": "string"
           }
         },
+        "expected_port": {
+          "description": "TCP ports the daemon is expected to bind to",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0
+          }
+        },
         "hooks": {
           "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
           "anyOf": [
@@ -140,6 +155,13 @@
               "type": "null"
             }
           ]
+        },
+        "port_bump_attempts": {
+          "description": "Maximum number of port bump attempts when auto_bump_port is enabled (default: 10)",
+          "type": "integer",
+          "format": "uint32",
+          "default": 10,
+          "minimum": 0
         },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",

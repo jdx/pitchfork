@@ -192,6 +192,7 @@ impl IpcClient {
                     started: true,
                     exit_code: None,
                     start_time,
+                    resolved_ports: daemon.port.clone(),
                 })
             }
             IpcResponse::DaemonReady { daemon } => {
@@ -200,6 +201,7 @@ impl IpcClient {
                     started: true,
                     exit_code: None,
                     start_time,
+                    resolved_ports: daemon.port.clone(),
                 })
             }
             IpcResponse::DaemonFailedWithCode { exit_code } => {
@@ -216,6 +218,7 @@ impl IpcClient {
                     started: false,
                     exit_code: Some(code),
                     start_time,
+                    resolved_ports: Vec::new(),
                 })
             }
             IpcResponse::DaemonAlreadyRunning => {
@@ -224,6 +227,7 @@ impl IpcClient {
                     started: false,
                     exit_code: None,
                     start_time,
+                    resolved_ports: Vec::new(),
                 })
             }
             IpcResponse::DaemonFailed { error } => {
@@ -239,6 +243,34 @@ impl IpcClient {
                     started: false,
                     exit_code: Some(1),
                     start_time,
+                    resolved_ports: Vec::new(),
+                })
+            }
+            IpcResponse::PortConflict { port, process, pid } => {
+                error!(
+                    "Failed to start daemon {}: port {} is already in use by process '{}' (PID: {})",
+                    opts.id, port, process, pid
+                );
+                Ok(RunResult {
+                    started: false,
+                    exit_code: Some(1),
+                    start_time,
+                    resolved_ports: Vec::new(),
+                })
+            }
+            IpcResponse::NoAvailablePort {
+                start_port,
+                attempts,
+            } => {
+                error!(
+                    "Failed to start daemon {}: could not find an available port after {} attempts starting from {}",
+                    opts.id, attempts, start_port
+                );
+                Ok(RunResult {
+                    started: false,
+                    exit_code: Some(1),
+                    start_time,
+                    resolved_ports: Vec::new(),
                 })
             }
             rsp => Err(Self::unexpected_response("DaemonStart or DaemonReady", &rsp).into()),

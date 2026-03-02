@@ -169,6 +169,9 @@ impl Supervisor {
                 ready_http: daemon.ready_http.clone(),
                 ready_port: daemon.ready_port,
                 ready_cmd: daemon.ready_cmd.clone(),
+                expected_port: daemon.expected_port.clone(),
+                auto_bump_port: daemon.auto_bump_port,
+                port_bump_attempts: daemon.port_bump_attempts,
                 wait_ready: false, // Don't block on boot daemons
                 depends: daemon.depends.clone(),
                 env: daemon.env.clone(),

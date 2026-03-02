@@ -110,6 +110,34 @@ pub enum DependencyError {
     },
 }
 
+/// Errors related to port binding and availability.
+#[derive(Debug, Error, Diagnostic)]
+pub enum PortError {
+    #[error("port {port} is already in use by process '{process}' (PID: {pid})")]
+    #[diagnostic(
+        code(pitchfork::port::in_use),
+        url("https://pitchfork.jdx.dev/configuration#port"),
+        help(
+            "choose a different port, stop the existing process, or enable auto_bump_port to automatically find an available port"
+        )
+    )]
+    InUse {
+        port: u16,
+        process: String,
+        pid: u32,
+    },
+
+    #[error(
+        "could not find an available port after {attempts} attempts starting from {start_port}"
+    )]
+    #[diagnostic(
+        code(pitchfork::port::no_available_port),
+        url("https://pitchfork.jdx.dev/configuration#port"),
+        help("manually specify an available port or reduce the number of concurrent services")
+    )]
+    NoAvailablePort { start_port: u16, attempts: u32 },
+}
+
 /// Error for TOML configuration parse failures with source code highlighting.
 #[derive(Debug, Error, Diagnostic)]
 #[error("failed to parse configuration")]

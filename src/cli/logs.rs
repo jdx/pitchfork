@@ -178,7 +178,7 @@ impl Iterator for StreamingLogParser {
             return None;
         }
 
-        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+) (.*)$");
+        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w-]+) (.*)$");
 
         loop {
             let mut line = String::new();
@@ -876,7 +876,7 @@ fn merge_log_lines(id: &str, lines: Vec<String>, reverse: bool) -> Vec<(String, 
         lines
     };
 
-    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+) (.*)$");
+    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w-]+) (.*)$");
     lines
         .into_iter()
         .fold(vec![], |mut acc, line| match re.captures(&line) {

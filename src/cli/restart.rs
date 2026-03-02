@@ -2,6 +2,7 @@ use crate::Result;
 use crate::cli::logs::print_startup_logs;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
 
@@ -83,9 +84,13 @@ impl Restart {
 
         // Show startup logs for successful daemons (unless --quiet)
         if !self.quiet {
-            for (id, start_time) in &result.started {
+            for (id, start_time, resolved_ports) in &result.started {
                 if let Err(e) = print_startup_logs(id, *start_time) {
                     debug!("Failed to print startup logs for {id}: {e}");
+                }
+                if !resolved_ports.is_empty() {
+                    let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
+                    println!("Daemon '{id}' restarted on port(s): {port_str}");
                 }
             }
         }

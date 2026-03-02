@@ -32,6 +32,12 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
+    /// Original ports requested (before auto-bump resolution)
+    pub original_port: Vec<u16>,
+    /// Resolved ports actually used (after auto-bump)
+    pub port: Vec<u16>,
+    pub auto_bump_port: Option<bool>,
+    pub port_bump_attempts: Option<u32>,
     pub depends: Option<Vec<String>>,
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
@@ -58,6 +64,10 @@ impl Default for UpsertDaemonOpts {
             ready_http: None,
             ready_port: None,
             ready_cmd: None,
+            original_port: Vec::new(),
+            port: Vec::new(),
+            auto_bump_port: None,
+            port_bump_attempts: None,
             depends: None,
             env: None,
             watch: None,
@@ -111,6 +121,24 @@ impl Supervisor {
             ready_cmd: opts
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),
+            original_port: if opts.original_port.is_empty() {
+                existing
+                    .map(|d| d.original_port.clone())
+                    .unwrap_or_default()
+            } else {
+                opts.original_port
+            },
+            port: if opts.port.is_empty() {
+                existing.map(|d| d.port.clone()).unwrap_or_default()
+            } else {
+                opts.port
+            },
+            auto_bump_port: opts
+                .auto_bump_port
+                .unwrap_or(existing.map(|d| d.auto_bump_port).unwrap_or(false)),
+            port_bump_attempts: opts
+                .port_bump_attempts
+                .unwrap_or(existing.map(|d| d.port_bump_attempts).unwrap_or(10)),
             depends: opts
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),

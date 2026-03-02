@@ -72,6 +72,12 @@ pub struct Add {
     /// Shell command to poll for readiness
     #[clap(long)]
     ready_cmd: Option<String>,
+    /// Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
+    #[clap(long = "expected-port", value_delimiter = ',')]
+    expected_port: Vec<u16>,
+    /// Automatically find an available port if the expected port is in use
+    #[clap(long)]
+    auto_bump_port: bool,
     /// Daemon dependencies that must start first (can be specified multiple times)
     #[clap(long = "depends")]
     depends: Vec<String>,
@@ -206,6 +212,9 @@ impl Add {
                 ready_http: self.ready_http.clone(),
                 ready_port: self.ready_port,
                 ready_cmd: self.ready_cmd.clone(),
+                expected_port: self.expected_port.clone(),
+                auto_bump_port: self.auto_bump_port,
+                port_bump_attempts: 10, // Default value
                 boot_start,
                 depends: self.depends.clone(),
                 watch: self.watch.clone(),
