@@ -416,7 +416,7 @@ fn handle_logs_event(
         KeyCode::Char('G') => {
             app.log_follow = true;
             if app.log_content.len() > 20 {
-                app.log_scroll = app.log_content.len().saturating_sub(20);
+                app.log_scroll = app.log_content.len();
             }
             Ok(None)
         }

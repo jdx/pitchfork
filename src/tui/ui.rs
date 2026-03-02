@@ -26,6 +26,8 @@ const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-
 const BAR_FULL: char = '█';
 const BAR_EMPTY: char = '░';
 
+const LOG_VIEWPORT_MAX_LINES: usize = 100;
+
 /// UTF-8 safe string truncation from the end, returning "...{suffix}" if too long.
 /// Uses character count instead of byte length to avoid panics on non-ASCII.
 fn truncate_path_end(s: &str, max_chars: usize) -> String {
@@ -879,33 +881,46 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     };
     let title = format!(" Logs: {daemon_id}{follow_indicator}{search_indicator} ");
 
+    let log_skip = app.log_scroll.saturating_sub(LOG_VIEWPORT_MAX_LINES);
+    let log_take = std::cmp::max(std::cmp::min(LOG_VIEWPORT_MAX_LINES, app.log_scroll), 1);
+
     let visible_height = area.height.saturating_sub(2) as usize;
-    let visible_lines: Vec<Line> = app
+    let mut visible_lines: Vec<Line> = app
         .log_content
         .iter()
         .enumerate()
-        .skip(app.log_scroll)
-        .take(visible_height)
+        .skip(log_skip)
+        .take(log_take)
+        .map(|(line_idx, line)| (line_idx, clean_log_line(line)))
         .map(|(line_idx, line)| highlight_log_line(line, line_idx, app))
         .collect();
+    if visible_lines.len() < LOG_VIEWPORT_MAX_LINES {
+        let padding = LOG_VIEWPORT_MAX_LINES - visible_lines.len();
+        let mut padding_vec = std::iter::repeat(Line::from(""))
+            .take(padding)
+            .collect::<Vec<_>>();
+        padding_vec.extend(visible_lines);
+        visible_lines = padding_vec;
+    }
 
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(RED).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(RED));
+    let inner_width = block.inner(area).width;
     let logs = Paragraph::new(visible_lines)
-        .block(
-            Block::default()
-                .title(title)
-                .title_style(Style::default().fg(RED).bold())
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
-        )
+        .block(block)
         .wrap(Wrap { trim: false });
+    let line_count = logs.line_count(inner_width);
+    let logs = logs.scroll((line_count as u16 - area.height, 0));
 
     f.render_widget(logs, area);
 
     // Render scrollbar if there are more lines than visible
     let total_lines = app.log_content.len();
     if total_lines > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(visible_height))
-            .position(app.log_scroll);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(app.log_scroll);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼"))
@@ -1008,8 +1023,16 @@ fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(search_bar, area);
 }
 
+fn clean_log_line(line: &str) -> String {
+    // remove clear screen code
+    let line = line.replace("\x1b[2J", "");
+    // replace tabs with spaces
+    let line = line.replace("\t", "    ");
+    line
+}
+
 /// Highlight a log line with syntax coloring and search match highlighting
-fn highlight_log_line(line: &str, line_idx: usize, app: &App) -> Line<'static> {
+fn highlight_log_line(line: String, line_idx: usize, app: &App) -> Line<'static> {
     let is_match = app.log_search_matches.contains(&line_idx);
     let is_current_match = app
         .log_search_matches
