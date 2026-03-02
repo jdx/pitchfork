@@ -155,6 +155,7 @@ mod tests {
             ready_cmd: None,
             expected_port: Vec::new(),
             auto_bump_port: false,
+            port_bump_attempts: 10,
             boot_start: None,
             depends: depends.into_iter().map(String::from).collect(),
             watch: vec![],

@@ -2,6 +2,7 @@ use crate::Result;
 use crate::cli::logs::print_startup_logs;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
 
@@ -104,11 +105,7 @@ impl Start {
                     debug!("Failed to print startup logs for {id}: {e}");
                 }
                 if !resolved_ports.is_empty() {
-                    let port_str = resolved_ports
-                        .iter()
-                        .map(|p| p.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
                     println!("Daemon '{id}' started on port(s): {port_str}");
                 }
             }

@@ -121,6 +121,7 @@ fn build_daemon_list(
             original_port: Vec::new(),
             port: Vec::new(),
             auto_bump_port: false,
+            port_bump_attempts: 10,
             depends: vec![],
             env: None,
             watch: vec![],

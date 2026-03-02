@@ -507,6 +507,7 @@ impl EditorState {
             ready_cmd: self.preserved_ready_cmd.clone(),
             expected_port: Vec::new(),
             auto_bump_port: false,
+            port_bump_attempts: 10,
             boot_start: None,
             depends: vec![],
             watch: vec![],

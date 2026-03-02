@@ -96,6 +96,8 @@ pub struct Daemon {
     pub port: Vec<u16>,
     #[serde(default)]
     pub auto_bump_port: bool,
+    #[serde(default)]
+    pub port_bump_attempts: u32,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -125,6 +127,7 @@ pub struct RunOptions {
     pub ready_cmd: Option<String>,
     pub expected_port: Vec<u16>,
     pub auto_bump_port: bool,
+    pub port_bump_attempts: u32,
     pub wait_ready: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<String>,

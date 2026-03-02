@@ -143,7 +143,13 @@ impl Supervisor {
         // Check port availability and apply auto-bump if configured
         let original_ports = opts.expected_port.clone();
         let (resolved_ports, effective_ready_port) = if !opts.expected_port.is_empty() {
-            match check_ports_available(&opts.expected_port, opts.auto_bump_port).await {
+            match check_ports_available(
+                &opts.expected_port,
+                opts.auto_bump_port,
+                opts.port_bump_attempts,
+            )
+            .await
+            {
                 Ok(resolved) => {
                     let ready_port = opts.ready_port.or(resolved.first().copied());
                     info!(
@@ -269,6 +275,7 @@ impl Supervisor {
                 original_port: original_ports,
                 port: resolved_ports,
                 auto_bump_port: Some(opts.auto_bump_port),
+                port_bump_attempts: Some(opts.port_bump_attempts),
                 depends: Some(opts.depends.clone()),
                 env: opts.env.clone(),
                 watch: Some(opts.watch.clone()),
@@ -801,14 +808,16 @@ impl Supervisor {
 /// Returns the resolved ports (either the original or bumped ones).
 /// Returns an error if any port is in use and auto_bump is disabled,
 /// or if no available ports can be found after max attempts.
-async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Result<Vec<u16>> {
+async fn check_ports_available(
+    expected_ports: &[u16],
+    auto_bump: bool,
+    max_attempts: u32,
+) -> Result<Vec<u16>> {
     if expected_ports.is_empty() {
         return Ok(Vec::new());
     }
 
-    const MAX_BUMP_ATTEMPTS: u32 = 10;
-
-    for bump_offset in 0..=MAX_BUMP_ATTEMPTS {
+    for bump_offset in 0..=max_attempts {
         let candidate_ports: Vec<u16> = expected_ports
             .iter()
             .map(|&p| p.wrapping_add(bump_offset as u16))
@@ -894,7 +903,7 @@ async fn check_ports_available(expected_ports: &[u16], auto_bump: bool) -> Resul
     // No available ports found after max attempts
     Err(PortError::NoAvailablePort {
         start_port: expected_ports[0],
-        attempts: MAX_BUMP_ATTEMPTS + 1,
+        attempts: max_attempts + 1,
     }
     .into())
 }

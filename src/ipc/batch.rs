@@ -38,6 +38,19 @@ pub struct StopResult {
     pub any_failed: bool,
 }
 
+/// Result of spawning a start task
+#[derive(Debug)]
+pub struct SpawnTaskResult {
+    /// Daemon ID
+    pub id: String,
+    /// Start time if the daemon started successfully
+    pub start_time: Option<DateTime<Local>>,
+    /// Exit code if the daemon failed
+    pub exit_code: Option<i32>,
+    /// Resolved ports after auto-bump
+    pub resolved_ports: Vec<u16>,
+}
+
 /// Options for starting daemons
 #[derive(Debug, Clone, Default)]
 pub struct StartOptions {
@@ -59,6 +72,8 @@ pub struct StartOptions {
     pub expected_port: Option<Vec<u16>>,
     /// Automatically find an available port if the expected port is in use
     pub auto_bump_port: bool,
+    /// Maximum number of port bump attempts when auto_bump_port is enabled
+    pub port_bump_attempts: Option<u32>,
     /// Number of times to retry on failure (for ad-hoc daemons)
     pub retry: Option<u32>,
 }
@@ -103,6 +118,9 @@ pub fn build_run_options(
             .clone()
             .unwrap_or_else(|| daemon_config.expected_port.clone()),
         auto_bump_port: opts.auto_bump_port || daemon_config.auto_bump_port,
+        port_bump_attempts: opts
+            .port_bump_attempts
+            .unwrap_or(daemon_config.port_bump_attempts),
         wait_ready: true,
         depends: daemon_config.depends.clone(),
         env: daemon_config.env.clone(),
@@ -266,12 +284,16 @@ impl IpcClient {
                 // Wait for all daemons in this level to complete before moving to next level
                 for task in tasks {
                     match task.await {
-                        Ok((id, start_time, exit_code, resolved_ports)) => {
-                            if exit_code.is_some() {
+                        Ok(result) => {
+                            if result.exit_code.is_some() {
                                 any_failed = true;
-                                error!("Daemon {id} failed to start");
-                            } else if let Some(start_time) = start_time {
-                                successful_daemons.push((id, start_time, resolved_ports));
+                                error!("Daemon {} failed to start", result.id);
+                            } else if let Some(start_time) = result.start_time {
+                                successful_daemons.push((
+                                    result.id,
+                                    start_time,
+                                    result.resolved_ports,
+                                ));
                             }
                         }
                         Err(e) => {
@@ -329,12 +351,12 @@ impl IpcClient {
             // Wait for all ad-hoc daemons to complete
             for task in tasks {
                 match task.await {
-                    Ok((id, start_time, exit_code, resolved_ports)) => {
-                        if exit_code.is_some() {
+                    Ok(result) => {
+                        if result.exit_code.is_some() {
                             any_failed = true;
-                            error!("Ad-hoc daemon {id} failed to start");
-                        } else if let Some(start_time) = start_time {
-                            successful_daemons.push((id, start_time, resolved_ports));
+                            error!("Ad-hoc daemon {} failed to start", result.id);
+                        } else if let Some(start_time) = result.start_time {
+                            successful_daemons.push((result.id, start_time, result.resolved_ports));
                         }
                     }
                     Err(e) => {
@@ -358,14 +380,13 @@ impl IpcClient {
     /// - Command parsing
     /// - Config merging (CLI options override config file)
     /// - IPC communication with supervisor
-    #[allow(clippy::type_complexity)]
     fn spawn_start_task(
         ipc: Arc<Self>,
         id: String,
         daemon_config: &PitchforkTomlDaemon,
         is_explicitly_requested: bool,
         opts: &StartOptions,
-    ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>, Vec<u16>)> {
+    ) -> tokio::task::JoinHandle<SpawnTaskResult> {
         // Build options with force only if explicitly requested
         let mut start_opts = opts.clone();
         start_opts.force = opts.force && is_explicitly_requested;
@@ -377,7 +398,12 @@ impl IpcClient {
                 Ok(opts) => opts,
                 Err(e) => {
                     error!("Failed to parse command for daemon {id}: {e}");
-                    return (id, None, Some(1), Vec::new());
+                    return SpawnTaskResult {
+                        id,
+                        start_time: None,
+                        exit_code: Some(1),
+                        resolved_ports: Vec::new(),
+                    };
                 }
             };
 
@@ -386,19 +412,29 @@ impl IpcClient {
             match result {
                 Ok(run_result) => {
                     if run_result.started {
-                        (
+                        SpawnTaskResult {
                             id,
-                            Some(run_result.start_time),
-                            run_result.exit_code,
-                            run_result.resolved_ports,
-                        )
+                            start_time: Some(run_result.start_time),
+                            exit_code: run_result.exit_code,
+                            resolved_ports: run_result.resolved_ports,
+                        }
                     } else {
-                        (id, None, run_result.exit_code, run_result.resolved_ports)
+                        SpawnTaskResult {
+                            id,
+                            start_time: None,
+                            exit_code: run_result.exit_code,
+                            resolved_ports: run_result.resolved_ports,
+                        }
                     }
                 }
                 Err(e) => {
                     error!("Failed to start daemon {id}: {e}");
-                    (id, None, Some(1), Vec::new())
+                    SpawnTaskResult {
+                        id,
+                        start_time: None,
+                        exit_code: Some(1),
+                        resolved_ports: Vec::new(),
+                    }
                 }
             }
         })
@@ -408,7 +444,6 @@ impl IpcClient {
     ///
     /// This handles restarting ad-hoc daemons that were originally started
     /// via `pitchfork run` command.
-    #[allow(clippy::type_complexity)]
     fn spawn_adhoc_start_task(
         ipc: Arc<Self>,
         id: String,
@@ -417,7 +452,7 @@ impl IpcClient {
         env: Option<IndexMap<String, String>>,
         is_explicitly_requested: bool,
         opts: &StartOptions,
-    ) -> tokio::task::JoinHandle<(String, Option<DateTime<Local>>, Option<i32>, Vec<u16>)> {
+    ) -> tokio::task::JoinHandle<SpawnTaskResult> {
         let force = opts.force && is_explicitly_requested;
         let delay = opts.delay;
         let output = opts.output.clone();
@@ -426,6 +461,7 @@ impl IpcClient {
         let ready_cmd = opts.cmd.clone();
         let expected_port = opts.expected_port.clone();
         let auto_bump_port = opts.auto_bump_port;
+        let port_bump_attempts = opts.port_bump_attempts.unwrap_or(10);
         let retry = opts.retry.unwrap_or(0);
         let shell_pid = opts.shell_pid;
 
@@ -448,6 +484,7 @@ impl IpcClient {
                 ready_cmd,
                 expected_port: expected_port.unwrap_or_default(),
                 auto_bump_port,
+                port_bump_attempts,
                 wait_ready: true,
                 depends: vec![],
                 env,
@@ -460,19 +497,29 @@ impl IpcClient {
             match result {
                 Ok(run_result) => {
                     if run_result.started {
-                        (
+                        SpawnTaskResult {
                             id,
-                            Some(run_result.start_time),
-                            run_result.exit_code,
-                            run_result.resolved_ports,
-                        )
+                            start_time: Some(run_result.start_time),
+                            exit_code: run_result.exit_code,
+                            resolved_ports: run_result.resolved_ports,
+                        }
                     } else {
-                        (id, None, run_result.exit_code, run_result.resolved_ports)
+                        SpawnTaskResult {
+                            id,
+                            start_time: None,
+                            exit_code: run_result.exit_code,
+                            resolved_ports: run_result.resolved_ports,
+                        }
                     }
                 }
                 Err(e) => {
                     error!("Failed to start ad-hoc daemon {id}: {e}");
-                    (id, None, Some(1), Vec::new())
+                    SpawnTaskResult {
+                        id,
+                        start_time: None,
+                        exit_code: Some(1),
+                        resolved_ports: Vec::new(),
+                    }
                 }
             }
         })
@@ -635,6 +682,7 @@ impl IpcClient {
             ready_cmd: opts.cmd.clone(),
             expected_port: opts.expected_port.unwrap_or_default(),
             auto_bump_port: opts.auto_bump_port,
+            port_bump_attempts: opts.port_bump_attempts.unwrap_or(10),
             wait_ready: true,
             depends: vec![],
             env: None,

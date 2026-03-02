@@ -87,6 +87,7 @@ impl Run {
             cmd: self.cmd.clone(),
             expected_port: (!self.expected_port.is_empty()).then_some(self.expected_port.clone()),
             auto_bump_port: self.auto_bump_port,
+            port_bump_attempts: None,
             retry: Some(self.retry),
         };
 

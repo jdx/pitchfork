@@ -177,6 +177,9 @@ pub struct PitchforkTomlDaemon {
     /// Automatically find an available port if the specified port is in use
     #[serde(default)]
     pub auto_bump_port: bool,
+    /// Maximum number of port bump attempts when auto_bump_port is enabled (default: 10)
+    #[serde(default = "default_port_bump_attempts")]
+    pub port_bump_attempts: u32,
     /// Whether to start this daemon automatically on system boot
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
@@ -201,6 +204,10 @@ pub struct PitchforkTomlDaemon {
 
 fn example_run_command() -> &'static str {
     "exec node server.js"
+}
+
+fn default_port_bump_attempts() -> u32 {
+    10
 }
 
 /// Cron scheduling configuration

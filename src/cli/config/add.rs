@@ -214,6 +214,7 @@ impl Add {
                 ready_cmd: self.ready_cmd.clone(),
                 expected_port: self.expected_port.clone(),
                 auto_bump_port: self.auto_bump_port,
+                port_bump_attempts: 10, // Default value
                 boot_start,
                 depends: self.depends.clone(),
                 watch: self.watch.clone(),
