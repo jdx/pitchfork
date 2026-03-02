@@ -112,14 +112,14 @@ impl DaemonId {
     pub fn parse(s: &str) -> Result<Self> {
         validate_qualified_id(s)?;
 
-        if let Some((ns, name)) = s.split_once('/') {
-            Ok(Self {
-                namespace: ns.to_string(),
-                name: name.to_string(),
-            })
-        } else {
-            Err(DaemonIdError::MissingNamespace { id: s.to_string() }.into())
-        }
+        // validate_qualified_id ensures exactly one '/' is present, so this unwrap is safe.
+        let (ns, name) = s
+            .split_once('/')
+            .expect("validate_qualified_id ensures '/' is present");
+        Ok(Self {
+            namespace: ns.to_string(),
+            name: name.to_string(),
+        })
     }
 
     /// Creates a DaemonId from a filesystem-safe path component.
@@ -308,6 +308,9 @@ fn validate_component(s: &str, component_name: &str) -> Result<()> {
     }
     if s.contains("--") {
         return Err(DaemonIdError::ReservedSequence { id: s.to_string() }.into());
+    }
+    if s.starts_with('-') || s.ends_with('-') {
+        return Err(DaemonIdError::LeadingTrailingDash { id: s.to_string() }.into());
     }
     if s.contains(' ') {
         return Err(DaemonIdError::ContainsSpace { id: s.to_string() }.into());
@@ -637,6 +640,22 @@ mod tests {
         // Schema only allows [A-Za-z0-9_.-] for each component.
         assert!(DaemonId::try_new("project+alpha", "api").is_err());
         assert!(DaemonId::try_new("project", "api@v1").is_err());
+    }
+
+    #[test]
+    fn test_daemon_id_rejects_leading_trailing_dash() {
+        // Leading dash in namespace or name
+        assert!(DaemonId::try_new("-project", "api").is_err());
+        assert!(DaemonId::try_new("project", "-api").is_err());
+        // Trailing dash in namespace or name
+        assert!(DaemonId::try_new("project-", "api").is_err());
+        assert!(DaemonId::try_new("project", "api-").is_err());
+        // Verify the safe_path roundtrip invariant holds for names with internal dashes
+        let id = DaemonId::try_new("a", "b").unwrap();
+        let recovered = DaemonId::from_safe_path(&id.safe_path()).unwrap();
+        assert_eq!(id, recovered);
+        // from_safe_path must also reject names produced by invalid components
+        assert!(DaemonId::from_safe_path("a---b").is_err()); // came from "a-"/"b" or "a"/"-b"
     }
 
     #[test]

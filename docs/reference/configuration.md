@@ -308,7 +308,7 @@ on_retry = "echo 'retrying...'"
 - `on_fail` - Runs when the daemon fails and all retries are exhausted
 - `on_retry` - Runs before each retry attempt
 
-Hook commands receive environment variables: `PITCHFORK_DAEMON_ID`, `PITCHFORK_RETRY_COUNT`, and (for `on_fail`) `PITCHFORK_EXIT_CODE`. See [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
+Hook commands receive environment variables: `PITCHFORK_DAEMON_ID` (fully-qualified `namespace/name`), `PITCHFORK_DAEMON_NAMESPACE`, `PITCHFORK_RETRY_COUNT`, and (for `on_fail`) `PITCHFORK_EXIT_CODE`. See [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
 
 ### `cron`
 

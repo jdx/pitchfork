@@ -167,7 +167,8 @@ impl Supervisor {
         }
 
         // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
-        cmd.env("PITCHFORK_DAEMON_ID", id.name());
+        cmd.env("PITCHFORK_DAEMON_ID", id.qualified());
+        cmd.env("PITCHFORK_DAEMON_NAMESPACE", id.namespace());
         cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
 
         // Put each daemon in its own session/process group so we can kill the

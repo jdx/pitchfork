@@ -54,6 +54,16 @@ pub enum DaemonIdError {
     )]
     ReservedSequence { id: String },
 
+    #[error("daemon ID component '{id}' starts or ends with a dash '-'")]
+    #[diagnostic(
+        code(pitchfork::daemon::leading_trailing_dash),
+        url("https://pitchfork.jdx.dev/configuration"),
+        help(
+            "remove the leading or trailing dash (e.g. 'my-daemon' not '-my-daemon' or 'my-daemon-')"
+        )
+    )]
+    LeadingTrailingDash { id: String },
+
     #[error("daemon ID '{id}' contains spaces")]
     #[diagnostic(
         code(pitchfork::daemon::contains_space),

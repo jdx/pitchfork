@@ -86,7 +86,8 @@ pub(crate) fn fire_hook(
 
         // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
         command
-            .env("PITCHFORK_DAEMON_ID", daemon_id.name())
+            .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
+            .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
 
         for (key, value) in &extra_env {

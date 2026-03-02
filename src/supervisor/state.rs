@@ -213,8 +213,9 @@ impl Supervisor {
 
     /// Remove a daemon from state
     pub(crate) async fn remove_daemon(&self, id: &DaemonId) -> Result<()> {
-        self.state_file.lock().await.daemons.remove(id);
-        if let Err(err) = self.state_file.lock().await.write() {
+        let mut state_file = self.state_file.lock().await;
+        state_file.daemons.remove(id);
+        if let Err(err) = state_file.write() {
             warn!("failed to update state file: {err:#}");
         }
         Ok(())
