@@ -865,6 +865,7 @@ pub struct App {
     pub network_selected: usize,
     pub network_scroll_offset: usize,
     pub network_selected_pid: Option<u32>, // Store PID to ensure correct targeting
+    pub network_visible_rows: usize,       // Cached visible row count for scroll calculations
 }
 
 impl App {
@@ -906,6 +907,7 @@ impl App {
             network_selected: 0,
             network_scroll_offset: 0,
             network_selected_pid: None,
+            network_visible_rows: 20, // Default value, updated during draw
         }
     }
 

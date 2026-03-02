@@ -141,7 +141,7 @@ impl Supervisor {
         };
 
         // Check port availability and apply auto-bump if configured
-        let original_ports = opts.expected_port.clone();
+        let expected_ports = opts.expected_port.clone();
         let (resolved_ports, effective_ready_port) = if !opts.expected_port.is_empty() {
             match check_ports_available(
                 &opts.expected_port,
@@ -223,6 +223,8 @@ impl Supervisor {
         // Inject the resolved ports for the daemon to use
         if !resolved_ports.is_empty() {
             // Set PORT to the first port for backward compatibility
+            // When there's only one port, both PORT and PORT0 will be set to the same value.
+            // This follows the convention used by many deployment platforms (Heroku, etc.).
             cmd.env("PORT", resolved_ports[0].to_string());
             // Set individual ports as PORT0, PORT1, etc.
             for (i, port) in resolved_ports.iter().enumerate() {
@@ -272,8 +274,8 @@ impl Supervisor {
                 ready_http: opts.ready_http.clone(),
                 ready_port: effective_ready_port,
                 ready_cmd: opts.ready_cmd.clone(),
-                original_port: original_ports,
-                port: resolved_ports,
+                expected_port: expected_ports,
+                resolved_port: resolved_ports,
                 auto_bump_port: Some(opts.auto_bump_port),
                 port_bump_attempts: Some(opts.port_bump_attempts),
                 depends: Some(opts.depends.clone()),
@@ -818,10 +820,16 @@ async fn check_ports_available(
     }
 
     for bump_offset in 0..=max_attempts {
-        let candidate_ports: Vec<u16> = expected_ports
+        // Use checked_add to prevent overflow - if any port would overflow, stop trying
+        let candidate_ports: Option<Vec<u16>> = expected_ports
             .iter()
-            .map(|&p| p.wrapping_add(bump_offset as u16))
+            .map(|&p| p.checked_add(bump_offset as u16))
             .collect();
+
+        let candidate_ports = match candidate_ports {
+            Some(ports) => ports,
+            None => break, // overflow, stop trying
+        };
 
         // Check if all ports in this set are available
         let mut all_available = true;
@@ -836,6 +844,11 @@ async fn check_ports_available(
 
             // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks
             // Bind to 0.0.0.0 to detect conflicts on all interfaces, not just localhost
+            //
+            // NOTE: This check has a time-of-check-to-time-of-use (TOCTOU) race condition.
+            // Another process could grab the port between our check and the daemon actually
+            // binding. This is inherent to the approach and acceptable for our use case
+            // since we're primarily detecting conflicts with already-running daemons.
             let port_check =
                 tokio::task::spawn_blocking(move || match TcpListener::bind(("0.0.0.0", port)) {
                     Ok(listener) => {
@@ -856,14 +869,6 @@ async fn check_ports_available(
         }
 
         if all_available {
-            // Check for overflow (port wrapped around to 0 due to wrapping_add)
-            if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
-                return Err(PortError::NoAvailablePort {
-                    start_port: expected_ports[0],
-                    attempts: bump_offset + 1,
-                }
-                .into());
-            }
             if bump_offset > 0 {
                 info!(
                     "ports {:?} bumped by {} to {:?}",

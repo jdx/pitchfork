@@ -39,7 +39,7 @@ fn truncate_path_end(s: &str, max_chars: usize) -> String {
     }
 }
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -124,7 +124,7 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(stats_widget, area);
 }
 
-fn draw_main(f: &mut Frame, area: Rect, app: &App) {
+fn draw_main(f: &mut Frame, area: Rect, app: &mut App) {
     match app.view {
         View::Dashboard
         | View::Confirm
@@ -527,7 +527,7 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Draw network view showing listening ports
-fn draw_network(f: &mut Frame, area: Rect, app: &App) {
+fn draw_network(f: &mut Frame, area: Rect, app: &mut App) {
     let search_height = if app.network_search_active || !app.network_search_query.is_empty() {
         3
     } else {
@@ -595,7 +595,15 @@ fn draw_network_search_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(search_paragraph, area);
 }
 
-fn draw_network_table(f: &mut Frame, area: Rect, app: &App) {
+fn draw_network_table(f: &mut Frame, area: Rect, app: &mut App) {
+    // Calculate visible rows first (before borrowing app for listeners)
+    let header_height = 3; // Header + border
+    let visible_rows = (area.height as usize).saturating_sub(header_height);
+
+    // Update the cached visible rows for event handler scroll calculations
+    app.network_visible_rows = visible_rows;
+
+    // Now get the listeners (this borrows app)
     let mut listeners: Vec<&Listener> = app.filtered_network_listeners();
 
     // Sort by PID to prevent visual jitter
@@ -605,12 +613,8 @@ fn draw_network_table(f: &mut Frame, area: Rect, app: &App) {
     let daemon_ports: std::collections::HashSet<u16> = app
         .daemons
         .iter()
-        .flat_map(|d| d.port.iter().copied())
+        .flat_map(|d| d.resolved_port.iter().copied())
         .collect();
-
-    // Calculate visible rows based on available height
-    let header_height = 3; // Header + border
-    let visible_rows = (area.height as usize).saturating_sub(header_height);
 
     // Apply scroll offset - only show visible rows
     let start_idx = app.network_scroll_offset;
@@ -1505,8 +1509,8 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
 
         // Show ports - use daemon's resolved ports if running, otherwise config ports
         let ports_to_show = daemon
-            .filter(|d| !d.port.is_empty())
-            .map(|d| d.port.clone())
+            .filter(|d| !d.resolved_port.is_empty())
+            .map(|d| d.resolved_port.clone())
             .unwrap_or_else(|| cfg.expected_port.clone());
 
         if !ports_to_show.is_empty() {

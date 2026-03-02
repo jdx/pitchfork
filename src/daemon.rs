@@ -88,12 +88,12 @@ pub struct Daemon {
     pub ready_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<String>,
-    /// Original ports requested (before auto-bump resolution)
+    /// Expected ports from configuration (before auto-bump resolution)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub original_port: Vec<u16>,
-    /// Resolved ports actually used (after auto-bump)
+    pub expected_port: Vec<u16>,
+    /// Resolved ports actually used after auto-bump (may differ from expected)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub port: Vec<u16>,
+    pub resolved_port: Vec<u16>,
     #[serde(default)]
     pub auto_bump_port: bool,
     #[serde(default)]

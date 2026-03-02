@@ -305,3 +305,124 @@ expected_port = [{}]
     // Cleanup
     let _ = env.run_command(&["stop", "ready_sync"]);
 }
+
+/// Test that PITCHFORK_PORT_BUMP_ATTEMPTS environment variable is respected
+#[test]
+fn test_port_bump_attempts_env_var() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    // Bind to a series of ports to force multiple bump attempts
+    let base_port: u16 = 45683;
+    let listeners: Vec<TcpListener> = (0..3)
+        .map(|i| {
+            TcpListener::bind(("0.0.0.0", base_port + i as u16))
+                .expect("Failed to bind to test port")
+        })
+        .collect();
+
+    // Create the project directory first
+    env.create_project_dir();
+
+    // Create a script that uses the PORT environment variable
+    let script_content = format!(
+        r#"#!/bin/bash
+python3 -c "
+import http.server
+import socketserver
+import os
+port = int(os.environ.get('PORT', {}))
+with socketserver.TCPServer(('', port), http.server.SimpleHTTPRequestHandler) as httpd:
+    print(f'Server running on port {{port}}')
+    httpd.handle_request()
+" &
+sleep 1
+echo "ready"
+sleep 30
+"#,
+        base_port + 3
+    );
+    let script_path = env.project_dir().join("test_env_bump.sh");
+    std::fs::write(&script_path, script_content).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    // Create a daemon that expects to use the first occupied port with auto_bump_port enabled
+    let toml_content = format!(
+        r#"
+[daemons.env_bump]
+run = "bash {}"
+expected_port = [{}]
+auto_bump_port = true
+ready_output = "ready"
+"#,
+        script_path.display(),
+        base_port
+    );
+    env.create_toml(&toml_content);
+
+    // Try to start the daemon with only 2 bump attempts - should fail
+    // (ports base_port, base_port+1, base_port+2 are occupied, need at least 3 bumps)
+    let output = env.run_command_with_env(
+        &["start", "env_bump"],
+        &[("PITCHFORK_PORT_BUMP_ATTEMPTS", "2")],
+    );
+
+    println!(
+        "stdout (should fail): {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "stderr (should fail): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The start command should fail because we don't have enough bump attempts
+    assert!(
+        !output.status.success(),
+        "Start command should fail with insufficient port bump attempts"
+    );
+
+    // Now try with 5 bump attempts - should succeed
+    let output = env.run_command_with_env(
+        &["start", "env_bump"],
+        &[("PITCHFORK_PORT_BUMP_ATTEMPTS", "5")],
+    );
+
+    println!(
+        "stdout (should succeed): {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "stderr (should succeed): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Should succeed with enough bump attempts
+    assert!(
+        output.status.success(),
+        "Start command should succeed with sufficient port bump attempts"
+    );
+
+    // Give the daemon a moment to start
+    env.sleep(Duration::from_millis(500));
+
+    // Check that the daemon is running
+    let status_output = env.run_command(&["status", "env_bump"]);
+    let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+    println!("Status output: {}", status_stdout);
+
+    assert!(
+        status_stdout.contains("running") || status_stdout.contains("ready"),
+        "Daemon should be running after port auto-bump"
+    );
+
+    // Cleanup
+    let _ = env.run_command(&["stop", "env_bump"]);
+    drop(listeners);
+}

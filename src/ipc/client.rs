@@ -192,7 +192,7 @@ impl IpcClient {
                     started: true,
                     exit_code: None,
                     start_time,
-                    resolved_ports: daemon.port.clone(),
+                    resolved_ports: daemon.resolved_port.clone(),
                 })
             }
             IpcResponse::DaemonReady { daemon } => {
@@ -201,7 +201,7 @@ impl IpcClient {
                     started: true,
                     exit_code: None,
                     start_time,
-                    resolved_ports: daemon.port.clone(),
+                    resolved_ports: daemon.resolved_port.clone(),
                 })
             }
             IpcResponse::DaemonFailedWithCode { exit_code } => {

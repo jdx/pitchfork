@@ -467,8 +467,8 @@ fn handle_network_event(
         return handle_network_search_input(app, key);
     }
 
-    // Calculate visible area (assuming ~20 visible rows for the table)
-    const VISIBLE_ROWS: usize = 20;
+    // Use the cached visible rows from the last draw (updated in draw_network)
+    let visible_rows = app.network_visible_rows.max(1); // Ensure at least 1 row
     let total_count = app.filtered_network_listeners().len();
 
     match key {
@@ -480,9 +480,9 @@ fn handle_network_event(
             if total_count > 0 && app.network_selected < total_count - 1 {
                 app.network_selected += 1;
                 // Scroll down if selection goes below visible area
-                if app.network_selected >= app.network_scroll_offset + VISIBLE_ROWS {
+                if app.network_selected >= app.network_scroll_offset + visible_rows {
                     app.network_scroll_offset =
-                        app.network_selected.saturating_sub(VISIBLE_ROWS - 1);
+                        app.network_selected.saturating_sub(visible_rows - 1);
                 }
                 // Update the stored PID
                 let listeners = app.filtered_network_listeners();
@@ -518,7 +518,7 @@ fn handle_network_event(
             // Go to bottom
             if total_count > 0 {
                 app.network_selected = total_count - 1;
-                app.network_scroll_offset = total_count.saturating_sub(VISIBLE_ROWS);
+                app.network_scroll_offset = total_count.saturating_sub(visible_rows);
                 // Update the stored PID
                 let listeners = app.filtered_network_listeners();
                 app.network_selected_pid =

@@ -1,3 +1,4 @@
+use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::error::{ConfigParseError, FileError};
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -207,7 +208,7 @@ fn example_run_command() -> &'static str {
 }
 
 fn default_port_bump_attempts() -> u32 {
-    10
+    *PITCHFORK_PORT_BUMP_ATTEMPTS
 }
 
 /// Cron scheduling configuration

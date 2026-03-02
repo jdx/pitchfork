@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
     PitchforkTomlHooks, Retry,
@@ -214,7 +215,7 @@ impl Add {
                 ready_cmd: self.ready_cmd.clone(),
                 expected_port: self.expected_port.clone(),
                 auto_bump_port: self.auto_bump_port,
-                port_bump_attempts: 10, // Default value
+                port_bump_attempts: *PITCHFORK_PORT_BUMP_ATTEMPTS,
                 boot_start,
                 depends: self.depends.clone(),
                 watch: self.watch.clone(),

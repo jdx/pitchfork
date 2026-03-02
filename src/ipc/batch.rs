@@ -5,6 +5,7 @@
 use crate::Result;
 use crate::daemon::RunOptions;
 use crate::deps::resolve_dependencies;
+use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
 use chrono::{DateTime, Local};
@@ -461,7 +462,9 @@ impl IpcClient {
         let ready_cmd = opts.cmd.clone();
         let expected_port = opts.expected_port.clone();
         let auto_bump_port = opts.auto_bump_port;
-        let port_bump_attempts = opts.port_bump_attempts.unwrap_or(10);
+        let port_bump_attempts = opts
+            .port_bump_attempts
+            .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS);
         let retry = opts.retry.unwrap_or(0);
         let shell_pid = opts.shell_pid;
 
@@ -682,7 +685,9 @@ impl IpcClient {
             ready_cmd: opts.cmd.clone(),
             expected_port: opts.expected_port.unwrap_or_default(),
             auto_bump_port: opts.auto_bump_port,
-            port_bump_attempts: opts.port_bump_attempts.unwrap_or(10),
+            port_bump_attempts: opts
+                .port_bump_attempts
+                .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
             wait_ready: true,
             depends: vec![],
             env: None,
