@@ -34,10 +34,50 @@ run = "npm run server"
 All configuration uses TOML format:
 
 ```toml
+namespace = "my-project" # optional, per-file namespace override
+
 [daemons.<daemon-name>]
 run = "command to execute"
 # ... other options
 ```
+
+### Daemon Naming Rules
+
+Daemon names must follow these rules:
+
+| Rule | Valid | Invalid |
+|------|-------|---------|
+| No double dashes | `my-app` | `my--app` |
+| No slashes | `api` | `api/v2` |
+| No spaces | `my_app` | `my app` |
+| No parent references | `myapp` | `..` or `foo..bar` |
+| ASCII only | `myapp123` | `myäpp` |
+
+The `--` sequence is reserved for internal use (namespace encoding). See [Namespaces](/concepts/namespaces) for details.
+
+### Namespace Derivation Rules
+
+- Global config files (`/etc/pitchfork/config.toml`, `~/.config/pitchfork/config.toml`) use namespace `global`
+- Project config files use top-level `namespace = "..."` if set
+- Otherwise project config files use the parent directory name as namespace
+- If the derived directory name is invalid (`--`, spaces, non-ASCII, etc.), parsing fails and you should set top-level `namespace`
+
+### Top-level `namespace` (optional)
+
+Overrides the namespace used for all daemons in that specific config file.
+
+```toml
+namespace = "frontend"
+
+[daemons.api]
+run = "npm run dev"
+```
+
+Notes:
+
+- `pitchfork.local.toml` shares namespace with sibling `pitchfork.toml`
+- If both declare `namespace`, the values must match
+- Global config files must use `global`
 
 ## Daemon Options
 
@@ -169,7 +209,12 @@ ready_cmd = "redis-cli ping"
 
 ### `depends`
 
-List of daemon names that must be started before this daemon. When you start a daemon, its dependencies are automatically started first in the correct order.
+List of daemon IDs that must be started before this daemon. Dependencies can be:
+
+- short IDs in the same namespace (e.g. `postgres`)
+- fully qualified cross-namespace IDs (e.g. `global/postgres`)
+
+When you start a daemon, its dependencies are automatically started first in the correct order.
 
 ```toml
 [daemons.api]
@@ -184,6 +229,7 @@ depends = ["postgres", "redis"]
 - **Parallel starting**: Dependencies at the same level start in parallel for faster startup
 - **Skip running**: Already-running dependencies are skipped (not restarted)
 - **Circular detection**: Circular dependencies are detected and reported as errors
+- **Strict validation**: Invalid dependency IDs fail config parsing (they are not skipped)
 - **Force flag**: Using `-f` only restarts the explicitly requested daemon, not its dependencies
 
 **Example with chained dependencies:**

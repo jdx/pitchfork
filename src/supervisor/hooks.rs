@@ -4,6 +4,7 @@
 //! lifecycle events (ready, fail, retry). They are configured in pitchfork.toml
 //! under `[daemons.<name>.hooks]`.
 
+use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::shell::Shell;
 use crate::{env, pitchfork_toml};
@@ -45,14 +46,17 @@ fn get_hook_cmd(
 /// then spawns it in the background. Errors are logged but never block the caller.
 pub(crate) fn fire_hook(
     hook_type: HookType,
-    daemon_id: String,
+    daemon_id: DaemonId,
     daemon_dir: PathBuf,
     retry_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
     extra_env: Vec<(String, String)>,
 ) {
     tokio::spawn(async move {
-        let pt = PitchforkToml::all_merged();
+        let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
+            warn!("Failed to load config for hook '{}': {}", hook_type, e);
+            PitchforkToml::default()
+        });
         let hook_cmd = pt
             .daemons
             .get(&daemon_id)
@@ -82,7 +86,7 @@ pub(crate) fn fire_hook(
 
         // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
         command
-            .env("PITCHFORK_DAEMON_ID", &daemon_id)
+            .env("PITCHFORK_DAEMON_ID", daemon_id.name())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
 
         for (key, value) in &extra_env {

@@ -4,7 +4,6 @@
 
 use super::{SUPERVISOR, Supervisor};
 use crate::Result;
-use crate::daemon::validate_daemon_id;
 use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
 
@@ -44,32 +43,24 @@ impl Supervisor {
                 IpcResponse::Ok
             }
             IpcRequest::Stop { id } => {
-                if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
+                // id is already DaemonId, no validation needed
                 self.stop(&id).await?
             }
             IpcRequest::Run(opts) => {
-                if let Err(e) = validate_daemon_id(&opts.id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
+                // opts.id is already DaemonId, no validation needed
                 self.run(opts).await?
             }
             IpcRequest::Enable { id } => {
-                if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
-                if self.enable(id).await? {
+                // id is already DaemonId, no validation needed
+                if self.enable(&id).await? {
                     IpcResponse::Yes
                 } else {
                     IpcResponse::No
                 }
             }
             IpcRequest::Disable { id } => {
-                if let Err(e) = validate_daemon_id(&id) {
-                    return Ok(IpcResponse::Error(e.to_string()));
-                }
-                if self.disable(id).await? {
+                // id is already DaemonId, no validation needed
+                if self.disable(&id).await? {
                     IpcResponse::Yes
                 } else {
                     IpcResponse::No

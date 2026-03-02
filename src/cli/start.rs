@@ -1,7 +1,9 @@
 use crate::Result;
 use crate::cli::logs::print_startup_logs;
+use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use crate::pitchfork_toml::PitchforkToml;
 use miette::ensure;
 use std::sync::Arc;
 
@@ -70,10 +72,10 @@ impl Start {
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
         // Compute daemon IDs to start
-        let ids: Vec<String> = if self.all {
-            IpcClient::get_all_configured_daemons()
+        let ids: Vec<DaemonId> = if self.all {
+            IpcClient::get_all_configured_daemons()?
         } else {
-            self.id.clone()
+            PitchforkToml::resolve_ids(&self.id)?
         };
 
         let opts = StartOptions {

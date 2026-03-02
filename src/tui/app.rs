@@ -1,9 +1,10 @@
 use crate::Result;
 use crate::daemon::Daemon;
-use crate::env::PITCHFORK_LOGS_DIR;
+use crate::daemon_id::DaemonId;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon, Retry,
+    namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
@@ -469,7 +470,15 @@ impl EditorState {
                 }
                 "ready_port" => field.value = FormFieldValue::OptionalPort(config.ready_port),
                 "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
-                "depends" => field.value = FormFieldValue::StringList(config.depends.clone()),
+                "depends" => {
+                    field.value = FormFieldValue::StringList(
+                        config
+                            .depends
+                            .iter()
+                            .map(|d: &DaemonId| d.qualified())
+                            .collect(),
+                    )
+                }
                 "watch" => field.value = FormFieldValue::StringList(config.watch.clone()),
                 "cron_schedule" => {
                     field.value = FormFieldValue::OptionalText(
@@ -541,7 +550,9 @@ impl EditorState {
                 ("ready_http", FormFieldValue::OptionalText(s)) => config.ready_http = s.clone(),
                 ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = *p,
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
-                ("depends", FormFieldValue::StringList(v)) => config.depends = v.clone(),
+                ("depends", FormFieldValue::StringList(v)) => {
+                    config.depends = v.iter().filter_map(|s| DaemonId::parse(s).ok()).collect()
+                }
                 ("watch", FormFieldValue::StringList(v)) => config.watch = v.clone(),
                 ("cron_schedule", FormFieldValue::OptionalText(s)) => cron_schedule = s.clone(),
                 ("cron_retrigger", FormFieldValue::Retrigger(r)) => cron_retrigger = *r,
@@ -756,13 +767,13 @@ pub struct ConfigFileSelector {
 
 #[derive(Debug, Clone)]
 pub enum PendingAction {
-    Stop(String),
-    Restart(String),
-    Disable(String),
+    Stop(DaemonId),
+    Restart(DaemonId),
+    Disable(DaemonId),
     // Batch operations
-    BatchStop(Vec<String>),
-    BatchRestart(Vec<String>),
-    BatchDisable(Vec<String>),
+    BatchStop(Vec<DaemonId>),
+    BatchRestart(Vec<DaemonId>),
+    BatchDisable(Vec<DaemonId>),
     // Config editor actions
     DeleteDaemon { id: String, config_path: PathBuf },
     DiscardEditorChanges,
@@ -815,18 +826,18 @@ impl SortOrder {
 
 pub struct App {
     pub daemons: Vec<Daemon>,
-    pub disabled: Vec<String>,
+    pub disabled: Vec<DaemonId>,
     pub selected: usize,
     pub view: View,
     pub prev_view: View,
     pub log_content: Vec<String>,
-    pub log_daemon_id: Option<String>,
+    pub log_daemon_id: Option<DaemonId>,
     pub log_scroll: usize,
     pub log_follow: bool, // Auto-scroll to bottom as new lines appear
     pub message: Option<String>,
     pub message_time: Option<Instant>,
     pub process_stats: HashMap<u32, ProcessStats>, // PID -> stats
-    pub stats_history: HashMap<String, StatsHistory>, // daemon_id -> history
+    pub stats_history: HashMap<DaemonId, StatsHistory>, // daemon_id -> history
     pub pending_action: Option<PendingAction>,
     pub loading_text: Option<String>,
     pub search_query: String,
@@ -840,13 +851,13 @@ pub struct App {
     pub log_search_matches: Vec<usize>, // Line indices that match
     pub log_search_current: usize,      // Current match index
     // Details view daemon (now used for full-page details view from 'l' key)
-    pub details_daemon_id: Option<String>,
+    pub details_daemon_id: Option<DaemonId>,
     // Whether logs are expanded to fill the screen (hides charts)
     pub logs_expanded: bool,
     // Multi-select state
-    pub multi_select: HashSet<String>,
+    pub multi_select: HashSet<DaemonId>,
     // Config-only daemons (defined in pitchfork.toml but not currently active)
-    pub config_daemon_ids: HashSet<String>,
+    pub config_daemon_ids: HashSet<DaemonId>,
     // Whether to show config-only daemons in the list
     pub show_available: bool,
     // Config editor state
@@ -955,7 +966,7 @@ impl App {
                 .iter()
                 .filter_map(|d| {
                     matcher
-                        .fuzzy_match(&d.id, &self.search_query)
+                        .fuzzy_match(&d.id.qualified(), &self.search_query)
                         .map(|score| (d, score))
                 })
                 .collect();
@@ -967,7 +978,11 @@ impl App {
         // Sort the filtered list
         filtered.sort_by(|a, b| {
             let cmp = match self.sort_column {
-                SortColumn::Name => a.id.to_lowercase().cmp(&b.id.to_lowercase()),
+                SortColumn::Name => {
+                    a.id.to_string()
+                        .to_lowercase()
+                        .cmp(&b.id.to_string().to_lowercase())
+                }
                 SortColumn::Status => {
                     let status_order = |d: &Daemon| match &d.status {
                         crate::daemon_status::DaemonStatus::Running => 0,
@@ -1089,7 +1104,7 @@ impl App {
 
     pub fn select_all_visible(&mut self) {
         // Collect IDs first to avoid borrow conflict
-        let ids: Vec<String> = self
+        let ids: Vec<DaemonId> = self
             .filtered_daemons()
             .iter()
             .map(|d| d.id.clone())
@@ -1103,7 +1118,7 @@ impl App {
         self.multi_select.clear();
     }
 
-    pub fn is_selected(&self, daemon_id: &str) -> bool {
+    pub fn is_selected(&self, daemon_id: &DaemonId) -> bool {
         self.multi_select.contains(daemon_id)
     }
 
@@ -1111,7 +1126,7 @@ impl App {
         !self.multi_select.is_empty()
     }
 
-    pub fn selected_daemon_ids(&self) -> Vec<String> {
+    pub fn selected_daemon_ids(&self) -> Vec<DaemonId> {
         self.multi_select.iter().cloned().collect()
     }
 
@@ -1149,7 +1164,7 @@ impl App {
     }
 
     /// Get stats history for a daemon
-    pub fn get_stats_history(&self, daemon_id: &str) -> Option<&StatsHistory> {
+    pub fn get_stats_history(&self, daemon_id: &DaemonId) -> Option<&StatsHistory> {
         self.stats_history.get(daemon_id)
     }
 
@@ -1166,14 +1181,17 @@ impl App {
 
         // Populate daemons list based on show_available setting
         for entry in all_entries {
+            // entry.id is already a DaemonId (entry.daemon.id)
+            let daemon_id = entry.daemon.id.clone();
+
             // Track disabled daemons
             if entry.is_disabled {
-                self.disabled.push(entry.id.clone());
+                self.disabled.push(daemon_id.clone());
             }
 
             // Track config-only daemons
             if entry.is_available {
-                self.config_daemon_ids.insert(entry.id.clone());
+                self.config_daemon_ids.insert(daemon_id.clone());
             }
 
             // Add to daemons list if:
@@ -1207,7 +1225,7 @@ impl App {
     }
 
     /// Check if a daemon is from config only (not currently active)
-    pub fn is_config_only(&self, daemon_id: &str) -> bool {
+    pub fn is_config_only(&self, daemon_id: &DaemonId) -> bool {
         self.config_daemon_ids.contains(daemon_id)
     }
 
@@ -1320,8 +1338,8 @@ impl App {
     }
 
     // Details view
-    pub fn show_details(&mut self, daemon_id: &str) {
-        self.details_daemon_id = Some(daemon_id.to_string());
+    pub fn show_details(&mut self, daemon_id: &DaemonId) {
+        self.details_daemon_id = Some(daemon_id.clone());
         self.prev_view = self.view;
         self.view = View::Details;
     }
@@ -1332,15 +1350,15 @@ impl App {
     }
 
     /// View daemon details (charts + logs)
-    pub fn view_daemon_details(&mut self, daemon_id: &str) {
-        self.log_daemon_id = Some(daemon_id.to_string());
+    pub fn view_daemon_details(&mut self, daemon_id: &DaemonId) {
+        self.log_daemon_id = Some(daemon_id.clone());
         self.logs_expanded = false; // Start with charts visible
         self.load_logs(daemon_id);
         self.view = View::Logs; // Logs view is now the full daemon details view
     }
 
-    fn load_logs(&mut self, daemon_id: &str) {
-        let log_path = Self::log_path(daemon_id);
+    fn load_logs(&mut self, daemon_id: &DaemonId) {
+        let log_path = daemon_id.log_path();
         let prev_len = self.log_content.len();
 
         self.log_content = if log_path.exists() {
@@ -1367,12 +1385,6 @@ impl App {
             }
         }
         // If not following and not first load, keep scroll position
-    }
-
-    fn log_path(daemon_id: &str) -> PathBuf {
-        PITCHFORK_LOGS_DIR
-            .join(daemon_id)
-            .join(format!("{daemon_id}.log"))
     }
 
     pub fn show_help(&mut self) {
@@ -1409,8 +1421,8 @@ impl App {
         (total, running, stopped, errored, available)
     }
 
-    pub fn is_disabled(&self, daemon_id: &str) -> bool {
-        self.disabled.contains(&daemon_id.to_string())
+    pub fn is_disabled(&self, daemon_id: &DaemonId) -> bool {
+        self.disabled.contains(daemon_id)
     }
 
     // Config editor methods
@@ -1446,8 +1458,14 @@ impl App {
     }
 
     /// Open editor for an existing daemon
-    pub fn open_editor_edit(&mut self, daemon_id: &str) {
-        let config = PitchforkToml::all_merged();
+    pub fn open_editor_edit(&mut self, daemon_id: &DaemonId) {
+        let config = match PitchforkToml::all_merged() {
+            Ok(config) => config,
+            Err(e) => {
+                self.set_message(format!("Failed to load config: {e}"));
+                return;
+            }
+        };
         if let Some(daemon_config) = config.daemons.get(daemon_id) {
             let config_path = daemon_config
                 .path
@@ -1488,35 +1506,40 @@ impl App {
         // Build daemon config
         let daemon_config = editor.to_daemon_config();
 
+        // Parse daemon ID from string
+        let daemon_id = DaemonId::parse(&editor.daemon_id)
+            .map_err(|e| miette::miette!("Invalid daemon ID: {}", e))?;
+
         // Read existing config (or create new)
         let mut config = PitchforkToml::read(&editor.config_path)?;
 
         // Check for duplicate daemon ID
         let is_duplicate = match &editor.mode {
-            EditMode::Create => config.daemons.contains_key(&editor.daemon_id),
+            EditMode::Create => config.daemons.contains_key(&daemon_id),
             EditMode::Edit { original_id } => {
                 // Only a duplicate if ID changed AND new ID already exists
-                original_id != &editor.daemon_id && config.daemons.contains_key(&editor.daemon_id)
+                let original_daemon_id = DaemonId::parse(original_id)
+                    .map_err(|e| miette::miette!("Invalid original daemon ID: {}", e))?;
+                original_daemon_id != daemon_id && config.daemons.contains_key(&daemon_id)
             }
         };
 
         if is_duplicate {
-            let daemon_id = editor.daemon_id.clone();
             self.set_message(format!("A daemon named '{daemon_id}' already exists"));
             return Ok(false);
         }
 
         // Handle rename case
-        if let EditMode::Edit { original_id } = &editor.mode
-            && original_id != &editor.daemon_id
-        {
-            config.daemons.shift_remove(original_id);
+        if let EditMode::Edit { original_id } = &editor.mode {
+            let original_daemon_id = DaemonId::parse(original_id)
+                .map_err(|e| miette::miette!("Invalid original daemon ID: {}", e))?;
+            if original_daemon_id != daemon_id {
+                config.daemons.shift_remove(&original_daemon_id);
+            }
         }
 
         // Insert/update daemon
-        config
-            .daemons
-            .insert(editor.daemon_id.clone(), daemon_config);
+        config.daemons.insert(daemon_id, daemon_config);
 
         // Write back
         config.write()?;
@@ -1536,7 +1559,16 @@ impl App {
     ) -> Result<bool> {
         let mut config = PitchforkToml::read(config_path)?;
 
-        if config.daemons.shift_remove(id).is_some() {
+        // For qualified IDs, parse directly; for bare names derive the namespace
+        // from the config file path so project-level daemons are found correctly.
+        let daemon_id = if id.contains('/') {
+            DaemonId::parse(id)?
+        } else {
+            let ns = namespace_from_path(config_path)?;
+            DaemonId::try_new(&ns, id)?
+        };
+
+        if config.daemons.shift_remove(&daemon_id).is_some() {
             config.write()?;
             Ok(true)
         } else {

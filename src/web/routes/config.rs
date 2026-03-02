@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::pitchfork_toml::PitchforkToml;
 use crate::web::bp;
+use crate::web::helpers::html_escape;
 
 fn base_html(title: &str, content: &str) -> String {
     let bp = bp();
@@ -229,14 +230,19 @@ pub struct ConfigForm {
 }
 
 pub async fn validate(Form(form): Form<ConfigForm>) -> Html<String> {
-    match toml::from_str::<PitchforkToml>(&form.content) {
+    let path = PathBuf::from(&form.path);
+    match PitchforkToml::parse_str(&form.content, &path) {
         Ok(config) => {
             let daemon_count = config.daemons.len();
-            let daemon_names: Vec<String> = config.daemons.keys().map(|s| html_escape(s)).collect();
+            let daemon_names: Vec<String> = config
+                .daemons
+                .keys()
+                .map(|id| html_escape(id.name()))
+                .collect();
             Html(format!(
                 r#"
                 <div class="validation-success">
-                    <strong>Valid TOML!</strong>
+                    <strong>Valid!</strong>
                     <p>Found {daemon_count} daemon(s): {}</p>
                 </div>
             "#,
@@ -246,11 +252,11 @@ pub async fn validate(Form(form): Form<ConfigForm>) -> Html<String> {
         Err(e) => Html(format!(
             r#"
                 <div class="validation-error">
-                    <strong>Invalid TOML</strong>
+                    <strong>Invalid config</strong>
                     <pre>{}</pre>
                 </div>
             "#,
-            html_escape(&e.to_string())
+            html_escape(&format!("{e:?}"))
         )),
     }
 }
@@ -266,16 +272,17 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
         }
     };
 
-    // Validate TOML first
-    if let Err(e) = toml::from_str::<PitchforkToml>(&form.content) {
+    // Validate config before saving using the real parser so we catch
+    // invalid daemon names, bad field types, missing required fields, etc.
+    if let Err(e) = PitchforkToml::parse_str(&form.content, &path) {
         return Html(format!(
             r#"
             <div class="validation-error">
-                <strong>Cannot save: Invalid TOML</strong>
+                <strong>Cannot save: Invalid config</strong>
                 <pre>{}</pre>
             </div>
         "#,
-            html_escape(&e.to_string())
+            html_escape(&format!("{e:?}"))
         ));
     }
 
@@ -311,12 +318,4 @@ pub async fn save(Form(form): Form<ConfigForm>) -> Html<String> {
             html_escape(&e.to_string())
         )),
     }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
