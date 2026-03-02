@@ -10,4 +10,4 @@ Remove a daemon from pitchfork.toml
 
 ### `<ID>`
 
-The ID of the daemon to remove
+The ID of the daemon to remove (e.g., "api" or "namespace/api")

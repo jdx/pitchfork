@@ -5,6 +5,7 @@
 
 use super::Supervisor;
 use crate::daemon::RunOptions;
+use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::{Result, env};
@@ -57,7 +58,7 @@ impl Supervisor {
     /// cancels pending autostop for daemon in /project)
     pub(crate) async fn cancel_pending_autostops_for_dir(&self, dir: &Path) {
         let mut pending = self.pending_autostops.lock().await;
-        let daemons_to_cancel: Vec<String> = {
+        let daemons_to_cancel: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -83,7 +84,7 @@ impl Supervisor {
     /// Process any pending autostops that have reached their scheduled time
     pub(crate) async fn process_pending_autostops(&self) -> Result<()> {
         let now = time::Instant::now();
-        let to_stop: Vec<String> = {
+        let to_stop: Vec<DaemonId> = {
             let pending = self.pending_autostops.lock().await;
             pending
                 .iter()
@@ -123,7 +124,7 @@ impl Supervisor {
     /// Start daemons configured with `boot_start = true`
     pub(crate) async fn start_boot_daemons(&self) -> Result<()> {
         info!("Scanning for boot_start daemons");
-        let pt = PitchforkToml::all_merged();
+        let pt = PitchforkToml::all_merged()?;
 
         let boot_daemons: Vec<_> = pt
             .daemons

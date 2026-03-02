@@ -221,8 +221,8 @@ ready_delay = 1
     let content = std::fs::read_to_string(&marker).unwrap();
     assert_eq!(
         content.trim(),
-        "id_env_test",
-        "PITCHFORK_DAEMON_ID should be the daemon id"
+        "project/id_env_test",
+        "PITCHFORK_DAEMON_ID should be the qualified daemon id (namespace/name)"
     );
 
     env.run_command(&["stop", "id_env_test"]);
@@ -308,7 +308,7 @@ on_fail = "sh -c 'echo $PITCHFORK_DAEMON_ID $PITCHFORK_EXIT_CODE > {}'"
     let content = std::fs::read_to_string(&marker).unwrap();
     assert_eq!(
         content.trim(),
-        "hook_env_test 7",
-        "Hook should receive PITCHFORK_DAEMON_ID and PITCHFORK_EXIT_CODE"
+        "project/hook_env_test 7",
+        "Hook should receive qualified PITCHFORK_DAEMON_ID and PITCHFORK_EXIT_CODE"
     );
 }

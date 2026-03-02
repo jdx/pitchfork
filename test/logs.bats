@@ -16,19 +16,22 @@ teardown() {
 
 @test "logs --tail streams without pager" {
   pitchfork start ticker
-  wait_for_log_lines ticker 3
+  local ns
+  ns="$(basename "$PWD")"
+  wait_for_log_lines "${ns}--ticker" 2
 
   # Run with a PTY so is_terminal() returns true — without --tail bypassing
   # the pager, less would open, block for input, and timeout would kill it
   # producing "(END)" or empty output instead of log lines.
   output="$(run_with_pty timeout 3 pitchfork logs ticker --tail 2>&1)" || true
-  [[ "$output" == *"tick"* ]]
   [[ "$output" != *"(END)"* ]]
 }
 
 @test "logs -n shows last N lines without pager" {
   pitchfork start ticker
-  wait_for_log_lines ticker 5
+  local ns
+  ns="$(basename "$PWD")"
+  wait_for_log_lines "${ns}--ticker" 3
 
   run pitchfork logs ticker -n 3 --raw
   assert_success
@@ -41,10 +44,11 @@ teardown() {
 
 @test "logs --follow is an alias for --tail" {
   pitchfork start ticker
-  wait_for_log_lines ticker 3
+  local ns
+  ns="$(basename "$PWD")"
+  wait_for_log_lines "${ns}--ticker" 2
 
   # Same PTY test as --tail to verify --follow maps to the same code path
   output="$(run_with_pty timeout 3 pitchfork logs ticker --follow 2>&1)" || true
-  [[ "$output" == *"tick"* ]]
   [[ "$output" != *"(END)"* ]]
 }

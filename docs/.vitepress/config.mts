@@ -81,6 +81,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "How Pitchfork Works", link: "/concepts/how-it-works" },
+          { text: "Namespaces", link: "/concepts/namespaces" },
           { text: "Architecture", link: "/concepts/architecture" },
         ],
       },

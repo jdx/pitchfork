@@ -33,11 +33,20 @@ These environment variables are automatically set for every daemon process and i
 
 ### `PITCHFORK_DAEMON_ID`
 
-The daemon's identifier (its name in the config).
+The daemon's fully-qualified identifier in `namespace/name` format (e.g. `my-project/api`).
 
 ```bash
 # In your daemon script
 echo "I am daemon: $PITCHFORK_DAEMON_ID"
+```
+
+### `PITCHFORK_DAEMON_NAMESPACE`
+
+The daemon's namespace component alone (e.g. `my-project`). Useful when you only need the
+namespace part without parsing `PITCHFORK_DAEMON_ID`.
+
+```bash
+echo "Running in namespace: $PITCHFORK_DAEMON_NAMESPACE"
 ```
 
 ### `PITCHFORK_RETRY_COUNT`

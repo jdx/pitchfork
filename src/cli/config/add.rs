@@ -1,12 +1,19 @@
 use crate::Result;
-use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
+use crate::daemon_id::DaemonId;
+use crate::env::{self, PITCHFORK_PORT_BUMP_ATTEMPTS};
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    PitchforkTomlHooks, Retry,
+    PitchforkTomlHooks, Retry, namespace_from_path,
 };
 use indexmap::IndexMap;
 use miette::bail;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+fn is_project_config_path(path: &Path) -> bool {
+    path.file_name()
+        .map(|name| name == "pitchfork.toml" || name == "pitchfork.local.toml")
+        .unwrap_or(false)
+}
 
 /// Add a new daemon to ./pitchfork.toml
 #[derive(Debug, clap::Args)]
@@ -38,8 +45,8 @@ Examples:
 "
 )]
 pub struct Add {
-    /// ID of the daemon to add
-    id: String,
+    /// ID of the daemon to add (e.g., "api" or "namespace/api")
+    pub id: String,
     /// Command to run (can also use positional args)
     #[clap(long)]
     run: Option<String>,
@@ -112,20 +119,23 @@ impl Add {
     pub async fn run(&self) -> Result<()> {
         // Find an existing project-level config or default to ./pitchfork.toml
         let paths = PitchforkToml::list_paths();
-        let project_paths: Vec<_> = paths
-            .iter()
-            .filter(|p| {
-                // Filter to only project-level configs (not system or user)
-                !p.starts_with("/etc") && !p.starts_with(&*crate::env::HOME_DIR)
-            })
-            .collect();
-        let path = project_paths
+        let project_paths: Vec<_> = paths.iter().filter(|p| is_project_config_path(p)).collect();
+        let config_path = project_paths
             .last()
             .map(|p| (*p).clone())
             .unwrap_or_else(|| PathBuf::from("pitchfork.toml"));
+        let config_path_for_write = if config_path.is_absolute() {
+            config_path.clone()
+        } else {
+            env::CWD.join(&config_path)
+        };
 
-        let mut pt = PitchforkToml::read(&path).unwrap_or_default();
-        pt.path = Some(path.clone());
+        let mut pt = if config_path.exists() {
+            PitchforkToml::read(&config_path)?
+        } else {
+            PitchforkToml::new(config_path_for_write.clone())
+        };
+        pt.path = Some(config_path_for_write.clone());
 
         // Build the run command
         let run_cmd = if let Some(ref run) = self.run {
@@ -201,8 +211,20 @@ impl Add {
         // Build boot_start
         let boot_start = if self.boot_start { Some(true) } else { None };
 
+        // Parse the daemon ID: if qualified, use it directly; otherwise use the
+        // namespace from the config file being edited (not global resolution)
+        // Canonicalize the path first to get correct namespace (not "unknown" for relative paths)
+        let canonical_path = config_path_for_write
+            .canonicalize()
+            .unwrap_or_else(|_| config_path_for_write.clone());
+        let daemon_id = if self.id.contains('/') {
+            DaemonId::parse(&self.id)?
+        } else {
+            let namespace = namespace_from_path(&canonical_path)?;
+            DaemonId::try_new(&namespace, &self.id)?
+        };
         pt.daemons.insert(
-            self.id.clone(),
+            daemon_id.clone(),
             PitchforkTomlDaemon {
                 run: run_cmd,
                 auto,
@@ -217,7 +239,19 @@ impl Add {
                 auto_bump_port: self.auto_bump_port,
                 port_bump_attempts: *PITCHFORK_PORT_BUMP_ATTEMPTS,
                 boot_start,
-                depends: self.depends.clone(),
+                depends: {
+                    let namespace = daemon_id.namespace().to_string();
+                    let mut deps = Vec::new();
+                    for dep in &self.depends {
+                        let dep_id = if dep.contains('/') {
+                            DaemonId::parse(dep)?
+                        } else {
+                            DaemonId::try_new(&namespace, dep)?
+                        };
+                        deps.push(dep_id);
+                    }
+                    deps
+                },
                 watch: self.watch.clone(),
                 dir: self.dir.clone(),
                 env,
@@ -226,7 +260,12 @@ impl Add {
             },
         );
         pt.write()?;
-        println!("added {} to {}", self.id, path.display());
+        let path_display = pt
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "pitchfork.toml".to_string());
+        println!("added {} to {}", daemon_id, path_display);
         Ok(())
     }
 
