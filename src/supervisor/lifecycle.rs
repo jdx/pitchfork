@@ -856,6 +856,14 @@ async fn check_ports_available(
         }
 
         if all_available {
+            // Check for overflow (port wrapped around to 0 due to wrapping_add)
+            if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
+                return Err(PortError::NoAvailablePort {
+                    start_port: expected_ports[0],
+                    attempts: bump_offset + 1,
+                }
+                .into());
+            }
             if bump_offset > 0 {
                 info!(
                     "ports {:?} bumped by {} to {:?}",
@@ -888,15 +896,6 @@ async fn check_ports_available(
                     .into());
                 }
             }
-        }
-
-        // Check for overflow (port wrapped around to 0 due to wrapping_add)
-        if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
-            return Err(PortError::NoAvailablePort {
-                start_port: expected_ports[0],
-                attempts: bump_offset + 1,
-            }
-            .into());
         }
     }
 
