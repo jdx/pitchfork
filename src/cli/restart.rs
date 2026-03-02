@@ -83,9 +83,17 @@ impl Restart {
 
         // Show startup logs for successful daemons (unless --quiet)
         if !self.quiet {
-            for (id, start_time, _resolved_ports) in &result.started {
+            for (id, start_time, resolved_ports) in &result.started {
                 if let Err(e) = print_startup_logs(id, *start_time) {
                     debug!("Failed to print startup logs for {id}: {e}");
+                }
+                if !resolved_ports.is_empty() {
+                    let port_str = resolved_ports
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("Daemon '{id}' restarted on port(s): {port_str}");
                 }
             }
         }
