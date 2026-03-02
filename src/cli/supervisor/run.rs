@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::cli::supervisor::kill_or_stop;
+use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
@@ -24,7 +25,7 @@ pub struct Run {
 impl Run {
     pub async fn run(&self) -> Result<()> {
         let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
-        if let Some(d) = pid_file.daemons.get("pitchfork")
+        if let Some(d) = pid_file.daemons.get(&DaemonId::pitchfork())
             && let Some(pid) = d.pid
             && !(kill_or_stop(pid, self.force).await?)
         {

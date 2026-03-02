@@ -55,7 +55,8 @@ All hooks receive these environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `PITCHFORK_DAEMON_ID` | The daemon's name |
+| `PITCHFORK_DAEMON_ID` | The daemon's fully-qualified ID (`namespace/name`) |
+| `PITCHFORK_DAEMON_NAMESPACE` | The daemon's namespace |
 | `PITCHFORK_RETRY_COUNT` | Current retry attempt (0 on first run) |
 | `PITCHFORK_EXIT_CODE` | Exit code of the failed process (`on_fail` only) |
 

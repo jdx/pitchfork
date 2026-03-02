@@ -31,9 +31,22 @@ Configuration files are merged in order, with later files overriding earlier one
 
 ### Logs
 
-`~/.local/state/pitchfork/logs/<daemon-name>/<daemon-name>.log`
+Each daemon has its own log directory and file. The log path is determined by the daemon's qualified ID (namespace + name):
 
-Each daemon has its own log directory and file.
+```
+~/.local/state/pitchfork/logs/<namespace>--<daemon-name>/<namespace>--<daemon-name>.log
+```
+
+The namespace is derived from top-level `namespace` in the config when present, otherwise from the project directory name (or `global` for global config files). For example:
+- Daemon `api` in project `myapp` → `logs/myapp--api/myapp--api.log`
+- Daemon `api` in project `yourapp` → `logs/yourapp--api/yourapp--api.log`
+- Daemon `postgres` in global config → `logs/global--postgres/global--postgres.log`
+
+The `--` separator is used to convert the `/` in qualified daemon IDs (e.g., `myapp/api`) to a filesystem-safe format.
+
+Because `--` is reserved for this encoding, project directory names containing `--` (or other invalid namespace characters) require a top-level `namespace` override in `pitchfork.toml`.
+
+See [Namespaces](/concepts/namespaces) for more details on how daemon IDs work across projects.
 
 ### IPC Socket
 

@@ -175,8 +175,8 @@
               {
                 "name": "ID",
                 "usage": "<ID>",
-                "help": "ID of the daemon to add",
-                "help_first_line": "ID of the daemon to add",
+                "help": "ID of the daemon to add (e.g., \"api\" or \"namespace/api\")",
+                "help_first_line": "ID of the daemon to add (e.g., \"api\" or \"namespace/api\")",
                 "required": true,
                 "double_dash": "Optional",
                 "hide": false
@@ -559,8 +559,8 @@
               {
                 "name": "ID",
                 "usage": "<ID>",
-                "help": "The ID of the daemon to remove",
-                "help_first_line": "The ID of the daemon to remove",
+                "help": "The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")",
+                "help_first_line": "The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")",
                 "required": true,
                 "double_dash": "Optional",
                 "hide": false

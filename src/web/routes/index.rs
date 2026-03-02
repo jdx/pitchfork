@@ -1,110 +1,24 @@
 use axum::response::Html;
 use std::collections::HashSet;
 
+use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use crate::web::bp;
+use crate::web::helpers::{css_safe_id, daemon_row, format_daemon_id_html, url_encode};
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-fn url_encode(s: &str) -> String {
-    urlencoding::encode(s).into_owned()
-}
-
-fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
-    let bp = bp();
-    let safe_id = html_escape(id);
-    let url_id = url_encode(id);
-    let status_class = match &d.status {
-        crate::daemon_status::DaemonStatus::Running => "running",
-        crate::daemon_status::DaemonStatus::Stopped => "stopped",
-        crate::daemon_status::DaemonStatus::Waiting => "waiting",
-        crate::daemon_status::DaemonStatus::Stopping => "stopping",
-        crate::daemon_status::DaemonStatus::Failed(_) => "failed",
-        crate::daemon_status::DaemonStatus::Errored(_) => "errored",
-    };
-
-    let pid_display = d
-        .pid
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "-".to_string());
-
-    // Get process stats (CPU, memory, uptime)
-    let stats = d.pid.and_then(|pid| PROCS.get_stats(pid));
-    let cpu_display = stats
-        .map(|s| s.cpu_display())
-        .unwrap_or_else(|| "-".to_string());
-    let mem_display = stats
-        .map(|s| s.memory_display())
-        .unwrap_or_else(|| "-".to_string());
-    let uptime_display = stats
-        .map(|s| s.uptime_display())
-        .unwrap_or_else(|| "-".to_string());
-
-    let error_msg = html_escape(&d.status.error_message().unwrap_or_default());
-    let disabled_badge = if is_disabled {
-        r#"<span class="badge disabled">disabled</span>"#
-    } else {
-        ""
-    };
-
-    let actions = if d.status.is_running() {
-        format!(
-            r##"
-            <button hx-post="{bp}/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
-            <button hx-post="{bp}/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
-        "##
-        )
-    } else {
-        format!(
-            r##"
-            <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
-        "##
-        )
-    };
-
-    let toggle_btn = if is_disabled {
-        format!(
-            r##"<button hx-post="{bp}/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
-        )
-    } else {
-        format!(
-            r##"<button hx-post="{bp}/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
-        )
-    };
-
-    format!(
-        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
-        <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
-        <td>{pid_display}</td>
-        <td><span class="status {status_class}">{}</span></td>
-        <td>{cpu_display}</td>
-        <td>{mem_display}</td>
-        <td>{uptime_display}</td>
-        <td class="error-msg">{error_msg}</td>
-        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
-    </tr>"#,
-        d.status
-    )
-}
-
-fn get_stats() -> (usize, usize, usize, usize) {
+fn get_stats() -> crate::Result<(usize, usize, usize, usize)> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    let pt = PitchforkToml::all_merged();
+    let pt = PitchforkToml::all_merged()?;
 
+    let pitchfork_id = DaemonId::pitchfork();
     let user_daemons: Vec<_> = state
         .daemons
         .iter()
-        .filter(|(id, _)| *id != "pitchfork")
+        .filter(|(id, _)| **id != pitchfork_id)
         .collect();
 
     let running = user_daemons
@@ -120,17 +34,25 @@ fn get_stats() -> (usize, usize, usize, usize) {
         .filter(|(_, d)| d.status.is_errored())
         .count();
 
-    let mut all_ids: HashSet<&String> = user_daemons.iter().map(|(id, _)| *id).collect();
+    let mut all_ids: HashSet<&DaemonId> = user_daemons.iter().map(|(id, _)| *id).collect();
     for id in pt.daemons.keys() {
         all_ids.insert(id);
     }
     let total = all_ids.len();
 
-    (total, running, stopped, errored)
+    Ok((total, running, stopped, errored))
 }
 
 pub async fn stats_partial() -> Html<String> {
-    let (total, running_count, stopped_count, errored_count) = get_stats();
+    let (total, running_count, stopped_count, errored_count) = match get_stats() {
+        Ok(stats) => stats,
+        Err(e) => {
+            return Html(format!(
+                r#"<div class="error">Failed to load configuration: {}</div>"#,
+                crate::web::helpers::html_escape(&e.to_string())
+            ));
+        }
+    };
 
     Html(format!(
         r#"<div class="stat-card">
@@ -160,13 +82,22 @@ pub async fn index() -> Html<String> {
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    let pt = PitchforkToml::all_merged();
+    let pt = match PitchforkToml::all_merged() {
+        Ok(pt) => pt,
+        Err(e) => {
+            return Html(format!(
+                r#"<h1>Error</h1><p class="error">Failed to load configuration: {}</p>"#,
+                crate::web::helpers::html_escape(&e.to_string())
+            ));
+        }
+    };
 
     // Exclude the "pitchfork" supervisor daemon from counts
+    let pitchfork_id = DaemonId::pitchfork();
     let user_daemons: Vec<_> = state
         .daemons
         .iter()
-        .filter(|(id, _)| *id != "pitchfork")
+        .filter(|(id, _)| **id != pitchfork_id)
         .collect();
 
     let running_count = user_daemons
@@ -183,7 +114,7 @@ pub async fn index() -> Html<String> {
         .count();
 
     // Total includes both state file daemons and configured-but-not-started daemons
-    let mut all_ids: HashSet<&String> = user_daemons.iter().map(|(id, _)| *id).collect();
+    let mut all_ids: HashSet<&DaemonId> = user_daemons.iter().map(|(id, _)| *id).collect();
     for id in pt.daemons.keys() {
         all_ids.insert(id);
     }
@@ -192,7 +123,7 @@ pub async fn index() -> Html<String> {
     // Build daemon table rows
     let mut rows = String::new();
     for (id, daemon) in &state.daemons {
-        if id == "pitchfork" {
+        if *id == pitchfork_id {
             continue;
         }
         let is_disabled = state.disabled.contains(id);
@@ -202,13 +133,15 @@ pub async fn index() -> Html<String> {
     // Add configured-but-not-started daemons
     for id in pt.daemons.keys() {
         if !state.daemons.contains_key(id) {
-            let safe_id = html_escape(id);
-            let url_id = url_encode(id);
+            let id_str = id.to_string();
+            let safe_id = css_safe_id(&id_str);
+            let url_id = url_encode(&id_str);
+            let display_html = format_daemon_id_html(id);
             rows.push_str(&format!(
                 r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
-                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{display_html}</a></td>
                 <td>-</td>
-                <td><span class="status stopped">stopped</span></td>
+                <td><span class="status available">available</span></td>
                 <td>-</td>
                 <td>-</td>
                 <td>-</td>

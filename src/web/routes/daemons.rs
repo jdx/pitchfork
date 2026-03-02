@@ -13,18 +13,9 @@ use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
 use crate::web::bp;
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-fn url_encode(s: &str) -> String {
-    urlencoding::encode(s).into_owned()
-}
+use crate::web::helpers::{
+    css_safe_id, daemon_row, format_daemon_id_html, html_escape, url_encode,
+};
 
 /// Get daemon command from the stored cmd field
 fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
@@ -91,83 +82,6 @@ fn base_html(title: &str, content: &str) -> String {
     )
 }
 
-fn daemon_row(id: &str, d: &crate::daemon::Daemon, is_disabled: bool) -> String {
-    let bp = bp();
-    let safe_id = html_escape(id);
-    let url_id = url_encode(id);
-    let status_class = match &d.status {
-        crate::daemon_status::DaemonStatus::Running => "running",
-        crate::daemon_status::DaemonStatus::Stopped => "stopped",
-        crate::daemon_status::DaemonStatus::Waiting => "waiting",
-        crate::daemon_status::DaemonStatus::Stopping => "stopping",
-        crate::daemon_status::DaemonStatus::Failed(_) => "failed",
-        crate::daemon_status::DaemonStatus::Errored(_) => "errored",
-    };
-
-    let pid_display = d
-        .pid
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "-".to_string());
-
-    // Get process stats (CPU, memory, uptime)
-    let stats = d.pid.and_then(|pid| PROCS.get_stats(pid));
-    let cpu_display = stats
-        .map(|s| s.cpu_display())
-        .unwrap_or_else(|| "-".to_string());
-    let mem_display = stats
-        .map(|s| s.memory_display())
-        .unwrap_or_else(|| "-".to_string());
-    let uptime_display = stats
-        .map(|s| s.uptime_display())
-        .unwrap_or_else(|| "-".to_string());
-
-    let error_msg = html_escape(&d.status.error_message().unwrap_or_default());
-    let disabled_badge = if is_disabled {
-        r#"<span class="badge disabled">disabled</span>"#
-    } else {
-        ""
-    };
-
-    let actions = if d.status.is_running() {
-        format!(
-            r##"
-            <button hx-post="{bp}/daemons/{url_id}/stop" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Stop daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="square" class="icon"></i> Stop</button>
-            <button hx-post="{bp}/daemons/{url_id}/restart" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Restart daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="refresh-cw" class="icon"></i> Restart</button>
-        "##
-        )
-    } else {
-        format!(
-            r##"
-            <button hx-post="{bp}/daemons/{url_id}/start" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm btn-primary"><i data-lucide="play" class="icon"></i> Start</button>
-        "##
-        )
-    };
-
-    let toggle_btn = if is_disabled {
-        format!(
-            r##"<button hx-post="{bp}/daemons/{url_id}/enable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" class="btn btn-sm"><i data-lucide="check" class="icon"></i> Enable</button>"##
-        )
-    } else {
-        format!(
-            r##"<button hx-post="{bp}/daemons/{url_id}/disable" hx-target="#daemon-{safe_id}" hx-swap="outerHTML" hx-confirm="Disable daemon '{safe_id}'?" class="btn btn-sm"><i data-lucide="x" class="icon"></i> Disable</button>"##
-        )
-    };
-
-    format!(
-        r#"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
-        <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a> {disabled_badge}</td>
-        <td>{pid_display}</td>
-        <td><span class="status {status_class}">{}</span></td>
-        <td>{cpu_display}</td>
-        <td>{mem_display}</td>
-        <td>{uptime_display}</td>
-        <td class="error-msg">{error_msg}</td>
-        <td class="actions" onclick="event.stopPropagation()">{actions} {toggle_btn} <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> Logs</a></td>
-    </tr>"#,
-        d.status
-    )
-}
-
 pub async fn list() -> Html<String> {
     let content = list_content().await;
     Html(base_html("Daemons", &content))
@@ -186,10 +100,12 @@ async fn list_content() -> String {
     for entry in entries {
         if entry.is_available {
             // Show available (config-only) daemons
-            let safe_id = html_escape(&entry.id);
-            let url_id = url_encode(&entry.id);
+            let id_str = entry.id.to_string();
+            let safe_id = css_safe_id(&id_str);
+            let url_id = url_encode(&id_str);
+            let display_html = format_daemon_id_html(&entry.id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
-                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{display_html}</a></td>
                 <td>-</td>
                 <td><span class="status available">available</span></td>
                 <td>-</td>
@@ -253,10 +169,12 @@ pub async fn list_partial() -> Html<String> {
     for entry in entries {
         if entry.is_available {
             // Show available (config-only) daemons
-            let safe_id = html_escape(&entry.id);
-            let url_id = url_encode(&entry.id);
+            let id_str = entry.id.to_string();
+            let safe_id = css_safe_id(&id_str);
+            let url_id = url_encode(&id_str);
+            let display_html = format_daemon_id_html(&entry.id);
             rows.push_str(&format!(r##"<tr id="daemon-{safe_id}" class="clickable-row" onclick="window.location.href='{bp}/daemons/{url_id}'">
-                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{safe_id}</a></td>
+                <td><a href="{bp}/daemons/{url_id}" class="daemon-name" onclick="event.stopPropagation()">{display_html}</a></td>
                 <td>-</td>
                 <td><span class="status available">available</span></td>
                 <td>-</td>
@@ -291,17 +209,36 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         return Html(base_html("Error", &content));
     }
 
+    // Resolve daemon ID - supports both qualified (namespace/name) and short names
+    let daemon_id = match PitchforkToml::resolve_id(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            let content = r#"<h1>Error</h1><p class="error">Invalid daemon ID format.</p><a href="/" class="btn">Back</a>"#;
+            return Html(base_html("Error", content));
+        }
+    };
+
     // Refresh process info for accurate stats
     PROCS.refresh_processes();
 
     let safe_id = html_escape(&id);
+    let display_html = format_daemon_id_html(&daemon_id);
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    let pt = PitchforkToml::all_merged();
+    let pt = match PitchforkToml::all_merged() {
+        Ok(pt) => pt,
+        Err(e) => {
+            let content = format!(
+                r#"<h1>Error</h1><p class="error">Failed to load configuration: {}</p><a href="{bp}/" class="btn">Back</a>"#,
+                html_escape(&e.to_string())
+            );
+            return Html(base_html("Error", &content));
+        }
+    };
 
-    let daemon_info = state.daemons.get(&id);
-    let config_info = pt.daemons.get(&id);
-    let is_disabled = state.disabled.contains(&id);
+    let daemon_info = state.daemons.get(&daemon_id);
+    let config_info = pt.daemons.get(&daemon_id);
+    let is_disabled = state.disabled.contains(&daemon_id);
 
     let url_id = url_encode(&id);
     let content = if let Some(d) = daemon_info {
@@ -434,7 +371,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             r#"
             <div class="page-header">
                 <div>
-                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{safe_id}</span></h1>
+                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{display_html}</span></h1>
                 </div>
                 <div class="header-actions">
                     <a href="{bp}/logs/{url_id}" class="btn btn-sm"><i data-lucide="file-text" class="icon"></i> View Logs</a>
@@ -475,7 +412,11 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
     } else if config_info.is_some() {
         format!(
             r##"
-            <h1>Daemon: {safe_id}</h1>
+            <div class="page-header">
+                <div>
+                    <h1><span class="daemon-label">DAEMON:</span> <span class="daemon-name">{display_html}</span></h1>
+                </div>
+            </div>
             <p>This daemon is configured but has not been started yet.</p>
             <div class="actions">
                 <button hx-post="{bp}/daemons/{url_id}/start?from=detail" hx-target="#start-result" hx-swap="innerHTML" class="btn btn-primary">Start</button>
@@ -510,14 +451,38 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let pt = PitchforkToml::all_merged();
+    // Resolve daemon ID - supports both qualified (namespace/name) and short names
+    let daemon_id = match PitchforkToml::resolve_id(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let display_id = html_escape(&id);
+    let pt = match PitchforkToml::all_merged() {
+        Ok(pt) => pt,
+        Err(e) => {
+            let message = format!(
+                r#"Failed to load configuration: {}"#,
+                html_escape(&e.to_string())
+            );
+            return if query.from.as_deref() == Some("detail") {
+                Html(format!(r#"<div class="error">{message}</div>"#))
+            } else {
+                Html(format!(
+                    r#"<tr id="daemon-{safe_id}"><td colspan="8" class="error">{message}</td></tr>"#
+                ))
+            };
+        }
+    };
     let from_detail = query.from.as_deref() == Some("detail");
 
-    let start_error = if let Some(daemon_config) = pt.daemons.get(&id) {
+    let start_error = if let Some(daemon_config) = pt.daemons.get(&daemon_id) {
         // Use shared helper to build RunOptions from config
         let opts = StartOptions::default();
-        let mut run_opts = match build_run_options(&id, daemon_config, &opts) {
+        let mut run_opts = match build_run_options(&daemon_id, daemon_config, &opts) {
             Ok(opts) => opts,
             Err(e) => {
                 return if from_detail {
@@ -554,7 +519,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
     if from_detail {
         if let Some(err) = start_error {
             Html(format!(r#"<div class="error">{}</div>"#, html_escape(&err)))
-        } else if let Some(daemon) = state.daemons.get(&id) {
+        } else if let Some(daemon) = state.daemons.get(&daemon_id) {
             let status = &daemon.status;
             Html(format!(
                 r#"<div class="success">Started! Status: {status}</div><script>setTimeout(function(){{ window.location.href='{bp}/'; }}, 1000);</script>"#
@@ -566,9 +531,9 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
         }
     } else {
         // Return table row for list page
-        if let Some(daemon) = state.daemons.get(&id) {
-            let is_disabled = state.disabled.contains(&id);
-            Html(daemon_row(&id, daemon, is_disabled))
+        if let Some(daemon) = state.daemons.get(&daemon_id) {
+            let is_disabled = state.disabled.contains(&daemon_id);
+            Html(daemon_row(&daemon_id, daemon, is_disabled))
         } else if let Some(err) = start_error {
             Html(format!(
                 r#"<tr id="daemon-{safe_id}"><td colspan="8" class="error">{}</td></tr>"#,
@@ -576,7 +541,7 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
             ))
         } else {
             Html(format!(
-                r#"<tr id="daemon-{safe_id}"><td colspan="8">Starting {safe_id}...</td></tr>"#
+                r#"<tr id="daemon-{safe_id}"><td colspan="8">Starting {display_id}...</td></tr>"#
             ))
         }
     }
@@ -588,16 +553,24 @@ pub async fn stop(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let _ = SUPERVISOR.stop(&id).await;
+    // Resolve daemon ID - supports both qualified (namespace/name) and short names
+    let daemon_id = match PitchforkToml::resolve_id(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let _ = SUPERVISOR.stop(&daemon_id).await;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
 
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
+    if let Some(daemon) = state.daemons.get(&daemon_id) {
+        let is_disabled = state.disabled.contains(&daemon_id);
+        Html(daemon_row(&daemon_id, daemon, is_disabled))
     } else {
         Html(format!(
             r#"<tr id="daemon-{safe_id}"><td colspan="8">Stopped</td></tr>"#
@@ -611,7 +584,15 @@ pub async fn restart(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let _ = SUPERVISOR.stop(&id).await;
+    // Resolve daemon ID - supports both qualified (namespace/name) and short names
+    let daemon_id = match PitchforkToml::resolve_id(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let _ = SUPERVISOR.stop(&daemon_id).await;
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     start(Path(id), Query(StartQuery::default())).await
 }
@@ -622,14 +603,22 @@ pub async fn enable(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let _ = SUPERVISOR.enable(id.clone()).await;
+    // Resolve daemon ID - supports both qualified (namespace/name) and short names
+    let daemon_id = match PitchforkToml::resolve_id(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let _ = SUPERVISOR.enable(&daemon_id).await;
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
+    if let Some(daemon) = state.daemons.get(&daemon_id) {
+        let is_disabled = state.disabled.contains(&daemon_id);
+        Html(daemon_row(&daemon_id, daemon, is_disabled))
     } else {
         Html(format!(
             r#"<tr id="daemon-{safe_id}"><td colspan="8">Enabled</td></tr>"#
@@ -643,14 +632,22 @@ pub async fn disable(Path(id): Path<String>) -> Html<String> {
         return Html(r#"<div class="error">Invalid daemon ID</div>"#.to_string());
     }
 
-    let safe_id = html_escape(&id);
-    let _ = SUPERVISOR.disable(id.clone()).await;
+    // Resolve daemon ID - supports both qualified (namespace/name) and short names
+    let daemon_id = match PitchforkToml::resolve_id(&id) {
+        Ok(id) => id,
+        Err(_) => {
+            return Html(r#"<div class="error">Invalid daemon ID format</div>"#.to_string());
+        }
+    };
+
+    let safe_id = css_safe_id(&id);
+    let _ = SUPERVISOR.disable(&daemon_id).await;
 
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
-    if let Some(daemon) = state.daemons.get(&id) {
-        let is_disabled = state.disabled.contains(&id);
-        Html(daemon_row(&id, daemon, is_disabled))
+    if let Some(daemon) = state.daemons.get(&daemon_id) {
+        let is_disabled = state.disabled.contains(&daemon_id);
+        Html(daemon_row(&daemon_id, daemon, is_disabled))
     } else {
         Html(format!(
             r#"<tr id="daemon-{safe_id}"><td colspan="8">Disabled</td></tr>"#

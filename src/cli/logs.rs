@@ -1,3 +1,6 @@
+use crate::daemon_id::DaemonId;
+use crate::pitchfork_toml::PitchforkToml;
+use crate::state_file::StateFile;
 use crate::ui::style::edim;
 use crate::watch_files::WatchFiles;
 use crate::{Result, env};
@@ -6,7 +9,7 @@ use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::RecursiveMode;
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -178,7 +181,7 @@ impl Iterator for StreamingLogParser {
             return None;
         }
 
-        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+) (.*)$");
+        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
 
         loop {
             let mut line = String::new();
@@ -308,16 +311,21 @@ pub struct Logs {
 
 impl Logs {
     pub async fn run(&self) -> Result<()> {
+        // Migrate legacy log directories (old format: "api" → new format: "legacy--api").
+        // This is idempotent and silent so it is safe to run on every invocation.
+        migrate_legacy_log_dirs();
+
+        // Resolve user-provided IDs to qualified IDs
+        let resolved_ids: Vec<DaemonId> = if self.id.is_empty() {
+            // When no IDs provided, use all daemon IDs
+            get_all_daemon_ids()?
+        } else {
+            PitchforkToml::resolve_ids(&self.id)?
+        };
+
         if self.clear {
-            let ids = if self.id.is_empty() {
-                // Clear all logs when no daemon specified
-                get_all_daemon_ids()?
-            } else {
-                self.id.clone()
-            };
-            for id in &ids {
-                let log_dir = env::PITCHFORK_LOGS_DIR.join(id);
-                let path = log_dir.join(format!("{id}.log"));
+            for id in &resolved_ids {
+                let path = id.log_path();
                 if path.exists() {
                     xx::file::create(&path)?;
                 }
@@ -336,9 +344,9 @@ impl Logs {
             None
         };
 
-        self.print_existing_logs(from, to)?;
+        self.print_existing_logs(&resolved_ids, from, to)?;
         if self.tail {
-            tail_logs(&self.id).await?;
+            tail_logs(&resolved_ids).await?;
         }
 
         Ok(())
@@ -346,12 +354,13 @@ impl Logs {
 
     fn print_existing_logs(
         &self,
+        resolved_ids: &[DaemonId],
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
     ) -> Result<()> {
-        let log_files = get_log_file_infos(&self.id)?;
+        let log_files = get_log_file_infos(resolved_ids)?;
         trace!("log files for: {}", log_files.keys().join(", "));
-        let single_daemon = self.id.len() == 1;
+        let single_daemon = resolved_ids.len() == 1;
         let has_time_filter = from.is_some() || to.is_some();
 
         if has_time_filter {
@@ -377,7 +386,7 @@ impl Logs {
 
     fn collect_log_lines_forward(
         &self,
-        log_files: &BTreeMap<String, LogFile>,
+        log_files: &BTreeMap<DaemonId, LogFile>,
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
     ) -> Result<Vec<(String, String, String)>> {
@@ -385,7 +394,7 @@ impl Logs {
             .iter()
             .flat_map(
                 |(name, lf)| match read_lines_in_time_range(&lf.path, from, to) {
-                    Ok(lines) => merge_log_lines(name, lines, false),
+                    Ok(lines) => merge_log_lines(&name.qualified(), lines, false),
                     Err(e) => {
                         error!("{}: {}", lf.path.display(), e);
                         vec![]
@@ -400,12 +409,12 @@ impl Logs {
 
     fn collect_log_lines_reverse(
         &self,
-        log_files: &BTreeMap<String, LogFile>,
+        log_files: &BTreeMap<DaemonId, LogFile>,
         limit: Option<usize>,
     ) -> Result<Vec<(String, String, String)>> {
         let log_lines: Vec<(String, String, String)> = log_files
             .iter()
-            .flat_map(|(name, lf)| {
+            .flat_map(|(daemon_id, lf)| {
                 let rev = match xx::file::open(&lf.path) {
                     Ok(f) => rev_lines::RevLines::new(f),
                     Err(e) => {
@@ -418,7 +427,7 @@ impl Logs {
                     Some(n) => lines.take(n).collect_vec(),
                     None => lines.collect_vec(),
                 };
-                merge_log_lines(name, lines, true)
+                merge_log_lines(&daemon_id.qualified(), lines, true)
             })
             .sorted_by_cached_key(|l| l.0.to_string())
             .collect_vec();
@@ -451,8 +460,12 @@ impl Logs {
 
         // Raw mode: output without formatting and without pager
         if raw {
-            for (date, _, msg) in log_lines {
-                println!("{} {}", date, msg);
+            for (date, id, msg) in log_lines {
+                if single_daemon {
+                    println!("{} {}", date, msg);
+                } else {
+                    println!("{} {} {}", date, id, msg);
+                }
             }
             return Ok(());
         }
@@ -513,7 +526,7 @@ impl Logs {
 
     fn stream_logs_to_pager(
         &self,
-        log_files: &BTreeMap<String, LogFile>,
+        log_files: &BTreeMap<DaemonId, LogFile>,
         single_daemon: bool,
         raw: bool,
     ) -> Result<()> {
@@ -529,7 +542,7 @@ impl Logs {
                     // Collect file info for the streaming thread
                     let log_files_clone: Vec<_> = log_files
                         .iter()
-                        .map(|(name, lf)| (name.clone(), lf.path.clone()))
+                        .map(|(daemon_id, lf)| (daemon_id.qualified(), lf.path.clone()))
                         .collect();
                     let single_daemon_clone = single_daemon;
 
@@ -613,14 +626,14 @@ impl Logs {
 
     fn stream_logs_direct(
         &self,
-        log_files: &BTreeMap<String, LogFile>,
+        log_files: &BTreeMap<DaemonId, LogFile>,
         single_daemon: bool,
         raw: bool,
     ) -> Result<()> {
         // Fast path for single daemon: directly output file content without parsing
         // This avoids expensive regex parsing for each line in large log files
         if log_files.len() == 1 {
-            let (name, lf) = log_files.iter().next().unwrap();
+            let (daemon_id, lf) = log_files.iter().next().unwrap();
             let file = match File::open(&lf.path) {
                 Ok(f) => f,
                 Err(e) => {
@@ -649,7 +662,12 @@ impl Logs {
                 for (timestamp, message) in parser {
                     let output = format!(
                         "{}\n",
-                        format_log_line(&timestamp, name, &message, single_daemon)
+                        format_log_line(
+                            &timestamp,
+                            &daemon_id.qualified(),
+                            &message,
+                            single_daemon
+                        )
                     );
                     if io::stdout().write_all(output.as_bytes()).is_err() {
                         return Ok(());
@@ -662,7 +680,7 @@ impl Logs {
         // Multiple daemons: use streaming merger for sorted output
         let mut merger: StreamingMerger<StreamingLogParser> = StreamingMerger::new();
 
-        for (name, lf) in log_files {
+        for (daemon_id, lf) in log_files {
             let file = match File::open(&lf.path) {
                 Ok(f) => f,
                 Err(e) => {
@@ -671,7 +689,7 @@ impl Logs {
                 }
             };
             let parser = StreamingLogParser::new(file);
-            merger.add_source(name.clone(), parser);
+            merger.add_source(daemon_id.qualified(), parser);
         }
 
         // Initialize the heap with first entry from each source
@@ -680,7 +698,11 @@ impl Logs {
         // Stream merged entries to stdout
         for (timestamp, daemon, message) in merger {
             let output = if raw {
-                format!("{} {}\n", timestamp, message)
+                if single_daemon {
+                    format!("{} {}\n", timestamp, message)
+                } else {
+                    format!("{} {} {}\n", timestamp, daemon, message)
+                }
             } else {
                 format!(
                     "{}\n",
@@ -876,7 +898,7 @@ fn merge_log_lines(id: &str, lines: Vec<String>, reverse: bool) -> Vec<(String, 
         lines
     };
 
-    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\w+) (.*)$");
+    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
     lines
         .into_iter()
         .fold(vec![], |mut acc, line| match re.captures(&line) {
@@ -898,49 +920,161 @@ fn merge_log_lines(id: &str, lines: Vec<String>, reverse: bool) -> Vec<(String, 
         })
 }
 
-fn get_all_daemon_ids() -> Result<Vec<String>> {
-    Ok(xx::file::ls(&*env::PITCHFORK_LOGS_DIR)?
+/// Rename legacy log directories that predate namespace-qualified daemon IDs.
+///
+/// Old layout: `PITCHFORK_LOGS_DIR/<name>/<name>.log`
+/// New layout: `PITCHFORK_LOGS_DIR/legacy--<name>/legacy--<name>.log`
+///
+/// Only directories that clearly match the old layout are migrated:
+/// - directory name does not contain `"--"`
+/// - directory contains `<name>.log`
+/// - `<name>` is a valid daemon short name under current DaemonId rules
+fn migrate_legacy_log_dirs() {
+    let known_safe_paths = known_daemon_safe_paths();
+    let dirs = match xx::file::ls(&*env::PITCHFORK_LOGS_DIR) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    for dir in dirs {
+        if dir.starts_with(".") || !dir.is_dir() {
+            continue;
+        }
+        let name = match dir.file_name().map(|f| f.to_string_lossy().to_string()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // New-format directories usually contain "--". For safety, only treat
+        // them as new-format if they match a known daemon ID safe-path.
+        if name.contains("--") {
+            // If it parses as a valid safe-path, treat it as already migrated
+            // and keep idempotent behavior silent.
+            if DaemonId::from_safe_path(&name).is_ok() {
+                continue;
+            }
+            // Keep noisy warnings only for invalid/ambiguous names that cannot
+            // be interpreted as new-format IDs.
+            if known_safe_paths.contains(&name) {
+                continue;
+            }
+            warn!(
+                "Skipping invalid legacy log directory '{}': contains '--' but is not a valid daemon safe-path",
+                name
+            );
+            continue;
+        }
+
+        // Migrate only explicit old-layout directories to avoid renaming
+        // unrelated folders under logs/.
+        let old_log = dir.join(format!("{name}.log"));
+        if !old_log.exists() {
+            continue;
+        }
+        if DaemonId::try_new("legacy", &name).is_err() {
+            warn!(
+                "Skipping invalid legacy log directory '{}': not a valid daemon ID",
+                name
+            );
+            continue;
+        }
+
+        let new_name = format!("legacy--{name}");
+        let new_dir = env::PITCHFORK_LOGS_DIR.join(&new_name);
+        // Skip if a target directory already exists to avoid clobbering data.
+        if new_dir.exists() {
+            continue;
+        }
+        if std::fs::rename(&dir, &new_dir).is_err() {
+            continue;
+        }
+        // Also rename the log file inside the directory.
+        let old_log = new_dir.join(format!("{name}.log"));
+        let new_log = new_dir.join(format!("{new_name}.log"));
+        if old_log.exists() {
+            let _ = std::fs::rename(&old_log, &new_log);
+        }
+        debug!("Migrated legacy log dir '{}' → '{}'", name, new_name);
+    }
+}
+
+fn known_daemon_safe_paths() -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+
+    match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+        Ok(state) => {
+            for id in state.daemons.keys() {
+                out.insert(id.safe_path());
+            }
+        }
+        Err(e) => {
+            warn!("Failed to read state while checking known daemon IDs: {e}");
+        }
+    }
+
+    match PitchforkToml::all_merged() {
+        Ok(config) => {
+            for id in config.daemons.keys() {
+                out.insert(id.safe_path());
+            }
+        }
+        Err(e) => {
+            warn!("Failed to read config while checking known daemon IDs: {e}");
+        }
+    }
+
+    out
+}
+
+fn get_all_daemon_ids() -> Result<Vec<DaemonId>> {
+    let mut ids = BTreeSet::new();
+
+    match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+        Ok(state) => ids.extend(state.daemons.keys().cloned()),
+        Err(e) => warn!("Failed to read state for log daemon discovery: {e}"),
+    }
+
+    match PitchforkToml::all_merged() {
+        Ok(config) => ids.extend(config.daemons.keys().cloned()),
+        Err(e) => warn!("Failed to read config for log daemon discovery: {e}"),
+    }
+
+    Ok(ids
         .into_iter()
-        .filter(|d| !d.starts_with("."))
-        .filter(|d| d.is_dir())
-        .filter_map(|d| d.file_name().map(|f| f.to_string_lossy().to_string()))
+        .filter(|id| id.log_path().exists())
         .collect())
 }
 
-fn get_log_file_infos(names: &[String]) -> Result<BTreeMap<String, LogFile>> {
-    let names = names.iter().collect::<HashSet<_>>();
-    xx::file::ls(&*env::PITCHFORK_LOGS_DIR)?
-        .into_iter()
-        .filter(|d| !d.starts_with("."))
-        .filter(|d| d.is_dir())
-        .filter_map(|d| d.file_name().map(|f| f.to_string_lossy().to_string()))
-        .filter(|n| names.is_empty() || names.contains(n))
-        .map(|n| {
-            let path = env::PITCHFORK_LOGS_DIR
-                .join(&n)
-                .join(format!("{n}.log"))
-                .canonicalize()
-                .into_diagnostic()?;
-            let mut file = xx::file::open(&path)?;
-            // Seek to end and get position atomically to avoid race condition
-            // where content is written between metadata check and file open
-            file.seek(SeekFrom::End(0)).into_diagnostic()?;
-            let cur = file.stream_position().into_diagnostic()?;
-            Ok((
-                n.clone(),
-                LogFile {
-                    _name: n,
-                    file,
-                    cur,
-                    path,
-                },
-            ))
-        })
-        .filter_ok(|(_, f)| f.path.exists())
-        .collect::<Result<BTreeMap<_, _>>>()
+fn get_log_file_infos(names: &[DaemonId]) -> Result<BTreeMap<DaemonId, LogFile>> {
+    let mut out = BTreeMap::new();
+
+    for daemon_id in names {
+        let path = daemon_id.log_path();
+
+        // Directory may exist before the first log line is written.
+        if !path.exists() {
+            continue;
+        }
+
+        let mut file = xx::file::open(&path)?;
+        // Seek to end and get position atomically to avoid race condition
+        // where content is written between metadata check and file open
+        file.seek(SeekFrom::End(0)).into_diagnostic()?;
+        let cur = file.stream_position().into_diagnostic()?;
+
+        out.insert(
+            daemon_id.clone(),
+            LogFile {
+                _name: daemon_id.clone(),
+                file,
+                cur,
+                path,
+            },
+        );
+    }
+
+    Ok(out)
 }
 
-pub async fn tail_logs(names: &[String]) -> Result<()> {
+pub async fn tail_logs(names: &[DaemonId]) -> Result<()> {
     let mut log_files = get_log_file_infos(names)?;
     let mut wf = WatchFiles::new(Duration::from_millis(10))?;
 
@@ -948,10 +1082,10 @@ pub async fn tail_logs(names: &[String]) -> Result<()> {
         wf.watch(&lf.path, RecursiveMode::NonRecursive)?;
     }
 
-    let files_to_name = log_files
+    let files_to_name: HashMap<PathBuf, DaemonId> = log_files
         .iter()
         .map(|(n, f)| (f.path.clone(), n.clone()))
-        .collect::<HashMap<_, _>>();
+        .collect();
 
     while let Some(paths) = wf.rx.recv().await {
         let mut out = vec![];
@@ -970,7 +1104,7 @@ pub async fn tail_logs(names: &[String]) -> Result<()> {
             let reader = BufReader::new(&info.file);
             let lines = reader.lines().map_while(Result::ok).collect_vec();
             info.cur = info.file.stream_position().into_diagnostic()?;
-            out.extend(merge_log_lines(name, lines, false));
+            out.extend(merge_log_lines(&name.qualified(), lines, false));
         }
         let out = out
             .into_iter()
@@ -984,7 +1118,7 @@ pub async fn tail_logs(names: &[String]) -> Result<()> {
 }
 
 struct LogFile {
-    _name: String,
+    _name: DaemonId,
     path: PathBuf,
     file: fs::File,
     cur: u64,
@@ -1074,11 +1208,11 @@ fn parse_time_only(s: &str) -> Result<NaiveTime> {
 }
 
 pub fn print_logs_for_time_range(
-    daemon_id: &str,
+    daemon_id: &DaemonId,
     from: DateTime<Local>,
     to: Option<DateTime<Local>>,
 ) -> Result<()> {
-    let daemon_ids = vec![daemon_id.to_string()];
+    let daemon_ids = vec![daemon_id.clone()];
     let log_files = get_log_file_infos(&daemon_ids)?;
 
     let from = from
@@ -1092,8 +1226,8 @@ pub fn print_logs_for_time_range(
     let log_lines = log_files
         .iter()
         .flat_map(
-            |(name, lf)| match read_lines_in_time_range(&lf.path, Some(from), to) {
-                Ok(lines) => merge_log_lines(name, lines, false),
+            |(daemon_id, lf)| match read_lines_in_time_range(&lf.path, Some(from), to) {
+                Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
                 Err(e) => {
                     error!("{}: {}", lf.path.display(), e);
                     vec![]
@@ -1116,8 +1250,8 @@ pub fn print_logs_for_time_range(
     Ok(())
 }
 
-pub fn print_startup_logs(daemon_id: &str, from: DateTime<Local>) -> Result<()> {
-    let daemon_ids = vec![daemon_id.to_string()];
+pub fn print_startup_logs(daemon_id: &DaemonId, from: DateTime<Local>) -> Result<()> {
+    let daemon_ids = vec![daemon_id.clone()];
     let log_files = get_log_file_infos(&daemon_ids)?;
 
     let from = from
@@ -1127,8 +1261,8 @@ pub fn print_startup_logs(daemon_id: &str, from: DateTime<Local>) -> Result<()> 
     let log_lines = log_files
         .iter()
         .flat_map(
-            |(name, lf)| match read_lines_in_time_range(&lf.path, Some(from), None) {
-                Ok(lines) => merge_log_lines(name, lines, false),
+            |(daemon_id, lf)| match read_lines_in_time_range(&lf.path, Some(from), None) {
+                Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
                 Err(e) => {
                     error!("{}: {}", lf.path.display(), e);
                     vec![]

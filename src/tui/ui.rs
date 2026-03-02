@@ -1,3 +1,4 @@
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
 use crate::tui::app::{
@@ -217,10 +218,24 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::White)
         };
 
-        let name = if disabled {
-            format!("{} (disabled)", daemon.id)
+        // Create styled name with dim namespace
+        let name_line: Line = if disabled {
+            // For disabled daemons, show full name with suffix
+            let ns_style = name_style.add_modifier(Modifier::DIM);
+            Line::from(vec![
+                Span::styled(daemon.id.namespace(), ns_style),
+                Span::styled("/", ns_style),
+                Span::styled(daemon.id.name(), name_style),
+                Span::styled(" (disabled)", name_style),
+            ])
         } else {
-            daemon.id.clone()
+            // Normal case: dim namespace, normal name
+            let ns_style = name_style.add_modifier(Modifier::DIM);
+            Line::from(vec![
+                Span::styled(daemon.id.namespace(), ns_style),
+                Span::styled("/", ns_style),
+                Span::styled(daemon.id.name(), name_style),
+            ])
         };
 
         let pid = daemon
@@ -273,7 +288,7 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             cells.push(Cell::from(checkbox).style(checkbox_style));
         }
         cells.extend(vec![
-            Cell::from(name).style(name_style),
+            Cell::from(name_line),
             Cell::from(pid),
             Cell::from(status_text).style(Style::default().fg(status_color)),
             cpu_cell,
@@ -461,7 +476,12 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
 
 /// Draw the daemon details view (charts + logs)
 fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
-    let daemon_id = app.log_daemon_id.as_deref().unwrap_or("unknown");
+    let daemon_id = app
+        .log_daemon_id
+        .as_ref()
+        .map(|d: &DaemonId| d.qualified())
+        .unwrap_or_else(|| "unknown".to_string());
+    let daemon_id = daemon_id.as_str();
 
     let search_height = if app.log_search_active || !app.log_search_query.is_empty() {
         3
@@ -526,7 +546,7 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
 
 /// Draw stats panel on the left side of details view
 fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
-    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+    let daemon = app.daemons.iter().find(|d| d.id.qualified() == daemon_id);
     let stats = daemon
         .and_then(|d| d.pid)
         .and_then(|pid| app.get_stats(pid));
@@ -586,7 +606,9 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     }
 
     // Disabled indicator
-    if app.is_disabled(daemon_id) {
+    if let Ok(daemon_id_parsed) = DaemonId::parse(daemon_id)
+        && app.is_disabled(&daemon_id_parsed)
+    {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "DISABLED",
@@ -606,7 +628,7 @@ fn draw_stats_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
 
 /// Draw compact daemon header (for expanded logs mode)
 fn draw_daemon_header_compact(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
-    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
+    let daemon = app.daemons.iter().find(|d| d.id.qualified() == daemon_id);
 
     let mut spans = vec![Span::styled(daemon_id, Style::default().fg(ORANGE).bold())];
 
@@ -657,7 +679,11 @@ fn draw_charts(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
         ])
         .split(area);
 
-    let history = app.get_stats_history(daemon_id);
+    let history = if let Ok(daemon_id_parsed) = DaemonId::parse(daemon_id) {
+        app.get_stats_history(&daemon_id_parsed)
+    } else {
+        None
+    };
 
     draw_cpu_chart(f, chunks[0], history);
     draw_memory_chart(f, chunks[1], history);
@@ -1263,12 +1289,26 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
     // Clear the background
     f.render_widget(Clear, area);
 
-    let daemon_id = app.details_daemon_id.as_deref().unwrap_or("unknown");
+    let daemon_id = app
+        .details_daemon_id
+        .as_ref()
+        .map(|d: &DaemonId| d.qualified())
+        .unwrap_or_else(|| "unknown".to_string());
+    let daemon_id = daemon_id.as_str();
 
     // Get daemon info
-    let daemon = app.daemons.iter().find(|d| d.id == daemon_id);
-    let config = PitchforkToml::all_merged();
-    let daemon_config = config.daemons.get(daemon_id);
+    let daemon = app.daemons.iter().find(|d| d.id.qualified() == daemon_id);
+    let daemon_id_parsed = DaemonId::parse(daemon_id).ok();
+    let (daemon_config, config_error) = match PitchforkToml::all_merged() {
+        Ok(config) => (
+            daemon_id_parsed
+                .as_ref()
+                .and_then(|id| config.daemons.get(id))
+                .cloned(),
+            None,
+        ),
+        Err(e) => (None, Some(e.to_string())),
+    };
 
     let mut lines = vec![
         Line::from(vec![Span::styled(
@@ -1277,6 +1317,14 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         )]),
         Line::from(""),
     ];
+
+    if let Some(err) = config_error {
+        lines.push(Line::from(vec![
+            Span::styled("Config error: ", Style::default().fg(RED).bold()),
+            Span::raw(err),
+        ]));
+        lines.push(Line::from(""));
+    }
 
     // Status info
     if let Some(d) = daemon {
@@ -1339,7 +1387,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         if let Some(cron) = &cfg.cron {
             lines.push(Line::from(vec![
                 Span::styled("Cron: ", Style::default().fg(GRAY)),
-                Span::styled(&cron.schedule, Style::default().fg(Color::White)),
+                Span::styled(cron.schedule.clone(), Style::default().fg(Color::White)),
                 Span::raw(" (retrigger: "),
                 Span::styled(
                     format!("{:?}", cron.retrigger),
@@ -1397,7 +1445,9 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
     }
 
     // Disabled status
-    if app.is_disabled(daemon_id) {
+    if let Some(ref id) = daemon_id_parsed
+        && app.is_disabled(id)
+    {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![Span::styled(
             "This daemon is DISABLED",

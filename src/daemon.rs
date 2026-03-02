@@ -1,6 +1,5 @@
-use crate::Result;
+use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::error::DaemonIdError;
 use crate::pitchfork_toml::CronRetrigger;
 use indexmap::IndexMap;
 use std::fmt::Display;
@@ -10,54 +9,56 @@ use std::path::PathBuf;
 ///
 /// A valid daemon ID:
 /// - Is not empty
-/// - Does not contain path separators (`/` or `\`)
+/// - Does not contain backslashes (`\`)
 /// - Does not contain parent directory references (`..`)
 /// - Does not contain spaces
+/// - Does not contain `--` (reserved for path encoding of `/`)
 /// - Is not `.` (current directory)
 /// - Contains only printable ASCII characters
+/// - If qualified (contains `/`), has exactly one `/` separating namespace and short ID
+///
+/// Format: `[namespace/]short_id`
+/// - Qualified: `project/api`, `global/web`
+/// - Short: `api`, `web`
 ///
 /// This validation prevents path traversal attacks when daemon IDs are used
 /// to construct log file paths or other filesystem operations.
 pub fn is_valid_daemon_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.contains('/')
-        && !id.contains('\\')
-        && !id.contains("..")
-        && !id.contains(' ')
-        && id != "."
-        && id.chars().all(|c| c.is_ascii() && !c.is_ascii_control())
+    if id.contains('/') {
+        DaemonId::parse(id).is_ok()
+    } else {
+        DaemonId::try_new("global", id).is_ok()
+    }
 }
 
-/// Validates a daemon ID and returns a diagnostic error with context if invalid.
-pub fn validate_daemon_id(id: &str) -> Result<()> {
-    if id.is_empty() {
-        return Err(DaemonIdError::Empty.into());
-    }
-    if let Some(sep) = id.chars().find(|&c| c == '/' || c == '\\') {
-        return Err(DaemonIdError::PathSeparator {
-            id: id.to_string(),
-            sep,
-        }
-        .into());
-    }
-    if id.contains("..") {
-        return Err(DaemonIdError::ParentDirRef { id: id.to_string() }.into());
-    }
-    if id.contains(' ') {
-        return Err(DaemonIdError::ContainsSpace { id: id.to_string() }.into());
-    }
-    if id == "." {
-        return Err(DaemonIdError::CurrentDir.into());
-    }
-    if !id.chars().all(|c| c.is_ascii() && !c.is_ascii_control()) {
-        return Err(DaemonIdError::InvalidChars { id: id.to_string() }.into());
-    }
-    Ok(())
+/// Converts a daemon ID to a filesystem-safe path component.
+///
+/// Replaces `/` with `--` to avoid issues with filesystem path separators.
+///
+/// Examples:
+/// - `"api"` → `"api"`
+/// - `"global/api"` → `"global--api"`
+/// - `"project-a/api"` → `"project-a--api"`
+pub fn daemon_id_to_path(id: &str) -> String {
+    id.replace('/', "--")
+}
+
+/// Returns the main log file path for a daemon.
+///
+/// The path is computed as: `$PITCHFORK_LOGS_DIR/{safe_id}/{safe_id}.log`
+/// where `safe_id` has `/` replaced with `--` for filesystem safety.
+///
+/// Prefer using `DaemonId::log_path()` when you have a structured ID.
+pub fn daemon_log_path(id: &str) -> std::path::PathBuf {
+    let safe_id = daemon_id_to_path(id);
+    crate::env::PITCHFORK_LOGS_DIR
+        .join(&safe_id)
+        .join(format!("{safe_id}.log"))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Daemon {
-    pub id: String,
+    pub id: DaemonId,
     pub title: Option<String>,
     pub pid: Option<u32>,
     pub shell_pid: Option<u32>,
@@ -89,7 +90,7 @@ pub struct Daemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub depends: Vec<String>,
+    pub depends: Vec<DaemonId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -100,7 +101,7 @@ pub struct Daemon {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RunOptions {
-    pub id: String,
+    pub id: DaemonId,
     pub cmd: Vec<String>,
     pub force: bool,
     pub shell_pid: Option<u32>,
@@ -117,7 +118,7 @@ pub struct RunOptions {
     pub ready_cmd: Option<String>,
     pub wait_ready: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub depends: Vec<String>,
+    pub depends: Vec<DaemonId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -128,7 +129,7 @@ pub struct RunOptions {
 
 impl Display for Daemon {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id)
+        write!(f, "{}", self.id.qualified())
     }
 }
 
@@ -138,13 +139,17 @@ mod tests {
 
     #[test]
     fn test_valid_daemon_ids() {
+        // Short IDs
         assert!(is_valid_daemon_id("myapp"));
         assert!(is_valid_daemon_id("my-app"));
         assert!(is_valid_daemon_id("my_app"));
         assert!(is_valid_daemon_id("my.app"));
         assert!(is_valid_daemon_id("MyApp123"));
-        assert!(is_valid_daemon_id("app@host"));
-        assert!(is_valid_daemon_id("app:8080"));
+
+        // Qualified IDs (namespace/short_id)
+        assert!(is_valid_daemon_id("project/api"));
+        assert!(is_valid_daemon_id("global/web"));
+        assert!(is_valid_daemon_id("my-project/my-app"));
     }
 
     #[test]
@@ -152,14 +157,26 @@ mod tests {
         // Empty
         assert!(!is_valid_daemon_id(""));
 
-        // Path separators
+        // Multiple slashes (invalid qualified format)
+        assert!(!is_valid_daemon_id("a/b/c"));
         assert!(!is_valid_daemon_id("../etc/passwd"));
-        assert!(!is_valid_daemon_id("foo/bar"));
+
+        // Invalid qualified format (empty parts)
+        assert!(!is_valid_daemon_id("/api"));
+        assert!(!is_valid_daemon_id("project/"));
+
+        // Backslashes
         assert!(!is_valid_daemon_id("foo\\bar"));
 
         // Parent directory reference
         assert!(!is_valid_daemon_id(".."));
         assert!(!is_valid_daemon_id("foo..bar"));
+
+        // Double dash (reserved for path encoding)
+        assert!(!is_valid_daemon_id("my--app"));
+        assert!(!is_valid_daemon_id("project--api"));
+        assert!(!is_valid_daemon_id("--app"));
+        assert!(!is_valid_daemon_id("app--"));
 
         // Spaces
         assert!(!is_valid_daemon_id("my app"));
@@ -177,53 +194,9 @@ mod tests {
         // Non-ASCII
         assert!(!is_valid_daemon_id("myäpp"));
         assert!(!is_valid_daemon_id("приложение"));
-    }
 
-    #[test]
-    fn test_validate_daemon_id_error_messages() {
-        assert!(validate_daemon_id("myapp").is_ok());
-
-        assert!(
-            validate_daemon_id("")
-                .unwrap_err()
-                .to_string()
-                .contains("daemon ID cannot be empty")
-        );
-        assert!(
-            validate_daemon_id("foo/bar")
-                .unwrap_err()
-                .to_string()
-                .contains("contains path separator")
-        );
-        assert!(
-            validate_daemon_id("foo\\bar")
-                .unwrap_err()
-                .to_string()
-                .contains("contains path separator")
-        );
-        assert!(
-            validate_daemon_id("..")
-                .unwrap_err()
-                .to_string()
-                .contains("contains parent directory reference")
-        );
-        assert!(
-            validate_daemon_id("my app")
-                .unwrap_err()
-                .to_string()
-                .contains("contains spaces")
-        );
-        assert!(
-            validate_daemon_id(".")
-                .unwrap_err()
-                .to_string()
-                .contains("daemon ID cannot be '.'")
-        );
-        assert!(
-            validate_daemon_id("my\x00app")
-                .unwrap_err()
-                .to_string()
-                .contains("non-printable or non-ASCII")
-        );
+        // Unsupported punctuation under DaemonId rules
+        assert!(!is_valid_daemon_id("app@host"));
+        assert!(!is_valid_daemon_id("app:8080"));
     }
 }

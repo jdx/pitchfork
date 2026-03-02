@@ -1,5 +1,7 @@
 use crate::Result;
+use crate::daemon_id::DaemonId;
 use crate::ipc::client::IpcClient;
+use crate::pitchfork_toml::PitchforkToml;
 use miette::ensure;
 use std::sync::Arc;
 
@@ -50,10 +52,10 @@ impl Stop {
         let ipc = Arc::new(IpcClient::connect(false).await?);
 
         // Compute daemon IDs to stop
-        let ids: Vec<String> = if self.all {
+        let ids: Vec<DaemonId> = if self.all {
             ipc.get_running_daemons().await?
         } else {
-            self.id.clone()
+            PitchforkToml::resolve_ids(&self.id)?
         };
 
         let result = ipc.stop_daemons(&ids).await?;
