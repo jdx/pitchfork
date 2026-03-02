@@ -911,7 +911,7 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
         .block(block)
         .wrap(Wrap { trim: false });
     let line_count = logs.line_count(inner_width);
-    let logs = logs.scroll((line_count as u16 - area.height, 0));
+    let logs = logs.scroll(((line_count as u16).saturating_sub(area.height), 0));
 
     f.render_widget(logs, area);
 
@@ -1028,7 +1028,7 @@ fn clean_log_line(line: &str) -> std::borrow::Cow<'_, str> {
     ];
 
     // using COW can avoid one allocation for the first replacement
-    // but if there are no replacements, it will still allocate a new String in `into_owned()`
+    // if there are no replacements, it will not allocate at all
     let mut cow_line = std::borrow::Cow::Borrowed(line);
     for (target, replacement) in &replacements {
         if cow_line.contains(target) {
