@@ -882,7 +882,7 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     let title = format!(" Logs: {daemon_id}{follow_indicator}{search_indicator} ");
 
     let log_skip = app.log_scroll.saturating_sub(LOG_VIEWPORT_MAX_LINES);
-    let log_take = std::cmp::max(std::cmp::min(LOG_VIEWPORT_MAX_LINES, app.log_scroll), 1);
+    let log_take = app.log_scroll.clamp(1, LOG_VIEWPORT_MAX_LINES);
 
     let visible_height = area.height.saturating_sub(2) as usize;
     let mut visible_lines: Vec<Line> = app
@@ -896,9 +896,7 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
         .collect();
     if visible_lines.len() < LOG_VIEWPORT_MAX_LINES {
         let padding = LOG_VIEWPORT_MAX_LINES - visible_lines.len();
-        let mut padding_vec = std::iter::repeat(Line::from(""))
-            .take(padding)
-            .collect::<Vec<_>>();
+        let mut padding_vec = std::iter::repeat_n(Line::from(""), padding).collect::<Vec<Line>>();
         padding_vec.extend(visible_lines);
         visible_lines = padding_vec;
     }
@@ -1027,8 +1025,7 @@ fn clean_log_line(line: &str) -> String {
     // remove clear screen code
     let line = line.replace("\x1b[2J", "");
     // replace tabs with spaces
-    let line = line.replace("\t", "    ");
-    line
+    line.replace("\t", "    ")
 }
 
 /// Highlight a log line with syntax coloring and search match highlighting

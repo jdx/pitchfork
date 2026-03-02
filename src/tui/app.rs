@@ -971,7 +971,7 @@ impl App {
                 })
                 .collect();
             // Sort by score descending (best matches first)
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|s| s.1);
             scored.into_iter().map(|(d, _)| d).collect()
         };
 
