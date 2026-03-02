@@ -1021,15 +1021,25 @@ fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(search_bar, area);
 }
 
-fn clean_log_line(line: &str) -> String {
-    // remove clear screen code
-    let line = line.replace("\x1b[2J", "");
-    // replace tabs with spaces
-    line.replace("\t", "    ")
+fn clean_log_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let replacements = [
+        ("\x1b[2J", ""), // Clear screen
+        ("\t", "    "),  // Replace tabs with spaces
+    ];
+
+    // using COW can avoid one allocation for the first replacement
+    // but if there are no replacements, it will still allocate a new String in `into_owned()`
+    let mut cow_line = std::borrow::Cow::Borrowed(line);
+    for (target, replacement) in &replacements {
+        if cow_line.contains(target) {
+            cow_line = std::borrow::Cow::Owned(cow_line.replace(target, replacement));
+        }
+    }
+    cow_line
 }
 
 /// Highlight a log line with syntax coloring and search match highlighting
-fn highlight_log_line(line: String, line_idx: usize, app: &App) -> Line<'static> {
+fn highlight_log_line(line: std::borrow::Cow<str>, line_idx: usize, app: &App) -> Line<'static> {
     let is_match = app.log_search_matches.contains(&line_idx);
     let is_current_match = app
         .log_search_matches
