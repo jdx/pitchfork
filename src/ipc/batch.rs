@@ -44,7 +44,7 @@ pub struct StopResult {
 #[derive(Debug)]
 pub struct SpawnTaskResult {
     /// Daemon ID
-    pub id: String,
+    pub id: DaemonId,
     /// Start time if the daemon started successfully
     pub start_time: Option<DateTime<Local>>,
     /// Exit code if the daemon failed

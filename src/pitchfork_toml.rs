@@ -43,6 +43,12 @@ struct PitchforkTomlDaemonRaw {
     pub ready_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub expected_port: Vec<u16>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auto_bump_port: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub port_bump_attempts: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -649,6 +655,11 @@ impl PitchforkToml {
                 ready_http: raw_daemon.ready_http,
                 ready_port: raw_daemon.ready_port,
                 ready_cmd: raw_daemon.ready_cmd,
+                expected_port: raw_daemon.expected_port,
+                auto_bump_port: raw_daemon.auto_bump_port.unwrap_or(false),
+                port_bump_attempts: raw_daemon
+                    .port_bump_attempts
+                    .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
@@ -714,6 +725,9 @@ impl PitchforkToml {
                     ready_http: daemon.ready_http.clone(),
                     ready_port: daemon.ready_port,
                     ready_cmd: daemon.ready_cmd.clone(),
+                    expected_port: daemon.expected_port.clone(),
+                    auto_bump_port: Some(daemon.auto_bump_port),
+                    port_bump_attempts: Some(daemon.port_bump_attempts),
                     boot_start: daemon.boot_start,
                     // Preserve cross-namespace dependencies: use qualified ID if namespace differs,
                     // otherwise use short name

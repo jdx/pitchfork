@@ -3,8 +3,8 @@
 //! This module provides a type-safe representation of daemon IDs that
 //! eliminates the need for repeated parsing and formatting operations.
 
-use crate::Result;
 use crate::error::DaemonIdError;
+use crate::Result;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display};
 use std::hash::Hash;
@@ -24,7 +24,7 @@ use std::hash::Hash;
 /// ```
 /// use pitchfork_cli::daemon_id::DaemonId;
 ///
-/// let id = DaemonId::new("project-a", "api");
+/// let id = DaemonId::try_new("project-a", "api").unwrap();
 /// assert_eq!(id.namespace(), "project-a");
 /// assert_eq!(id.name(), "api");
 /// assert_eq!(id.qualified(), "project-a/api");
