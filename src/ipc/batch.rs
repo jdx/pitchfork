@@ -7,7 +7,7 @@ use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::deps::resolve_dependencies;
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon};
+use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork};
 use chrono::{DateTime, Local};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -641,16 +641,6 @@ pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> Path
         Some(d) => base_dir.join(d),
         None => base_dir,
     }
-}
-
-fn is_dot_config_pitchfork(path: &Path) -> bool {
-    path.file_name()
-        .map(|n| n == "pitchfork.toml")
-        .unwrap_or(false)
-        && path
-            .parent()
-            .map(|p| p.file_name().map(|n| n == ".config").unwrap_or(false))
-            .unwrap_or(false)
 }
 
 #[cfg(test)]

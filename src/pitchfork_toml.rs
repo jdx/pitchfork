@@ -75,9 +75,7 @@ pub struct PitchforkToml {
 }
 
 fn is_global_config(path: &Path) -> bool {
-    path == *env::PITCHFORK_GLOBAL_CONFIG_USER
-        || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
-        || (is_dot_config_pitchfork(path) && path.starts_with(&*env::HOME_DIR))
+    path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
 }
 
 fn is_local_config(path: &Path) -> bool {
@@ -86,14 +84,8 @@ fn is_local_config(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_dot_config_pitchfork(path: &Path) -> bool {
-    path.file_name()
-        .map(|n| n == "pitchfork.toml")
-        .unwrap_or(false)
-        && path
-            .parent()
-            .map(|p| p.file_name().map(|n| n == ".config").unwrap_or(false))
-            .unwrap_or(false)
+pub(crate) fn is_dot_config_pitchfork(path: &Path) -> bool {
+    path.ends_with(".config/pitchfork.toml")
 }
 
 fn sibling_base_config(path: &Path) -> Option<PathBuf> {
