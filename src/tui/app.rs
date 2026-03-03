@@ -991,7 +991,7 @@ impl App {
                 })
                 .collect();
             // Sort by score descending (best matches first)
-            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.sort_by_key(|s| std::cmp::Reverse(s.1));
             scored.into_iter().map(|(d, _)| d).collect()
         };
 
@@ -1101,7 +1101,7 @@ impl App {
         self.log_follow = !self.log_follow;
         if self.log_follow && !self.log_content.is_empty() {
             // Jump to bottom when enabling follow
-            self.log_scroll = self.log_content.len().saturating_sub(20);
+            self.log_scroll = self.log_content.len();
         }
     }
 
@@ -1342,7 +1342,7 @@ impl App {
 
     pub fn scroll_logs_down(&mut self) {
         if self.log_content.len() > 20 {
-            let max_scroll = self.log_content.len().saturating_sub(20);
+            let max_scroll = self.log_content.len();
             self.log_scroll = (self.log_scroll + 1).min(max_scroll);
         }
     }
@@ -1355,7 +1355,7 @@ impl App {
     pub fn scroll_logs_page_down(&mut self, visible_lines: usize) {
         let half_page = visible_lines / 2;
         if self.log_content.len() > visible_lines {
-            let max_scroll = self.log_content.len().saturating_sub(visible_lines);
+            let max_scroll = self.log_content.len();
             self.log_scroll = (self.log_scroll + half_page).min(max_scroll);
         }
     }
@@ -1474,16 +1474,10 @@ impl App {
 
         // Auto-scroll to bottom when in follow mode
         if self.log_follow {
-            if self.log_content.len() > 20 {
-                self.log_scroll = self.log_content.len().saturating_sub(20);
-            } else {
-                self.log_scroll = 0;
-            }
+            self.log_scroll = self.log_content.len();
         } else if prev_len == 0 {
             // First load - start at bottom
-            if self.log_content.len() > 20 {
-                self.log_scroll = self.log_content.len().saturating_sub(20);
-            }
+            self.log_scroll = self.log_content.len();
         }
         // If not following and not first load, keep scroll position
     }

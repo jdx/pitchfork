@@ -27,6 +27,8 @@ const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-
 const BAR_FULL: char = '█';
 const BAR_EMPTY: char = '░';
 
+const LOG_VIEWPORT_MAX_LINES: usize = 100;
+
 /// UTF-8 safe string truncation from the end, returning "...{suffix}" if too long.
 /// Uses character count instead of byte length to avoid panics on non-ASCII.
 fn truncate_path_end(s: &str, max_chars: usize) -> String {
@@ -1034,33 +1036,44 @@ fn draw_log_panel(f: &mut Frame, area: Rect, app: &App, daemon_id: &str) {
     };
     let title = format!(" Logs: {daemon_id}{follow_indicator}{search_indicator} ");
 
+    let log_skip = app.log_scroll.saturating_sub(LOG_VIEWPORT_MAX_LINES);
+    let log_take = app.log_scroll.clamp(1, LOG_VIEWPORT_MAX_LINES);
+
     let visible_height = area.height.saturating_sub(2) as usize;
-    let visible_lines: Vec<Line> = app
+    let mut visible_lines: Vec<Line> = app
         .log_content
         .iter()
         .enumerate()
-        .skip(app.log_scroll)
-        .take(visible_height)
+        .skip(log_skip)
+        .take(log_take)
+        .map(|(line_idx, line)| (line_idx, clean_log_line(line)))
         .map(|(line_idx, line)| highlight_log_line(line, line_idx, app))
         .collect();
+    if visible_lines.len() < LOG_VIEWPORT_MAX_LINES {
+        let padding = LOG_VIEWPORT_MAX_LINES - visible_lines.len();
+        let mut padding_vec = std::iter::repeat_n(Line::from(""), padding).collect::<Vec<Line>>();
+        padding_vec.extend(visible_lines);
+        visible_lines = padding_vec;
+    }
 
+    let block = Block::default()
+        .title(title)
+        .title_style(Style::default().fg(RED).bold())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(RED));
+    let inner_width = block.inner(area).width;
     let logs = Paragraph::new(visible_lines)
-        .block(
-            Block::default()
-                .title(title)
-                .title_style(Style::default().fg(RED).bold())
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
-        )
+        .block(block)
         .wrap(Wrap { trim: false });
+    let line_count = logs.line_count(inner_width);
+    let logs = logs.scroll(((line_count as u16).saturating_sub(area.height), 0));
 
     f.render_widget(logs, area);
 
     // Render scrollbar if there are more lines than visible
     let total_lines = app.log_content.len();
     if total_lines > visible_height {
-        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(visible_height))
-            .position(app.log_scroll);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(app.log_scroll);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼"))
@@ -1163,8 +1176,25 @@ fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(search_bar, area);
 }
 
+fn clean_log_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let replacements = [
+        ("\x1b[2J", ""), // Clear screen
+        ("\t", "    "),  // Replace tabs with spaces
+    ];
+
+    // using COW can avoid one allocation for the first replacement
+    // if there are no replacements, it will not allocate at all
+    let mut cow_line = std::borrow::Cow::Borrowed(line);
+    for (target, replacement) in &replacements {
+        if cow_line.contains(target) {
+            cow_line = std::borrow::Cow::Owned(cow_line.replace(target, replacement));
+        }
+    }
+    cow_line
+}
+
 /// Highlight a log line with syntax coloring and search match highlighting
-fn highlight_log_line(line: &str, line_idx: usize, app: &App) -> Line<'static> {
+fn highlight_log_line(line: std::borrow::Cow<str>, line_idx: usize, app: &App) -> Line<'static> {
     let is_match = app.log_search_matches.contains(&line_idx);
     let is_current_match = app
         .log_search_matches
