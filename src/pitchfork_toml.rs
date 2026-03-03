@@ -75,13 +75,25 @@ pub struct PitchforkToml {
 }
 
 fn is_global_config(path: &Path) -> bool {
-    path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
+    path == *env::PITCHFORK_GLOBAL_CONFIG_USER
+        || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
+        || (is_dot_config_pitchfork(path) && path.starts_with(&*env::HOME_DIR))
 }
 
 fn is_local_config(path: &Path) -> bool {
     path.file_name()
         .map(|n| n == "pitchfork.local.toml")
         .unwrap_or(false)
+}
+
+fn is_dot_config_pitchfork(path: &Path) -> bool {
+    path.file_name()
+        .map(|n| n == "pitchfork.toml")
+        .unwrap_or(false)
+        && path
+            .parent()
+            .map(|p| p.file_name().map(|n| n == ".config").unwrap_or(false))
+            .unwrap_or(false)
 }
 
 fn sibling_base_config(path: &Path) -> Option<PathBuf> {
@@ -135,8 +147,13 @@ fn validate_namespace(path: &Path, namespace: &str) -> Result<String> {
 }
 
 fn derive_namespace_from_dir(path: &Path) -> Result<String> {
-    let raw_namespace = path
-        .parent()
+    let dir_for_namespace = if is_dot_config_pitchfork(path) {
+        path.parent().and_then(|p| p.parent())
+    } else {
+        path.parent()
+    };
+
+    let raw_namespace = dir_for_namespace
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .ok_or_else(|| miette::miette!("cannot derive namespace from path '{}'", path.display()))?
@@ -463,21 +480,27 @@ impl PitchforkToml {
     /// Returns paths in order of precedence (lowest to highest):
     /// 1. System-level: /etc/pitchfork/config.toml
     /// 2. User-level: ~/.config/pitchfork/config.toml
-    /// 3. Project-level: pitchfork.toml and pitchfork.local.toml files
+    /// 3. Project-level: .config/pitchfork.toml, pitchfork.toml and pitchfork.local.toml files
     ///    from filesystem root to the given directory
     ///
-    /// Within each directory, pitchfork.toml comes before pitchfork.local.toml,
-    /// so local.toml values override the base config.
+    /// Within each directory, .config/pitchfork.toml comes before pitchfork.toml,
+    /// which comes before pitchfork.local.toml, so local.toml values override base config.
     pub fn list_paths_from(cwd: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_SYSTEM.clone());
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
 
-        // Find both files in one call. Order is reversed so after .reverse():
-        // - each directory has pitchfork.toml before pitchfork.local.toml
+        // Find all project config files. Order is reversed so after .reverse():
+        // - each directory has .config/pitchfork.toml before pitchfork.toml before pitchfork.local.toml
         // - directories go from root to cwd (later configs override earlier)
-        let mut project_paths =
-            xx::file::find_up_all(cwd, &["pitchfork.local.toml", "pitchfork.toml"]);
+        let mut project_paths = xx::file::find_up_all(
+            cwd,
+            &[
+                "pitchfork.local.toml",
+                "pitchfork.toml",
+                ".config/pitchfork.toml",
+            ],
+        );
         project_paths.reverse();
         paths.extend(project_paths);
 

@@ -628,13 +628,29 @@ impl IpcClient {
 /// Otherwise, use the pitchfork.toml parent directory.
 pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
     let base_dir = config_path
-        .and_then(|p| p.parent())
+        .and_then(|p| {
+            if is_dot_config_pitchfork(p) {
+                p.parent().and_then(|p| p.parent())
+            } else {
+                p.parent()
+            }
+        })
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| crate::env::CWD.to_path_buf());
     match dir {
         Some(d) => base_dir.join(d),
         None => base_dir,
     }
+}
+
+fn is_dot_config_pitchfork(path: &Path) -> bool {
+    path.file_name()
+        .map(|n| n == "pitchfork.toml")
+        .unwrap_or(false)
+        && path
+            .parent()
+            .map(|p| p.file_name().map(|n| n == ".config").unwrap_or(false))
+            .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -690,5 +706,47 @@ mod tests {
             Some(Path::new("/projects/myapp/pitchfork.toml")),
         );
         assert_eq!(result, PathBuf::from("/projects/myapp/services/api"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_dot_config_none() {
+        // .config/pitchfork.toml should resolve to project directory (not .config)
+        let result = resolve_daemon_dir(
+            None,
+            Some(Path::new("/projects/myapp/.config/pitchfork.toml")),
+        );
+        assert_eq!(
+            result,
+            PathBuf::from("/projects/myapp"),
+            ".config/pitchfork.toml should resolve to project dir"
+        );
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_dot_config_relative() {
+        // Relative dir from .config/pitchfork.toml -> project dir + relative
+        let result = resolve_daemon_dir(
+            Some("frontend"),
+            Some(Path::new("/projects/myapp/.config/pitchfork.toml")),
+        );
+        assert_eq!(
+            result,
+            PathBuf::from("/projects/myapp/frontend"),
+            "Relative dir should resolve from project dir"
+        );
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_dot_config_absolute() {
+        // Absolute dir overrides project dir
+        let result = resolve_daemon_dir(
+            Some("/opt/service"),
+            Some(Path::new("/projects/myapp/.config/pitchfork.toml")),
+        );
+        assert_eq!(
+            result,
+            PathBuf::from("/opt/service"),
+            "Absolute dir should override project dir"
+        );
     }
 }
