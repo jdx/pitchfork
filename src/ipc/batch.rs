@@ -7,7 +7,9 @@ use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::deps::resolve_dependencies;
 use crate::ipc::client::IpcClient;
-use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork};
+use crate::pitchfork_toml::{
+    PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork, is_global_config,
+};
 use chrono::{DateTime, Local};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -629,7 +631,11 @@ impl IpcClient {
 pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
     let base_dir = config_path
         .and_then(|p| {
-            if is_dot_config_pitchfork(p) {
+            // Global configs use normal parent resolution
+            if is_global_config(p) {
+                p.parent()
+            } else if is_dot_config_pitchfork(p) {
+                // .config/pitchfork.toml uses project directory (grandparent)
                 p.parent().and_then(|p| p.parent())
             } else {
                 p.parent()
@@ -737,6 +743,20 @@ mod tests {
             result,
             PathBuf::from("/opt/service"),
             "Absolute dir should override project dir"
+        );
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_global_config_normal() {
+        // Global config (~/.config/pitchfork/config.toml) should use normal resolution (parent)
+        let result = resolve_daemon_dir(
+            None,
+            Some(Path::new("/home/user/.config/pitchfork/config.toml")),
+        );
+        assert_eq!(
+            result,
+            PathBuf::from("/home/user/.config/pitchfork"),
+            "Global config should use parent directory"
         );
     }
 }

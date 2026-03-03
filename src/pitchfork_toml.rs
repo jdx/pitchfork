@@ -74,10 +74,8 @@ pub struct PitchforkToml {
     pub path: Option<PathBuf>,
 }
 
-fn is_global_config(path: &Path) -> bool {
-    path == *env::PITCHFORK_GLOBAL_CONFIG_USER
-        || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
-        || path == env::HOME_DIR.join(".config").join("pitchfork.toml")
+pub(crate) fn is_global_config(path: &Path) -> bool {
+    path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
 }
 
 fn is_local_config(path: &Path) -> bool {

@@ -1942,15 +1942,21 @@ fn test_namespace_from_dot_config_pitchfork() {
 }
 
 #[test]
-fn test_namespace_from_home_dot_config_is_global() {
-    // Test that ~/.config/pitchfork.toml is treated as global (namespace = "global")
+fn test_namespace_from_home_dot_config_is_not_global() {
+    // Test that ~/.config/pitchfork.toml is NOT treated as global - it derives
+    // namespace from the home directory (like any other project .config/pitchfork.toml)
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
     let global_path = Path::new(&home).join(".config/pitchfork.toml");
 
     let ns = pitchfork_toml::namespace_from_path(&global_path)
-        .expect("Should return global namespace for home .config");
+        .expect("Should derive namespace from home directory");
+    // The namespace should be derived from the home directory name, not "global"
+    let home_dir_name = Path::new(&home)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("home");
     assert_eq!(
-        ns, "global",
-        "Home .config/pitchfork.toml should have namespace 'global'"
+        ns, home_dir_name,
+        "Home .config/pitchfork.toml should derive namespace from home directory name"
     );
 }
