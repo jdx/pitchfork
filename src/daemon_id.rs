@@ -3,8 +3,8 @@
 //! This module provides a type-safe representation of daemon IDs that
 //! eliminates the need for repeated parsing and formatting operations.
 
-use crate::error::DaemonIdError;
 use crate::Result;
+use crate::error::DaemonIdError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt::{self, Display};
 use std::hash::Hash;
