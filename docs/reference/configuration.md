@@ -6,9 +6,16 @@ Complete reference for `pitchfork.toml` configuration files.
 
 Pitchfork loads configuration files in order, with later files overriding earlier ones:
 
-1. **System-level:** `/etc/pitchfork/config.toml`
-2. **User-level:** `~/.config/pitchfork/config.toml`
-3. **Project-level:** `pitchfork.toml`/`pitchfork.local.toml` files from filesystem root to current directory (`pitchfork.local.toml` overrides `pitchfork.toml` in the same directory)
+1. **System-level:** `/etc/pitchfork/config.toml` (namespace: `global`)
+2. **User-level:** `~/.config/pitchfork/config.toml` (namespace: `global`)
+3. **Project-level:** `.config/pitchfork.toml`, `pitchfork.toml`, `pitchfork.local.toml` from filesystem root to current directory
+
+Within each directory, files are processed in this order:
+- `.config/pitchfork.toml` (lowest precedence in directory)
+- `pitchfork.toml` (overrides `.config/pitchfork.toml`)
+- `pitchfork.local.toml` (highest precedence in directory, not committed to version control)
+
+This mirrors [mise](https://mise.jdx.dev/configuration.html) behavior, allowing you to store project config in a centralized `.config/` directory if preferred.
 
 ## JSON Schema
 
@@ -58,8 +65,10 @@ The `--` sequence is reserved for internal use (namespace encoding). See [Namesp
 ### Namespace Derivation Rules
 
 - Global config files (`/etc/pitchfork/config.toml`, `~/.config/pitchfork/config.toml`) use namespace `global`
-- Project config files use top-level `namespace = "..."` if set
-- Otherwise project config files use the parent directory name as namespace
+- Project config files (`.config/pitchfork.toml`, `pitchfork.toml`, `pitchfork.local.toml`) use:
+  - Top-level `namespace = "..."` if set in the config file
+  - Otherwise, the parent directory name as namespace
+- For `.config/pitchfork.toml`, the namespace is derived from the project directory (the `.config` directory's parent), not from `.config` itself
 - If the derived directory name is invalid (`--`, spaces, non-ASCII, etc.), parsing fails and you should set top-level `namespace`
 
 ### Top-level `namespace` (optional)

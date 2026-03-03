@@ -68,9 +68,11 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 ### Config Hierarchy
 
 Configs merge in order (later overrides earlier):
-1. `/etc/pitchfork/config.toml` (system)
-2. `~/.config/pitchfork/config.toml` (user)
-3. `pitchfork.toml` files from filesystem root to current directory (project)
+1. `/etc/pitchfork/config.toml` (system - namespace: global)
+2. `~/.config/pitchfork/config.toml` (user - namespace: global)
+3. `.config/pitchfork.toml` files from filesystem root to current directory (project)
+4. `pitchfork.toml` files from filesystem root to current directory (project)
+5. `pitchfork.local.toml` files from filesystem root to current directory (project)
 
 ## Code Patterns
 
