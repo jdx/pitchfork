@@ -40,7 +40,16 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.CERTIFICATES_P12 }}
           p12-password: ${{ secrets.CERTIFICATES_P12_PASS }}
+      - name: Install cross
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/install-action@0aa4f22591557b744fe31e55dbfcdfea74a073f7 # v2
+        with:
+          tool: cross
+      - name: Setup Rust target
+        if: matrix.os == 'ubuntu-latest'
+        run: rustup target add ${{ matrix.target }}
       - name: Install cross-compilation tools
+        if: matrix.os != 'ubuntu-latest'
         uses: taiki-e/setup-cross-toolchain-action@b8d1a322a6009a2b7220f53996695778eef89b41 # v1
         with:
           target: ${{ matrix.target }}
@@ -57,8 +66,17 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           codesign: "Developer ID Application: Jeffrey Dickey (4993Y37DX6)"
           codesign_prefix: dev.jdx.
-      - name: Upload binary (non-macOS)
-        if: ${{ !startsWith(matrix.os, 'macos') }}
+      - name: Upload binary (Linux, via cross)
+        if: matrix.os == 'ubuntu-latest'
+        uses: taiki-e/upload-rust-binary-action@f391289bcff6a7f36b6301c0a74199657bbb4561 # v1
+        with:
+          bin: pitchfork
+          target: ${{ matrix.target }}
+          ref: refs/tags/${{ inputs.tag }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          build-tool: cross
+      - name: Upload binary (Windows)
+        if: startsWith(matrix.os, 'windows')
         uses: taiki-e/upload-rust-binary-action@f391289bcff6a7f36b6301c0a74199657bbb4561 # v1
         with:
           bin: pitchfork
