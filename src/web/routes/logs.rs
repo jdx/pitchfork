@@ -15,7 +15,7 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 use crate::web::bp;
 use crate::web::helpers::{html_escape, url_encode};
-use std::io::{Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 
 fn base_html(title: &str, content: &str) -> String {
     let bp = bp();
@@ -344,59 +344,115 @@ pub async fn stream_sse(
         let log_path = daemon_id.log_path();
         let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
         let mut file_handle: Option<std::fs::File> = None;
-        // Limit reads to 1MB per iteration to prevent memory exhaustion
-        const MAX_READ_SIZE: u64 = 1024 * 1024;
+
+        // Internal result type for file operations within spawn_blocking
+        enum FileOpResult {
+            Data(Vec<u8>),
+            Truncated,
+            FileRotated,
+            SeekFailed,
+            ReadFailed,
+            Eof,
+        }
 
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            // Re-open file if we don't have a handle or if the file may have been recreated
-            let file = match &mut file_handle {
-                Some(f) => f,
-                None => {
-                    match std::fs::File::open(&log_path) {
-                        Ok(f) => file_handle.insert(f),
-                        Err(_) => {
-                            // File may not exist yet, retry next iteration
-                            continue;
+            // Use spawn_blocking for all blocking file operations
+            let file_op_result = {
+                let path = log_path.clone();
+                let fh = file_handle.take();
+                let mut ls = last_size;
+                tokio::task::spawn_blocking(move || {
+                    let mut file = match fh {
+                        Some(f) => f,
+                        None => match std::fs::File::open(&path) {
+                            Ok(f) => f,
+                            Err(_) => return (None, ls, None),
+                        },
+                    };
+
+                    let metadata = match file.metadata() {
+                        Ok(m) => m,
+                        Err(_) => return (Some(file), ls, None),
+                    };
+                    let current_size = metadata.len();
+
+                    // Check if file was recreated (inode changed) on Unix systems
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        let path_ino = std::fs::metadata(&path).map(|m| m.ino()).ok();
+                        let file_ino = metadata.ino();
+                        if let Some(path_ino) = path_ino && path_ino != file_ino {
+                            // File was recreated; drop handle and reset
+                            return (None, 0, Some(FileOpResult::FileRotated));
                         }
                     }
-                }
+
+                    if current_size > ls {
+                        // Read new content as bytes to handle invalid UTF-8
+                        if file.seek(SeekFrom::Start(ls)).is_err() {
+                            return (Some(file), ls, Some(FileOpResult::SeekFailed));
+                        }
+
+                        const MAX_READ_SIZE: u64 = 1024 * 1024;
+                        let mut total_read = 0u64;
+                        let bytes_to_read = (current_size - ls).min(MAX_READ_SIZE) as usize;
+                        let mut buffer = vec![0u8; bytes_to_read];
+                        let mut hit_eof = false;
+                        while total_read < bytes_to_read as u64 {
+                            match file.read(&mut buffer[total_read as usize..]) {
+                                Ok(0) => { hit_eof = true; break; }
+                                Ok(n) => { total_read += n as u64; }
+                                Err(_) => { return (None, ls, Some(FileOpResult::ReadFailed)); }
+                            }
+                        }
+
+                        if total_read > 0 {
+                            buffer.truncate(total_read as usize);
+                            ls += total_read;
+                            return (Some(file), ls, Some(FileOpResult::Data(buffer)));
+                        } else if hit_eof {
+                            // Advance past bytes that are present in the file but unreadable
+                            ls = current_size;
+                            return (Some(file), ls, Some(FileOpResult::Eof));
+                        }
+                        return (Some(file), ls, None);
+                    } else if current_size < ls {
+                        // File was truncated (cleared)
+                        return (Some(file), 0, Some(FileOpResult::Truncated));
+                    }
+
+                    (Some(file), ls, None)
+                }).await
             };
 
-            if let Ok(metadata) = file.metadata() {
-                let current_size = metadata.len();
+            match file_op_result {
+                Ok((fh, ls, result)) => {
+                    file_handle = fh;
+                    last_size = ls;
 
-                if current_size > last_size {
-                    // Read new content as bytes to handle invalid UTF-8
-                    use std::io::{Read, Seek, SeekFrom};
-                    if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                        let bytes_to_read = (current_size - last_size).min(MAX_READ_SIZE) as usize;
-                        let mut buffer = vec![0u8; bytes_to_read];
-                        match file.read_exact(&mut buffer) {
-                            Ok(_) => {
-                                // Use lossy conversion to handle invalid UTF-8 gracefully
-                                let new_content = String::from_utf8_lossy(&buffer);
-                                let escaped = html_escape(&new_content);
-                                yield Ok(Event::default().event("message").data(escaped));
-                                last_size += bytes_to_read as u64;
-                            }
-                            Err(_) => {
-                                // Read failed, reset position and try again next iteration
-                                let _ = file.seek(SeekFrom::Start(last_size));
-                            }
+                    match result {
+                        Some(FileOpResult::Data(buffer)) => {
+                            let new_content = String::from_utf8_lossy(&buffer);
+                            let escaped = html_escape(&new_content);
+                            yield Ok(Event::default().event("message").data(escaped));
                         }
+                        Some(FileOpResult::Truncated) => {
+                            yield Ok(Event::default().event("clear").data(""));
+                        }
+                        Some(FileOpResult::FileRotated) => {
+                            // file_handle and last_size already reset by outer fh/ls bindings
+                        }
+                        _ => {}
                     }
-                } else if current_size < last_size {
-                    // File was truncated (cleared), send clear event and reset
-                    yield Ok(Event::default().event("clear").data(""));
-                    last_size = current_size;
-                    // Reset file handle to start from beginning
-                    let _ = file.seek(SeekFrom::Start(0));
                 }
-            } else {
-                // Failed to get metadata, file may have been deleted
-                file_handle = None;
+                Err(_) => {
+                    file_handle = None;
+                    // last_size remains valid from before this iteration;
+                    // do not reset it or we will re-stream the entire file.
+                }
             }
         }
     };

@@ -142,9 +142,7 @@ impl IpcServer {
             bail!("IPC message contains null byte");
         }
         msg.push(0);
-        if let Err(err) = send.write_all(&msg).await {
-            trace!("Failed to send message: {err:?}");
-        }
+        send.write_all(&msg).await.into_diagnostic()?;
         Ok(())
     }
 
@@ -232,7 +230,31 @@ impl IpcServer {
                     }
                 };
                 if let Err(err) = Self::send(&mut send, msg).await {
-                    warn!("Failed to send message: {err:?}");
+                    // Broken-pipe / reset is expected when a client disconnects normally
+                    // Traverse the error source chain to find the original io::Error
+                    // since miette wraps it in a DiagnosticError
+                    use std::error::Error as StdError;
+                    let is_disconnect = {
+                        let mut cur: Option<&dyn StdError> = Some(err.as_ref() as &dyn StdError);
+                        let mut found = false;
+                        while let Some(e) = cur {
+                            if let Some(io) = e.downcast_ref::<std::io::Error>() {
+                                found = matches!(
+                                    io.kind(),
+                                    std::io::ErrorKind::BrokenPipe
+                                        | std::io::ErrorKind::ConnectionReset
+                                );
+                                break;
+                            }
+                            cur = e.source();
+                        }
+                        found
+                    };
+                    if is_disconnect {
+                        debug!("IPC client disconnected: {err:?}");
+                    } else {
+                        warn!("Failed to send message: {err:?}");
+                    }
                     break;
                 }
             }
