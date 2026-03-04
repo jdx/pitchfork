@@ -344,6 +344,8 @@ pub async fn stream_sse(
         let log_path = daemon_id.log_path();
         let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
         let mut file_handle: Option<std::fs::File> = None;
+        // Limit reads to 1MB per iteration to prevent memory exhaustion
+        const MAX_READ_SIZE: u64 = 1024 * 1024;
 
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -353,10 +355,7 @@ pub async fn stream_sse(
                 Some(f) => f,
                 None => {
                     match std::fs::File::open(&log_path) {
-                        Ok(f) => {
-                            file_handle = Some(f);
-                            file_handle.as_mut().unwrap()
-                        }
+                        Ok(f) => file_handle.insert(f),
                         Err(_) => {
                             // File may not exist yet, retry next iteration
                             continue;
@@ -372,15 +371,21 @@ pub async fn stream_sse(
                     // Read new content as bytes to handle invalid UTF-8
                     use std::io::{Read, Seek, SeekFrom};
                     if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                        let mut buffer = Vec::new();
-                        if file.read_to_end(&mut buffer).is_ok() && !buffer.is_empty() {
-                            // Use lossy conversion to handle invalid UTF-8 gracefully
-                            let new_content = String::from_utf8_lossy(&buffer);
-                            let escaped = html_escape(&new_content);
-                            yield Ok(Event::default().event("message").data(escaped));
+                        let bytes_to_read = (current_size - last_size).min(MAX_READ_SIZE) as usize;
+                        let mut buffer = vec![0u8; bytes_to_read];
+                        match file.read_exact(&mut buffer) {
+                            Ok(_) => {
+                                // Use lossy conversion to handle invalid UTF-8 gracefully
+                                let new_content = String::from_utf8_lossy(&buffer);
+                                let escaped = html_escape(&new_content);
+                                yield Ok(Event::default().event("message").data(escaped));
+                                last_size += bytes_to_read as u64;
+                            }
+                            Err(_) => {
+                                // Read failed, reset position and try again next iteration
+                                let _ = file.seek(SeekFrom::Start(last_size));
+                            }
                         }
-                        // Always update last_size to avoid stalling on invalid content
-                        last_size = current_size;
                     }
                 } else if current_size < last_size {
                     // File was truncated (cleared), send clear event and reset
