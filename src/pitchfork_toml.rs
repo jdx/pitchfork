@@ -85,7 +85,7 @@ fn is_local_config(path: &Path) -> bool {
 }
 
 pub(crate) fn is_dot_config_pitchfork(path: &Path) -> bool {
-    path.ends_with(".config/pitchfork.toml")
+    path.ends_with(".config/pitchfork.toml") || path.ends_with(".config/pitchfork.local.toml")
 }
 
 fn sibling_base_config(path: &Path) -> Option<PathBuf> {
@@ -472,10 +472,10 @@ impl PitchforkToml {
     /// Returns paths in order of precedence (lowest to highest):
     /// 1. System-level: /etc/pitchfork/config.toml
     /// 2. User-level: ~/.config/pitchfork/config.toml
-    /// 3. Project-level: .config/pitchfork.toml, pitchfork.toml and pitchfork.local.toml files
+    /// 3. Project-level: .config/pitchfork.toml, .config/pitchfork.local.toml, pitchfork.toml and pitchfork.local.toml files
     ///    from filesystem root to the given directory
     ///
-    /// Within each directory, .config/pitchfork.toml comes before pitchfork.toml,
+    /// Within each directory, .config/ comes before pitchfork.toml,
     /// which comes before pitchfork.local.toml, so local.toml values override base config.
     pub fn list_paths_from(cwd: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
@@ -490,6 +490,7 @@ impl PitchforkToml {
             &[
                 "pitchfork.local.toml",
                 "pitchfork.toml",
+                ".config/pitchfork.local.toml",
                 ".config/pitchfork.toml",
             ],
         );

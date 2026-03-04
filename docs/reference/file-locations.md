@@ -11,6 +11,7 @@ Pitchfork supports configuration files in multiple locations. Files are merged i
 | `/etc/pitchfork/config.toml` | System-wide configuration |
 | `~/.config/pitchfork/config.toml` | User configuration |
 | `.config/pitchfork.toml` | Project configuration |
+| `.config/pitchfork.local.toml` | Project configuration |
 | `pitchfork.toml` | Project configuration |
 | `pitchfork.local.toml` | Local project overrides |
 
@@ -19,12 +20,14 @@ Pitchfork supports configuration files in multiple locations. Files are merged i
 1. `/etc/pitchfork/config.toml` - System-wide (lowest precedence)
 2. `~/.config/pitchfork/config.toml` - User-wide
 3. `.config/pitchfork.toml` - Project-level (in project's `.config/` subdirectory)
-4. `pitchfork.toml` - Project-level (in project root)
-5. `pitchfork.local.toml` - Local project overrides (highest precedence)
+4. `.config/pitchfork.local.toml` - Project-level (in project's `.config/` subdirectory)
+5. `pitchfork.toml` - Project-level (in project root)
+6. `pitchfork.local.toml` - Local project overrides (highest precedence)
 
 Within a given project directory, files take precedence in this order:
 - `.config/pitchfork.toml` has lowest precedence in that project
-- `pitchfork.toml` overrides `.config/pitchfork.toml`
+- `.config/pitchfork.local.toml` overrides `.config/pitchfork.toml`
+- `pitchfork.toml` overrides anything in `.config/`
 - `pitchfork.local.toml` overrides both (typically git-ignored)
 
 ## State Directory

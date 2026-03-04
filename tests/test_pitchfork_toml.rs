@@ -1883,7 +1883,7 @@ fn test_try_new_rejects_invalid_input() {
 }
 
 // =============================================================================
-// Tests for .config/pitchfork.toml support
+// Tests for .config/pitchfork.toml and .config/pitchfork.local.toml support
 // =============================================================================
 
 #[test]
@@ -1892,11 +1892,13 @@ fn test_list_paths_from_with_dot_config() {
     let dot_config_dir = temp_dir.path().join(".config");
     std::fs::create_dir(&dot_config_dir).unwrap();
     let dot_config_path = dot_config_dir.join("pitchfork.toml");
+    let dot_config_local_path = dot_config_dir.join("pitchfork.local.toml");
     let toml_path = temp_dir.path().join("pitchfork.toml");
     let local_path = temp_dir.path().join("pitchfork.local.toml");
 
     // Create all three config files
     std::fs::write(&dot_config_path, "[daemons]").unwrap();
+    std::fs::write(&dot_config_local_path, "[daemons]").unwrap();
     std::fs::write(&toml_path, "[daemons]").unwrap();
     std::fs::write(&local_path, "[daemons]").unwrap();
 
@@ -1907,24 +1909,38 @@ fn test_list_paths_from_with_dot_config() {
         paths.contains(&dot_config_path),
         "Should discover .config/pitchfork.toml"
     );
+    assert!(
+        paths.contains(&dot_config_local_path),
+        "Should discover .config/pitchfork.local.toml"
+    );
     assert!(paths.contains(&toml_path), "Should discover pitchfork.toml");
     assert!(
         paths.contains(&local_path),
         "Should discover pitchfork.local.toml"
     );
 
-    // Check precedence order: local > toml > .config
+    // Precedence: local > toml > .config local > .config toml
+    // → indices should satisfy: dot_config < dot_config_local < toml < local
+
     let dot_config_idx = paths.iter().position(|p| p == &dot_config_path).unwrap();
+    let dot_config_local_idx = paths
+        .iter()
+        .position(|p| p == &dot_config_local_path)
+        .unwrap();
     let toml_idx = paths.iter().position(|p| p == &toml_path).unwrap();
     let local_idx = paths.iter().position(|p| p == &local_path).unwrap();
 
     assert!(
-        toml_idx > dot_config_idx,
-        "pitchfork.toml should have higher priority than .config/pitchfork.toml"
+        dot_config_idx < dot_config_local_idx,
+        "wrong order: .config/toml vs .config/local"
     );
     assert!(
-        local_idx > toml_idx,
-        "pitchfork.local.toml should have highest priority"
+        dot_config_local_idx < toml_idx,
+        "wrong order: .config/local vs project/toml"
+    );
+    assert!(
+        toml_idx < local_idx,
+        "wrong order: project/toml vs project/local"
     );
 }
 
@@ -1933,6 +1949,19 @@ fn test_namespace_from_dot_config_pitchfork() {
     // Test that .config/pitchfork.toml in a project derives namespace from project dir
     let ns = pitchfork_toml::namespace_from_path(Path::new(
         "/home/user/myproject/.config/pitchfork.toml",
+    ))
+    .expect("Should derive namespace from project dir");
+    assert_eq!(
+        ns, "myproject",
+        "Namespace should be project directory name"
+    );
+}
+
+#[test]
+fn test_namespace_from_dot_config_local_pitchfork() {
+    // Test that .config/pitchfork.local.toml in a project derives namespace from project dir
+    let ns = pitchfork_toml::namespace_from_path(Path::new(
+        "/home/user/myproject/.config/pitchfork.local.toml",
     ))
     .expect("Should derive namespace from project dir");
     assert_eq!(
@@ -1958,5 +1987,25 @@ fn test_namespace_from_home_dot_config_is_not_global() {
     assert_eq!(
         ns, home_dir_name,
         "Home .config/pitchfork.toml should derive namespace from home directory name"
+    );
+}
+
+#[test]
+fn test_namespace_from_home_dot_config_local_is_not_global() {
+    // Test that ~/.config/pitchfork.local.toml is NOT treated as global - it derives
+    // namespace from the home directory (like any other project .config/pitchfork.local.toml)
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+    let global_path = Path::new(&home).join(".config/pitchfork.local.toml");
+
+    let ns = pitchfork_toml::namespace_from_path(&global_path)
+        .expect("Should derive namespace from home directory");
+    // The namespace should be derived from the home directory name, not "global"
+    let home_dir_name = Path::new(&home)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("home");
+    assert_eq!(
+        ns, home_dir_name,
+        "Home .config/pitchfork.local.toml should derive namespace from home directory name"
     );
 }
