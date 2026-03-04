@@ -36,6 +36,7 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
             match app.view {
                 View::Dashboard => handle_dashboard_event(app, key.code, key.modifiers),
                 View::Logs => handle_logs_event(app, key.code, key.modifiers),
+                View::Network => handle_network_event(app, key.code, key.modifiers),
                 View::Help => handle_help_event(app, key.code),
                 View::Confirm => handle_confirm_event(app, key.code),
                 View::Details => handle_details_event(app, key.code),
@@ -62,6 +63,7 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
                     }
                     Ok(None)
                 }
+                View::Network => Ok(None),
                 View::Loading | View::ConfigEditor | View::ConfigFileSelect => Ok(None),
             }
         }
@@ -294,6 +296,12 @@ fn handle_dashboard_event(
             }
             Ok(None)
         }
+        // Network view - show listening ports
+        KeyCode::Char('p') => {
+            app.view = View::Network;
+            app.prev_view = View::Dashboard;
+            Ok(None)
+        }
         _ => Ok(None),
     }
 }
@@ -444,6 +452,113 @@ fn handle_log_search_input(app: &mut App, key: KeyCode) -> Result<Option<Action>
         }
         KeyCode::Char(c) => {
             app.log_search_push(c);
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_network_event(
+    app: &mut App,
+    key: KeyCode,
+    _modifiers: KeyModifiers,
+) -> Result<Option<Action>> {
+    // Handle network search input mode first
+    if app.network_search_active {
+        return handle_network_search_input(app, key);
+    }
+
+    // Use the cached visible rows from the last draw (updated in draw_network)
+    let visible_rows = app.network_visible_rows.max(1); // Ensure at least 1 row
+    let total_count = app.filtered_network_listeners().len();
+
+    match key {
+        KeyCode::Char('q') | KeyCode::Esc => {
+            app.back_to_dashboard();
+            Ok(None)
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if total_count > 0 && app.network_selected < total_count - 1 {
+                app.network_selected += 1;
+                // Scroll down if selection goes below visible area
+                if app.network_selected >= app.network_scroll_offset + visible_rows {
+                    app.network_scroll_offset =
+                        app.network_selected.saturating_sub(visible_rows - 1);
+                }
+                // Update the stored PID
+                let listeners = app.filtered_network_listeners();
+                app.network_selected_pid =
+                    listeners.get(app.network_selected).map(|l| l.process.pid);
+            }
+            Ok(None)
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.network_selected > 0 {
+                app.network_selected -= 1;
+                // Scroll up if selection goes above visible area
+                if app.network_selected < app.network_scroll_offset {
+                    app.network_scroll_offset = app.network_selected;
+                }
+                // Update the stored PID
+                let listeners = app.filtered_network_listeners();
+                app.network_selected_pid =
+                    listeners.get(app.network_selected).map(|l| l.process.pid);
+            }
+            Ok(None)
+        }
+        KeyCode::Char('g') => {
+            // Go to top
+            app.network_selected = 0;
+            app.network_scroll_offset = 0;
+            // Update the stored PID
+            let listeners = app.filtered_network_listeners();
+            app.network_selected_pid = listeners.first().map(|l| l.process.pid);
+            Ok(None)
+        }
+        KeyCode::Char('G') => {
+            // Go to bottom
+            if total_count > 0 {
+                app.network_selected = total_count - 1;
+                app.network_scroll_offset = total_count.saturating_sub(visible_rows);
+                // Update the stored PID
+                let listeners = app.filtered_network_listeners();
+                app.network_selected_pid =
+                    listeners.get(app.network_selected).map(|l| l.process.pid);
+            }
+            Ok(None)
+        }
+        KeyCode::Char('/') => {
+            app.toggle_network_search();
+            Ok(None)
+        }
+        KeyCode::Char('r') => {
+            // Refresh will be triggered by the caller
+            Ok(Some(Action::Refresh))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn handle_network_search_input(app: &mut App, key: KeyCode) -> Result<Option<Action>> {
+    match key {
+        KeyCode::Esc => {
+            app.clear_network_search();
+            Ok(None)
+        }
+        KeyCode::Enter => {
+            app.network_search_active = false;
+            Ok(None)
+        }
+        KeyCode::Backspace => {
+            if app.network_search_query.is_empty() {
+                app.clear_network_search();
+            } else {
+                app.network_search_query.pop();
+            }
+            Ok(None)
+        }
+        KeyCode::Char(c) => {
+            app.network_search_query.push(c);
             Ok(None)
         }
         _ => Ok(None),

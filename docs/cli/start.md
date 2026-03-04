@@ -58,6 +58,14 @@ Wait until TCP port is listening before considering daemon ready
 
 Shell command to poll for readiness (exit code 0 = ready)
 
+### `--expected-port… <EXPECTED_PORT>`
+
+Ports the daemon is expected to bind to (can be specified multiple times)
+
+### `--auto-bump-port`
+
+Automatically find an available port if the expected port is in use
+
 ### `-q --quiet`
 
 Suppress startup log output

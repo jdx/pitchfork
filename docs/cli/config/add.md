@@ -78,6 +78,14 @@ TCP port to check for readiness
 
 Shell command to poll for readiness
 
+### `--expected-port… <EXPECTED_PORT>`
+
+Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
+
+### `--auto-bump-port`
+
+Automatically find an available port if the expected port is in use
+
 ### `--depends… <DEPENDS>`
 
 Daemon dependencies that must start first (can be specified multiple times)
