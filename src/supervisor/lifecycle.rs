@@ -153,7 +153,24 @@ impl Supervisor {
             .await
             {
                 Ok(resolved) => {
-                    let ready_port = opts.ready_port.or(resolved.first().copied());
+                    let ready_port = if let Some(configured_port) = opts.ready_port {
+                        // If ready_port matches one of the expected ports, apply the same bump offset
+                        let bump_offset = resolved
+                            .first()
+                            .unwrap_or(&0)
+                            .saturating_sub(*opts.expected_port.first().unwrap_or(&0));
+                        if opts.expected_port.contains(&configured_port) && bump_offset > 0 {
+                            configured_port
+                                .checked_add(bump_offset)
+                                .or(Some(configured_port))
+                        } else {
+                            Some(configured_port)
+                        }
+                    } else {
+                        // Don't use port 0 for readiness checks - it's a special value
+                        // that requests an ephemeral port from the OS
+                        resolved.first().copied().filter(|&p| p != 0)
+                    };
                     info!(
                         "daemon {id}: ports {:?} resolved to {:?}",
                         opts.expected_port, resolved
@@ -842,16 +859,11 @@ async fn check_ports_available(
     }
 
     for bump_offset in 0..=max_attempts {
-        // Use checked_add to prevent overflow - if any port would overflow, stop trying
-        let candidate_ports: Option<Vec<u16>> = expected_ports
+        // Use wrapping_add to handle overflow correctly - ports wrap around at 65535
+        let candidate_ports: Vec<u16> = expected_ports
             .iter()
-            .map(|&p| p.checked_add(bump_offset as u16))
+            .map(|&p| p.wrapping_add(bump_offset as u16))
             .collect();
-
-        let candidate_ports = match candidate_ports {
-            Some(ports) => ports,
-            None => break, // overflow, stop trying
-        };
 
         // Check if all ports in this set are available
         let mut all_available = true;
@@ -891,6 +903,16 @@ async fn check_ports_available(
         }
 
         if all_available {
+            // Check for overflow (port wrapped around to 0 due to wrapping_add)
+            // If any candidate port is 0 but the original expected port wasn't 0,
+            // it means we've wrapped around and should stop
+            if candidate_ports.contains(&0) && !expected_ports.contains(&0) {
+                return Err(PortError::NoAvailablePort {
+                    start_port: expected_ports[0],
+                    attempts: bump_offset + 1,
+                }
+                .into());
+            }
             if bump_offset > 0 {
                 info!(
                     "ports {:?} bumped by {} to {:?}",

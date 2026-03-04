@@ -56,8 +56,8 @@ pub struct Run {
     /// Wait until TCP port is listening before considering daemon ready
     #[clap(long)]
     port: Option<u16>,
-    /// Port(s) the daemon is expected to bind to (can be specified multiple times)
-    #[clap(long = "expected-port")]
+    /// Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)
+    #[clap(long = "expected-port", value_delimiter = ',')]
     expected_port: Vec<u16>,
     /// Automatically find an available port if the expected port is in use
     #[clap(long)]
