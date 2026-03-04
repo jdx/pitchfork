@@ -1187,8 +1187,8 @@
           {
             "name": "expected-port",
             "usage": "--expected-port… <EXPECTED_PORT>",
-            "help": "Port(s) the daemon is expected to bind to (can be specified multiple times)",
-            "help_first_line": "Port(s) the daemon is expected to bind to (can be specified multiple times)",
+            "help": "Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)",
+            "help_first_line": "Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)",
             "short": [],
             "long": [
               "expected-port"
