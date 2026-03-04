@@ -418,14 +418,12 @@ fn handle_logs_event(
         }
         KeyCode::Char('g') => {
             app.log_follow = false;
-            app.log_scroll = 0;
+            app.log_scroll = 1;
             Ok(None)
         }
         KeyCode::Char('G') => {
             app.log_follow = true;
-            if app.log_content.len() > 20 {
-                app.log_scroll = app.log_content.len();
-            }
+            app.log_scroll = app.log_content.len().max(1);
             Ok(None)
         }
         _ => Ok(None),
