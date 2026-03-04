@@ -15,6 +15,7 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 use crate::web::bp;
 use crate::web::helpers::{html_escape, url_encode};
+use std::io::{Seek, SeekFrom};
 
 fn base_html(title: &str, content: &str) -> String {
     let bp = bp();
@@ -342,35 +343,55 @@ pub async fn stream_sse(
         };
         let log_path = daemon_id.log_path();
         let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        let mut file_handle: Option<std::fs::File> = None;
 
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
-            if let Ok(metadata) = std::fs::metadata(&log_path) {
+            // Re-open file if we don't have a handle or if the file may have been recreated
+            let file = match &mut file_handle {
+                Some(f) => f,
+                None => {
+                    match std::fs::File::open(&log_path) {
+                        Ok(f) => {
+                            file_handle = Some(f);
+                            file_handle.as_mut().unwrap()
+                        }
+                        Err(_) => {
+                            // File may not exist yet, retry next iteration
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            if let Ok(metadata) = file.metadata() {
                 let current_size = metadata.len();
 
                 if current_size > last_size {
                     // Read new content as bytes to handle invalid UTF-8
-                    if let Ok(file) = std::fs::File::open(&log_path) {
-                        use std::io::{Read, Seek, SeekFrom};
-                        let mut file = file;
-                        if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                            let mut buffer = Vec::new();
-                            if file.read_to_end(&mut buffer).is_ok() && !buffer.is_empty() {
-                                // Use lossy conversion to handle invalid UTF-8 gracefully
-                                let new_content = String::from_utf8_lossy(&buffer);
-                                let escaped = html_escape(&new_content);
-                                yield Ok(Event::default().event("message").data(escaped));
-                            }
-                            // Always update last_size to avoid stalling on invalid content
-                            last_size = current_size;
+                    use std::io::{Read, Seek, SeekFrom};
+                    if file.seek(SeekFrom::Start(last_size)).is_ok() {
+                        let mut buffer = Vec::new();
+                        if file.read_to_end(&mut buffer).is_ok() && !buffer.is_empty() {
+                            // Use lossy conversion to handle invalid UTF-8 gracefully
+                            let new_content = String::from_utf8_lossy(&buffer);
+                            let escaped = html_escape(&new_content);
+                            yield Ok(Event::default().event("message").data(escaped));
                         }
+                        // Always update last_size to avoid stalling on invalid content
+                        last_size = current_size;
                     }
                 } else if current_size < last_size {
                     // File was truncated (cleared), send clear event and reset
                     yield Ok(Event::default().event("clear").data(""));
                     last_size = current_size;
+                    // Reset file handle to start from beginning
+                    let _ = file.seek(SeekFrom::Start(0));
                 }
+            } else {
+                // Failed to get metadata, file may have been deleted
+                file_handle = None;
             }
         }
     };

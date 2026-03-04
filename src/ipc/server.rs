@@ -112,8 +112,10 @@ impl IpcServer {
                                     while let Some(req) = incoming_chan.recv().await {
                                         if let Err(err) = tx.send((req, outgoing_chan.clone())).await {
                                             debug!("Failed to send message: {err:?}");
+                                            break;
                                         }
                                     }
+                                    trace!("IPC connection handler task terminated cleanly");
                                 });
                             }
                             Err(err) => {
@@ -207,8 +209,10 @@ impl IpcServer {
 
                 if let Err(err) = tx.send(msg).await {
                     warn!("Failed to emit message: {err:?}");
+                    break;
                 }
             }
+            trace!("IPC read task terminated cleanly");
         });
         rx
     }
@@ -229,8 +233,10 @@ impl IpcServer {
                 };
                 if let Err(err) = Self::send(&mut send, msg).await {
                     warn!("Failed to send message: {err:?}");
+                    break;
                 }
             }
+            trace!("IPC send task terminated cleanly");
         });
         tx
     }
