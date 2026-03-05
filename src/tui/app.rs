@@ -9,6 +9,7 @@ use crate::pitchfork_toml::{
 use crate::procs::{PROCS, ProcessStats};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use listeners::Listener;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
@@ -81,6 +82,7 @@ impl StatsHistory {
 pub enum View {
     Dashboard,
     Logs,
+    Network,
     Help,
     Confirm,
     Loading,
@@ -512,6 +514,9 @@ impl EditorState {
             ready_http: None,
             ready_port: None,
             ready_cmd: self.preserved_ready_cmd.clone(),
+            expected_port: Vec::new(),
+            auto_bump_port: false,
+            port_bump_attempts: 10,
             boot_start: None,
             depends: vec![],
             watch: vec![],
@@ -864,6 +869,14 @@ pub struct App {
     pub editor_state: Option<EditorState>,
     // Config file selector state
     pub file_selector: Option<ConfigFileSelector>,
+    // Network view state
+    pub network_listeners: Vec<Listener>,
+    pub network_search_query: String,
+    pub network_search_active: bool,
+    pub network_selected: usize,
+    pub network_scroll_offset: usize,
+    pub network_selected_pid: Option<u32>, // Store PID to ensure correct targeting
+    pub network_visible_rows: usize,       // Cached visible row count for scroll calculations
 }
 
 impl App {
@@ -876,7 +889,7 @@ impl App {
             prev_view: View::Dashboard,
             log_content: Vec::new(),
             log_daemon_id: None,
-            log_scroll: 0,
+            log_scroll: 1,
             log_follow: true,
             message: None,
             message_time: None,
@@ -899,6 +912,13 @@ impl App {
             show_available: true, // Show available daemons by default
             editor_state: None,
             file_selector: None,
+            network_listeners: Vec::new(),
+            network_search_query: String::new(),
+            network_search_active: false,
+            network_selected: 0,
+            network_scroll_offset: 0,
+            network_selected_pid: None,
+            network_visible_rows: 20, // Default value, updated during draw
         }
     }
 
@@ -1224,6 +1244,87 @@ impl App {
         Ok(())
     }
 
+    /// Refresh network listeners data (for Network view)
+    pub async fn refresh_network(&mut self) {
+        // Use spawn_blocking since listeners::get_all() is a blocking operation
+        let listeners: Vec<Listener> = tokio::task::spawn_blocking(|| {
+            listeners::get_all()
+                .map(|set| set.into_iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+
+        self.network_listeners = listeners;
+
+        // Keep selection in bounds - first calculate the filtered count
+        let filtered_count = self.filtered_network_listeners().len();
+
+        // Update selection index
+        if filtered_count > 0 && self.network_selected >= filtered_count {
+            self.network_selected = filtered_count - 1;
+        } else if filtered_count == 0 {
+            self.network_selected = 0;
+        }
+
+        // Get a fresh filtered list and update the stored PID
+        let selected_pid = self
+            .filtered_network_listeners()
+            .get(self.network_selected)
+            .map(|l| l.process.pid);
+        self.network_selected_pid = selected_pid;
+    }
+
+    /// Get filtered network listeners based on search query
+    pub fn filtered_network_listeners(&self) -> Vec<&listeners::Listener> {
+        if self.network_search_query.is_empty() {
+            return self.network_listeners.iter().collect();
+        }
+
+        let matcher = SkimMatcherV2::default();
+        let query = &self.network_search_query;
+
+        self.network_listeners
+            .iter()
+            .filter(|listener| {
+                // Search by process name, PID, or port
+                let search_text = format!(
+                    "{} {} {}",
+                    listener.process.name,
+                    listener.process.pid,
+                    listener.socket.port()
+                );
+                matcher.fuzzy_match(&search_text, query).is_some()
+            })
+            .collect()
+    }
+
+    /// Toggle network search active state
+    pub fn toggle_network_search(&mut self) {
+        self.network_search_active = !self.network_search_active;
+        if !self.network_search_active {
+            self.network_search_query.clear();
+        }
+        // Reset scroll and selection when toggling search
+        self.network_selected = 0;
+        self.network_scroll_offset = 0;
+        // Update PID for new selection
+        let filtered = self.filtered_network_listeners();
+        self.network_selected_pid = filtered.first().map(|l| l.process.pid);
+    }
+
+    /// Clear network search
+    pub fn clear_network_search(&mut self) {
+        self.network_search_query.clear();
+        self.network_search_active = false;
+        // Reset scroll and selection
+        self.network_selected = 0;
+        self.network_scroll_offset = 0;
+        // Update PID for new selection
+        let filtered = self.filtered_network_listeners();
+        self.network_selected_pid = filtered.first().map(|l| l.process.pid);
+    }
+
     /// Check if a daemon is from config only (not currently active)
     pub fn is_config_only(&self, daemon_id: &DaemonId) -> bool {
         self.config_daemon_ids.contains(daemon_id)
@@ -1240,29 +1341,25 @@ impl App {
     }
 
     pub fn scroll_logs_down(&mut self) {
-        if self.log_content.len() > 20 {
-            let max_scroll = self.log_content.len();
-            self.log_scroll = (self.log_scroll + 1).min(max_scroll);
-        }
+        let max_scroll = self.log_content.len();
+        self.log_scroll = (self.log_scroll + 1).clamp(1, max_scroll);
     }
 
     pub fn scroll_logs_up(&mut self) {
-        self.log_scroll = self.log_scroll.saturating_sub(1);
+        self.log_scroll = self.log_scroll.saturating_sub(1).max(1);
     }
 
     /// Scroll down by half page (Ctrl+D)
     pub fn scroll_logs_page_down(&mut self, visible_lines: usize) {
         let half_page = visible_lines / 2;
-        if self.log_content.len() > visible_lines {
-            let max_scroll = self.log_content.len();
-            self.log_scroll = (self.log_scroll + half_page).min(max_scroll);
-        }
+        let max_scroll = self.log_content.len();
+        self.log_scroll = (self.log_scroll + half_page).clamp(1, max_scroll);
     }
 
     /// Scroll up by half page (Ctrl+U)
     pub fn scroll_logs_page_up(&mut self, visible_lines: usize) {
         let half_page = visible_lines / 2;
-        self.log_scroll = self.log_scroll.saturating_sub(half_page);
+        self.log_scroll = self.log_scroll.saturating_sub(half_page).max(1);
     }
 
     // Log search
@@ -1332,7 +1429,7 @@ impl App {
         if let Some(&line_idx) = self.log_search_matches.get(self.log_search_current) {
             // Scroll so the match is visible (center it if possible)
             let half_page = 10; // Assume ~20 visible lines
-            self.log_scroll = line_idx.saturating_sub(half_page);
+            self.log_scroll = line_idx.saturating_sub(half_page).max(1);
             self.log_follow = false;
         }
     }
@@ -1373,10 +1470,10 @@ impl App {
 
         // Auto-scroll to bottom when in follow mode
         if self.log_follow {
-            self.log_scroll = self.log_content.len();
+            self.log_scroll = self.log_content.len().max(1);
         } else if prev_len == 0 {
             // First load - start at bottom
-            self.log_scroll = self.log_content.len();
+            self.log_scroll = self.log_content.len().max(1);
         }
         // If not following and not first load, keep scroll position
     }
@@ -1389,7 +1486,7 @@ impl App {
         self.view = View::Dashboard;
         self.log_daemon_id = None;
         self.log_content.clear();
-        self.log_scroll = 0;
+        self.log_scroll = 1;
     }
 
     /// Returns (total, running, stopped, errored, available)

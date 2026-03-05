@@ -7,6 +7,7 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
+use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
@@ -36,6 +37,12 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_http: Option<String>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
+    /// Expected ports from configuration (before auto-bump resolution)
+    pub expected_port: Vec<u16>,
+    /// Resolved ports actually used after auto-bump (may differ from expected)
+    pub resolved_port: Vec<u16>,
+    pub auto_bump_port: Option<bool>,
+    pub port_bump_attempts: Option<u32>,
     pub depends: Option<Vec<DaemonId>>,
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
@@ -80,6 +87,10 @@ impl UpsertDaemonOpts {
                 ready_http: None,
                 ready_port: None,
                 ready_cmd: None,
+                expected_port: Vec::new(),
+                resolved_port: Vec::new(),
+                auto_bump_port: None,
+                port_bump_attempts: None,
                 depends: None,
                 env: None,
                 watch: None,
@@ -147,6 +158,28 @@ impl Supervisor {
             ready_cmd: opts
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),
+            expected_port: if opts.expected_port.is_empty() {
+                existing
+                    .map(|d| d.expected_port.clone())
+                    .unwrap_or_default()
+            } else {
+                opts.expected_port
+            },
+            resolved_port: if opts.resolved_port.is_empty() {
+                existing
+                    .map(|d| d.resolved_port.clone())
+                    .unwrap_or_default()
+            } else {
+                opts.resolved_port
+            },
+            auto_bump_port: opts
+                .auto_bump_port
+                .unwrap_or(existing.map(|d| d.auto_bump_port).unwrap_or(false)),
+            port_bump_attempts: opts.port_bump_attempts.unwrap_or(
+                existing
+                    .map(|d| d.port_bump_attempts)
+                    .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
+            ),
             depends: opts
                 .depends
                 .unwrap_or_else(|| existing.map(|d| d.depends.clone()).unwrap_or_default()),

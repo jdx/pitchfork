@@ -24,7 +24,7 @@ use std::hash::Hash;
 /// ```
 /// use pitchfork_cli::daemon_id::DaemonId;
 ///
-/// let id = DaemonId::new("project-a", "api");
+/// let id = DaemonId::try_new("project-a", "api").unwrap();
 /// assert_eq!(id.namespace(), "project-a");
 /// assert_eq!(id.name(), "api");
 /// assert_eq!(id.qualified(), "project-a/api");

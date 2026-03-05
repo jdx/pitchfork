@@ -69,6 +69,17 @@ pub enum IpcResponse {
     DaemonFailed {
         error: String,
     },
+    /// Port conflict detected with detailed process information
+    PortConflict {
+        port: u16,
+        process: String,
+        pid: u32,
+    },
+    /// No available ports found after exhausting auto-bump attempts
+    NoAvailablePort {
+        start_port: u16,
+        attempts: u32,
+    },
     DaemonReady {
         daemon: Daemon,
     },
