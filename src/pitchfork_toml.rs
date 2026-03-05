@@ -531,13 +531,16 @@ impl PitchforkToml {
                 Ok(pt2) => {
                     // Detect collisions for all existing project configs, including
                     // pitchfork.local.toml. Allow sibling base/local files in the same
-                    // directory to share a namespace.
+                    // directory to share a namespace, including siblings via .config subfolder
                     if p.exists() && !is_global_config(&p) {
                         let ns = namespace_from_path(&p)?;
-                        let origin_dir = p
-                            .parent()
-                            .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
-                            .unwrap_or_else(|| p.clone());
+                        let origin_dir = if is_dot_config_pitchfork(&p) {
+                            p.parent().and_then(|d| d.parent())
+                        } else {
+                            p.parent()
+                        }
+                        .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
+                        .unwrap_or_else(|| p.clone());
 
                         if let Some((other_path, other_dir)) = ns_to_origin.get(ns.as_str())
                             && *other_dir != origin_dir
