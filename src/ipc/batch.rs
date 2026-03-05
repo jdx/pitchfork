@@ -651,6 +651,8 @@ pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> Path
 
 #[cfg(test)]
 mod tests {
+    use crate::env;
+
     use super::*;
 
     #[test]
@@ -791,13 +793,11 @@ mod tests {
     #[test]
     fn test_resolve_daemon_dir_global_config_normal() {
         // Global config (~/.config/pitchfork/config.toml) should use normal resolution (parent)
-        let result = resolve_daemon_dir(
-            None,
-            Some(Path::new("/home/user/.config/pitchfork/config.toml")),
-        );
+        let global_path = env::PITCHFORK_GLOBAL_CONFIG_USER.as_path();
+        let result = resolve_daemon_dir(None, Some(global_path));
         assert_eq!(
             result,
-            PathBuf::from("/home/user/.config/pitchfork"),
+            global_path.parent().unwrap(),
             "Global config should use parent directory"
         );
     }
