@@ -69,11 +69,22 @@ pub static PITCHFORK_INTERVAL_SECS: Lazy<u64> =
 pub static PITCHFORK_WATCH_INTERVAL_MS: Lazy<u64> =
     Lazy::new(|| var_u64("PITCHFORK_WATCH_INTERVAL_MS").unwrap_or(10_000));
 
+// Maximum number of port bump attempts when auto_bump_port is enabled
+// This controls how many times pitchfork will try incrementing the port
+// number to find an available port before giving up.
+// Default: 10. Increase if you have many conflicting ports.
+pub static PITCHFORK_PORT_BUMP_ATTEMPTS: Lazy<u32> =
+    Lazy::new(|| var_u32("PITCHFORK_PORT_BUMP_ATTEMPTS").unwrap_or(10));
+
 fn var_path(name: &str) -> Option<PathBuf> {
     var(name).map(PathBuf::from).ok()
 }
 
 fn var_u64(name: &str) -> Option<u64> {
+    var(name).ok().and_then(|val| val.parse().ok())
+}
+
+fn var_u32(name: &str) -> Option<u32> {
     var(name).ok().and_then(|val| val.parse().ok())
 }
 

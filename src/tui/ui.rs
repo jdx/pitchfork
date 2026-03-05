@@ -4,6 +4,7 @@ use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
 use crate::tui::app::{
     App, EditMode, FormFieldValue, PendingAction, SortColumn, StatsHistory, View,
 };
+use listeners::Listener;
 use ratatui::{
     prelude::*,
     symbols,
@@ -41,7 +42,7 @@ fn truncate_path_end(s: &str, max_chars: usize) -> String {
     }
 }
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -126,7 +127,7 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(stats_widget, area);
 }
 
-fn draw_main(f: &mut Frame, area: Rect, app: &App) {
+fn draw_main(f: &mut Frame, area: Rect, app: &mut App) {
     match app.view {
         View::Dashboard
         | View::Confirm
@@ -135,6 +136,7 @@ fn draw_main(f: &mut Frame, area: Rect, app: &App) {
         | View::ConfigEditor
         | View::ConfigFileSelect => draw_daemon_table(f, area, app),
         View::Logs => draw_logs(f, area, app),
+        View::Network => draw_network(f, area, app),
         View::Help => draw_daemon_table(f, area, app), // Help is an overlay
     }
 }
@@ -544,6 +546,159 @@ fn draw_logs(f: &mut Frame, area: Rect, app: &App) {
 
         draw_log_panel(f, logs_area, app, daemon_id);
     }
+}
+
+/// Draw network view showing listening ports
+fn draw_network(f: &mut Frame, area: Rect, app: &mut App) {
+    let search_height = if app.network_search_active || !app.network_search_query.is_empty() {
+        3
+    } else {
+        0
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),             // Header
+            Constraint::Length(search_height), // Search bar (if active)
+            Constraint::Min(5),                // Table
+        ])
+        .split(area);
+
+    // Header
+    let header_text = if app.network_search_active {
+        format!(
+            "Network Listeners ({} matches)",
+            app.filtered_network_listeners().len()
+        )
+    } else {
+        format!("Network Listeners ({} total)", app.network_listeners.len())
+    };
+    let header = Paragraph::new(header_text)
+        .style(Style::default().fg(ORANGE).bold())
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(GRAY)),
+        );
+    f.render_widget(header, chunks[0]);
+
+    // Search bar (if active)
+    let table_area = if search_height > 0 {
+        draw_network_search_bar(f, chunks[1], app);
+        chunks[2]
+    } else {
+        chunks[2]
+    };
+
+    // Table
+    draw_network_table(f, table_area, app);
+}
+
+fn draw_network_search_bar(f: &mut Frame, area: Rect, app: &App) {
+    let search_text = if app.network_search_active {
+        format!("/{}", app.network_search_query)
+    } else {
+        app.network_search_query.clone()
+    };
+
+    let search_paragraph = Paragraph::new(search_text)
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(if app.network_search_active {
+                    Color::Yellow
+                } else {
+                    GRAY
+                }))
+                .title("Search"),
+        );
+    f.render_widget(search_paragraph, area);
+}
+
+fn draw_network_table(f: &mut Frame, area: Rect, app: &mut App) {
+    // Calculate visible rows first (before borrowing app for listeners)
+    let header_height = 3; // Header + border
+    let visible_rows = (area.height as usize).saturating_sub(header_height);
+
+    // Update the cached visible rows for event handler scroll calculations
+    app.network_visible_rows = visible_rows;
+
+    // Now get the listeners (this borrows app)
+    let mut listeners: Vec<&Listener> = app.filtered_network_listeners();
+
+    // Sort by PID to prevent visual jitter
+    listeners.sort_by_key(|l| l.process.pid);
+
+    // Build a set of daemon ports for overlap detection
+    let daemon_ports: std::collections::HashSet<u16> = app
+        .daemons
+        .iter()
+        .flat_map(|d| d.resolved_port.iter().copied())
+        .collect();
+
+    // Apply scroll offset - only show visible rows
+    let start_idx = app.network_scroll_offset;
+    let end_idx = (start_idx + visible_rows).min(listeners.len());
+    let visible_listeners = &listeners[start_idx..end_idx];
+
+    // Create table rows
+    let rows: Vec<Row> = visible_listeners
+        .iter()
+        .enumerate()
+        .map(|(visible_idx, listener)| {
+            let actual_idx = start_idx + visible_idx;
+            let socket = &listener.socket;
+            let process = &listener.process;
+            let port = socket.port();
+
+            // Check if this port overlaps with any daemon's expected port
+            let is_overlapping = daemon_ports.contains(&port);
+
+            let cells = vec![
+                Cell::from(process.pid.to_string()),
+                Cell::from(process.name.clone()),
+                Cell::from(format!("{:?}", listener.protocol)),
+                Cell::from(socket.ip().to_string()),
+                Cell::from(port.to_string()),
+            ];
+
+            let style = if actual_idx == app.network_selected {
+                Style::default().bg(Color::DarkGray).fg(Color::White)
+            } else if is_overlapping {
+                // Highlight overlapping ports with a warning color
+                Style::default().fg(Color::Rgb(255, 100, 100)) // Reddish
+            } else {
+                Style::default()
+            };
+
+            Row::new(cells).style(style)
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(8),  // PID
+            Constraint::Length(20), // Process Name
+            Constraint::Length(6),  // Protocol
+            Constraint::Length(16), // IP Address
+            Constraint::Length(7),  // Port
+        ],
+    )
+    .header(
+        Row::new(vec!["PID", "Process", "Proto", "Address", "Port"])
+            .style(Style::default().fg(ORANGE).bold())
+            .bottom_margin(1),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(GRAY)),
+    );
+
+    f.render_widget(table, area);
 }
 
 /// Draw stats panel on the left side of details view
@@ -1116,10 +1271,10 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             "Space:toggle  Ctrl+A:all  c:clear  s:start  x:stop  r:restart  d:disable  e:enable"
         }
         View::Dashboard if !app.search_query.is_empty() => {
-            "/:search  q/Esc:clear  j/k:nav  Space:select  s:start  a:toggle-avail  ?:help"
+            "/:search  q/Esc:clear  j/k:nav  Space:select  s:start  a:toggle-avail  p:ports  ?:help"
         }
         View::Dashboard => {
-            "/:search  q/Esc:quit  j/k:nav  Space:select  s:start  a:toggle-avail  ?:help"
+            "/:search  q/Esc:quit  j/k:nav  Space:select  s:start  a:toggle-avail  p:ports  ?:help"
         }
         View::Logs if app.log_search_active => "Type to search  Enter:finish  Esc:clear",
         View::Logs if !app.log_search_query.is_empty() => {
@@ -1131,6 +1286,11 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         View::Logs => {
             "/:search  q/Esc:back  j/k:scroll  Ctrl+D/U:page  f:follow  e:expand  g/G:top/btm"
         }
+        View::Network if app.network_search_active => "Type to search  Enter:finish  Esc:clear",
+        View::Network if !app.network_search_query.is_empty() => {
+            "/:search  q/Esc:back  j/k:nav  g/G:top/btm  r:refresh"
+        }
+        View::Network => "/:search  q/Esc:back  j/k:nav  g/G:top/btm  r:refresh",
         View::Help => "q/Esc/?:close",
         View::Confirm => "y/Enter:confirm  n/Esc:cancel",
         View::Loading => "Please wait...",
@@ -1200,6 +1360,7 @@ fn draw_help_overlay(f: &mut Frame) {
             "General",
             Style::default().fg(RED).bold(),
         )]),
+        Line::from("  p           Show network ports view"),
         Line::from("  ?           Toggle this help"),
         Line::from("  q           Quit / Go back"),
         Line::from("  Ctrl+C      Force quit"),
@@ -1215,6 +1376,16 @@ fn draw_help_overlay(f: &mut Frame) {
         Line::from("  f           Toggle follow mode"),
         Line::from("  e           Expand/collapse logs"),
         Line::from("  g / G       Go to top/bottom"),
+        Line::from("  q / Esc     Return to dashboard"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Network View",
+            Style::default().fg(RED).bold(),
+        )]),
+        Line::from("  j / k       Navigate up/down"),
+        Line::from("  g / G       Go to top/bottom"),
+        Line::from("  /           Search/filter processes"),
+        Line::from("  r           Refresh list"),
         Line::from("  q / Esc     Return to dashboard"),
     ];
 
@@ -1413,6 +1584,29 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
             Span::styled("Command: ", Style::default().fg(GRAY)),
             Span::styled(cfg.run.clone(), Style::default().fg(Color::White)),
         ]));
+
+        // Show ports - use daemon's resolved ports if running, otherwise config ports
+        let ports_to_show = daemon
+            .filter(|d| !d.resolved_port.is_empty())
+            .map(|d| d.resolved_port.clone())
+            .unwrap_or_else(|| cfg.expected_port.clone());
+
+        if !ports_to_show.is_empty() {
+            let port_str = ports_to_show
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let port_label = if ports_to_show.len() == 1 {
+                "Port: "
+            } else {
+                "Ports: "
+            };
+            lines.push(Line::from(vec![
+                Span::styled(port_label, Style::default().fg(GRAY)),
+                Span::styled(port_str, Style::default().fg(Color::White)),
+            ]));
+        }
 
         if let Some(cron) = &cfg.cron {
             lines.push(Line::from(vec![

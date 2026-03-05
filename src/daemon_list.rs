@@ -2,6 +2,7 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
+use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use std::collections::HashSet;
@@ -122,6 +123,10 @@ fn build_daemon_list(
             ready_http: None,
             ready_port: None,
             ready_cmd: None,
+            expected_port: Vec::new(),
+            resolved_port: Vec::new(),
+            auto_bump_port: false,
+            port_bump_attempts: *PITCHFORK_PORT_BUMP_ATTEMPTS,
             depends: vec![],
             env: None,
             watch: vec![],
