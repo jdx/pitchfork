@@ -17,7 +17,7 @@
 <p><b>Daemons with DX</b></p>
 
 <p align="center">
-  <a href="https://pitchfork.jdx.dev/getting-started.html">Getting Started</a> •
+  <a href="https://pitchfork.jdx.dev/quickstart.html">Quick Start</a> •
   <a href="https://pitchfork.jdx.dev">Documentation</a> •
   <a href="https://pitchfork.jdx.dev/cli">CLI Reference</a>
 </p>
