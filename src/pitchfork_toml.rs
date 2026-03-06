@@ -490,7 +490,7 @@ impl PitchforkToml {
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
 
         // Find all project config files. Order is reversed so after .reverse():
-        // - each directory has .config/pitchfork.toml before pitchfork.toml before pitchfork.local.toml
+        // - each directory has: .config/pitchfork.toml < .config/pitchfork.local.toml < pitchfork.toml < pitchfork.local.toml
         // - directories go from root to cwd (later configs override earlier)
         let mut project_paths = xx::file::find_up_all(
             cwd,
