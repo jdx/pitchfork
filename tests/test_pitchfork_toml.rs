@@ -1902,7 +1902,7 @@ fn test_list_paths_from_with_dot_config() {
     let toml_path = temp_dir.path().join("pitchfork.toml");
     let local_path = temp_dir.path().join("pitchfork.local.toml");
 
-    // Create all three config files
+    // Create all four config files
     std::fs::write(&dot_config_path, "[daemons]").unwrap();
     std::fs::write(&dot_config_local_path, "[daemons]").unwrap();
     std::fs::write(&toml_path, "[daemons]").unwrap();
@@ -1910,7 +1910,7 @@ fn test_list_paths_from_with_dot_config() {
 
     let paths = pitchfork_toml::PitchforkToml::list_paths_from(temp_dir.path());
 
-    // All three should be discovered
+    // All four should be discovered
     assert!(
         paths.contains(&dot_config_path),
         "Should discover .config/pitchfork.toml"
