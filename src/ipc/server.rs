@@ -175,8 +175,20 @@ impl IpcServer {
             } else {
                 window_ms
             };
-            let max_requests = usize::try_from(s.ipc.rate_limit).unwrap_or(100);
-            let mut rate_limiter = RateLimiter::new(max_requests, window_ms);
+            let max_requests = match usize::try_from(s.ipc.rate_limit) {
+                Ok(0) => {
+                    warn!("ipc.rate_limit is 0, which would block all IPC requests; clamping to 1");
+                    1
+                }
+                Ok(n) => n,
+                Err(_) => {
+                    warn!(
+                        "ipc.rate_limit value {} is out of range, clamping to 100",
+                        s.ipc.rate_limit
+                    );
+                    100
+                }
+            };
 
             loop {
                 // Check rate limit BEFORE reading to avoid wasting CPU on deserialization
