@@ -78,6 +78,15 @@ impl Settings {
 
         candidates.into_iter().find(|p| p.is_file())
     }
+
+    /// Return `supervisor.port_bump_attempts` as `u32`, clamping out-of-range
+    /// values to the schema default (10).
+    ///
+    /// This is the single source of truth for the fallback so that call-sites
+    /// don't each duplicate the hardcoded `10`.
+    pub fn default_port_bump_attempts(&self) -> u32 {
+        u32::try_from(self.supervisor.port_bump_attempts).unwrap_or(10)
+    }
 }
 
 #[cfg(test)]

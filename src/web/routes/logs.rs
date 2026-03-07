@@ -133,7 +133,7 @@ pub async fn index() -> Html<String> {
                         let content = String::from_utf8_lossy(&bytes);
                         let lines: Vec<&str> = content.lines().collect();
                         let log_lines = settings().web.log_lines.max(0) as usize;
-                        let start = if lines.len() > log_lines {
+                        let start = if log_lines > 0 && lines.len() > log_lines {
                             lines.len() - log_lines
                         } else {
                             0
@@ -262,7 +262,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                 // Get last N lines (configurable via web.log_lines setting)
                 let lines: Vec<&str> = content.lines().collect();
                 let log_lines = settings().web.log_lines.max(0) as usize;
-                let start = if lines.len() > log_lines {
+                let start = if log_lines > 0 && lines.len() > log_lines {
                     lines.len() - log_lines
                 } else {
                     0
@@ -317,7 +317,7 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
                 let content = String::from_utf8_lossy(&bytes);
                 let lines: Vec<&str> = content.lines().collect();
                 let log_lines = settings().web.log_lines.max(0) as usize;
-                let start = if lines.len() > log_lines {
+                let start = if log_lines > 0 && lines.len() > log_lines {
                     lines.len() - log_lines
                 } else {
                     0

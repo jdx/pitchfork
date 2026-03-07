@@ -15,13 +15,24 @@ use once_cell::sync::Lazy;
 static TERM_LEVEL: AtomicUsize = AtomicUsize::new(LevelFilter::Info as usize);
 static FILE_LEVEL: AtomicUsize = AtomicUsize::new(LevelFilter::Info as usize);
 
+fn usize_to_level_filter(n: usize) -> LevelFilter {
+    match n {
+        0 => LevelFilter::Off,
+        1 => LevelFilter::Error,
+        2 => LevelFilter::Warn,
+        3 => LevelFilter::Info,
+        4 => LevelFilter::Debug,
+        5 => LevelFilter::Trace,
+        _ => LevelFilter::Info, // unreachable in practice
+    }
+}
+
 fn load_term_level() -> LevelFilter {
-    // SAFETY: we only ever store valid LevelFilter discriminants.
-    unsafe { std::mem::transmute(TERM_LEVEL.load(Ordering::Relaxed)) }
+    usize_to_level_filter(TERM_LEVEL.load(Ordering::Relaxed))
 }
 
 fn load_file_level() -> LevelFilter {
-    unsafe { std::mem::transmute(FILE_LEVEL.load(Ordering::Relaxed)) }
+    usize_to_level_filter(FILE_LEVEL.load(Ordering::Relaxed))
 }
 
 #[derive(Debug)]

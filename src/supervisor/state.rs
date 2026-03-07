@@ -179,7 +179,7 @@ impl Supervisor {
                 .unwrap_or(existing.map(|d| d.auto_bump_port).unwrap_or(false)),
             port_bump_attempts: opts.port_bump_attempts.unwrap_or(
                 existing.map(|d| d.port_bump_attempts).unwrap_or_else(|| {
-                    u32::try_from(settings().supervisor.port_bump_attempts).unwrap_or(10)
+                    settings().default_port_bump_attempts()
                 }),
             ),
             depends: opts

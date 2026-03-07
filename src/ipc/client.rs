@@ -51,6 +51,12 @@ impl IpcClient {
             );
             5
         });
+        let connect_attempts = if connect_attempts == 0 {
+            warn!("ipc.connect_attempts is 0; defaulting to 1");
+            1
+        } else {
+            connect_attempts
+        };
         let connect_min_delay = s.ipc_connect_min_delay();
         let connect_max_delay = s.ipc_connect_max_delay();
 
