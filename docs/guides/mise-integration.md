@@ -28,8 +28,8 @@ haven't run. The built-in mise integration solves this by wrapping your daemon c
 Enable mise for all daemons in [settings](/reference/settings):
 
 ```toml
-# ~/.config/pitchfork/settings.toml
-[general]
+# ~/.config/pitchfork/config.toml
+[settings.general]
 mise = true
 ```
 
@@ -55,8 +55,8 @@ disabled by default.
 If `mise` is not in a well-known location, specify the path:
 
 ```toml
-# ~/.config/pitchfork/settings.toml
-[general]
+# ~/.config/pitchfork/config.toml
+[settings.general]
 mise = true
 mise_bin = "/opt/custom/bin/mise"
 ```

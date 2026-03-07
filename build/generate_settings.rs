@@ -455,17 +455,14 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                                     if std::env::var(#env_var).is_err() {
                                         if let Ok(val) = std::env::var(#dep_env) {
                                             eprintln!(
-                                                "pitchfork: warning: {} is deprecated, use {} instead (with duration format, e.g. \"10s\", \"1m\")",
+                                                "pitchfork: warning: {} is deprecated, use {} instead (with duration format, e.g. \"10s\", \"100ms\", \"1m\")",
                                                 #dep_env, #env_var
                                             );
                                             if humantime::parse_duration(&val).is_ok() {
                                                 #field_path = val;
-                                            } else if let Ok(n) = val.parse::<u64>() {
-                                                // Best-effort: treat bare integer as seconds
-                                                #field_path = format!("{}s", n);
                                             } else {
                                                 eprintln!(
-                                                    "pitchfork: warning: invalid value {:?} for {}, using default",
+                                                    "pitchfork: warning: cannot parse {:?} from {} as a duration (expected e.g. \"10s\", \"100ms\"), using default",
                                                     val, #dep_env
                                                 );
                                             }

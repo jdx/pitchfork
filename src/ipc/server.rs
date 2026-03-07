@@ -168,7 +168,7 @@ impl IpcServer {
             let window_ms = if window_ms < 100 {
                 warn!(
                     "ipc.rate_limit_window is {}ms which is too small (< 100ms), \
-                     clamping to 100ms to avoid effectively disabling rate limiting",
+                    clamping to 100ms to avoid effectively disabling rate limiting",
                     window_ms
                 );
                 100
@@ -189,6 +189,7 @@ impl IpcServer {
                     100
                 }
             };
+            let mut rate_limiter = RateLimiter::new(max_requests, window_ms);
 
             loop {
                 // Check rate limit BEFORE reading to avoid wasting CPU on deserialization

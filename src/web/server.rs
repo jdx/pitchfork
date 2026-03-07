@@ -35,13 +35,15 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
     let bind_address = &s.web.bind_address;
     // port_attempts is stored as i64; clamp to a sane u16 range rather than
     // silently truncating negative/oversized values with `as u16`.
-    let port_attempts: u16 = u16::try_from(s.web.port_attempts).unwrap_or_else(|_| {
-        warn!(
-            "web.port_attempts value {} is out of range (1-65535), clamping to 10",
-            s.web.port_attempts
-        );
-        10
-    });
+    let port_attempts: u16 = u16::try_from(s.web.port_attempts)
+        .unwrap_or_else(|_| {
+            warn!(
+                "web.port_attempts value {} is out of range (1-65535), clamping to 10",
+                s.web.port_attempts
+            );
+            10
+        })
+        .max(1);
     let inner = Router::new()
         // Dashboard
         .route("/", get(routes::index::index))
