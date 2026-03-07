@@ -356,7 +356,6 @@ pub async fn stream_sse(
         }
 
         // Track last seen inode to detect rotation when opening fresh handles
-        #[cfg(unix)]
         let mut last_path_ino: Option<u64> = None;
 
         loop {
@@ -367,7 +366,6 @@ pub async fn stream_sse(
                 let path = log_path.clone();
                 let fh = file_handle.take();
                 let mut ls = last_size;
-                #[cfg(unix)]
                 let prev_ino = last_path_ino;
                 tokio::task::spawn_blocking(move || {
                     let mut file = match fh {
@@ -412,7 +410,7 @@ pub async fn stream_sse(
                     if current_size > ls {
                         // Read new content as bytes to handle invalid UTF-8
                         if file.seek(SeekFrom::Start(ls)).is_err() {
-                            return (Some(file), ls, Some(FileOpResult::SeekFailed), prev_ino);
+                            return (None, ls, Some(FileOpResult::SeekFailed), prev_ino);
                         }
 
                         const MAX_READ_SIZE: u64 = 1024 * 1024;
@@ -451,10 +449,7 @@ pub async fn stream_sse(
                 Ok((fh, ls, result, ino)) => {
                     file_handle = fh;
                     last_size = ls;
-                    #[cfg(unix)]
-                    {
-                        last_path_ino = ino;
-                    }
+                    last_path_ino = ino;
 
                     match result {
                         Some(FileOpResult::Data(buffer)) => {
