@@ -470,9 +470,9 @@ impl IpcClient {
         let ready_cmd = opts.cmd.clone();
         let expected_port = opts.expected_port.clone();
         let auto_bump_port = opts.auto_bump_port;
-        let port_bump_attempts = opts.port_bump_attempts.unwrap_or_else(|| {
-            settings().default_port_bump_attempts()
-        });
+        let port_bump_attempts = opts
+            .port_bump_attempts
+            .unwrap_or_else(|| settings().default_port_bump_attempts());
         let retry = opts.retry.unwrap_or(0);
         let shell_pid = opts.shell_pid;
 
@@ -695,9 +695,9 @@ impl IpcClient {
             ready_cmd: opts.cmd.clone(),
             expected_port: opts.expected_port.unwrap_or_default(),
             auto_bump_port: opts.auto_bump_port,
-            port_bump_attempts: opts.port_bump_attempts.unwrap_or_else(|| {
-                settings().default_port_bump_attempts()
-            }),
+            port_bump_attempts: opts
+                .port_bump_attempts
+                .unwrap_or_else(|| settings().default_port_bump_attempts()),
             wait_ready: true,
             depends: vec![],
             env: None,

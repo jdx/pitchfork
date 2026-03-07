@@ -685,9 +685,9 @@ impl PitchforkToml {
                 ready_cmd: raw_daemon.ready_cmd,
                 expected_port: raw_daemon.expected_port,
                 auto_bump_port: raw_daemon.auto_bump_port.unwrap_or(false),
-                port_bump_attempts: raw_daemon.port_bump_attempts.unwrap_or_else(|| {
-                    settings().default_port_bump_attempts()
-                }),
+                port_bump_attempts: raw_daemon
+                    .port_bump_attempts
+                    .unwrap_or_else(|| settings().default_port_bump_attempts()),
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
