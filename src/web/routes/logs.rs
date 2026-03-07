@@ -413,7 +413,7 @@ pub async fn stream_sse(
                         Some(m) => m,
                         None => match file.metadata() {
                             Ok(m) => m,
-                            Err(_) => return (Some(file), ls, None, fresh_ino),
+                            Err(_) => return (None, ls, None, fresh_ino),
                         },
                     };
                     let current_size = metadata.len();
@@ -505,9 +505,8 @@ pub async fn stream_sse(
                     }
                 }
                 Err(_) => {
-                    file_handle = None;
-                    // last_size remains valid from before this iteration;
-                    // do not reset it or we will re-stream the entire file.
+                    // file_handle is already None after take() above;
+                    // last_size remains valid from before this iteration.
                 }
             }
         }
