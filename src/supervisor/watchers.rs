@@ -10,12 +10,12 @@ use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
 use crate::{Result, env};
 use notify::RecursiveMode;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio::time;
 
 impl Supervisor {
@@ -52,8 +52,8 @@ impl Supervisor {
     /// Start the cron watcher for scheduled daemon execution
     pub(crate) fn cron_watch(&self) -> Result<()> {
         tokio::spawn(async move {
-            // Check every 10 seconds to support sub-minute cron schedules
-            let mut interval = time::interval(Duration::from_secs(10));
+            // Check every cron_check_interval to support sub-minute cron schedules
+            let mut interval = time::interval(settings().supervisor_cron_check_interval());
             loop {
                 interval.tick().await;
                 if let Err(err) = SUPERVISOR.check_cron_schedules().await {
@@ -187,6 +187,7 @@ impl Supervisor {
                                 env: daemon.env.clone(),
                                 watch: daemon.watch.clone(),
                                 watch_base_dir: daemon.watch_base_dir.clone(),
+                                mise: daemon.mise,
                             };
                             if let Err(e) = self.run(opts).await {
                                 error!("failed to run cron daemon {id}: {e}");
@@ -256,7 +257,7 @@ impl Supervisor {
 
         // Spawn the file watcher task
         tokio::spawn(async move {
-            let mut wf = match WatchFiles::new(Duration::from_secs(1)) {
+            let mut wf = match WatchFiles::new(settings().supervisor_file_watch_debounce()) {
                 Ok(wf) => wf,
                 Err(e) => {
                     error!("Failed to create file watcher: {e}");
@@ -318,7 +319,7 @@ impl Supervisor {
                 watched_dirs = required_dirs;
 
                 // Wait for file changes or a refresh interval
-                let watch_interval = Duration::from_millis(*env::PITCHFORK_WATCH_INTERVAL_MS);
+                let watch_interval = settings().supervisor_watch_interval();
                 tokio::select! {
                     Some(changed_paths) = wf.rx.recv() => {
                         debug!("File changes detected: {changed_paths:?}");
@@ -402,7 +403,7 @@ impl Supervisor {
         let _ = self.stop(id).await;
 
         // Small delay to allow the process to fully stop
-        time::sleep(Duration::from_millis(100)).await;
+        time::sleep(settings().supervisor_restart_delay()).await;
 
         // Restart the daemon
         let run_opts = RunOptions {
@@ -429,6 +430,7 @@ impl Supervisor {
             env: daemon.env.clone(),
             watch: daemon.watch.clone(),
             watch_base_dir: daemon.watch_base_dir.clone(),
+            mise: daemon.mise,
         };
 
         match self.run(run_opts).await {

@@ -10,6 +10,7 @@ use crate::daemon_status::DaemonStatus;
 use crate::error::PortError;
 use crate::ipc::IpcResponse;
 use crate::procs::PROCS;
+use crate::settings::settings;
 use crate::shell::Shell;
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
@@ -209,9 +210,26 @@ impl Supervisor {
             (Vec::new(), opts.ready_port)
         };
 
-        let cmd = once("exec".to_string())
-            .chain(cmd.into_iter())
-            .collect_vec();
+        let cmd: Vec<String> = if opts.mise {
+            match settings().resolve_mise_bin() {
+                Some(mise_bin) => {
+                    let mise_bin_str = mise_bin.to_string_lossy().to_string();
+                    info!("daemon {id}: wrapping command with mise ({mise_bin_str})");
+                    once("exec".to_string())
+                        .chain(once(mise_bin_str))
+                        .chain(once("x".to_string()))
+                        .chain(once("--".to_string()))
+                        .chain(cmd)
+                        .collect_vec()
+                }
+                None => {
+                    warn!("daemon {id}: mise=true but mise binary not found, running without mise");
+                    once("exec".to_string()).chain(cmd).collect_vec()
+                }
+            }
+        } else {
+            once("exec".to_string()).chain(cmd).collect_vec()
+        };
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
         let log_path = id.log_path();
         if let Some(parent) = log_path.parent() {
@@ -302,6 +320,7 @@ impl Supervisor {
                         o.env = opts.env.clone();
                         o.watch = Some(opts.watch.clone());
                         o.watch_base_dir = opts.watch_base_dir.clone();
+                        o.mise = Some(opts.mise);
                     })
                     .build(),
             )
@@ -361,28 +380,34 @@ impl Supervisor {
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
 
-            // Setup HTTP readiness check interval (poll every 500ms)
+            // Get settings for intervals
+            let s = settings();
+            let ready_check_interval = s.supervisor_ready_check_interval();
+            let http_client_timeout = s.supervisor_http_client_timeout();
+            let log_flush_interval_duration = s.supervisor_log_flush_interval();
+
+            // Setup HTTP readiness check interval
             let mut http_check_interval = ready_http
                 .as_ref()
-                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+                .map(|_| tokio::time::interval(ready_check_interval));
             let http_client = ready_http.as_ref().map(|_| {
                 reqwest::Client::builder()
-                    .timeout(Duration::from_secs(5))
+                    .timeout(http_client_timeout)
                     .build()
                     .unwrap_or_default()
             });
 
-            // Setup TCP port readiness check interval (poll every 500ms)
+            // Setup TCP port readiness check interval
             let mut port_check_interval =
-                ready_port.map(|_| tokio::time::interval(Duration::from_millis(500)));
+                ready_port.map(|_| tokio::time::interval(ready_check_interval));
 
-            // Setup command readiness check interval (poll every 500ms)
+            // Setup command readiness check interval
             let mut cmd_check_interval = ready_cmd
                 .as_ref()
-                .map(|_| tokio::time::interval(Duration::from_millis(500)));
+                .map(|_| tokio::time::interval(ready_check_interval));
 
-            // Setup periodic log flush interval (every 500ms - balances I/O reduction with responsiveness)
-            let mut log_flush_interval = tokio::time::interval(Duration::from_millis(500));
+            // Setup periodic log flush interval
+            let mut log_flush_interval = tokio::time::interval(log_flush_interval_duration);
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =

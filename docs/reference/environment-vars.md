@@ -17,9 +17,20 @@ PITCHFORK_LOG=debug pitchfork supervisor start --force
 The supervisor only reads this variable at startup. Use `--force` to restart the supervisor with new log settings.
 :::
 
+## `PITCHFORK_WEB_BIND_PORT`
+
+Sets the default port for the web UI in persistent settings. The web UI is disabled by default — use `PITCHFORK_WEB_PORT` (or `--web-port`) to enable it for a single invocation.
+
+```bash
+# Persist the default port in environment
+export PITCHFORK_WEB_BIND_PORT=19876
+```
+
+If the specified port is in use, pitchfork tries up to `port_attempts` consecutive ports.
+
 ## `PITCHFORK_WEB_PORT`
 
-Enables the web UI on the specified port. The web UI is disabled by default.
+Enables the web UI on the specified port for this invocation. The web UI is disabled by default.
 
 ```bash
 PITCHFORK_WEB_PORT=19876 pitchfork supervisor start --force

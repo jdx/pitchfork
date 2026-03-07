@@ -178,6 +178,7 @@ mod tests {
             dir: None,
             env: None,
             hooks: None,
+            mise: None,
             path: None,
         }
     }
@@ -298,6 +299,7 @@ mod tests {
                 dir: None,
                 env: None,
                 hooks: None,
+                mise: None,
             },
         );
 

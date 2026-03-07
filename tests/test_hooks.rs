@@ -118,10 +118,10 @@ on_fail = "touch {}"
     println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
 
     // Background retries happen on 10s interval, so we need to wait
-    // Use PITCHFORK_INTERVAL_SECS=1 to speed this up
+    // Use PITCHFORK_INTERVAL=1s to speed this up
     let output = env.run_command_with_env(
         &["start", "fail_retry_hook"],
-        &[("PITCHFORK_INTERVAL_SECS", "1")],
+        &[("PITCHFORK_INTERVAL", "1s")],
     );
     println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
 

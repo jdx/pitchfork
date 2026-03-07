@@ -334,6 +334,18 @@ cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
 - `schedule` - Cron expression (6 fields: second, minute, hour, day, month, weekday)
 - `retrigger` - Behavior when schedule fires: `"finish"` (default), `"always"`, `"success"`, `"fail"`
 
+### `mise`
+
+Enable [mise](https://mise.jdx.dev) integration for this daemon. When `true`, the daemon's command is wrapped with `mise x --` to activate mise-managed tools and environment variables.
+
+```toml
+[daemons.api]
+run = "node server.js"
+mise = true
+```
+
+This is especially useful for daemons running via `pitchfork boot` (login daemon mode) where interactive shell hooks haven't set up tool paths. When not set, falls back to the global `general.mise` setting. See [mise Integration guide](/guides/mise-integration) for details.
+
 ## Complete Example
 
 ```toml

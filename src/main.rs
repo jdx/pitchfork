@@ -14,6 +14,7 @@ mod ipc;
 mod logger;
 mod pitchfork_toml;
 mod procs;
+mod settings;
 mod shell;
 mod state_file;
 mod supervisor;
@@ -30,6 +31,9 @@ use tokio::signal::unix::SignalKind;
 #[tokio::main]
 async fn main() -> Result<()> {
     logger::init();
+    // Re-apply log levels now that settings (env + config files) are loaded.
+    // logger::init() only sees env vars; this picks up pitchfork.toml values.
+    logger::apply_settings();
     #[cfg(unix)]
     handle_epipe();
     cli::run().await

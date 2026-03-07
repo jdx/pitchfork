@@ -3,6 +3,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use crate::{env, ui};
@@ -10,21 +11,45 @@ use log::{Level, LevelFilter, Metadata, Record};
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 
+/// Atomic level storage so settings can update log levels after init.
+static TERM_LEVEL: AtomicUsize = AtomicUsize::new(LevelFilter::Info as usize);
+static FILE_LEVEL: AtomicUsize = AtomicUsize::new(LevelFilter::Info as usize);
+
+fn usize_to_level_filter(n: usize) -> LevelFilter {
+    match n {
+        0 => LevelFilter::Off,
+        1 => LevelFilter::Error,
+        2 => LevelFilter::Warn,
+        3 => LevelFilter::Info,
+        4 => LevelFilter::Debug,
+        5 => LevelFilter::Trace,
+        _ => LevelFilter::Info, // unreachable in practice
+    }
+}
+
+fn load_term_level() -> LevelFilter {
+    usize_to_level_filter(TERM_LEVEL.load(Ordering::Relaxed))
+}
+
+fn load_file_level() -> LevelFilter {
+    usize_to_level_filter(FILE_LEVEL.load(Ordering::Relaxed))
+}
+
 #[derive(Debug)]
 struct Logger {
-    level: LevelFilter,
-    term_level: LevelFilter,
-    file_level: LevelFilter,
     log_file: Option<Mutex<File>>,
 }
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= self.level
+        let max_level = std::cmp::max(load_term_level(), load_file_level());
+        metadata.level() <= max_level
     }
 
     fn log(&self, record: &Record) {
-        if record.level() <= self.file_level
+        let file_level = load_file_level();
+        let term_level = load_term_level();
+        if record.level() <= file_level
             && let Some(log_file) = &self.log_file
         {
             let mut log_file = match log_file.lock() {
@@ -39,8 +64,8 @@ impl log::Log for Logger {
             );
             let _ = writeln!(log_file, "{}", console::strip_ansi_codes(&out));
         }
-        if record.level() <= self.term_level {
-            let out = self.render(record, self.term_level);
+        if record.level() <= term_level {
+            let out = self.render(record, term_level);
             if !out.is_empty() {
                 eprintln!("{out}");
             }
@@ -57,12 +82,11 @@ impl Logger {
         let term_level = *env::PITCHFORK_LOG;
         let file_level = *env::PITCHFORK_LOG_FILE_LEVEL;
 
-        let mut logger = Logger {
-            level: std::cmp::max(term_level, file_level),
-            file_level,
-            term_level,
-            log_file: None,
-        };
+        // Store initial levels (from env vars) into atomics.
+        TERM_LEVEL.store(term_level as usize, Ordering::Relaxed);
+        FILE_LEVEL.store(file_level as usize, Ordering::Relaxed);
+
+        let mut logger = Logger { log_file: None };
 
         let log_file = &*env::PITCHFORK_LOG_FILE;
         if let Ok(log_file) = init_log_file(log_file) {
@@ -72,6 +96,35 @@ impl Logger {
         }
 
         logger
+    }
+
+    /// Re-apply log levels from the settings system.
+    ///
+    /// The logger is initialised very early (before config files are parsed),
+    /// so it can only see environment variables at that point. After
+    /// `Settings::load()` has merged env + config-file values, call this
+    /// function to pick up any `log_level` / `log_file_level` that was set
+    /// in a pitchfork.toml `[settings]` section.
+    fn apply_settings_levels(&self) {
+        use std::sync::atomic::Ordering;
+        let s = crate::settings::settings();
+
+        let term_level: LevelFilter = s.general.log_level.parse().unwrap_or(LevelFilter::Info);
+        let file_level: LevelFilter = s.general.log_file_level.parse().unwrap_or(term_level);
+        let max_level = std::cmp::max(term_level, file_level);
+
+        // Update the cached levels inside LOGGER.
+        // Safety: these are only read by the `log` trait methods which
+        // tolerate momentary inconsistency (worst case: one extra or
+        // one missing log line during the switch).
+        //
+        // We use AtomicUsize fields so we can update them after init.
+        TERM_LEVEL.store(term_level as usize, Ordering::Relaxed);
+        FILE_LEVEL.store(file_level as usize, Ordering::Relaxed);
+
+        // Also update the global max level so the `log` crate's
+        // fast-path filter reflects the new configuration.
+        log::set_max_level(max_level);
     }
 
     fn render(&self, record: &Record, level: LevelFilter) -> String {
@@ -139,10 +192,19 @@ pub fn thread_id() -> String {
 pub fn init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
-        if let Err(err) = log::set_logger(&*LOGGER).map(|()| log::set_max_level(LOGGER.level)) {
-            eprintln!("mise: could not initialize logger: {err}");
+        let max_level = std::cmp::max(load_term_level(), load_file_level());
+        if let Err(err) = log::set_logger(&*LOGGER).map(|()| log::set_max_level(max_level)) {
+            eprintln!("pitchfork: could not initialize logger: {err}");
         }
     });
+}
+
+/// Re-apply log levels from the loaded settings.
+///
+/// Call this once after `Settings::load()` has run so that log levels
+/// configured in pitchfork.toml `[settings.general]` take effect.
+pub fn apply_settings() {
+    LOGGER.apply_settings_levels();
 }
 
 fn init_log_file(log_file: &Path) -> Result<File> {

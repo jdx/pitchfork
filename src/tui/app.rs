@@ -7,6 +7,7 @@ use crate::pitchfork_toml::{
     namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
+use crate::settings::settings;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use listeners::Listener;
@@ -15,9 +16,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-
-/// Maximum number of stat samples to keep for each daemon (e.g., 60 samples at 2s intervals = 2 minutes)
-const MAX_STAT_HISTORY: usize = 60;
 
 /// Convert character index to byte index for UTF-8 strings
 fn char_to_byte_index(s: &str, char_idx: usize) -> usize {
@@ -56,7 +54,8 @@ pub struct StatsHistory {
 impl StatsHistory {
     pub fn push(&mut self, snapshot: StatsSnapshot) {
         self.samples.push_back(snapshot);
-        while self.samples.len() > MAX_STAT_HISTORY {
+        let max_history = settings().tui.stat_history.max(1) as usize;
+        while self.samples.len() > max_history {
             self.samples.pop_front();
         }
     }
@@ -523,6 +522,7 @@ impl EditorState {
             dir: None,
             env: None,
             hooks: None,
+            mise: None,
             path: Some(self.config_path.clone()),
         };
 
@@ -1156,8 +1156,9 @@ impl App {
     }
 
     pub fn clear_stale_message(&mut self) {
+        let duration = settings().tui_message_duration();
         if let Some(time) = self.message_time
-            && time.elapsed().as_secs() >= 3
+            && time.elapsed() >= duration
         {
             self.message = None;
             self.message_time = None;
