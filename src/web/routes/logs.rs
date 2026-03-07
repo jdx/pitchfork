@@ -461,7 +461,8 @@ pub async fn stream_sse(
                             yield Ok(Event::default().event("clear").data(""));
                         }
                         Some(FileOpResult::FileRotated) => {
-                            // file_handle and last_size already reset by outer fh/ls bindings
+                            // Signal the client to clear stale content from the previous file
+                            yield Ok(Event::default().event("clear").data(""));
                         }
                         _ => {}
                     }
