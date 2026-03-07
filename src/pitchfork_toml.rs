@@ -81,7 +81,7 @@ pub struct PitchforkToml {
     pub path: Option<PathBuf>,
 }
 
-fn is_global_config(path: &Path) -> bool {
+pub(crate) fn is_global_config(path: &Path) -> bool {
     path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
 }
 
@@ -89,6 +89,10 @@ fn is_local_config(path: &Path) -> bool {
     path.file_name()
         .map(|n| n == "pitchfork.local.toml")
         .unwrap_or(false)
+}
+
+pub(crate) fn is_dot_config_pitchfork(path: &Path) -> bool {
+    path.ends_with(".config/pitchfork.toml") || path.ends_with(".config/pitchfork.local.toml")
 }
 
 fn sibling_base_config(path: &Path) -> Option<PathBuf> {
@@ -142,8 +146,13 @@ fn validate_namespace(path: &Path, namespace: &str) -> Result<String> {
 }
 
 fn derive_namespace_from_dir(path: &Path) -> Result<String> {
-    let raw_namespace = path
-        .parent()
+    let dir_for_namespace = if is_dot_config_pitchfork(path) {
+        path.parent().and_then(|p| p.parent())
+    } else {
+        path.parent()
+    };
+
+    let raw_namespace = dir_for_namespace
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .ok_or_else(|| miette::miette!("cannot derive namespace from path '{}'", path.display()))?
@@ -470,21 +479,28 @@ impl PitchforkToml {
     /// Returns paths in order of precedence (lowest to highest):
     /// 1. System-level: /etc/pitchfork/config.toml
     /// 2. User-level: ~/.config/pitchfork/config.toml
-    /// 3. Project-level: pitchfork.toml and pitchfork.local.toml files
+    /// 3. Project-level: .config/pitchfork.toml, .config/pitchfork.local.toml, pitchfork.toml and pitchfork.local.toml files
     ///    from filesystem root to the given directory
     ///
-    /// Within each directory, pitchfork.toml comes before pitchfork.local.toml,
-    /// so local.toml values override the base config.
+    /// Within each directory, .config/ comes before pitchfork.toml,
+    /// which comes before pitchfork.local.toml, so local.toml values override base config.
     pub fn list_paths_from(cwd: &Path) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_SYSTEM.clone());
         paths.push(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
 
-        // Find both files in one call. Order is reversed so after .reverse():
-        // - each directory has pitchfork.toml before pitchfork.local.toml
+        // Find all project config files. Order is reversed so after .reverse():
+        // - each directory has: .config/pitchfork.toml < .config/pitchfork.local.toml < pitchfork.toml < pitchfork.local.toml
         // - directories go from root to cwd (later configs override earlier)
-        let mut project_paths =
-            xx::file::find_up_all(cwd, &["pitchfork.local.toml", "pitchfork.toml"]);
+        let mut project_paths = xx::file::find_up_all(
+            cwd,
+            &[
+                "pitchfork.local.toml",
+                "pitchfork.toml",
+                ".config/pitchfork.local.toml",
+                ".config/pitchfork.toml",
+            ],
+        );
         project_paths.reverse();
         paths.extend(project_paths);
 
@@ -522,13 +538,16 @@ impl PitchforkToml {
                 Ok(pt2) => {
                     // Detect collisions for all existing project configs, including
                     // pitchfork.local.toml. Allow sibling base/local files in the same
-                    // directory to share a namespace.
+                    // directory to share a namespace, including siblings via .config subfolder
                     if p.exists() && !is_global_config(&p) {
                         let ns = namespace_from_path(&p)?;
-                        let origin_dir = p
-                            .parent()
-                            .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
-                            .unwrap_or_else(|| p.clone());
+                        let origin_dir = if is_dot_config_pitchfork(&p) {
+                            p.parent().and_then(|d| d.parent())
+                        } else {
+                            p.parent()
+                        }
+                        .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
+                        .unwrap_or_else(|| p.clone());
 
                         if let Some((other_path, other_dir)) = ns_to_origin.get(ns.as_str())
                             && *other_dir != origin_dir
