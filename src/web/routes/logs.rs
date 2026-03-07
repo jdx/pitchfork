@@ -342,7 +342,9 @@ pub async fn stream_sse(
             }
         };
         let log_path = daemon_id.log_path();
-        let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        // Initialize last_size to 0 to avoid blocking metadata call at connection setup.
+        // The next loop iteration will detect and stream any existing file content.
+        let mut last_size = 0u64;
         let mut file_handle: Option<std::fs::File> = None;
 
         // Internal result type for file operations within spawn_blocking
@@ -447,12 +449,11 @@ pub async fn stream_sse(
                         let mut total_read = 0u64;
                         let bytes_to_read = (current_size - ls).min(MAX_READ_SIZE) as usize;
                         let mut buffer = vec![0u8; bytes_to_read];
-                        let mut hit_eof = false;
                         while total_read < bytes_to_read as u64 {
                             match file.read(&mut buffer[total_read as usize..]) {
-                                Ok(0) => { hit_eof = true; break; }
-                                Ok(n) => { total_read += n as u64; }
-                                Err(_) => { return (None, ls, Some(FileOpResult::ReadFailed), current_ino); }
+                                Ok(0) => break,
+                                Ok(n) => total_read += n as u64,
+                                Err(_) => return (None, ls, Some(FileOpResult::ReadFailed), current_ino),
                             }
                         }
 
@@ -460,12 +461,11 @@ pub async fn stream_sse(
                             buffer.truncate(total_read as usize);
                             ls += total_read;
                             return (Some(file), ls, Some(FileOpResult::Data(buffer)), current_ino);
-                        } else if hit_eof {
-                            // Advance past bytes that are present in the file but unreadable
-                            ls = current_size;
-                            return (Some(file), ls, Some(FileOpResult::Eof), current_ino);
                         }
-                        return (Some(file), ls, None, current_ino);
+                        // If total_read == 0, we hit EOF (only way to exit loop with 0 bytes)
+                        // Advance past bytes that are present in the file but unreadable
+                        ls = current_size;
+                        return (Some(file), ls, Some(FileOpResult::Eof), current_ino);
                     } else if current_size < ls {
                         // File was truncated (cleared)
                         return (Some(file), 0, Some(FileOpResult::Truncated), current_ino);
