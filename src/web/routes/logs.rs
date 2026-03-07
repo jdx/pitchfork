@@ -403,6 +403,10 @@ pub async fn stream_sse(
                         return (None, 0, Some(FileOpResult::FileRotated), fresh_ino);
                     }
 
+                    // Fallback for non-unix platforms
+                    #[cfg(not(unix))]
+                    let (cached_metadata, fresh_ino): (Option<std::fs::Metadata>, Option<u64>) = (None, None);
+
                     let metadata = match cached_metadata {
                         Some(m) => m,
                         None => match file.metadata() {
