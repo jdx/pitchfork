@@ -377,21 +377,38 @@ pub async fn stream_sse(
                     };
 
                     // Check if file was rotated while we had no handle (fresh open case)
+                    // and cache metadata to avoid redundant fstat calls
                     #[cfg(unix)]
-                    {
+                    let (fresh_open_rotated, cached_metadata, fresh_ino) = {
                         use std::os::unix::fs::MetadataExt;
-                        if let Some(prev_ino_val) = prev_ino {
-                            let new_ino = file.metadata().ok().map(|m| m.ino());
-                            if new_ino != Some(prev_ino_val) {
-                                // File was rotated since we last had a handle
-                                return (None, 0, Some(FileOpResult::FileRotated), new_ino);
+                        if let Ok(meta) = file.metadata() {
+                            let ino = meta.ino();
+                            if let Some(prev_ino_val) = prev_ino {
+                                if ino != prev_ino_val {
+                                    // File was rotated since we last had a handle
+                                    (true, Some(meta), Some(ino))
+                                } else {
+                                    (false, Some(meta), Some(ino))
+                                }
+                            } else {
+                                // No previous inode, capture current one for future checks
+                                (false, Some(meta), Some(ino))
                             }
+                        } else {
+                            (false, None, None)
                         }
+                    };
+                    #[cfg(unix)]
+                    if fresh_open_rotated {
+                        return (None, 0, Some(FileOpResult::FileRotated), fresh_ino);
                     }
 
-                    let metadata = match file.metadata() {
-                        Ok(m) => m,
-                        Err(_) => return (Some(file), ls, None, prev_ino),
+                    let metadata = match cached_metadata {
+                        Some(m) => m,
+                        None => match file.metadata() {
+                            Ok(m) => m,
+                            Err(_) => return (Some(file), ls, None, fresh_ino),
+                        },
                     };
                     let current_size = metadata.len();
 
@@ -407,10 +424,19 @@ pub async fn stream_sse(
                         }
                     }
 
+                    // Use the current file's inode for future rotation checks
+                    #[cfg(unix)]
+                    let current_ino = fresh_ino.or_else(|| {
+                        use std::os::unix::fs::MetadataExt;
+                        file.metadata().ok().map(|m| m.ino())
+                    });
+                    #[cfg(not(unix))]
+                    let current_ino: Option<u64> = None;
+
                     if current_size > ls {
                         // Read new content as bytes to handle invalid UTF-8
                         if file.seek(SeekFrom::Start(ls)).is_err() {
-                            return (None, ls, Some(FileOpResult::SeekFailed), prev_ino);
+                            return (None, ls, Some(FileOpResult::SeekFailed), current_ino);
                         }
 
                         const MAX_READ_SIZE: u64 = 1024 * 1024;
@@ -422,26 +448,26 @@ pub async fn stream_sse(
                             match file.read(&mut buffer[total_read as usize..]) {
                                 Ok(0) => { hit_eof = true; break; }
                                 Ok(n) => { total_read += n as u64; }
-                                Err(_) => { return (None, ls, Some(FileOpResult::ReadFailed), prev_ino); }
+                                Err(_) => { return (None, ls, Some(FileOpResult::ReadFailed), current_ino); }
                             }
                         }
 
                         if total_read > 0 {
                             buffer.truncate(total_read as usize);
                             ls += total_read;
-                            return (Some(file), ls, Some(FileOpResult::Data(buffer)), prev_ino);
+                            return (Some(file), ls, Some(FileOpResult::Data(buffer)), current_ino);
                         } else if hit_eof {
                             // Advance past bytes that are present in the file but unreadable
                             ls = current_size;
-                            return (Some(file), ls, Some(FileOpResult::Eof), prev_ino);
+                            return (Some(file), ls, Some(FileOpResult::Eof), current_ino);
                         }
-                        return (Some(file), ls, None, prev_ino);
+                        return (Some(file), ls, None, current_ino);
                     } else if current_size < ls {
                         // File was truncated (cleared)
-                        return (Some(file), 0, Some(FileOpResult::Truncated), prev_ino);
+                        return (Some(file), 0, Some(FileOpResult::Truncated), current_ino);
                     }
 
-                    (Some(file), ls, None, prev_ino)
+                    (Some(file), ls, None, current_ino)
                 }).await
             };
 
