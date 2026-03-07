@@ -889,7 +889,7 @@ impl App {
             prev_view: View::Dashboard,
             log_content: Vec::new(),
             log_daemon_id: None,
-            log_scroll: 0,
+            log_scroll: 1,
             log_follow: true,
             message: None,
             message_time: None,
@@ -1342,29 +1342,25 @@ impl App {
     }
 
     pub fn scroll_logs_down(&mut self) {
-        if self.log_content.len() > 20 {
-            let max_scroll = self.log_content.len();
-            self.log_scroll = (self.log_scroll + 1).min(max_scroll);
-        }
+        let max_scroll = self.log_content.len();
+        self.log_scroll = (self.log_scroll + 1).clamp(1, max_scroll);
     }
 
     pub fn scroll_logs_up(&mut self) {
-        self.log_scroll = self.log_scroll.saturating_sub(1);
+        self.log_scroll = self.log_scroll.saturating_sub(1).max(1);
     }
 
     /// Scroll down by half page (Ctrl+D)
     pub fn scroll_logs_page_down(&mut self, visible_lines: usize) {
         let half_page = visible_lines / 2;
-        if self.log_content.len() > visible_lines {
-            let max_scroll = self.log_content.len();
-            self.log_scroll = (self.log_scroll + half_page).min(max_scroll);
-        }
+        let max_scroll = self.log_content.len();
+        self.log_scroll = (self.log_scroll + half_page).clamp(1, max_scroll);
     }
 
     /// Scroll up by half page (Ctrl+U)
     pub fn scroll_logs_page_up(&mut self, visible_lines: usize) {
         let half_page = visible_lines / 2;
-        self.log_scroll = self.log_scroll.saturating_sub(half_page);
+        self.log_scroll = self.log_scroll.saturating_sub(half_page).max(1);
     }
 
     // Log search
@@ -1434,7 +1430,7 @@ impl App {
         if let Some(&line_idx) = self.log_search_matches.get(self.log_search_current) {
             // Scroll so the match is visible (center it if possible)
             let half_page = 10; // Assume ~20 visible lines
-            self.log_scroll = line_idx.saturating_sub(half_page);
+            self.log_scroll = line_idx.saturating_sub(half_page).max(1);
             self.log_follow = false;
         }
     }
@@ -1475,10 +1471,10 @@ impl App {
 
         // Auto-scroll to bottom when in follow mode
         if self.log_follow {
-            self.log_scroll = self.log_content.len();
+            self.log_scroll = self.log_content.len().max(1);
         } else if prev_len == 0 {
             // First load - start at bottom
-            self.log_scroll = self.log_content.len();
+            self.log_scroll = self.log_content.len().max(1);
         }
         // If not following and not first load, keep scroll position
     }
@@ -1491,7 +1487,7 @@ impl App {
         self.view = View::Dashboard;
         self.log_daemon_id = None;
         self.log_content.clear();
-        self.log_scroll = 0;
+        self.log_scroll = 1;
     }
 
     /// Returns (total, running, stopped, errored, available)

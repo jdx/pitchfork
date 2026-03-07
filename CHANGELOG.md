@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/jdx/pitchfork/compare/v1.6.0...v2.0.0) - 2026-03-04
+
+### Added
+
+- *(port-management)* Add port conflict detection and auto-bump support ([#259](https://github.com/jdx/pitchfork/pull/259))
+
+### Fixed
+
+- fixed tui log rendering and scroll behavior ([#264](https://github.com/jdx/pitchfork/pull/264))
+- *(config)* correct pitchfork config add to generate valid TOML ([#258](https://github.com/jdx/pitchfork/pull/258))
+- *(watch)* implement file watching for daemon auto-restart ([#255](https://github.com/jdx/pitchfork/pull/255))
+- *(logs)* bypass pager when --tail is active ([#253](https://github.com/jdx/pitchfork/pull/253))
+
+### Other
+
+- [**breaking**] add namespace to daemon id ([#213](https://github.com/jdx/pitchfork/pull/213))
+- *(deps)* lock file maintenance ([#263](https://github.com/jdx/pitchfork/pull/263))
+- Update README.md ([#254](https://github.com/jdx/pitchfork/pull/254))
+
 ## [1.6.0](https://github.com/jdx/pitchfork/compare/v1.5.0...v1.6.0) - 2026-02-21
 
 ### Added
