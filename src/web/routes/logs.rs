@@ -431,10 +431,11 @@ pub async fn stream_sse(
                     }
 
                     // Use the current file's inode for future rotation checks
+                    // metadata is already available from above, no need for extra fstat
                     #[cfg(unix)]
                     let current_ino = fresh_ino.or_else(|| {
                         use std::os::unix::fs::MetadataExt;
-                        file.metadata().ok().map(|m| m.ino())
+                        Some(metadata.ino())
                     });
                     #[cfg(not(unix))]
                     let current_ino: Option<u64> = None;
@@ -493,6 +494,12 @@ pub async fn stream_sse(
                         Some(FileOpResult::FileRotated) => {
                             // Signal the client to clear stale content from the previous file
                             yield Ok(Event::default().event("clear").data(""));
+                        }
+                        Some(FileOpResult::SeekFailed) => {
+                            debug!("SSE log stream: seek failed on '{}', will reopen", log_path.display());
+                        }
+                        Some(FileOpResult::ReadFailed) => {
+                            debug!("SSE log stream: read failed on '{}', will reopen", log_path.display());
                         }
                         _ => {}
                     }
