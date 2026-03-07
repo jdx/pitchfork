@@ -355,6 +355,10 @@ pub async fn stream_sse(
             Eof,
         }
 
+        // Track last seen inode to detect rotation when opening fresh handles
+        #[cfg(unix)]
+        let mut last_path_ino: Option<u64> = None;
+
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -363,18 +367,33 @@ pub async fn stream_sse(
                 let path = log_path.clone();
                 let fh = file_handle.take();
                 let mut ls = last_size;
+                #[cfg(unix)]
+                let prev_ino = last_path_ino;
                 tokio::task::spawn_blocking(move || {
                     let mut file = match fh {
                         Some(f) => f,
                         None => match std::fs::File::open(&path) {
                             Ok(f) => f,
-                            Err(_) => return (None, ls, None),
+                            Err(_) => return (None, ls, None, prev_ino),
                         },
                     };
 
+                    // Check if file was rotated while we had no handle (fresh open case)
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        if let Some(prev_ino_val) = prev_ino {
+                            let new_ino = file.metadata().ok().map(|m| m.ino());
+                            if new_ino != Some(prev_ino_val) {
+                                // File was rotated since we last had a handle
+                                return (None, 0, Some(FileOpResult::FileRotated), new_ino);
+                            }
+                        }
+                    }
+
                     let metadata = match file.metadata() {
                         Ok(m) => m,
-                        Err(_) => return (Some(file), ls, None),
+                        Err(_) => return (Some(file), ls, None, prev_ino),
                     };
                     let current_size = metadata.len();
 
@@ -386,14 +405,14 @@ pub async fn stream_sse(
                         let file_ino = metadata.ino();
                         if let Some(path_ino) = path_ino && path_ino != file_ino {
                             // File was recreated; drop handle and reset
-                            return (None, 0, Some(FileOpResult::FileRotated));
+                            return (None, 0, Some(FileOpResult::FileRotated), Some(path_ino));
                         }
                     }
 
                     if current_size > ls {
                         // Read new content as bytes to handle invalid UTF-8
                         if file.seek(SeekFrom::Start(ls)).is_err() {
-                            return (Some(file), ls, Some(FileOpResult::SeekFailed));
+                            return (Some(file), ls, Some(FileOpResult::SeekFailed), prev_ino);
                         }
 
                         const MAX_READ_SIZE: u64 = 1024 * 1024;
@@ -405,33 +424,37 @@ pub async fn stream_sse(
                             match file.read(&mut buffer[total_read as usize..]) {
                                 Ok(0) => { hit_eof = true; break; }
                                 Ok(n) => { total_read += n as u64; }
-                                Err(_) => { return (None, ls, Some(FileOpResult::ReadFailed)); }
+                                Err(_) => { return (None, ls, Some(FileOpResult::ReadFailed), prev_ino); }
                             }
                         }
 
                         if total_read > 0 {
                             buffer.truncate(total_read as usize);
                             ls += total_read;
-                            return (Some(file), ls, Some(FileOpResult::Data(buffer)));
+                            return (Some(file), ls, Some(FileOpResult::Data(buffer)), prev_ino);
                         } else if hit_eof {
                             // Advance past bytes that are present in the file but unreadable
                             ls = current_size;
-                            return (Some(file), ls, Some(FileOpResult::Eof));
+                            return (Some(file), ls, Some(FileOpResult::Eof), prev_ino);
                         }
-                        return (Some(file), ls, None);
+                        return (Some(file), ls, None, prev_ino);
                     } else if current_size < ls {
                         // File was truncated (cleared)
-                        return (Some(file), 0, Some(FileOpResult::Truncated));
+                        return (Some(file), 0, Some(FileOpResult::Truncated), prev_ino);
                     }
 
-                    (Some(file), ls, None)
+                    (Some(file), ls, None, prev_ino)
                 }).await
             };
 
             match file_op_result {
-                Ok((fh, ls, result)) => {
+                Ok((fh, ls, result, ino)) => {
                     file_handle = fh;
                     last_size = ls;
+                    #[cfg(unix)]
+                    {
+                        last_path_ino = ino;
+                    }
 
                     match result {
                         Some(FileOpResult::Data(buffer)) => {
