@@ -228,9 +228,7 @@ impl Supervisor {
                 }
             }
         } else {
-            once("exec".to_string())
-                .chain(cmd)
-                .collect_vec()
+            once("exec".to_string()).chain(cmd).collect_vec()
         };
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
         let log_path = id.log_path();

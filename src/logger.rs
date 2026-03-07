@@ -75,9 +75,7 @@ impl Logger {
         TERM_LEVEL.store(term_level as usize, Ordering::Relaxed);
         FILE_LEVEL.store(file_level as usize, Ordering::Relaxed);
 
-        let mut logger = Logger {
-            log_file: None,
-        };
+        let mut logger = Logger { log_file: None };
 
         let log_file = &*env::PITCHFORK_LOG_FILE;
         if let Ok(log_file) = init_log_file(log_file) {
@@ -100,16 +98,8 @@ impl Logger {
         use std::sync::atomic::Ordering;
         let s = crate::settings::settings();
 
-        let term_level: LevelFilter = s
-            .general
-            .log_level
-            .parse()
-            .unwrap_or(LevelFilter::Info);
-        let file_level: LevelFilter = s
-            .general
-            .log_file_level
-            .parse()
-            .unwrap_or(term_level);
+        let term_level: LevelFilter = s.general.log_level.parse().unwrap_or(LevelFilter::Info);
+        let file_level: LevelFilter = s.general.log_file_level.parse().unwrap_or(term_level);
         let max_level = std::cmp::max(term_level, file_level);
 
         // Update the cached levels inside LOGGER.

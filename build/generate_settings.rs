@@ -480,7 +480,7 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                                 #main_block
                                 #deprecated_block
                             }
-                        },
+                        }
                         "Path" => quote! {
                             if let Ok(val) = std::env::var(#env_var) {
                                 #field_path = std::path::PathBuf::from(val);
