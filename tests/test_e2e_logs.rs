@@ -1,7 +1,98 @@
 mod common;
 
 use common::{TestEnv, get_script_path};
+use std::fs;
+use std::net::TcpListener;
+use std::process::Child;
+use std::sync::mpsc;
 use std::time::Duration;
+
+fn get_free_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap().port()
+}
+
+fn start_web_supervisor(env: &TestEnv) -> (Child, u16) {
+    let base_port = get_free_port();
+    let port = base_port.to_string();
+    let child = env.run_background(&["supervisor", "run", "--web-port", &port]);
+    let actual_port = wait_for_web_server(base_port);
+    (child, actual_port)
+}
+
+fn stop_process(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn wait_for_web_server(base_port: u16) -> u16 {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async move {
+        let client = reqwest::Client::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            for port in base_port..base_port.saturating_add(10) {
+                let url = format!("http://127.0.0.1:{port}/health");
+                if let Ok(response) = client.get(&url).send().await
+                    && response.status().is_success()
+                {
+                    return port;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "web server did not become ready"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+}
+
+fn read_sse_until(
+    url: &str,
+    on_open: Option<mpsc::Sender<()>>,
+    on_chunk: impl FnMut(&str),
+    predicate: impl Fn(&str) -> bool,
+) -> String {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async move {
+        let mut on_chunk = on_chunk;
+        let client = reqwest::Client::new();
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .expect("failed to connect to SSE endpoint");
+        assert!(
+            response.status().is_success(),
+            "SSE endpoint should succeed"
+        );
+        if let Some(tx) = on_open {
+            let _ = tx.send(());
+        }
+
+        let mut body = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while tokio::time::Instant::now() < deadline {
+            let chunk = match tokio::time::timeout(Duration::from_secs(2), response.chunk()).await {
+                Err(_) => continue,
+                Ok(Err(err)) => panic!("failed to read SSE chunk: {err}"),
+                Ok(Ok(chunk)) => chunk,
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
+            let chunk_text = String::from_utf8_lossy(&chunk);
+            body.push_str(&chunk_text);
+            on_chunk(&body);
+            if predicate(&body) {
+                return body;
+            }
+        }
+
+        panic!("did not receive expected SSE output, got: {body}");
+    })
+}
 
 // ============================================================================
 // Log Viewing Tests
@@ -106,6 +197,117 @@ ready_delay = 0
 
     // Clean up
     env.run_command(&["stop", "test_follow"]);
+}
+
+#[test]
+fn test_web_logs_sse_skips_existing_content_on_connect() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let script = get_script_path("slowly_output.ts");
+    let toml_content = format!(
+        r#"
+[daemons.sse_connect]
+run = "bun run {} 1 6"
+ready_delay = 0
+"#,
+        script.display()
+    );
+    env.create_toml(&toml_content);
+
+    let (mut supervisor, port) = start_web_supervisor(&env);
+
+    env.run_command(&["start", "sse_connect"]);
+    env.sleep(Duration::from_secs(3));
+
+    let existing_logs = env.read_logs("sse_connect");
+    assert!(
+        existing_logs.contains("Output 1/6"),
+        "expected existing log content before SSE connect"
+    );
+
+    let stream_url = format!("http://127.0.0.1:{port}/logs/project%2Fsse_connect/stream");
+    let body = read_sse_until(
+        &stream_url,
+        None,
+        |_| {},
+        |body| body.contains("Output 4/6"),
+    );
+
+    assert!(
+        body.contains("Output 4/6"),
+        "SSE should stream newly appended content"
+    );
+    assert!(
+        !body.contains("Output 1/6"),
+        "SSE should not replay existing content on initial connect: {body}"
+    );
+
+    env.run_command(&["stop", "sse_connect"]);
+    stop_process(&mut supervisor);
+}
+
+#[test]
+fn test_web_logs_sse_clears_and_restreams_after_rotation() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+    env.create_toml("");
+
+    let (mut supervisor, port) = start_web_supervisor(&env);
+
+    let log_path = env.log_path("rotate_sse");
+    fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+    fs::write(&log_path, "").unwrap();
+
+    let stream_url = format!("http://127.0.0.1:{port}/logs/project%2Frotate_sse/stream");
+    let (open_tx, open_rx) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let reader = std::thread::spawn({
+        let stream_url = stream_url.clone();
+        move || {
+            let mut ready_tx = Some(ready_tx);
+            read_sse_until(
+                &stream_url,
+                Some(open_tx),
+                move |body| {
+                    if body.contains("ready before rotation")
+                        && let Some(tx) = ready_tx.take()
+                    {
+                        let _ = tx.send(());
+                    }
+                },
+                |body| body.contains("event: clear") && body.contains("new line after rotation"),
+            )
+        }
+    });
+
+    open_rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("SSE stream did not connect in time");
+    fs::write(&log_path, "ready before rotation\n").unwrap();
+    ready_rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("SSE stream did not observe pre-rotation content in time");
+
+    let rotated_path = log_path.with_extension("log.1");
+    fs::rename(&log_path, &rotated_path).unwrap();
+    fs::write(&log_path, "new line after rotation\n").unwrap();
+
+    let body = reader.join().unwrap();
+    assert!(
+        body.contains("event: clear"),
+        "rotation should emit a clear event: {body}"
+    );
+    assert!(
+        body.contains("ready before rotation"),
+        "expected pre-rotation content before clear event: {body}"
+    );
+    assert!(
+        body.contains("new line after rotation"),
+        "rotation should stream the new file from the beginning: {body}"
+    );
+
+    stop_process(&mut supervisor);
 }
 
 #[test]
