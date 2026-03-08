@@ -342,9 +342,36 @@ pub async fn stream_sse(
             }
         };
         let log_path = daemon_id.log_path();
-        // Initialize last_size to 0 to avoid blocking metadata call at connection setup.
-        // The next loop iteration will detect and stream any existing file content.
-        let mut last_size = 0u64;
+        let (mut last_size, mut last_path_ino) = match tokio::task::spawn_blocking({
+            let path = log_path.clone();
+            move || {
+                match std::fs::metadata(&path) {
+                    Ok(metadata) => {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            (metadata.len(), Some(metadata.ino()))
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            (metadata.len(), None)
+                        }
+                    }
+                    Err(_) => (0, None),
+                }
+            }
+        })
+        .await
+        {
+            Ok(state) => state,
+            Err(err) => {
+                warn!(
+                    "SSE log stream: failed to read initial metadata for '{}': {err:?}",
+                    log_path.display()
+                );
+                (0, None)
+            }
+        };
         let mut file_handle: Option<std::fs::File> = None;
 
         // Internal result type for file operations within spawn_blocking
@@ -357,8 +384,12 @@ pub async fn stream_sse(
             Eof,
         }
 
-        // Track last seen inode to detect rotation when opening fresh handles
-        let mut last_path_ino: Option<u64> = None;
+        struct FileOpOutput {
+            file: Option<std::fs::File>,
+            size: u64,
+            result: Option<FileOpResult>,
+            inode: Option<u64>,
+        }
 
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -374,7 +405,14 @@ pub async fn stream_sse(
                         Some(f) => f,
                         None => match std::fs::File::open(&path) {
                             Ok(f) => f,
-                            Err(_) => return (None, ls, None, prev_ino),
+                            Err(_) => {
+                                return FileOpOutput {
+                                    file: None,
+                                    size: ls,
+                                    result: None,
+                                    inode: prev_ino,
+                                };
+                            }
                         },
                     };
 
@@ -402,7 +440,12 @@ pub async fn stream_sse(
                     };
                     #[cfg(unix)]
                     if fresh_open_rotated {
-                        return (None, 0, Some(FileOpResult::FileRotated), fresh_ino);
+                        return FileOpOutput {
+                            file: None,
+                            size: 0,
+                            result: Some(FileOpResult::FileRotated),
+                            inode: fresh_ino,
+                        };
                     }
 
                     // Fallback for non-unix platforms
@@ -413,7 +456,14 @@ pub async fn stream_sse(
                         Some(m) => m,
                         None => match file.metadata() {
                             Ok(m) => m,
-                            Err(_) => return (None, ls, None, fresh_ino),
+                            Err(_) => {
+                                return FileOpOutput {
+                                    file: None,
+                                    size: ls,
+                                    result: None,
+                                    inode: fresh_ino,
+                                };
+                            }
                         },
                     };
                     let current_size = metadata.len();
@@ -426,7 +476,12 @@ pub async fn stream_sse(
                         let file_ino = metadata.ino();
                         if let Some(path_ino) = path_ino && path_ino != file_ino {
                             // File was recreated; drop handle and reset
-                            return (None, 0, Some(FileOpResult::FileRotated), Some(path_ino));
+                            return FileOpOutput {
+                                file: None,
+                                size: 0,
+                                result: Some(FileOpResult::FileRotated),
+                                inode: Some(path_ino),
+                            };
                         }
                     }
 
@@ -443,46 +498,70 @@ pub async fn stream_sse(
                     if current_size > ls {
                         // Read new content as bytes to handle invalid UTF-8
                         if file.seek(SeekFrom::Start(ls)).is_err() {
-                            return (None, ls, Some(FileOpResult::SeekFailed), current_ino);
+                            return FileOpOutput {
+                                file: None,
+                                size: ls,
+                                result: Some(FileOpResult::SeekFailed),
+                                inode: current_ino,
+                            };
                         }
 
                         const MAX_READ_SIZE: u64 = 1024 * 1024;
-                        let mut total_read = 0u64;
                         let bytes_to_read = (current_size - ls).min(MAX_READ_SIZE) as usize;
-                        let mut buffer = vec![0u8; bytes_to_read];
-                        while total_read < bytes_to_read as u64 {
-                            match file.read(&mut buffer[total_read as usize..]) {
-                                Ok(0) => break,
-                                Ok(n) => total_read += n as u64,
-                                Err(_) => return (None, ls, Some(FileOpResult::ReadFailed), current_ino),
+                        let mut buffer = Vec::with_capacity(bytes_to_read);
+                        match (&mut file).take(bytes_to_read as u64).read_to_end(&mut buffer) {
+                            Ok(0) => {
+                                return FileOpOutput {
+                                    file: Some(file),
+                                    size: ls,
+                                    result: Some(FileOpResult::Eof),
+                                    inode: current_ino,
+                                };
+                            }
+                            Ok(n) => {
+                                ls += n as u64;
+                                return FileOpOutput {
+                                    file: Some(file),
+                                    size: ls,
+                                    result: Some(FileOpResult::Data(buffer)),
+                                    inode: current_ino,
+                                };
+                            }
+                            Err(_) => {
+                                return FileOpOutput {
+                                    file: None,
+                                    size: ls,
+                                    result: Some(FileOpResult::ReadFailed),
+                                    inode: current_ino,
+                                };
                             }
                         }
-
-                        if total_read > 0 {
-                            buffer.truncate(total_read as usize);
-                            ls += total_read;
-                            return (Some(file), ls, Some(FileOpResult::Data(buffer)), current_ino);
-                        }
-                        // If total_read == 0, we hit EOF (only way to exit loop with 0 bytes)
-                        // Advance past bytes that are present in the file but unreadable
-                        ls = current_size;
-                        return (Some(file), ls, Some(FileOpResult::Eof), current_ino);
                     } else if current_size < ls {
                         // File was truncated (cleared)
-                        return (Some(file), 0, Some(FileOpResult::Truncated), current_ino);
+                        return FileOpOutput {
+                            file: Some(file),
+                            size: 0,
+                            result: Some(FileOpResult::Truncated),
+                            inode: current_ino,
+                        };
                     }
 
-                    (Some(file), ls, None, current_ino)
+                    FileOpOutput {
+                        file: Some(file),
+                        size: ls,
+                        result: None,
+                        inode: current_ino,
+                    }
                 }).await
             };
 
             match file_op_result {
-                Ok((fh, ls, result, ino)) => {
-                    file_handle = fh;
-                    last_size = ls;
-                    last_path_ino = ino;
+                Ok(output) => {
+                    file_handle = output.file;
+                    last_size = output.size;
+                    last_path_ino = output.inode;
 
-                    match result {
+                    match output.result {
                         Some(FileOpResult::Data(buffer)) => {
                             let new_content = String::from_utf8_lossy(&buffer);
                             let escaped = html_escape(&new_content);
@@ -501,12 +580,22 @@ pub async fn stream_sse(
                         Some(FileOpResult::ReadFailed) => {
                             debug!("SSE log stream: read failed on '{}', will reopen", log_path.display());
                         }
+                        Some(FileOpResult::Eof) => {
+                            debug!(
+                                "SSE log stream: read 0 bytes from '{}' after size check; retrying",
+                                log_path.display()
+                            );
+                        }
                         _ => {}
                     }
                 }
-                Err(_) => {
+                Err(err) => {
                     // file_handle is already None after take() above;
                     // last_size remains valid from before this iteration.
+                    warn!(
+                        "SSE log stream: spawn_blocking panicked for '{}': {err:?}",
+                        log_path.display()
+                    );
                 }
             }
         }
