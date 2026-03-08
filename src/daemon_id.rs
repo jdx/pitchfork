@@ -262,7 +262,11 @@ impl<'de> Deserialize<'de> for DaemonId {
 }
 
 /// JSON Schema implementation for DaemonId
-/// Represents daemon ID as a string in "namespace/name" format
+///
+/// In `pitchfork.toml`, users write **short names** (e.g. `api`) for daemon
+/// keys under `[daemons]` and for same-namespace `depends` entries.  Fully
+/// qualified `namespace/name` format is only required for cross-namespace
+/// dependency references.  The pattern therefore accepts both forms.
 impl schemars::JsonSchema for DaemonId {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "DaemonId".into()
@@ -275,8 +279,8 @@ impl schemars::JsonSchema for DaemonId {
     fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
             "type": "string",
-            "description": "Daemon ID in the format 'namespace/name'",
-            "pattern": r"^[\w.-]+/[\w.-]+$"
+            "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
+            "pattern": r"^[\w.-]+(/[\w.-]+)?$"
         })
     }
 }
