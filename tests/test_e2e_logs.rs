@@ -1,7 +1,189 @@
 mod common;
 
 use common::{TestEnv, get_script_path};
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::process::Child;
+use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::Duration;
+
+struct ChildGuard {
+    child: Child,
+    stderr_thread: Option<JoinHandle<()>>,
+}
+
+impl ChildGuard {
+    fn new(child: Child, stderr_thread: JoinHandle<()>) -> Self {
+        Self {
+            child,
+            stderr_thread: Some(stderr_thread),
+        }
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(stderr_thread) = self.stderr_thread.take() {
+            let _ = stderr_thread.join();
+        }
+    }
+}
+
+fn start_web_supervisor(env: &TestEnv) -> (ChildGuard, u16) {
+    let port = "0";
+    let mut child = env.run_background(&["supervisor", "run", "--web-port", port]);
+    let (actual_port, stderr_thread) = wait_for_web_server(&mut child);
+    (ChildGuard::new(child, stderr_thread), actual_port)
+}
+
+fn wait_for_web_server(child: &mut Child) -> (u16, JoinHandle<()>) {
+    let stderr = child
+        .stderr
+        .take()
+        .expect("supervisor stderr should be piped");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (port_tx, port_rx) = mpsc::channel();
+    let stderr_thread = std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        let mut recent_lines = Vec::new();
+        let mut sent_port = false;
+        for line in reader.lines() {
+            let line = line.expect("failed to read supervisor stderr");
+            if recent_lines.len() == 20 {
+                recent_lines.remove(0);
+            }
+            recent_lines.push(line.clone());
+
+            if !sent_port
+                && let Some(port_start) = line.find("Web UI listening on http://127.0.0.1:")
+            {
+                let port_str = &line[port_start + "Web UI listening on http://127.0.0.1:".len()..];
+                let port_digits: String = port_str
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(port) = port_digits.parse::<u16>() {
+                    let _ = port_tx.send(Ok(port));
+                    sent_port = true;
+                }
+            }
+        }
+
+        if !sent_port {
+            let _ = port_tx.send(Err(recent_lines));
+        }
+    });
+
+    let port = port_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("web server did not report a listening port in time")
+        .unwrap_or_else(|lines| {
+            panic!(
+                "web server exited before reporting a port; recent stderr: {}",
+                lines.join(" | ")
+            )
+        });
+
+    rt.block_on(async move {
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{port}/health");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(response) = client.get(&url).send().await
+                && response.status().is_success()
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "web server did not become ready on port {port}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+
+    (port, stderr_thread)
+}
+
+fn read_sse_until(
+    url: &str,
+    on_open: Option<mpsc::Sender<()>>,
+    on_chunk: impl FnMut(&str),
+    predicate: impl Fn(&str) -> bool,
+) -> String {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async move {
+        let mut on_chunk = on_chunk;
+        let client = reqwest::Client::new();
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .expect("failed to connect to SSE endpoint");
+        assert!(
+            response.status().is_success(),
+            "SSE endpoint should succeed"
+        );
+        if let Some(tx) = on_open {
+            let _ = tx.send(());
+        }
+
+        let mut body = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while tokio::time::Instant::now() < deadline {
+            let chunk = match tokio::time::timeout(Duration::from_secs(2), response.chunk()).await {
+                Err(_) => continue,
+                Ok(Err(err)) => panic!("failed to read SSE chunk: {err}"),
+                Ok(Ok(chunk)) => chunk,
+            };
+            let Some(chunk) = chunk else {
+                break;
+            };
+            let chunk_text = String::from_utf8_lossy(&chunk);
+            body.push_str(&chunk_text);
+            on_chunk(&body);
+            if predicate(&body) {
+                return body;
+            }
+        }
+
+        panic!("did not receive expected SSE output, got: {body}");
+    })
+}
+
+fn wait_for_log_content(env: &TestEnv, daemon_id: &str, needle: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let logs = env.read_logs(daemon_id);
+        if logs.contains(needle) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "log file for {daemon_id} did not contain '{needle}' in time"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn wait_for_supervisor_cli(env: &TestEnv) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let output = env.run_command(&["list"]);
+        if output.status.success() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "supervisor CLI did not become ready in time: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
 
 // ============================================================================
 // Log Viewing Tests
@@ -106,6 +288,117 @@ ready_delay = 0
 
     // Clean up
     env.run_command(&["stop", "test_follow"]);
+}
+
+#[test]
+fn test_web_logs_sse_skips_existing_content_on_connect() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let script = get_script_path("slowly_output.ts");
+    let toml_content = format!(
+        r#"
+[daemons.sse_connect]
+run = "bun run {} 1 6"
+ready_delay = 0
+"#,
+        script.display()
+    );
+    env.create_toml(&toml_content);
+
+    let (_supervisor, port) = start_web_supervisor(&env);
+    wait_for_supervisor_cli(&env);
+
+    env.run_command(&["start", "sse_connect"]);
+    wait_for_log_content(&env, "sse_connect", "Output 1/6");
+
+    let existing_logs = env.read_logs("sse_connect");
+    assert!(
+        existing_logs.contains("Output 1/6"),
+        "expected existing log content before SSE connect"
+    );
+
+    let stream_url = format!("http://127.0.0.1:{port}/logs/project%2Fsse_connect/stream");
+    let body = read_sse_until(
+        &stream_url,
+        None,
+        |_| {},
+        |body| body.contains("Output 4/6"),
+    );
+
+    assert!(
+        body.contains("Output 4/6"),
+        "SSE should stream newly appended content"
+    );
+    assert!(
+        !body.contains("Output 1/6"),
+        "SSE should not replay existing content on initial connect: {body}"
+    );
+
+    env.run_command(&["stop", "sse_connect"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_web_logs_sse_clears_and_restreams_after_rotation() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+    env.create_toml("");
+
+    let (_supervisor, port) = start_web_supervisor(&env);
+    wait_for_supervisor_cli(&env);
+
+    let log_path = env.log_path("rotate_sse");
+    fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+    fs::write(&log_path, "").unwrap();
+
+    let stream_url = format!("http://127.0.0.1:{port}/logs/project%2Frotate_sse/stream");
+    let (open_tx, open_rx) = mpsc::channel();
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let reader = std::thread::spawn({
+        let stream_url = stream_url.clone();
+        move || {
+            let mut ready_tx = Some(ready_tx);
+            read_sse_until(
+                &stream_url,
+                Some(open_tx),
+                move |body| {
+                    if body.contains("ready before rotation")
+                        && let Some(tx) = ready_tx.take()
+                    {
+                        let _ = tx.send(());
+                    }
+                },
+                |body| body.contains("event: clear") && body.contains("new line after rotation"),
+            )
+        }
+    });
+
+    open_rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("SSE stream did not connect in time");
+    fs::write(&log_path, "ready before rotation\n").unwrap();
+    ready_rx
+        .recv_timeout(Duration::from_secs(8))
+        .expect("SSE stream did not observe pre-rotation content in time");
+
+    let rotated_path = log_path.with_extension("log.1");
+    fs::rename(&log_path, &rotated_path).unwrap();
+    fs::write(&log_path, "new line after rotation\n").unwrap();
+
+    let body = reader.join().unwrap();
+    assert!(
+        body.contains("event: clear"),
+        "rotation should emit a clear event: {body}"
+    );
+    assert!(
+        body.contains("ready before rotation"),
+        "expected pre-rotation content before clear event: {body}"
+    );
+    assert!(
+        body.contains("new line after rotation"),
+        "rotation should stream the new file from the beginning: {body}"
+    );
 }
 
 #[test]

@@ -99,13 +99,19 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
 
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => {
+                let actual_addr = listener
+                    .local_addr()
+                    .map_err(|e| miette::miette!("Failed to inspect bound web port: {}", e))?;
                 if offset > 0 {
-                    info!("Port {port} was in use, using port {try_port} instead");
+                    info!(
+                        "Port {port} was in use, using port {} instead",
+                        actual_addr.port()
+                    );
                 }
                 if base_path.is_empty() {
-                    info!("Web UI listening on http://{addr}");
+                    info!("Web UI listening on http://{actual_addr}");
                 } else {
-                    info!("Web UI listening on http://{addr}{base_path}/");
+                    info!("Web UI listening on http://{actual_addr}{base_path}/");
                 }
 
                 return axum::serve(listener, app)

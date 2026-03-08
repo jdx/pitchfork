@@ -144,6 +144,11 @@ impl TestEnv {
     /// - A short ID (e.g., "api") - will look for logs in the "project" namespace
     /// - A qualified ID (e.g., "project/api") - will convert to filesystem-safe path
     pub fn read_logs(&self, daemon_id: &str) -> String {
+        fs::read_to_string(self.log_path(daemon_id)).unwrap_or_default()
+    }
+
+    /// Get log file path for a daemon
+    pub fn log_path(&self, daemon_id: &str) -> PathBuf {
         // If the ID doesn't contain a namespace, assume it's from the project directory
         let qualified_id = if daemon_id.contains('/') {
             daemon_id.to_string()
@@ -154,16 +159,13 @@ impl TestEnv {
         // Convert to filesystem-safe path (replace "/" with "--")
         let safe_id = qualified_id.replace('/', "--");
 
-        let log_path = self
-            .home_dir
+        self.home_dir
             .join(".local")
             .join("state")
             .join("pitchfork")
             .join("logs")
             .join(&safe_id)
-            .join(format!("{safe_id}.log"));
-
-        fs::read_to_string(log_path).unwrap_or_default()
+            .join(format!("{safe_id}.log"))
     }
 
     /// Get the home directory for this test environment

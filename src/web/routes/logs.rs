@@ -16,6 +16,7 @@ use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::web::bp;
 use crate::web::helpers::{html_escape, url_encode};
+use std::io::{Read, Seek, SeekFrom};
 
 fn base_html(title: &str, content: &str) -> String {
     let bp = bp();
@@ -353,35 +354,268 @@ pub async fn stream_sse(
             }
         };
         let log_path = daemon_id.log_path();
-        let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        let (mut last_size, mut last_path_ino) = match tokio::task::spawn_blocking({
+            let path = log_path.clone();
+            move || {
+                match std::fs::metadata(&path) {
+                    Ok(metadata) => {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            (metadata.len(), Some(metadata.ino()))
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            (metadata.len(), None)
+                        }
+                    }
+                    Err(_) => (0, None),
+                }
+            }
+        })
+        .await
+        {
+            Ok(state) => state,
+            Err(err) => {
+                warn!(
+                    "SSE log stream: failed to read initial metadata for '{}': {err:?}",
+                    log_path.display()
+                );
+                (0, None)
+            }
+        };
+        let mut file_handle: Option<std::fs::File> = None;
+
+        // Internal result type for file operations within spawn_blocking
+        enum FileOpResult {
+            Data(Vec<u8>),
+            Truncated,
+            FileRotated,
+            SeekFailed,
+            ReadFailed,
+            Eof,
+        }
+
+        struct FileOpOutput {
+            file: Option<std::fs::File>,
+            size: u64,
+            result: Option<FileOpResult>,
+            inode: Option<u64>,
+        }
+
+        let mut poll_count = 0u64;
 
         loop {
             tokio::time::sleep(sse_poll_interval).await;
+            poll_count = poll_count.wrapping_add(1);
 
-            if let Ok(metadata) = std::fs::metadata(&log_path) {
-                let current_size = metadata.len();
-
-                if current_size > last_size {
-                    // Read new content as bytes to handle invalid UTF-8
-                    if let Ok(file) = std::fs::File::open(&log_path) {
-                        use std::io::{Read, Seek, SeekFrom};
-                        let mut file = file;
-                        if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                            let mut buffer = Vec::new();
-                            if file.read_to_end(&mut buffer).is_ok() && !buffer.is_empty() {
-                                // Use lossy conversion to handle invalid UTF-8 gracefully
-                                let new_content = String::from_utf8_lossy(&buffer);
-                                let escaped = html_escape(&new_content);
-                                yield Ok(Event::default().event("message").data(escaped));
+            // Use spawn_blocking for all blocking file operations
+            let file_op_result = {
+                let path = log_path.clone();
+                let fh = file_handle.take();
+                let mut ls = last_size;
+                let prev_ino = last_path_ino;
+                let poll_count = poll_count;
+                tokio::task::spawn_blocking(move || {
+                    let opened_fresh = fh.is_none();
+                    let mut file = match fh {
+                        Some(f) => f,
+                        None => match std::fs::File::open(&path) {
+                            Ok(f) => f,
+                            Err(_) => {
+                                return FileOpOutput {
+                                    file: None,
+                                    size: ls,
+                                    result: None,
+                                    inode: prev_ino,
+                                };
                             }
-                            // Always update last_size to avoid stalling on invalid content
-                            last_size = current_size;
+                        },
+                    };
+
+                    // Check if file was rotated while we had no handle (fresh open case)
+                    // and cache metadata to avoid redundant fstat calls
+                    #[cfg(unix)]
+                    let (fresh_open_rotated, cached_metadata, fresh_ino) = if opened_fresh {
+                        use std::os::unix::fs::MetadataExt;
+                        if let Ok(meta) = file.metadata() {
+                            let ino = meta.ino();
+                            if let Some(prev_ino_val) = prev_ino {
+                                if ino != prev_ino_val {
+                                    // File was rotated since we last had a handle
+                                    (true, Some(meta), Some(ino))
+                                } else {
+                                    (false, Some(meta), Some(ino))
+                                }
+                            } else {
+                                // No previous inode, capture current one for future checks
+                                (false, Some(meta), Some(ino))
+                            }
+                        } else {
+                            (false, None, None)
+                        }
+                    } else {
+                        (false, None, None)
+                    };
+                    #[cfg(unix)]
+                    if fresh_open_rotated {
+                        return FileOpOutput {
+                            file: None,
+                            size: 0,
+                            result: Some(FileOpResult::FileRotated),
+                            inode: fresh_ino,
+                        };
+                    }
+
+                    // Fallback for non-unix platforms
+                    #[cfg(not(unix))]
+                    let (cached_metadata, fresh_ino): (Option<std::fs::Metadata>, Option<u64>) = (None, None);
+
+                    let metadata = match cached_metadata {
+                        Some(m) => m,
+                        None => match file.metadata() {
+                            Ok(m) => m,
+                            Err(_) => {
+                                return FileOpOutput {
+                                    file: None,
+                                    size: ls,
+                                    result: None,
+                                    inode: fresh_ino,
+                                };
+                            }
+                        },
+                    };
+                    let current_size = metadata.len();
+
+                    // Check if file was recreated (inode changed) on Unix systems
+                    #[cfg(unix)]
+                    if current_size != ls || poll_count.is_multiple_of(10) {
+                        use std::os::unix::fs::MetadataExt;
+                        let path_ino = std::fs::metadata(&path).map(|m| m.ino()).ok();
+                        let file_ino = metadata.ino();
+                        if let Some(path_ino) = path_ino && path_ino != file_ino {
+                            // File was recreated; drop handle and reset
+                            return FileOpOutput {
+                                file: None,
+                                size: 0,
+                                result: Some(FileOpResult::FileRotated),
+                                inode: Some(path_ino),
+                            };
                         }
                     }
-                } else if current_size < last_size {
-                    // File was truncated (cleared), send clear event and reset
-                    yield Ok(Event::default().event("clear").data(""));
-                    last_size = current_size;
+
+
+                    // Use the current file's inode for future rotation checks
+                    // metadata is already available from above, no need for extra fstat
+                    #[cfg(unix)]
+                    let current_ino = fresh_ino.or_else(|| {
+                        use std::os::unix::fs::MetadataExt;
+                        Some(metadata.ino())
+                    });
+                    #[cfg(not(unix))]
+                    let current_ino: Option<u64> = None;
+
+                    if current_size > ls {
+                        // Read new content as bytes to handle invalid UTF-8
+                        if file.seek(SeekFrom::Start(ls)).is_err() {
+                            return FileOpOutput {
+                                file: None,
+                                size: ls,
+                                result: Some(FileOpResult::SeekFailed),
+                                inode: current_ino,
+                            };
+                        }
+
+                        const MAX_READ_SIZE: u64 = 1024 * 1024;
+                        let bytes_to_read = (current_size - ls).min(MAX_READ_SIZE) as usize;
+                        let mut buffer = Vec::with_capacity(bytes_to_read);
+                        match (&mut file).take(bytes_to_read as u64).read_to_end(&mut buffer) {
+                            Ok(0) => {
+                                return FileOpOutput {
+                                    file: Some(file),
+                                    size: ls,
+                                    result: Some(FileOpResult::Eof),
+                                    inode: current_ino,
+                                };
+                            }
+                            Ok(n) => {
+                                ls += n as u64;
+                                return FileOpOutput {
+                                    file: Some(file),
+                                    size: ls,
+                                    result: Some(FileOpResult::Data(buffer)),
+                                    inode: current_ino,
+                                };
+                            }
+                            Err(_) => {
+                                return FileOpOutput {
+                                    file: None,
+                                    size: ls,
+                                    result: Some(FileOpResult::ReadFailed),
+                                    inode: current_ino,
+                                };
+                            }
+                        }
+                    } else if current_size < ls {
+                        // File was truncated (cleared)
+                        return FileOpOutput {
+                            file: Some(file),
+                            size: 0,
+                            result: Some(FileOpResult::Truncated),
+                            inode: current_ino,
+                        };
+                    }
+
+                    FileOpOutput {
+                        file: Some(file),
+                        size: ls,
+                        result: None,
+                        inode: current_ino,
+                    }
+                }).await
+            };
+
+            match file_op_result {
+                Ok(output) => {
+                    file_handle = output.file;
+                    last_size = output.size;
+                    last_path_ino = output.inode;
+
+                    match output.result {
+                        Some(FileOpResult::Data(buffer)) => {
+                            let new_content = String::from_utf8_lossy(&buffer);
+                            let escaped = html_escape(&new_content);
+                            yield Ok(Event::default().event("message").data(escaped));
+                        }
+                        Some(FileOpResult::Truncated) => {
+                            yield Ok(Event::default().event("clear").data(""));
+                        }
+                        Some(FileOpResult::FileRotated) => {
+                            // Signal the client to clear stale content from the previous file
+                            yield Ok(Event::default().event("clear").data(""));
+                        }
+                        Some(FileOpResult::SeekFailed) => {
+                            debug!("SSE log stream: seek failed on '{}', will reopen", log_path.display());
+                        }
+                        Some(FileOpResult::ReadFailed) => {
+                            debug!("SSE log stream: read failed on '{}', will reopen", log_path.display());
+                        }
+                        Some(FileOpResult::Eof) => {
+                            debug!(
+                                "SSE log stream: read 0 bytes from '{}' after size check; retrying",
+                                log_path.display()
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                Err(err) => {
+                    // file_handle is already None after take() above;
+                    // last_size remains valid from before this iteration.
+                    warn!(
+                        "SSE log stream: spawn_blocking panicked for '{}': {err:?}",
+                        log_path.display()
+                    );
                 }
             }
         }
