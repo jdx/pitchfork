@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0](https://github.com/jdx/pitchfork/compare/v2.0.0...v2.1.0) - 2026-03-08
+
+### Added
+
+- add `settings.toml` ([#275](https://github.com/jdx/pitchfork/pull/275))
+
+### Fixed
+
+- correct json schema for DaemonId ([#277](https://github.com/jdx/pitchfork/pull/277))
+- *(supervisor)* prevent file descriptor leaks in SSE streaming and IPC ([#267](https://github.com/jdx/pitchfork/pull/267))
+- fixed scroll disabled when log <20 lines ([#268](https://github.com/jdx/pitchfork/pull/268))
+
+### Other
+
+- Support .config/pitchfork.toml ([#265](https://github.com/jdx/pitchfork/pull/265))
+- *(README)* update broken link ([#270](https://github.com/jdx/pitchfork/pull/270))
+
 ## [2.0.0](https://github.com/jdx/pitchfork/compare/v1.6.0...v2.0.0) - 2026-03-04
 
 ### Added
