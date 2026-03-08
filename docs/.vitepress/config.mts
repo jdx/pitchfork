@@ -63,7 +63,7 @@ export default defineConfig({
         text: "Reference",
         items: [
           { text: "Configuration", link: "/reference/configuration" },
-          { text: "Environment Variables", link: "/reference/environment-vars" },
+          { text: "Settings", link: "/reference/settings" },
           { text: "File Locations", link: "/reference/file-locations" },
           {
             text: "CLI Reference",
@@ -93,6 +93,10 @@ export default defineConfig({
         ],
       },
     ],
+
+    outline: {
+      level: [2, 3],
+    },
 
     socialLinks: [{ icon: "github", link: "https://github.com/jdx/pitchfork" }],
 

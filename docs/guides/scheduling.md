@@ -106,3 +106,20 @@ pitchfork list
 # View logs
 pitchfork logs backup
 ```
+
+## PATH and Tool Availability
+
+When running cron daemons via `pitchfork boot` (login daemon mode), tools installed by version
+managers (e.g. Node via mise, Python via pyenv) may not be available because interactive shell
+hooks haven't run.
+
+**Solution:** Use [mise integration](/guides/mise-integration) to wrap your commands:
+
+```toml
+[daemons.backup]
+run = "node scripts/backup.js"
+cron = { schedule = "0 0 2 * * *" }
+mise = true  # Ensures Node is on PATH even in login daemon context
+```
+
+See the [mise integration guide](/guides/mise-integration#built-in-mise-integration) for details.

@@ -75,6 +75,26 @@ Configs merge in order (later overrides earlier):
 5. `pitchfork.toml` files from filesystem root to current directory (project)
 6. `pitchfork.local.toml` files from filesystem root to current directory (project)
 
+### Data Sources
+
+| Source | Pipeline | Outputs |
+|--------|----------|---------|
+| `settings.toml` | `build/generate_settings.rs` (compile-time) | `Settings` struct + merge/meta Rust code; also `docs/settings.data.ts` → `SettingsTable.vue` → `docs/reference/settings.md` |
+| Rust clap + schemars | `mise run render`: `pitchfork usage` → `usage` tool; `pitchfork schema` | `docs/cli/*.md` + `docs/cli/commands.json` (CLI reference); `docs/public/schema.json` (JSON Schema for editor autocomplete) |
+
+**Update rules:**
+- Changing user settings (`src/settings.rs`) → update `settings.toml` (sole source of truth for codegen)
+- Changing CLI flags/args/help text (clap) or config struct (schemars) → run `mise run render` to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
+
+**These files are generated and should not be manually edited:**
+- `docs/cli/*.md`
+- `docs/cli/commands.json`
+- `docs/public/schema.json`
+- `pitchfork.usage.kdl`
+
+**Partially generated** (hand-authored prose + auto-populated component):
+- `docs/reference/settings.md` — only the `<SettingsTable />` section is auto-generated from `settings.toml`; the surrounding prose may be edited by hand.
+
 ## Code Patterns
 
 - **Async/Tokio**: All I/O is async; use `tokio::select!` for concurrent operations

@@ -59,7 +59,7 @@ ready_port = {}
     // Wait for daemon to be fully running
     env.wait_for_status("watch_test", "running");
 
-    // Give file watcher time to set up watches (much faster now with PITCHFORK_WATCH_INTERVAL_MS=100)
+    // Give file watcher time to set up watches (much faster now with PITCHFORK_WATCH_INTERVAL=100ms)
     env.sleep(Duration::from_millis(500));
 
     // Modify the watched file to trigger a restart

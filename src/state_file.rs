@@ -284,6 +284,7 @@ mod tests {
                 env: None,
                 watch: vec![],
                 watch_base_dir: None,
+                mise: false,
             },
         );
 

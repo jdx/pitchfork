@@ -89,7 +89,7 @@ impl TestEnv {
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
             // Set fast watch interval for tests
-            .env("PITCHFORK_WATCH_INTERVAL_MS", "100")
+            .env("PITCHFORK_WATCH_INTERVAL", "100ms")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -109,7 +109,7 @@ impl TestEnv {
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
             // Set fast watch interval for tests
-            .env("PITCHFORK_WATCH_INTERVAL_MS", "100")
+            .env("PITCHFORK_WATCH_INTERVAL", "100ms")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -204,7 +204,7 @@ impl TestEnv {
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
             // Set fast watch interval for tests
-            .env("PITCHFORK_WATCH_INTERVAL_MS", "100")
+            .env("PITCHFORK_WATCH_INTERVAL", "100ms")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

@@ -6,12 +6,13 @@ use axum::{
     },
 };
 use std::convert::Infallible;
-use std::time::Duration;
 
 use crate::daemon::daemon_log_path;
+use crate::daemon::is_valid_daemon_id;
 use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::web::bp;
 use crate::web::helpers::{html_escape, url_encode};
@@ -132,8 +133,9 @@ pub async fn index() -> Html<String> {
                     Ok(bytes) => {
                         let content = String::from_utf8_lossy(&bytes);
                         let lines: Vec<&str> = content.lines().collect();
-                        let start = if lines.len() > 100 {
-                            lines.len() - 100
+                        let log_lines = settings().web.log_lines.max(0) as usize;
+                        let start = if log_lines > 0 && lines.len() > log_lines {
+                            lines.len() - log_lines
                         } else {
                             0
                         };
@@ -258,10 +260,11 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             Ok(bytes) => {
                 // Use lossy conversion to handle invalid UTF-8
                 let content = String::from_utf8_lossy(&bytes);
-                // Get last 100 lines
+                // Get last N lines (configurable via web.log_lines setting)
                 let lines: Vec<&str> = content.lines().collect();
-                let start = if lines.len() > 100 {
-                    lines.len() - 100
+                let log_lines = settings().web.log_lines.max(0) as usize;
+                let start = if log_lines > 0 && lines.len() > log_lines {
+                    lines.len() - log_lines
                 } else {
                     0
                 };
@@ -314,8 +317,9 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
                 // Use lossy conversion to handle invalid UTF-8
                 let content = String::from_utf8_lossy(&bytes);
                 let lines: Vec<&str> = content.lines().collect();
-                let start = if lines.len() > 100 {
-                    lines.len() - 100
+                let log_lines = settings().web.log_lines.max(0) as usize;
+                let start = if log_lines > 0 && lines.len() > log_lines {
+                    lines.len() - log_lines
                 } else {
                     0
                 };
@@ -333,7 +337,15 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
 pub async fn stream_sse(
     Path(id): Path<String>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let sse_poll_interval = settings().web_sse_poll_interval();
+
     let stream = async_stream::stream! {
+        // Validate daemon ID to prevent path traversal before touching the filesystem
+        if !is_valid_daemon_id(&id) {
+            yield Ok(Event::default().event("error").data("invalid daemon id"));
+            return;
+        }
+
         let daemon_id = match DaemonId::parse(&id) {
             Ok(d) => d,
             Err(_) => {
@@ -394,7 +406,7 @@ pub async fn stream_sse(
         let mut poll_count = 0u64;
 
         loop {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            tokio::time::sleep(sse_poll_interval).await;
             poll_count = poll_count.wrapping_add(1);
 
             // Use spawn_blocking for all blocking file operations

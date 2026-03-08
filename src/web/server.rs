@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::settings::settings;
 use axum::{
     Router,
     body::Body,
@@ -25,15 +26,24 @@ async fn csrf_protection(request: Request<Body>, next: Next) -> Result<Response,
     Ok(next.run(request).await)
 }
 
-/// Number of ports to try before giving up
-const PORT_ATTEMPTS: u16 = 10;
-
 pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
     let base_path = super::normalize_base_path(web_path.as_deref())?;
     super::BASE_PATH
         .set(base_path.clone())
         .expect("BASE_PATH already set; serve() must only be called once per process");
-
+    let s = settings();
+    let bind_address = &s.web.bind_address;
+    // port_attempts is stored as i64; clamp to a sane u16 range rather than
+    // silently truncating negative/oversized values with `as u16`.
+    let port_attempts: u16 = u16::try_from(s.web.port_attempts)
+        .unwrap_or_else(|_| {
+            warn!(
+                "web.port_attempts value {} is out of range (1-65535), clamping to 10",
+                s.web.port_attempts
+            );
+            10
+        })
+        .max(1);
     let inner = Router::new()
         // Dashboard
         .route("/", get(routes::index::index))
@@ -76,11 +86,16 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
             .nest(&base_path, inner)
     };
 
-    // Try up to PORT_ATTEMPTS ports starting from the given port
+    // Parse bind address
+    let ip_addr: std::net::IpAddr = bind_address
+        .parse()
+        .map_err(|e| miette::miette!("Invalid bind address '{}': {}", bind_address, e))?;
+
+    // Try up to port_attempts ports starting from the given port
     let mut last_error = None;
-    for offset in 0..PORT_ATTEMPTS {
+    for offset in 0..port_attempts {
         let try_port = port.saturating_add(offset);
-        let addr = SocketAddr::from(([127, 0, 0, 1], try_port));
+        let addr = SocketAddr::from((ip_addr, try_port));
 
         match tokio::net::TcpListener::bind(addr).await {
             Ok(listener) => {
@@ -113,7 +128,7 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
     Err(miette::miette!(
         "Failed to bind web server: tried ports {}-{}, all in use. Last error: {}",
         port,
-        port.saturating_add(PORT_ATTEMPTS - 1),
+        port.saturating_add(port_attempts - 1),
         last_error.map(|e| e.to_string()).unwrap_or_default()
     ))
 }

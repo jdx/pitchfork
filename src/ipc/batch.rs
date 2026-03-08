@@ -6,11 +6,12 @@ use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::deps::resolve_dependencies;
-use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork, is_global_config,
 };
+use crate::settings::settings;
+
 use chrono::{DateTime, Local};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -133,6 +134,7 @@ pub fn build_run_options(
             .path
             .as_ref()
             .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+        mise: daemon_config.mise.unwrap_or(settings().general.mise),
     })
 }
 
@@ -470,7 +472,7 @@ impl IpcClient {
         let auto_bump_port = opts.auto_bump_port;
         let port_bump_attempts = opts
             .port_bump_attempts
-            .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS);
+            .unwrap_or_else(|| settings().default_port_bump_attempts());
         let retry = opts.retry.unwrap_or(0);
         let shell_pid = opts.shell_pid;
 
@@ -499,6 +501,7 @@ impl IpcClient {
                 env,
                 watch: vec![],
                 watch_base_dir: None,
+                mise: settings().general.mise,
             };
 
             let result = ipc.run(run_opts).await;
@@ -694,12 +697,13 @@ impl IpcClient {
             auto_bump_port: opts.auto_bump_port,
             port_bump_attempts: opts
                 .port_bump_attempts
-                .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
+                .unwrap_or_else(|| settings().default_port_bump_attempts()),
             wait_ready: true,
             depends: vec![],
             env: None,
             watch: vec![],
             watch_base_dir: None,
+            mise: settings().general.mise,
         })
         .await
     }

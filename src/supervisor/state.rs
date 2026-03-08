@@ -7,10 +7,10 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::env::PITCHFORK_PORT_BUMP_ATTEMPTS;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
+use crate::settings::settings;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,6 +47,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
     pub watch_base_dir: Option<PathBuf>,
+    pub mise: Option<bool>,
 }
 
 /// Builder for UpsertDaemonOpts - ensures daemon ID is always provided.
@@ -95,6 +96,7 @@ impl UpsertDaemonOpts {
                 env: None,
                 watch: None,
                 watch_base_dir: None,
+                mise: None,
             },
         }
     }
@@ -178,7 +180,7 @@ impl Supervisor {
             port_bump_attempts: opts.port_bump_attempts.unwrap_or(
                 existing
                     .map(|d| d.port_bump_attempts)
-                    .unwrap_or(*PITCHFORK_PORT_BUMP_ATTEMPTS),
+                    .unwrap_or_else(|| settings().default_port_bump_attempts()),
             ),
             depends: opts
                 .depends
@@ -190,6 +192,9 @@ impl Supervisor {
             watch_base_dir: opts
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
+            mise: opts
+                .mise
+                .unwrap_or(existing.map(|d| d.mise).unwrap_or(settings().general.mise)),
         };
         state_file.daemons.insert(opts.id.clone(), daemon.clone());
         if let Err(err) = state_file.write() {

@@ -16,9 +16,76 @@ Pitchfork handles:
 
 Together, they provide a complete development environment solution.
 
-## Basic Setup
+## Built-in mise Integration
 
-Define a simple daemon that calls a mise task:
+When pitchfork runs as a **login daemon** (e.g. via `pitchfork boot`) or in non-interactive
+environments (e.g. cron), tools installed by mise may not be on `PATH` because shell hooks
+haven't run. The built-in mise integration solves this by wrapping your daemon commands with
+`mise x --`, which activates the mise environment before executing the command.
+
+### Global Setting
+
+Enable mise for all daemons in [settings](/reference/settings):
+
+```toml
+# ~/.config/pitchfork/config.toml
+[settings.general]
+mise = true
+```
+
+### Per-Daemon Override
+
+Enable or disable mise for individual daemons in `pitchfork.toml`:
+
+```toml
+[daemons.api]
+run = "node server.js"
+mise = true  # Enable mise for this daemon
+
+[daemons.simple]
+run = "echo hello"
+mise = false  # Disable mise even if globally enabled
+```
+
+Per-daemon `mise` overrides the global `general.mise` setting. If neither is set, mise is
+disabled by default.
+
+### Custom mise Binary Path
+
+If `mise` is not in a well-known location, specify the path:
+
+```toml
+# ~/.config/pitchfork/config.toml
+[settings.general]
+mise = true
+mise_bin = "/opt/custom/bin/mise"
+```
+
+Pitchfork automatically searches these paths when `mise_bin` is not set:
+- `~/.local/bin/mise`
+- `~/.cargo/bin/mise`
+- `/usr/local/bin/mise`
+- `/opt/homebrew/bin/mise`
+
+### How It Works
+
+When `mise = true` is set for a daemon, pitchfork wraps the command:
+
+```
+# Without mise:
+sh -c "exec node server.js"
+
+# With mise:
+sh -c "exec /path/to/mise x -- node server.js"
+```
+
+`mise x --` activates all tools and environment variables from `mise.toml` / `.tool-versions`
+in the daemon's working directory before running the command.
+
+## Using mise Tasks
+
+You can also use mise tasks directly as daemon commands. This approach gives you full control
+over tool installation, environment variables, and task dependencies:
 
 **pitchfork.toml:**
 ```toml
@@ -42,7 +109,7 @@ run = "node docs/index.js"
 depends = ["docs:setup"]
 ```
 
-## How It Works
+### Workflow
 
 1. `pitchfork start docs` launches the daemon
 2. Pitchfork calls `mise run docs:dev`
@@ -96,3 +163,4 @@ depends = ["frontend:setup"]
 - **Environment:** mise sets environment variables before the daemon starts
 - **Dependencies:** mise runs setup tasks (npm install, etc.) automatically
 - **Lifecycle:** pitchfork handles process monitoring, restarts, and ready checks
+- **Login daemons:** Built-in `mise = true` ensures tools are available even without interactive shell hooks
