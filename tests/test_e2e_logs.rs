@@ -95,7 +95,7 @@ fn wait_for_web_server(child: &mut Child) -> (u16, JoinHandle<()>) {
             if let Ok(response) = client.get(&url).send().await
                 && response.status().is_success()
             {
-                return port;
+                return;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
@@ -338,6 +338,7 @@ ready_delay = 0
     env.run_command(&["stop", "sse_connect"]);
 }
 
+#[cfg(unix)]
 #[test]
 fn test_web_logs_sse_clears_and_restreams_after_rotation() {
     let env = TestEnv::new();
