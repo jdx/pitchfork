@@ -85,7 +85,14 @@ impl Settings {
     /// This is the single source of truth for the fallback so that call-sites
     /// don't each duplicate the hardcoded `10`.
     pub fn default_port_bump_attempts(&self) -> u32 {
-        u32::try_from(self.supervisor.port_bump_attempts).unwrap_or(10)
+        u32::try_from(self.supervisor.port_bump_attempts).unwrap_or_else(|_| {
+            warn!(
+                "supervisor.port_bump_attempts value {} is out of range (0-{}), clamping to 10",
+                self.supervisor.port_bump_attempts,
+                u32::MAX
+            );
+            10
+        })
     }
 }
 

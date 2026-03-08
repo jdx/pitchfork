@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
+import { marked } from "marked";
 
 // __dirname is not available in ES modules (VitePress uses ESM).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,6 @@ interface SettingsData {
 // Convert markdown to HTML using marked
 async function markdownToHtml(md: string): Promise<string> {
   if (!md) return "";
-  const { marked } = await import("marked");
   return marked.parse(md, { async: false }) as string;
 }
 
@@ -37,7 +37,7 @@ async function processDocs(obj: SettingsData): Promise<void> {
 
     if (value.type) {
       // This is a leaf setting
-      const content = (value.docs || value.description || "") as string;
+      const content = (value.docs as string) || "";
       value.docsHtml = await markdownToHtml(content);
     } else {
       // Nested group
