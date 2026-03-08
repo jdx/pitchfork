@@ -401,6 +401,7 @@ pub async fn stream_sse(
                 let mut ls = last_size;
                 let prev_ino = last_path_ino;
                 tokio::task::spawn_blocking(move || {
+                    let opened_fresh = fh.is_none();
                     let mut file = match fh {
                         Some(f) => f,
                         None => match std::fs::File::open(&path) {
@@ -419,7 +420,7 @@ pub async fn stream_sse(
                     // Check if file was rotated while we had no handle (fresh open case)
                     // and cache metadata to avoid redundant fstat calls
                     #[cfg(unix)]
-                    let (fresh_open_rotated, cached_metadata, fresh_ino) = {
+                    let (fresh_open_rotated, cached_metadata, fresh_ino) = if opened_fresh {
                         use std::os::unix::fs::MetadataExt;
                         if let Ok(meta) = file.metadata() {
                             let ino = meta.ino();
@@ -437,6 +438,8 @@ pub async fn stream_sse(
                         } else {
                             (false, None, None)
                         }
+                    } else {
+                        (false, None, None)
                     };
                     #[cfg(unix)]
                     if fresh_open_rotated {
