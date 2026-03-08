@@ -2,46 +2,94 @@ mod common;
 
 use common::{TestEnv, get_script_path};
 use std::fs;
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::sync::mpsc;
 use std::time::Duration;
 
-fn get_free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
+struct ChildGuard(Child);
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self(child)
+    }
 }
 
-fn start_web_supervisor(env: &TestEnv) -> (Child, u16) {
-    let base_port = get_free_port();
-    let port = base_port.to_string();
-    let child = env.run_background(&["supervisor", "run", "--web-port", &port]);
-    let actual_port = wait_for_web_server(base_port);
-    (child, actual_port)
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
-fn stop_process(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+fn start_web_supervisor(env: &TestEnv) -> (ChildGuard, u16) {
+    let port = "0";
+    let mut child = env.run_background(&["supervisor", "run", "--web-port", port]);
+    let actual_port = wait_for_web_server(&mut child);
+    (ChildGuard::new(child), actual_port)
 }
 
-fn wait_for_web_server(base_port: u16) -> u16 {
+fn wait_for_web_server(child: &mut Child) -> u16 {
+    let stderr = child
+        .stderr
+        .take()
+        .expect("supervisor stderr should be piped");
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let (port_tx, port_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        let mut recent_lines = Vec::new();
+        let mut sent_port = false;
+        for line in reader.lines() {
+            let line = line.expect("failed to read supervisor stderr");
+            if recent_lines.len() == 20 {
+                recent_lines.remove(0);
+            }
+            recent_lines.push(line.clone());
+
+            if !sent_port
+                && let Some(port_start) = line.find("Web UI listening on http://127.0.0.1:")
+            {
+                let port_str = &line[port_start + "Web UI listening on http://127.0.0.1:".len()..];
+                let port_digits: String = port_str
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(port) = port_digits.parse::<u16>() {
+                    let _ = port_tx.send(Ok(port));
+                    sent_port = true;
+                }
+            }
+        }
+
+        if !sent_port {
+            let _ = port_tx.send(Err(recent_lines));
+        }
+    });
+
+    let port = port_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("web server did not report a listening port in time")
+        .unwrap_or_else(|lines| {
+            panic!(
+                "web server exited before reporting a port; recent stderr: {}",
+                lines.join(" | ")
+            )
+        });
+
     rt.block_on(async move {
         let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{port}/health");
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            for port in base_port..base_port.saturating_add(10) {
-                let url = format!("http://127.0.0.1:{port}/health");
-                if let Ok(response) = client.get(&url).send().await
-                    && response.status().is_success()
-                {
-                    return port;
-                }
+            if let Ok(response) = client.get(&url).send().await
+                && response.status().is_success()
+            {
+                return port;
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "web server did not become ready"
+                "web server did not become ready on port {port}"
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -92,6 +140,37 @@ fn read_sse_until(
 
         panic!("did not receive expected SSE output, got: {body}");
     })
+}
+
+fn wait_for_log_content(env: &TestEnv, daemon_id: &str, needle: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let logs = env.read_logs(daemon_id);
+        if logs.contains(needle) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "log file for {daemon_id} did not contain '{needle}' in time"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn wait_for_supervisor_cli(env: &TestEnv) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    loop {
+        let output = env.run_command(&["list"]);
+        if output.status.success() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "supervisor CLI did not become ready in time: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 // ============================================================================
@@ -215,10 +294,11 @@ ready_delay = 0
     );
     env.create_toml(&toml_content);
 
-    let (mut supervisor, port) = start_web_supervisor(&env);
+    let (_supervisor, port) = start_web_supervisor(&env);
+    wait_for_supervisor_cli(&env);
 
     env.run_command(&["start", "sse_connect"]);
-    env.sleep(Duration::from_secs(3));
+    wait_for_log_content(&env, "sse_connect", "Output 1/6");
 
     let existing_logs = env.read_logs("sse_connect");
     assert!(
@@ -244,7 +324,6 @@ ready_delay = 0
     );
 
     env.run_command(&["stop", "sse_connect"]);
-    stop_process(&mut supervisor);
 }
 
 #[test]
@@ -253,7 +332,8 @@ fn test_web_logs_sse_clears_and_restreams_after_rotation() {
     env.ensure_binary_exists().unwrap();
     env.create_toml("");
 
-    let (mut supervisor, port) = start_web_supervisor(&env);
+    let (_supervisor, port) = start_web_supervisor(&env);
+    wait_for_supervisor_cli(&env);
 
     let log_path = env.log_path("rotate_sse");
     fs::create_dir_all(log_path.parent().unwrap()).unwrap();
@@ -306,8 +386,6 @@ fn test_web_logs_sse_clears_and_restreams_after_rotation() {
         body.contains("new line after rotation"),
         "rotation should stream the new file from the beginning: {body}"
     );
-
-    stop_process(&mut supervisor);
 }
 
 #[test]

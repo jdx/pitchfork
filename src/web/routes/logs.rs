@@ -391,8 +391,11 @@ pub async fn stream_sse(
             inode: Option<u64>,
         }
 
+        let mut poll_count = 0u64;
+
         loop {
             tokio::time::sleep(Duration::from_millis(500)).await;
+            poll_count = poll_count.wrapping_add(1);
 
             // Use spawn_blocking for all blocking file operations
             let file_op_result = {
@@ -400,6 +403,7 @@ pub async fn stream_sse(
                 let fh = file_handle.take();
                 let mut ls = last_size;
                 let prev_ino = last_path_ino;
+                let poll_count = poll_count;
                 tokio::task::spawn_blocking(move || {
                     let opened_fresh = fh.is_none();
                     let mut file = match fh {
@@ -473,7 +477,7 @@ pub async fn stream_sse(
 
                     // Check if file was recreated (inode changed) on Unix systems
                     #[cfg(unix)]
-                    {
+                    if opened_fresh || current_size != ls || poll_count.is_multiple_of(10) {
                         use std::os::unix::fs::MetadataExt;
                         let path_ino = std::fs::metadata(&path).map(|m| m.ino()).ok();
                         let file_ino = metadata.ino();
