@@ -5,38 +5,48 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
-struct ChildGuard(Child);
+struct ChildGuard {
+    child: Child,
+    stderr_thread: Option<JoinHandle<()>>,
+}
 
 impl ChildGuard {
-    fn new(child: Child) -> Self {
-        Self(child)
+    fn new(child: Child, stderr_thread: JoinHandle<()>) -> Self {
+        Self {
+            child,
+            stderr_thread: Some(stderr_thread),
+        }
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(stderr_thread) = self.stderr_thread.take() {
+            let _ = stderr_thread.join();
+        }
     }
 }
 
 fn start_web_supervisor(env: &TestEnv) -> (ChildGuard, u16) {
     let port = "0";
     let mut child = env.run_background(&["supervisor", "run", "--web-port", port]);
-    let actual_port = wait_for_web_server(&mut child);
-    (ChildGuard::new(child), actual_port)
+    let (actual_port, stderr_thread) = wait_for_web_server(&mut child);
+    (ChildGuard::new(child, stderr_thread), actual_port)
 }
 
-fn wait_for_web_server(child: &mut Child) -> u16 {
+fn wait_for_web_server(child: &mut Child) -> (u16, JoinHandle<()>) {
     let stderr = child
         .stderr
         .take()
         .expect("supervisor stderr should be piped");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (port_tx, port_rx) = mpsc::channel();
-    std::thread::spawn(move || {
+    let stderr_thread = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         let mut recent_lines = Vec::new();
         let mut sent_port = false;
@@ -93,7 +103,9 @@ fn wait_for_web_server(child: &mut Child) -> u16 {
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-    })
+    });
+
+    (port, stderr_thread)
 }
 
 fn read_sse_until(

@@ -477,7 +477,7 @@ pub async fn stream_sse(
 
                     // Check if file was recreated (inode changed) on Unix systems
                     #[cfg(unix)]
-                    if opened_fresh || current_size != ls || poll_count.is_multiple_of(10) {
+                    if current_size != ls || poll_count.is_multiple_of(10) {
                         use std::os::unix::fs::MetadataExt;
                         let path_ino = std::fs::metadata(&path).map(|m| m.ino()).ok();
                         let file_ino = metadata.ino();
