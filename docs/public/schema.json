@@ -9,7 +9,7 @@
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[\\w.-]+/[\\w.-]+$": {
+        "^[\\w.-]+(/[\\w.-]+)?$": {
           "$ref": "#/$defs/PitchforkTomlDaemon"
         }
       }
@@ -52,9 +52,9 @@
       ]
     },
     "DaemonId": {
-      "description": "Daemon ID in the format 'namespace/name'",
+      "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
       "type": "string",
-      "pattern": "^[\\w.-]+/[\\w.-]+$"
+      "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
     },
     "PitchforkTomlAuto": {
       "description": "Auto start/stop configuration",
