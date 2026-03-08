@@ -408,6 +408,75 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                         .and_then(|v| v.as_str())
                         .filter(|dep| *dep != env_var);
 
+                    // Generate the deprecated env var shim for ALL types.
+                    // When the new env var is not set, fall back to the
+                    // deprecated one and emit a one-time deprecation warning.
+                    let deprecated_block = if let Some(dep_env) = deprecated_env {
+                        match type_str {
+                            "Duration" => quote! {
+                                if std::env::var(#env_var).is_err() {
+                                    if let Ok(val) = std::env::var(#dep_env) {
+                                        eprintln!(
+                                            "pitchfork: warning: {} is deprecated, use {} instead (with duration format, e.g. \"10s\", \"100ms\", \"1m\")",
+                                            #dep_env, #env_var
+                                        );
+                                        if humantime::parse_duration(&val).is_ok() {
+                                            #field_path = val;
+                                        } else {
+                                            eprintln!(
+                                                "pitchfork: warning: cannot parse {:?} from {} as a duration (expected e.g. \"10s\", \"100ms\"), using default",
+                                                val, #dep_env
+                                            );
+                                        }
+                                    }
+                                }
+                            },
+                            "Bool" => quote! {
+                                if std::env::var(#env_var).is_err() {
+                                    if let Ok(val) = std::env::var(#dep_env) {
+                                        eprintln!("pitchfork: warning: {} is deprecated, use {} instead", #dep_env, #env_var);
+                                        if let Ok(b) = val.parse::<bool>() {
+                                            #field_path = b;
+                                        } else if val == "1" {
+                                            #field_path = true;
+                                        } else if val == "0" {
+                                            #field_path = false;
+                                        }
+                                    }
+                                }
+                            },
+                            "Integer" => quote! {
+                                if std::env::var(#env_var).is_err() {
+                                    if let Ok(val) = std::env::var(#dep_env) {
+                                        eprintln!("pitchfork: warning: {} is deprecated, use {} instead", #dep_env, #env_var);
+                                        if let Ok(n) = val.parse::<i64>() {
+                                            #field_path = n;
+                                        }
+                                    }
+                                }
+                            },
+                            "String" => quote! {
+                                if std::env::var(#env_var).is_err() {
+                                    if let Ok(val) = std::env::var(#dep_env) {
+                                        eprintln!("pitchfork: warning: {} is deprecated, use {} instead", #dep_env, #env_var);
+                                        #field_path = val;
+                                    }
+                                }
+                            },
+                            "Path" => quote! {
+                                if std::env::var(#env_var).is_err() {
+                                    if let Ok(val) = std::env::var(#dep_env) {
+                                        eprintln!("pitchfork: warning: {} is deprecated, use {} instead", #dep_env, #env_var);
+                                        #field_path = std::path::PathBuf::from(val);
+                                    }
+                                }
+                            },
+                            _ => quote! {},
+                        }
+                    } else {
+                        quote! {}
+                    };
+
                     let assign = match type_str {
                         "Bool" => quote! {
                             if let Ok(val) = std::env::var(#env_var) {
@@ -419,6 +488,7 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                                     #field_path = false;
                                 }
                             }
+                            #deprecated_block
                         },
                         "Integer" => quote! {
                             if let Ok(val) = std::env::var(#env_var) {
@@ -426,15 +496,17 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                                     #field_path = n;
                                 }
                             }
+                            #deprecated_block
                         },
                         "String" => quote! {
                             if let Ok(val) = std::env::var(#env_var) {
                                 #field_path = val;
                             }
+                            #deprecated_block
                         },
                         "Duration" => {
                             // Main env var: validate as humantime, warn on invalid
-                            let main_block = quote! {
+                            quote! {
                                 if let Ok(val) = std::env::var(#env_var) {
                                     if humantime::parse_duration(&val).is_ok() {
                                         #field_path = val;
@@ -445,36 +517,6 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                                         );
                                     }
                                 }
-                            };
-
-                            // Deprecated env var (different name): fallback when the new
-                            // env var is not set. Try humantime first, then bare integer
-                            // (interpreted as seconds for backward compat).
-                            let deprecated_block = if let Some(dep_env) = deprecated_env {
-                                quote! {
-                                    if std::env::var(#env_var).is_err() {
-                                        if let Ok(val) = std::env::var(#dep_env) {
-                                            eprintln!(
-                                                "pitchfork: warning: {} is deprecated, use {} instead (with duration format, e.g. \"10s\", \"100ms\", \"1m\")",
-                                                #dep_env, #env_var
-                                            );
-                                            if humantime::parse_duration(&val).is_ok() {
-                                                #field_path = val;
-                                            } else {
-                                                eprintln!(
-                                                    "pitchfork: warning: cannot parse {:?} from {} as a duration (expected e.g. \"10s\", \"100ms\"), using default",
-                                                    val, #dep_env
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                quote! {}
-                            };
-
-                            quote! {
-                                #main_block
                                 #deprecated_block
                             }
                         }
@@ -482,6 +524,7 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                             if let Ok(val) = std::env::var(#env_var) {
                                 #field_path = std::path::PathBuf::from(val);
                             }
+                            #deprecated_block
                         },
                         _ => quote! {},
                     };
@@ -620,11 +663,28 @@ fn generate_apply_partial_body(table: &Table, self_path: &str, partial_path: &st
                     .get("type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("String");
-                // Bool and Integer are Copy; String/Duration/Path need clone
+
+                let setting_name = format!("{}.{}", self_path.trim_start_matches("self."), key);
+
+                // Bool and Integer are Copy; String/Duration/Path need clone.
+                // Duration fields are validated at apply time so that invalid
+                // values from TOML are caught once (consistent with env-var path).
                 let stmt = match type_str {
                     "Bool" | "Integer" => quote! {
                         if let Some(v) = #partial_field {
                             #self_field = v;
+                        }
+                    },
+                    "Duration" => quote! {
+                        if let Some(ref v) = #partial_field {
+                            if humantime::parse_duration(v).is_ok() {
+                                #self_field = v.clone();
+                            } else {
+                                eprintln!(
+                                    "pitchfork: warning: invalid duration {:?} for setting {}, keeping current value",
+                                    v, #setting_name
+                                );
+                            }
                         }
                     },
                     _ => quote! {
@@ -675,11 +735,21 @@ fn generate_duration_helpers(settings: &Table) -> TokenStream {
                             format!("self.{}.{}", prefix, key).parse().unwrap()
                         };
 
-                        // Get default from the field definition for fallback
+                        // Get default from the field definition for fallback.
+                        // Every Duration field MUST declare a default in settings.toml;
+                        // a missing default is a schema error caught at build time.
+                        let setting_path = if prefix.is_empty() {
+                            key.to_string()
+                        } else {
+                            format!("{}.{}", prefix, key)
+                        };
                         let default_str = props
                             .get("default")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("1s");
+                            .unwrap_or_else(|| panic!(
+                                "settings.toml: Duration field '{}' is missing a 'default' value",
+                                setting_path
+                            ));
                         // Remove any surrounding quotes from the default value
                         let default_duration = default_str.trim_matches('"');
 
@@ -694,24 +764,15 @@ fn generate_duration_helpers(settings: &Table) -> TokenStream {
                             format!("Get `{}.{}` as Duration", prefix, key)
                         };
 
-                        let setting_name = if prefix.is_empty() {
-                            key.to_string()
-                        } else {
-                            format!("{}.{}", prefix, key)
-                        };
-
                         methods.push(quote! {
                             #[doc = #doc_comment]
                             #[allow(dead_code)]
                             pub fn #method_name(&self) -> std::time::Duration {
+                                // Silently fall back to the schema default.
+                                // Invalid values are already warned about once
+                                // at load time in apply_partial / load_from_env.
                                 Self::parse_duration(&#field_path)
-                                    .unwrap_or_else(|| {
-                                        eprintln!(
-                                            "pitchfork: warning: invalid duration {:?} for setting {}, using default {:?}",
-                                            #field_path, #setting_name, #default_duration
-                                        );
-                                        #fallback
-                                    })
+                                    .unwrap_or(#fallback)
                             }
                         });
                     }

@@ -22,7 +22,7 @@
       ]
     },
     "settings": {
-      "description": "Settings configuration (merged from all config files)",
+      "description": "Settings configuration (merged from all config files).\n\n**Note:** This field exists for serialization round-trips and for\n`PitchforkToml::merge()` to collect per-file overrides.  It is **not**\nconsumed by the global `settings()` singleton, which is populated\nindependently by `Settings::load()` to avoid a circular dependency\nbetween `PitchforkToml` and `Settings`.  Do not rely on mutations to\nthis field being reflected in `settings()`.",
       "$ref": "#/$defs/SettingsPartial",
       "default": {
         "general": {},

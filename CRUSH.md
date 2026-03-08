@@ -87,11 +87,13 @@ Configs merge in order (later overrides earlier):
 - Changing CLI flags/args/help text (clap) or config struct (schemars) → run `mise run render` to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
 
 **These files are generated and should not be manually edited:**
-- `docs/reference/settings.md`
 - `docs/cli/*.md`
 - `docs/cli/commands.json`
 - `docs/public/schema.json`
 - `pitchfork.usage.kdl`
+
+**Partially generated** (hand-authored prose + auto-populated component):
+- `docs/reference/settings.md` — only the `<SettingsTable />` section is auto-generated from `settings.toml`; the surrounding prose may be edited by hand.
 
 ## Code Patterns
 

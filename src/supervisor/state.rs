@@ -194,7 +194,7 @@ impl Supervisor {
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
             mise: opts
                 .mise
-                .unwrap_or(existing.map(|d| d.mise).unwrap_or(false)),
+                .unwrap_or(existing.map(|d| d.mise).unwrap_or(settings().general.mise)),
         };
         state_file.daemons.insert(opts.id.clone(), daemon.clone());
         if let Err(err) = state_file.write() {

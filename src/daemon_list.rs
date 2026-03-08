@@ -97,7 +97,7 @@ fn build_daemon_list(
     }
 
     // Then, add daemons from config that aren't in state file (available daemons)
-    for daemon_id in config.daemons.keys() {
+    for (daemon_id, daemon_config) in &config.daemons {
         if *daemon_id == pitchfork_id || seen_ids.contains(daemon_id) {
             continue;
         }
@@ -126,13 +126,12 @@ fn build_daemon_list(
             expected_port: Vec::new(),
             resolved_port: Vec::new(),
             auto_bump_port: false,
-            port_bump_attempts: u32::try_from(settings().supervisor.port_bump_attempts)
-                .unwrap_or(10),
+            port_bump_attempts: settings().default_port_bump_attempts(),
             depends: vec![],
             env: None,
             watch: vec![],
             watch_base_dir: None,
-            mise: false,
+            mise: daemon_config.mise.unwrap_or(settings().general.mise),
         };
 
         entries.push(DaemonListEntry {

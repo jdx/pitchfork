@@ -1100,7 +1100,9 @@
               "double_dash": "Optional",
               "hide": false
             },
-            "default": "0"
+            "default": [
+              "0"
+            ]
           },
           {
             "name": "delay",

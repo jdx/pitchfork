@@ -82,9 +82,16 @@ pub struct PitchforkToml {
     /// This applies to per-file read/write flows. Merged configs may contain
     /// daemons from multiple namespaces and leave this as `None`.
     pub namespace: Option<String>,
-    /// Settings configuration (merged from all config files)
+    /// Settings configuration (merged from all config files).
+    ///
+    /// **Note:** This field exists for serialization round-trips and for
+    /// `PitchforkToml::merge()` to collect per-file overrides.  It is **not**
+    /// consumed by the global `settings()` singleton, which is populated
+    /// independently by `Settings::load()` to avoid a circular dependency
+    /// between `PitchforkToml` and `Settings`.  Do not rely on mutations to
+    /// this field being reflected in `settings()`.
     #[serde(default)]
-    pub settings: SettingsPartial,
+    pub(crate) settings: SettingsPartial,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }

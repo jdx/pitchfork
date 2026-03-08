@@ -504,7 +504,6 @@ pub async fn stream_sse(
                         }
                     }
 
-
                     // Use the current file's inode for future rotation checks
                     // metadata is already available from above, no need for extra fstat
                     #[cfg(unix)]

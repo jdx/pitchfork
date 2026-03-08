@@ -107,12 +107,11 @@ impl Procs {
         // Use the configurable stop_timeout setting to govern total wait time.
         let stop_timeout = settings().supervisor_stop_timeout();
         let fast_ms = 10u64;
-        let fast_count = 10usize;
         let slow_ms = 50u64;
+        let total_ms = stop_timeout.as_millis().max(1) as u64;
+        let fast_count = ((total_ms / fast_ms) as usize).min(10);
         let fast_total_ms = fast_ms * fast_count as u64;
-        let remaining_ms = stop_timeout
-            .as_millis()
-            .saturating_sub(fast_total_ms as u128) as u64;
+        let remaining_ms = total_ms.saturating_sub(fast_total_ms);
         let slow_count = (remaining_ms / slow_ms) as usize;
 
         let fast_checks =
@@ -191,15 +190,15 @@ impl Procs {
                 process.kill_with(Signal::Term);
             }
 
-            // Fast check: 10ms intervals for first 100ms (for processes that exit immediately)
+            // Fast check: 10ms intervals, then slower 50ms polling for stop_timeout.
+            // Cap fast_count so short timeouts (e.g. 50ms) are honoured correctly.
             let stop_timeout = settings().supervisor_stop_timeout();
             let fast_ms = 10u64;
-            let fast_count = 10usize;
             let slow_ms = 50u64;
+            let total_ms = stop_timeout.as_millis().max(1) as u64;
+            let fast_count = ((total_ms / fast_ms) as usize).min(10);
             let fast_total_ms = fast_ms * fast_count as u64;
-            let remaining_ms = stop_timeout
-                .as_millis()
-                .saturating_sub(fast_total_ms as u128) as u64;
+            let remaining_ms = total_ms.saturating_sub(fast_total_ms);
             let slow_count = (remaining_ms / slow_ms) as usize;
 
             for i in 0..fast_count {
