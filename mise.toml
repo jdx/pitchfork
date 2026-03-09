@@ -2,11 +2,15 @@
 _.path = "target/debug"
 
 [tasks.ci]
-depends = ["lint", "build"]
+depends = ["lint", "build", "docs:build"]
 run = [
   "cargo nextest run",
   "test/bats/bin/bats test",
 ]
+
+[tasks."docs:build"]
+dir = "docs"
+run = "bun i && exec bun run docs:build"
 
 [tasks.docs]
 dir = "docs"
