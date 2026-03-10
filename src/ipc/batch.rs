@@ -143,12 +143,41 @@ impl IpcClient {
     // Helper functions for resolving daemon IDs
     // =========================================================================
 
-    /// Get all configured daemon IDs from pitchfork.toml files
+    /// Get all configured daemon IDs from pitchfork.toml files (both local and global)
     pub fn get_all_configured_daemons() -> Result<Vec<DaemonId>> {
         Ok(PitchforkToml::all_merged()?
             .daemons
             .keys()
             .cloned()
+            .collect())
+    }
+
+    /// Get local configured daemon IDs (from pitchfork.toml files in current directory hierarchy)
+    ///
+    /// This excludes daemons from global config files (~/.config/pitchfork/config.toml
+    /// and /etc/pitchfork/config.toml), returning only daemons defined in project-level
+    /// pitchfork.toml files.
+    pub fn get_local_configured_daemons() -> Result<Vec<DaemonId>> {
+        Self::get_configured_daemons_filtered(|id| id.namespace() != "global")
+    }
+
+    /// Get global configured daemon IDs (from ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml)
+    ///
+    /// This returns only daemons defined in global config files, excluding project-level
+    /// pitchfork.toml files.
+    pub fn get_global_configured_daemons() -> Result<Vec<DaemonId>> {
+        Self::get_configured_daemons_filtered(|id| id.namespace() == "global")
+    }
+
+    /// Get configured daemon IDs filtered by a predicate
+    fn get_configured_daemons_filtered<F>(predicate: F) -> Result<Vec<DaemonId>>
+    where
+        F: Fn(&DaemonId) -> bool,
+    {
+        Ok(PitchforkToml::all_merged()?
+            .daemons
+            .into_keys()
+            .filter(predicate)
             .collect())
     }
 
