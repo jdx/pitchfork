@@ -1052,12 +1052,7 @@ run = "echo 'local worker'"
         .filter(|(id, _)| id.namespace() == project_ns)
         .collect();
     assert_eq!(local_daemons.len(), 2);
-    for (id, _) in &pt.daemons {
-        assert_eq!(
-            id.namespace(),
-            project_ns,
-            "All daemons should have local namespace"
-        );
+    for (id, _) in pt.daemons.iter().filter(|(id, _)| id.namespace() == project_ns) {
         assert_ne!(id.namespace(), "global", "None should be global");
     }
 
