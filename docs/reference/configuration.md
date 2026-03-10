@@ -22,14 +22,14 @@ This mirrors [mise](https://mise.jdx.dev/configuration.html) behavior, allowing 
 
 A JSON Schema is available for editor autocompletion and validation:
 
-**URL:** [`https://pitchfork.dev/schema.json`](/schema.json)
+**URL:** [`https://pitchfork.jdx.dev/schema.json`](/schema.json)
 
 ### Editor Setup
 
 **VS Code** with [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml):
 
 ```toml
-#:schema https://pitchfork.dev/schema.json
+#:schema https://pitchfork.jdx.dev/schema.json
 
 [daemons.api]
 run = "npm run server"
