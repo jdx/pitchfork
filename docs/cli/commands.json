@@ -1314,8 +1314,8 @@
           {
             "name": "global",
             "usage": "-g --global",
-            "help": "Start all global daemons in ~/.config/pitchfork/config.toml",
-            "help_first_line": "Start all global daemons in ~/.config/pitchfork/config.toml",
+            "help": "Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "help_first_line": "Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
             "short": [
               "g"
             ],

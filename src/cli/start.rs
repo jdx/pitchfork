@@ -51,7 +51,7 @@ pub struct Start {
         conflicts_with = "global"
     )]
     local: bool,
-    /// Start all global daemons in ~/.config/pitchfork/config.toml
+    /// Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
     #[clap(
         long,
         short = 'g',
@@ -98,7 +98,7 @@ impl Start {
     pub async fn run(&self) -> Result<()> {
         ensure!(
             self.local || self.global || self.all || !self.id.is_empty(),
-            "At least one daemon ID must be provided"
+            "At least one daemon ID or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);

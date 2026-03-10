@@ -38,7 +38,7 @@ Start all local daemons in pitchfork.toml
 
 ### `-g --global`
 
-Start all global daemons in ~/.config/pitchfork/config.toml
+Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
 
 ### `-a --all`
 

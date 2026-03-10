@@ -1044,7 +1044,14 @@ run = "echo 'local worker'"
     let pt = pitchfork_toml::PitchforkToml::all_merged_from(temp_dir.path()).unwrap();
 
     // All daemons should have the project namespace
-    assert_eq!(pt.daemons.len(), 2);
+    // Note: only count daemons with the project namespace to avoid failures
+    // when the developer/CI machine has daemons in their global config.
+    let local_daemons: Vec<_> = pt
+        .daemons
+        .iter()
+        .filter(|(id, _)| id.namespace() == project_ns)
+        .collect();
+    assert_eq!(local_daemons.len(), 2);
     for (id, _) in &pt.daemons {
         assert_eq!(
             id.namespace(),
@@ -1058,7 +1065,7 @@ run = "echo 'local worker'"
     let local_daemons: Vec<_> = pt
         .daemons
         .iter()
-        .filter(|(id, _): &(&DaemonId, _)| id.namespace() != "global")
+        .filter(|(id, _): &(&DaemonId, _)| id.namespace() == project_ns)
         .collect();
     assert_eq!(local_daemons.len(), 2);
 
@@ -1080,12 +1087,10 @@ fn test_global_namespace_from_config_path() {
     use std::path::Path;
 
     // User global config should return "global"
-    // Note: pitchfork uses ~/.config/pitchfork/config.toml (not dirs::config_dir())
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let user_global = Path::new(&home)
-        .join(".config")
-        .join("pitchfork")
-        .join("config.toml");
+    // Use the canonical constant so the path matches is_global_config() even when
+    // PITCHFORK_CONFIG_DIR env var is set.
+    use pitchfork_cli::env;
+    let user_global = env::PITCHFORK_GLOBAL_CONFIG_USER.as_path();
 
     // Test that the function returns the expected namespace
     let namespace = namespace_from_path(&user_global).unwrap();
