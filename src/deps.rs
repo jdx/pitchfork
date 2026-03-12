@@ -178,8 +178,10 @@ mod tests {
             dir: None,
             env: None,
             hooks: None,
-            mise: None,
             path: None,
+            mise: None,
+            slug: None,
+            proxy: None,
         }
     }
 
@@ -300,6 +302,8 @@ mod tests {
                 env: None,
                 hooks: None,
                 mise: None,
+                slug: None,
+                proxy: None,
             },
         );
 

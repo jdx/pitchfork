@@ -321,6 +321,8 @@ impl Supervisor {
                         o.watch = Some(opts.watch.clone());
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = Some(opts.mise);
+                        o.slug = opts.slug.clone();
+                        o.proxy = Some(opts.proxy);
                     })
                     .build(),
             )
@@ -336,6 +338,13 @@ impl Supervisor {
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
         let hook_daemon_env = opts.env.clone();
+        // Whether this daemon has any port-related config — used to skip the
+        // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
+        // Include `slug.is_some()` because a daemon with a slug is routed through
+        // the proxy by slug, so its active_port must be detected even when
+        // `expected_port` is empty and `proxy` is false.
+        let has_port_config = !opts.expected_port.is_empty() || opts.proxy || opts.slug.is_some();
+        let daemon_pid = pid;
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -376,6 +385,8 @@ impl Supervisor {
             let mut ready_notified = false;
             let mut ready_tx = ready_tx;
             let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
+            // Track whether we've already spawned the active_port detection task
+            let mut active_port_spawned = false;
 
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
@@ -425,6 +436,22 @@ impl Supervisor {
             // Initial None is a safety net; loop only exits via exit_rx.recv() which sets it
             let mut exit_status = None;
 
+            // If there is no ready check of any kind and no delay, the daemon is
+            // considered immediately ready and the active_port detection task would
+            // never be triggered inside the select loop.  Kick it off right away so
+            // that daemons without any readiness configuration still get their
+            // active_port populated (needed for proxy routing).
+            if has_port_config
+                && ready_pattern.is_none()
+                && ready_http.is_none()
+                && ready_port.is_none()
+                && ready_cmd.is_none()
+                && delay_timer.is_none()
+            {
+                active_port_spawned = true;
+                detect_and_store_active_port(id.clone(), daemon_pid);
+            }
+
             loop {
                 select! {
                     Ok(Some(line)) = stdout.next_line() => {
@@ -446,6 +473,10 @@ impl Supervisor {
                                         let _ = tx.send(Ok(()));
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
@@ -467,6 +498,10 @@ impl Supervisor {
                                         let _ = tx.send(Ok(()));
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                     },
                     Some(result) = exit_rx.recv() => {
@@ -519,6 +554,10 @@ impl Supervisor {
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                     // Stop checking once ready
                                     http_check_interval = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                                 Ok(response) => {
                                     trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
@@ -549,6 +588,10 @@ impl Supervisor {
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                     // Stop checking once ready
                                     port_check_interval = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                                 Err(_) => {
                                     trace!("daemon {id} port check: port {port} not listening yet");
@@ -582,6 +625,10 @@ impl Supervisor {
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
                                     // Stop checking once ready
                                     cmd_check_interval = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                                 Ok(_) => {
                                     trace!("daemon {id} cmd check: command returned non-zero (not ready)");
@@ -611,6 +658,10 @@ impl Supervisor {
                         }
                         // Disable timer after it fires
                         delay_timer = None;
+                        if !active_port_spawned && has_port_config {
+                            active_port_spawned = true;
+                            detect_and_store_active_port(id.clone(), daemon_pid);
+                        }
                     }
                     _ = log_flush_interval.tick() => {
                         // Periodic flush to ensure logs are written to disk
@@ -626,6 +677,17 @@ impl Supervisor {
             // Final flush to ensure all buffered logs are written
             if let Err(e) = log_appender.flush().await {
                 error!("Failed to final flush log for daemon {id}: {e}");
+            }
+
+            // Clear active_port since the process is no longer running
+            {
+                let mut state_file = SUPERVISOR.state_file.lock().await;
+                if let Some(d) = state_file.daemons.get_mut(&id) {
+                    d.active_port = None;
+                }
+                if let Err(e) = state_file.write() {
+                    debug!("Failed to write state after clearing active_port for {id}: {e}");
+                }
             }
 
             // Get the final exit status
@@ -995,4 +1057,80 @@ async fn get_process_using_port(port: u16) -> Option<(u32, String)> {
     .await
     .ok()
     .flatten()
+}
+
+/// Spawn a background task that detects the first port the daemon process is listening on
+/// and stores it in the state file as `active_port`.
+///
+/// This is called once when the daemon becomes ready. The port is cleared when the daemon stops.
+///
+/// Port selection strategy:
+/// 1. If the daemon has `expected_port` configured, prefer the first port from that list
+///    (it is the port the operator explicitly designated as the primary service port).
+/// 2. Otherwise, take the first port the process is actually listening on (in the order
+///    returned by the OS), which is typically the port bound earliest.
+///
+/// Using `min()` (lowest port number) was previously used here but is incorrect: many
+/// applications listen on multiple ports (e.g. HTTP + metrics) and the lowest-numbered
+/// port is not necessarily the primary service port.
+fn detect_and_store_active_port(id: DaemonId, pid: u32) {
+    tokio::spawn(async move {
+        // Give the process a moment to bind its port (in case it hasn't yet)
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Read the expected_port from the state file so we can prefer it.
+        let expected_port: Option<u16> = {
+            let state_file = SUPERVISOR.state_file.lock().await;
+            state_file
+                .daemons
+                .get(&id)
+                .and_then(|d| d.expected_port.first().copied())
+                .filter(|&p| p > 0)
+        };
+
+        let active_port = tokio::task::spawn_blocking(move || {
+            let listeners = listeners::get_all().ok()?;
+            let process_ports: Vec<u16> = listeners
+                .into_iter()
+                .filter(|listener| listener.process.pid == pid)
+                .map(|listener| listener.socket.port())
+                .filter(|&port| port > 0)
+                .collect();
+
+            if process_ports.is_empty() {
+                return None;
+            }
+
+            // Prefer the configured expected_port if the process is actually
+            // listening on it; otherwise fall back to the first port found.
+            if let Some(ep) = expected_port {
+                if process_ports.contains(&ep) {
+                    return Some(ep);
+                }
+            }
+
+            // No expected_port match — return the first port in the list.
+            // The list order reflects the order the OS reports listeners,
+            // which is generally the order they were bound (earliest first).
+            // Do NOT sort: the lowest-numbered port is not necessarily the
+            // primary service port (e.g. HTTP vs metrics).
+            process_ports.into_iter().next()
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(port) = active_port {
+            debug!("daemon {id} active_port detected: {port}");
+            let mut state_file = SUPERVISOR.state_file.lock().await;
+            if let Some(d) = state_file.daemons.get_mut(&id) {
+                d.active_port = Some(port);
+            }
+            if let Err(e) = state_file.write() {
+                debug!("Failed to write state after detecting active_port for {id}: {e}");
+            }
+        } else {
+            debug!("daemon {id}: no active port detected for pid {pid}");
+        }
+    });
 }

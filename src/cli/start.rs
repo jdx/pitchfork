@@ -1,9 +1,11 @@
 use crate::Result;
+use crate::cli::list::build_proxy_url;
 use crate::cli::logs::print_startup_logs;
 use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
@@ -109,6 +111,19 @@ impl Start {
                 if !resolved_ports.is_empty() {
                     let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
                     println!("Daemon '{id}' started on port(s): {port_str}");
+                }
+                // Show proxy URL only when the proxy server is globally enabled.
+                // Read the daemon state once and reuse the snapshot to avoid a TOCTOU
+                // race between two independent StateFile::get() calls.
+                let s = settings();
+                let state_snapshot = crate::state_file::StateFile::get();
+                let daemon_state = state_snapshot.daemons.get(id);
+                if s.proxy.enable {
+                    // Read slug from the same snapshot (consistent with status command)
+                    let slug = daemon_state.and_then(|d| d.slug.clone());
+                    if let Some(proxy_url) = build_proxy_url(id, slug.as_deref(), s) {
+                        println!("  → Proxy: {proxy_url}");
+                    }
                 }
             }
         }

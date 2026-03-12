@@ -137,6 +137,16 @@ cmd logs help="Displays logs for daemon(s)" {
     flag --raw help="Output raw log lines without color or formatting"
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
+cmd proxy subcommand_required=#true help="Manage the pitchfork reverse proxy" {
+    long_help "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable URLs like:\n  http://api.myproject.localhost:7777\n\nto the daemon's actual listening port (e.g. localhost:3000).\n\nThis gives daemons stable, human-friendly URLs that don't change when\nports are auto-bumped or reassigned.\n\nEnable the proxy in your pitchfork.toml or settings:\n  [settings.proxy]\n  enable = true\n\nSubcommands:\n  trust    Install the proxy's TLS certificate into the system trust store"
+    cmd trust help="Install the proxy's self-signed TLS certificate into the system trust store" {
+        long_help "Install the proxy's self-signed TLS certificate into the system trust store\n\nThis command installs pitchfork's auto-generated TLS certificate into your\nsystem's trust store so that browsers and tools trust HTTPS proxy URLs\nwithout certificate warnings.\n\nOn macOS, this installs the certificate into the current user's login\nkeychain. No `sudo` required.\n\nOn Linux, this copies the certificate to /usr/local/share/ca-certificates/\nand runs `update-ca-certificates`, which DOES require sudo.\n\nExample:\n  pitchfork proxy trust\n  sudo pitchfork proxy trust    # Linux only"
+        flag --cert help="Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)" {
+            arg <CERT>
+        }
+    }
+    cmd status help="Show the current proxy configuration and status"
+}
 cmd restart help="Restarts a daemon (stops then starts it)" {
     long_help "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
     flag "-a --all" help="Restart all running daemons"

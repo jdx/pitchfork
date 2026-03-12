@@ -95,6 +95,16 @@ pub struct Daemon {
     /// Resolved ports actually used after auto-bump (may differ from expected)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub resolved_port: Vec<u16>,
+    /// The first port the process is actually listening on (detected at runtime via listeners crate).
+    /// This is the source of truth for the reverse proxy. Cleared when the daemon stops.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub active_port: Option<u16>,
+    /// Optional stable slug alias for this daemon (used in proxy URLs and CLI commands).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub slug: Option<String>,
+    /// Whether to proxy this daemon.
+    #[serde(default)]
+    pub proxy: bool,
     #[serde(default)]
     pub auto_bump_port: bool,
     #[serde(default)]
@@ -142,6 +152,12 @@ pub struct RunOptions {
     pub watch_base_dir: Option<PathBuf>,
     #[serde(default)]
     pub mise: bool,
+    /// Optional stable slug alias for this daemon.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub slug: Option<String>,
+    /// Whether to proxy this daemon.
+    #[serde(default)]
+    pub proxy: bool,
 }
 
 impl Display for Daemon {

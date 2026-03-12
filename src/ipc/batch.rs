@@ -135,6 +135,8 @@ pub fn build_run_options(
             .as_ref()
             .and_then(|p| p.parent().map(|p| p.to_path_buf())),
         mise: daemon_config.mise.unwrap_or(settings().general.mise),
+        slug: daemon_config.slug.clone(),
+        proxy: daemon_config.proxy.unwrap_or(settings().proxy.enable),
     })
 }
 
@@ -502,6 +504,8 @@ impl IpcClient {
                 watch: vec![],
                 watch_base_dir: None,
                 mise: settings().general.mise,
+                slug: None,
+                proxy: settings().proxy.enable,
             };
 
             let result = ipc.run(run_opts).await;
@@ -704,6 +708,8 @@ impl IpcClient {
             watch: vec![],
             watch_base_dir: None,
             mise: settings().general.mise,
+            slug: None,
+            proxy: settings().proxy.enable,
         })
         .await
     }

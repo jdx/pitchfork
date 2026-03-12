@@ -285,6 +285,9 @@ mod tests {
                 watch: vec![],
                 watch_base_dir: None,
                 mise: false,
+                active_port: None,
+                slug: None,
+                proxy: false,
             },
         );
 

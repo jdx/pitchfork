@@ -185,6 +185,8 @@ impl Supervisor {
                     .as_ref()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf())),
                 mise: daemon.mise.unwrap_or(settings().general.mise),
+                slug: daemon.slug.clone(),
+                proxy: daemon.proxy.unwrap_or(settings().proxy.enable),
             };
 
             match self.run(run_opts).await {
