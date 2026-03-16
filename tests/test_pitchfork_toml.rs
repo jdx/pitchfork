@@ -1068,12 +1068,10 @@ run = "echo 'local worker'"
         .collect();
     assert_eq!(local_daemons.len(), 2);
 
-    let global_daemons: Vec<_> = pt
-        .daemons
-        .iter()
-        .filter(|(id, _): &(&DaemonId, _)| id.namespace() == "global")
-        .collect();
-    assert_eq!(global_daemons.len(), 0);
+    // Cannot safely assert global_daemons.len() == 0 here because
+    // all_merged_from also reads PITCHFORK_GLOBAL_CONFIG_USER and
+    // PITCHFORK_GLOBAL_CONFIG_SYSTEM; if the test runner has any
+    // daemons in those files the assertion would fail.
 
     Ok(())
 }
