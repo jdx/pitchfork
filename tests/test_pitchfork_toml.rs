@@ -1052,21 +1052,6 @@ run = "echo 'local worker'"
         .filter(|(id, _)| id.namespace() == project_ns)
         .collect();
     assert_eq!(local_daemons.len(), 2);
-    for (id, _) in pt
-        .daemons
-        .iter()
-        .filter(|(id, _)| id.namespace() == project_ns)
-    {
-        assert_ne!(id.namespace(), "global", "None should be global");
-    }
-
-    // Verify we can filter by namespace
-    let local_daemons: Vec<_> = pt
-        .daemons
-        .iter()
-        .filter(|(id, _): &(&DaemonId, _)| id.namespace() == project_ns)
-        .collect();
-    assert_eq!(local_daemons.len(), 2);
 
     // Cannot safely assert global_daemons.len() == 0 here because
     // all_merged_from also reads PITCHFORK_GLOBAL_CONFIG_USER and
