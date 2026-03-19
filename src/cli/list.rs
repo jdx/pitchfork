@@ -93,6 +93,13 @@ impl List {
                 Cell::new(&error_msg).fg(Color::Red)
             };
 
+            let pid_str = entry.daemon.pid.map(|p| p.to_string()).unwrap_or_default();
+            let mut row = vec![
+                Cell::new(&display_name),
+                Cell::new(pid_str),
+                Cell::new(&status_text).fg(status_color),
+                Cell::new(disabled_marker),
+            ];
             if s.proxy.enable {
                 let proxy_cell = match build_proxy_url(&entry.id, entry.daemon.slug.as_deref(), s) {
                     Some(proxy_url)
@@ -104,37 +111,10 @@ impl List {
                     }
                     _ => Cell::new(""), // no port yet, proxy disabled, or invalid proxy.port config
                 };
-                table.add_row(vec![
-                    Cell::new(&display_name),
-                    Cell::new(
-                        entry
-                            .daemon
-                            .pid
-                            .as_ref()
-                            .map(|p| p.to_string())
-                            .unwrap_or_default(),
-                    ),
-                    Cell::new(&status_text).fg(status_color),
-                    Cell::new(disabled_marker),
-                    proxy_cell,
-                    error_cell,
-                ]);
-            } else {
-                table.add_row(vec![
-                    Cell::new(&display_name),
-                    Cell::new(
-                        entry
-                            .daemon
-                            .pid
-                            .as_ref()
-                            .map(|p| p.to_string())
-                            .unwrap_or_default(),
-                    ),
-                    Cell::new(&status_text).fg(status_color),
-                    Cell::new(disabled_marker),
-                    error_cell,
-                ]);
+                row.push(proxy_cell);
             }
+            row.push(error_cell);
+            table.add_row(row);
         }
 
         print_table(table)

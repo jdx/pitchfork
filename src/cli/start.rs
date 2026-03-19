@@ -146,7 +146,13 @@ impl Start {
                 // this daemon, so printing a URL would be misleading — matching `list` behaviour.
                 // Use `resolved_ports` from the IPC response (authoritative, always fresh) to
                 // determine whether a port is available.  Fall back to a fresh StateFile read
-                // for slug/proxy metadata that is not included in the start response.
+                // for slug/proxy metadata (slug name, per-daemon proxy flag) that is not
+                // included in the start response.
+                // NOTE: active_port is intentionally NOT read from the state file here.
+                // detect_and_store_active_port runs asynchronously with at least a 500 ms
+                // delay, so the state file will almost always show active_port = None at
+                // this point.  The proxy URL is built from resolved_port as a fallback,
+                // which is correct and stable.
                 let s = settings();
                 if s.proxy.enable && !resolved_ports.is_empty() {
                     // Read fresh state to get slug and per-daemon proxy flag.

@@ -42,6 +42,7 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tokio::net::TcpListener;
 
+use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
@@ -71,14 +72,11 @@ struct ProxyState {
 /// This function is intended to be spawned as a background task.
 pub async fn serve() -> crate::Result<()> {
     let s = settings();
-    let effective_port = match u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) {
-        Some(p) => p,
-        None => {
-            miette::bail!(
-                "proxy.port {} is out of valid port range (1-65535), proxy server cannot start",
-                s.proxy.port
-            );
-        }
+    let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
+        miette::bail!(
+            "proxy.port {} is out of valid port range (1-65535), proxy server cannot start",
+            s.proxy.port
+        );
     };
 
     let mut connector = HttpConnector::new();
@@ -598,20 +596,18 @@ impl SniCertResolver {
             // Re-parse the PEM to get the validity period.
             // CertificateParams::from_ca_cert_pem works for any DER-encoded cert.
             let first_pem_block: String = {
-                let mut in_cert = false;
-                let mut lines: Vec<&str> = Vec::new();
-                for line in pem.lines() {
-                    if line.starts_with("-----BEGIN CERTIFICATE-----") {
-                        in_cert = true;
-                    }
-                    if in_cert {
-                        lines.push(line);
-                    }
-                    if in_cert && line.starts_with("-----END CERTIFICATE-----") {
-                        break;
-                    }
+                let lines: Vec<&str> = pem
+                    .lines()
+                    .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE-----"))
+                    .take_while(|l| !l.starts_with("-----END CERTIFICATE-----"))
+                    .collect();
+                if lines.is_empty() {
+                    String::new()
+                } else {
+                    // Re-attach the END line that take_while dropped
+                    let end_line = "-----END CERTIFICATE-----";
+                    format!("{}\n{end_line}", lines.join("\n"))
                 }
-                lines.join("\n")
             };
             if first_pem_block.is_empty() {
                 // Could not extract a PEM block — treat as corrupt and force regeneration.
@@ -844,6 +840,7 @@ fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) 
         ("x-forwarded-host", forwarded_host),
         ("x-forwarded-port", forwarded_port),
     ];
+
     for (name, value) in headers {
         if let Ok(v) = HeaderValue::from_str(&value) {
             let header_name = axum::http::HeaderName::from_static(name);
@@ -858,9 +855,8 @@ fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) 
 /// WebSocket / HTTP upgrade requests are forwarded transparently via hyper's upgrade mechanism.
 async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Response {
     // Extract the host (supports both HTTP/2 :authority and HTTP/1.1 Host)
-    let raw_host = match get_request_host(&req) {
-        Some(h) => h,
-        None => return error_response(StatusCode::BAD_REQUEST, "Missing Host header"),
+    let Some(raw_host) = get_request_host(&req) else {
+        return error_response(StatusCode::BAD_REQUEST, "Missing Host header");
     };
     // Strip port from host for routing
     let host = raw_host.split(':').next().unwrap_or(&raw_host).to_string();
@@ -1086,9 +1082,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, String> {
     // Strip the TLD suffix to get the subdomain part before acquiring the lock.
-    let subdomain = match strip_tld(host, tld) {
-        Some(s) => s,
-        None => return Ok(None),
+    let Some(subdomain) = strip_tld(host, tld) else {
+        return Ok(None);
     };
 
     // Take a snapshot of the daemon map and release the lock immediately so
@@ -1110,15 +1105,17 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
     // non-deterministically to whichever DaemonId sorts first in the BTreeMap
     // would be invisible to the user, so we refuse to route at all when there
     // is ambiguity.
-    let slug_matches: Vec<_> = daemons
-        .values()
-        .filter(|d| d.slug.as_deref() == Some(subdomain.as_str()))
+    //
+    // Collect (id, daemon) pairs so we can build conflicting_ids directly from
+    // slug_matches without a second pass over the daemon map.
+    let slug_matches: Vec<(&DaemonId, &Daemon)> = daemons
+        .iter()
+        .filter(|(_, d)| d.slug.as_deref() == Some(subdomain.as_str()))
         .collect();
 
-    match slug_matches.len() {
-        0 => {} // no slug match — fall through to id.namespace pass
-        1 => {
-            let daemon = slug_matches[0];
+    match slug_matches.as_slice() {
+        [] => {} // no slug match — fall through to id.namespace pass
+        [(_, daemon)] => {
             // Respect the per-daemon proxy opt-out flag.
             if !daemon.proxy.unwrap_or(settings().proxy.enable) {
                 return Ok(None);
@@ -1132,17 +1129,14 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
         }
         _ => {
             // Multiple running daemons share the same slug (cross-project conflict).
-            // Collect the conflicting IDs from the already-snapshotted daemon map.
-            let conflicting_ids: Vec<String> = daemons
-                .iter()
-                .filter(|(_, d)| d.slug.as_deref() == Some(subdomain.as_str()))
-                .map(|(id, _)| id.to_string())
-                .collect();
+            // Build conflicting_ids directly from slug_matches — no second pass needed.
+            let conflicting_ids: Vec<String> =
+                slug_matches.iter().map(|(id, _)| id.to_string()).collect();
             let msg = format!(
-                "Proxy routing conflict: slug '{subdomain}' is claimed by multiple daemons: {ids}.\n\
+                "Proxy routing conflict: slug '{subdomain}' is claimed by multiple daemons: {}.\n\
                  Refusing to route ambiguously.\n\
                  Rename one of the slugs to resolve the conflict.",
-                ids = conflicting_ids.join(", ")
+                conflicting_ids.join(", ")
             );
             log::warn!("{msg}");
             return Err(msg);
@@ -1153,13 +1147,10 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
     // The subdomain format is `<id>.<namespace>` where namespace is the
     // *last* dot-separated component (e.g. `api.myproject` → id=`api`, ns=`myproject`).
     // For a single component (no dot) treat it as the global namespace.
-    let (id, namespace) = if let Some(dot_pos) = subdomain.find('.') {
-        // First dot separates id from namespace.
+    let (id, namespace) = if let Some((id, namespace)) = subdomain.split_once('.') {
         // `api.myproject` → id=`api`, namespace=`myproject`
         // `v2.api.myproject` is not a valid pattern; the daemon id cannot
         // contain dots, so we only split on the first dot.
-        let id = &subdomain[..dot_pos];
-        let namespace = &subdomain[dot_pos + 1..];
         (id.to_string(), namespace.to_string())
     } else {
         // <id> only — treat as global namespace
@@ -1167,13 +1158,11 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
     };
 
     // Look up daemon by (namespace, id), respecting per-daemon proxy opt-out.
-    let daemon_id = match DaemonId::try_new(&namespace, &id) {
-        Ok(id) => id,
-        Err(_) => return Ok(None),
+    let Ok(daemon_id) = DaemonId::try_new(&namespace, &id) else {
+        return Ok(None);
     };
-    let daemon = match daemons.get(&daemon_id) {
-        Some(d) => d,
-        None => return Ok(None),
+    let Some(daemon) = daemons.get(&daemon_id) else {
+        return Ok(None);
     };
 
     if !daemon.proxy.unwrap_or(settings().proxy.enable) {
@@ -1192,12 +1181,9 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
 /// - `api.localhost` with tld `localhost` → `api`
 /// - `localhost` with tld `localhost` → `None` (no subdomain)
 fn strip_tld(host: &str, tld: &str) -> Option<String> {
-    let subdomain = host.strip_suffix(&format!(".{tld}"))?;
-    if subdomain.is_empty() {
-        None
-    } else {
-        Some(subdomain.to_string())
-    }
+    host.strip_suffix(&format!(".{tld}"))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Build a plain-text error response.

@@ -1093,6 +1093,19 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
         for delay_ms in [500u64, 1000, 2000, 4000] {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
+            // Bail out early if the daemon has already exited — no point retrying.
+            // active_port is cleared by the exit handler the moment the process stops,
+            // and we cannot find ports for a dead PID anyway.
+            {
+                let state_file = SUPERVISOR.state_file.lock().await;
+                if let Some(d) = state_file.daemons.get(&id) {
+                    if d.pid.is_none() {
+                        debug!("daemon {id}: aborting active_port detection — process exited");
+                        return;
+                    }
+                }
+            }
+
             // Read the expected_port from the state file so we can prefer it.
             let expected_port: Option<u16> = {
                 let state_file = SUPERVISOR.state_file.lock().await;
@@ -1139,7 +1152,19 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
                 debug!("daemon {id} active_port detected: {port}");
                 let mut state_file = SUPERVISOR.state_file.lock().await;
                 if let Some(d) = state_file.daemons.get_mut(&id) {
-                    d.active_port = Some(port);
+                    // Guard against PID reuse: if the original process exited and the OS
+                    // assigned the same PID to an unrelated process that happens to bind
+                    // a port, we must not route proxy traffic to that unrelated service.
+                    if d.pid == Some(pid) {
+                        d.active_port = Some(port);
+                    } else {
+                        debug!(
+                            "daemon {id}: skipping active_port write — PID mismatch \
+                             (expected {pid}, current {:?})",
+                            d.pid
+                        );
+                        return;
+                    }
                 }
                 if let Err(e) = state_file.write() {
                     debug!("Failed to write state after detecting active_port for {id}: {e}");

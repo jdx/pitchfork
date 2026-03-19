@@ -75,13 +75,10 @@ struct Trust {
 
 impl Trust {
     async fn run(&self) -> Result<()> {
-        let cert_path = match &self.cert {
-            Some(p) => p.clone(),
-            None => {
-                // Default: pitchfork's auto-generated CA cert in state dir
-                crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem")
-            }
-        };
+        let cert_path = self.cert.clone().unwrap_or_else(|| {
+            // Default: pitchfork's auto-generated CA cert in state dir
+            crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem")
+        });
 
         if !cert_path.exists() {
             miette::bail!(
@@ -276,16 +273,13 @@ impl ProxyStatus {
             return Ok(());
         }
 
-        let effective_port = match u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) {
-            Some(p) => p,
-            None => {
-                println!("Proxy: enabled");
-                println!(
-                    "  ⚠  proxy.port {} is out of valid port range (1-65535)",
-                    s.proxy.port
-                );
-                return Ok(());
-            }
+        let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
+            println!("Proxy: enabled");
+            println!(
+                "  ⚠  proxy.port {} is out of valid port range (1-65535)",
+                s.proxy.port
+            );
+            return Ok(());
         };
         let scheme = if s.proxy.https { "https" } else { "http" };
         let tld = &s.proxy.tld;

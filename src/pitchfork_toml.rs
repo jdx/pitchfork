@@ -154,6 +154,45 @@ fn read_namespace_override_from_file(path: &Path) -> Result<Option<String>> {
     parse_namespace_override_from_content(path, &content)
 }
 
+/// Validate that a slug is non-empty, contains no dots, and uses only alphanumeric
+/// characters, hyphens, and underscores.
+///
+/// Returns an error with a descriptive message if any constraint is violated.
+fn validate_slug_chars(slug: &str, daemon_id: &str, path: &std::path::Path) -> Result<()> {
+    if slug.is_empty() {
+        return Err(miette::miette!(
+            "slug for daemon '{}' in {} is empty. Slugs must be non-empty strings.",
+            daemon_id,
+            path.display()
+        ));
+    }
+    // Dots create ambiguity with the `<id>.<namespace>` routing pattern.
+    if slug.contains('.') {
+        return Err(miette::miette!(
+            "slug '{}' for daemon '{}' in {} contains a dot ('.'). \
+             Slugs must not contain dots to avoid ambiguity with \
+             the '<id>.<namespace>' proxy routing pattern.",
+            slug,
+            daemon_id,
+            path.display()
+        ));
+    }
+    // Only alphanumeric, hyphens, and underscores are valid DNS subdomain characters.
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(miette::miette!(
+            "slug '{}' for daemon '{}' in {} contains invalid characters. \
+             Slugs must be alphanumeric with '-' and '_' allowed.",
+            slug,
+            daemon_id,
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 fn validate_namespace(path: &Path, namespace: &str) -> Result<String> {
     if let Err(e) = DaemonId::try_new(namespace, "probe") {
         return Err(ConfigParseError::InvalidNamespace {
@@ -284,18 +323,20 @@ impl PitchforkToml {
             .filter(|(_, d)| d.slug.as_deref() == Some(user_id))
             .map(|(id, _)| id.clone())
             .collect();
-        if slug_matches.len() == 1 {
-            return Ok(slug_matches);
-        } else if slug_matches.len() > 1 {
-            // Slugs must be globally unique — report the collision clearly.
-            let mut candidates: Vec<String> =
-                slug_matches.iter().map(|id| id.qualified()).collect();
-            candidates.sort();
-            return Err(miette::miette!(
-                "slug '{}' matches multiple daemons: {}. Slugs must be globally unique.",
-                user_id,
-                candidates.join(", ")
-            ));
+        match slug_matches.as_slice() {
+            [] => {}
+            [id] => return Ok(vec![id.clone()]),
+            _ => {
+                // Slugs must be globally unique — report the collision clearly.
+                let mut candidates: Vec<String> =
+                    slug_matches.iter().map(|id| id.qualified()).collect();
+                candidates.sort();
+                return Err(miette::miette!(
+                    "slug '{}' matches multiple daemons: {}. Slugs must be globally unique.",
+                    user_id,
+                    candidates.join(", ")
+                ));
+            }
         }
 
         // Look for matching qualified IDs in the config
@@ -366,18 +407,20 @@ impl PitchforkToml {
             .filter(|(_, d)| d.slug.as_deref() == Some(user_id))
             .map(|(id, _)| id.clone())
             .collect();
-        if slug_matches.len() == 1 {
-            return Ok(slug_matches.into_iter().next().unwrap());
-        } else if slug_matches.len() > 1 {
-            // Slugs must be unique, but handle gracefully
-            let mut candidates: Vec<String> =
-                slug_matches.iter().map(|id| id.qualified()).collect();
-            candidates.sort();
-            return Err(miette::miette!(
-                "slug '{}' matches multiple daemons: {}. Slugs must be globally unique.",
-                user_id,
-                candidates.join(", ")
-            ));
+        match slug_matches.as_slice() {
+            [] => {}
+            [id] => return Ok(id.clone()),
+            _ => {
+                // Slugs must be unique, but handle gracefully
+                let mut candidates: Vec<String> =
+                    slug_matches.iter().map(|id| id.qualified()).collect();
+                candidates.sort();
+                return Err(miette::miette!(
+                    "slug '{}' matches multiple daemons: {}. Slugs must be globally unique.",
+                    user_id,
+                    candidates.join(", ")
+                ));
+            }
         }
 
         // Config has no slug match — fall back to the runtime state file.
@@ -391,17 +434,19 @@ impl PitchforkToml {
                 .filter(|(_, d)| d.slug.as_deref() == Some(user_id))
                 .map(|(id, _)| id.clone())
                 .collect();
-            if state_slug_matches.len() == 1 {
-                return Ok(state_slug_matches.into_iter().next().unwrap());
-            } else if state_slug_matches.len() > 1 {
-                let mut candidates: Vec<String> =
-                    state_slug_matches.iter().map(|id| id.qualified()).collect();
-                candidates.sort();
-                return Err(miette::miette!(
-                    "slug '{}' matches multiple running daemons: {}. Slugs must be globally unique.",
-                    user_id,
-                    candidates.join(", ")
-                ));
+            match state_slug_matches.as_slice() {
+                [] => {}
+                [id] => return Ok(id.clone()),
+                _ => {
+                    let mut candidates: Vec<String> =
+                        state_slug_matches.iter().map(|id| id.qualified()).collect();
+                    candidates.sort();
+                    return Err(miette::miette!(
+                        "slug '{}' matches multiple running daemons: {}. Slugs must be globally unique.",
+                        user_id,
+                        candidates.join(", ")
+                    ));
+                }
             }
         }
 
@@ -657,45 +702,8 @@ impl PitchforkToml {
                     let mut pt2_slug_seen: std::collections::HashMap<String, String> =
                         std::collections::HashMap::new();
                     for (id, daemon) in &pt2.daemons {
-                        if let Some(ref slug) = daemon.slug {
-                            // Slugs must not be empty.
-                            if slug.is_empty() {
-                                return Err(miette::miette!(
-                                    "slug for daemon '{}' in {} is empty. \
-                                     Slugs must be non-empty strings.",
-                                    id.qualified(),
-                                    p.display()
-                                ));
-                            }
-                            // Slugs must not contain dots — a dot in a slug would
-                            // create ambiguity with the `<id>.<namespace>` routing
-                            // pattern and could shadow valid id.namespace routes.
-                            if slug.contains('.') {
-                                return Err(miette::miette!(
-                                    "slug '{}' for daemon '{}' in {} contains a dot ('.'). \
-                                     Slugs must not contain dots to avoid ambiguity with \
-                                     the '<id>.<namespace>' proxy routing pattern.",
-                                    slug,
-                                    id.qualified(),
-                                    p.display()
-                                ));
-                            }
-                            // Slugs must only contain alphanumeric characters, hyphens,
-                            // and underscores — anything else (spaces, slashes, @, etc.)
-                            // cannot appear in a DNS subdomain and would cause silent 502s.
-                            if !slug
-                                .chars()
-                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                            {
-                                return Err(miette::miette!(
-                                    "slug '{}' for daemon '{}' in {} contains invalid \
-                                     characters. Slugs must be alphanumeric with '-' and \
-                                     '_' allowed.",
-                                    slug,
-                                    id.qualified(),
-                                    p.display()
-                                ));
-                            }
+                        if let Some(slug) = &daemon.slug {
+                            validate_slug_chars(slug, &id.qualified(), &p)?;
                             // Check for intra-file duplicate first
                             if let Some(other_id) = pt2_slug_seen.get(slug.as_str()) {
                                 return Err(miette::miette!(
