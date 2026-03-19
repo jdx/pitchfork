@@ -644,23 +644,21 @@ impl SniCertResolver {
         params.distinguished_name = dn;
 
         // Set validity dynamically: from yesterday to 10 years from now.
-        // Using yesterday as not_before avoids clock-skew rejections on clients
-        // whose clocks are slightly behind.
         {
             use chrono::{Datelike, Duration, Utc};
             let yesterday = Utc::now() - Duration::days(1);
-            // Use 10 * 366 days (≈ 10 years + a few days) to ensure the cert
-            // covers a full 10-year span even across leap years.
-            let ten_years_later = Utc::now() + Duration::days(10 * 366);
+            // 397 days: stays within Chrome/Safari's 398-day maximum validity limit
+            // for TLS certificates (including locally-trusted CA leaf certs).
+            let expiry = Utc::now() + Duration::days(397);
             params.not_before = date_time_ymd(
                 yesterday.year(),
                 yesterday.month() as u8,
                 yesterday.day() as u8,
             );
             params.not_after = date_time_ymd(
-                ten_years_later.year(),
-                ten_years_later.month() as u8,
-                ten_years_later.day() as u8,
+                expiry.year(),
+                expiry.month() as u8,
+                expiry.day() as u8,
             );
         }
 
