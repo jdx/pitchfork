@@ -14,6 +14,7 @@ mod ipc;
 mod logger;
 mod pitchfork_toml;
 mod procs;
+mod proxy;
 mod settings;
 mod shell;
 mod state_file;
@@ -30,6 +31,10 @@ use tokio::signal::unix::SignalKind;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install ring as the default rustls crypto provider.
+    // Required because reqwest is built with `rustls-tls-*-no-provider`, which
+    // avoids pulling in aws-lc-sys but requires the caller to install a provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     logger::init();
     // Re-apply log levels now that settings (env + config files) are loaded.
     // logger::init() only sees env vars; this picks up pitchfork.toml values.

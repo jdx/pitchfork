@@ -1,9 +1,11 @@
 use crate::Result;
+use crate::cli::list::build_proxy_url;
 use crate::cli::logs::print_startup_logs;
 use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
@@ -138,6 +140,33 @@ impl Start {
                 if !resolved_ports.is_empty() {
                     let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
                     println!("Daemon '{id}' started on port(s): {port_str}");
+                }
+                // Show proxy URL only when the proxy server is globally enabled AND the daemon
+                // has a port (active or resolved).  Without a port the proxy cannot route to
+                // this daemon, so printing a URL would be misleading — matching `list` behaviour.
+                // Use `resolved_ports` from the IPC response (authoritative, always fresh) to
+                // determine whether a port is available.  Fall back to a fresh StateFile read
+                // for slug/proxy metadata (slug name, per-daemon proxy flag) that is not
+                // included in the start response.
+                // NOTE: active_port is intentionally NOT read from the state file here.
+                // detect_and_store_active_port runs asynchronously with at least a 500 ms
+                // delay, so the state file will almost always show active_port = None at
+                // this point.  The proxy URL is built from resolved_port as a fallback,
+                // which is correct and stable.
+                let s = settings();
+                if s.proxy.enable && !resolved_ports.is_empty() {
+                    // Read fresh state to get slug and per-daemon proxy flag.
+                    let fresh_state =
+                        crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE).ok();
+                    let daemon_state = fresh_state.as_ref().and_then(|sf| sf.daemons.get(id));
+                    let proxy_enabled =
+                        daemon_state.and_then(|d| d.proxy).unwrap_or(s.proxy.enable);
+                    if proxy_enabled {
+                        let slug = daemon_state.and_then(|d| d.slug.clone());
+                        if let Some(proxy_url) = build_proxy_url(id, slug.as_deref(), s) {
+                            println!("  → Proxy: {proxy_url}");
+                        }
+                    }
                 }
             }
         }

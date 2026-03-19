@@ -73,15 +73,6 @@ impl Supervisor {
                     }
                 };
                 let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                fire_hook(
-                    HookType::OnRetry,
-                    id.clone(),
-                    dir,
-                    daemon.retry_count + 1,
-                    daemon.env.clone(),
-                    vec![],
-                )
-                .await;
                 let mut retry_opts = daemon.to_run_options(cmd);
                 retry_opts.retry_count = daemon.retry_count + 1;
                 if let Err(e) = self.run(retry_opts).await {

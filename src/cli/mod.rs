@@ -12,6 +12,7 @@ mod enable;
 mod list;
 pub mod logs;
 mod mcp;
+mod proxy;
 mod restart;
 mod run;
 mod schema;
@@ -44,6 +45,7 @@ enum Commands {
     List(list::List),
     Logs(logs::Logs),
     Mcp(mcp::Mcp),
+    Proxy(proxy::Proxy),
     Restart(restart::Restart),
     Run(run::Run),
     Schema(schema::Schema),
@@ -70,6 +72,7 @@ pub async fn run() -> Result<()> {
         Commands::List(list) => list.run().await,
         Commands::Logs(logs) => logs.run().await,
         Commands::Mcp(mcp) => mcp.run().await,
+        Commands::Proxy(proxy) => proxy.run().await,
         Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
         Commands::Schema(schema) => schema.run().await,

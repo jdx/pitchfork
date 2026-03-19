@@ -94,9 +94,21 @@ pub fn start_if_not_running() -> Result<()> {
 
 pub fn start_in_background() -> Result<()> {
     debug!("starting supervisor in background");
+    // Ensure the log directory exists so we can redirect stderr there.
+    // Panics and other fatal errors from the background supervisor process
+    // would otherwise be silently swallowed.
+    let log_file = &*env::PITCHFORK_LOG_FILE;
+    if let Some(parent) = log_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let stderr_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .into_diagnostic()?;
     cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
         .stdout_null()
-        .stderr_null()
+        .stderr_file(stderr_file)
         .start()
         .into_diagnostic()?;
     Ok(())
@@ -186,6 +198,38 @@ impl Supervisor {
             tokio::spawn(async move {
                 if let Err(e) = crate::web::serve(port, effective_path).await {
                     error!("Web server error: {e}");
+                }
+            });
+        }
+
+        // Start reverse proxy server if enabled
+        if s.proxy.enable {
+            // Pre-generate the TLS certificate synchronously before spawning the proxy
+            // task. This ensures the cert exists immediately after `sup start` returns,
+            // so `proxy trust` can be run right away without waiting for the async task.
+            #[cfg(feature = "proxy-tls")]
+            if s.proxy.https {
+                let proxy_dir = crate::env::PITCHFORK_STATE_DIR.join("proxy");
+                let ca_cert_path = proxy_dir.join("ca.pem");
+                let ca_key_path = proxy_dir.join("ca-key.pem");
+                if !ca_cert_path.exists() || !ca_key_path.exists() {
+                    match crate::proxy::server::generate_ca(&ca_cert_path, &ca_key_path) {
+                        Ok(()) => {
+                            info!(
+                                "Generated local CA certificate at {}",
+                                ca_cert_path.display()
+                            );
+                            info!("To trust the CA in your browser, run: pitchfork proxy trust");
+                        }
+                        Err(e) => {
+                            error!("Failed to generate CA certificate: {e}");
+                        }
+                    }
+                }
+            }
+            tokio::spawn(async {
+                if let Err(e) = crate::proxy::server::serve().await {
+                    error!("Proxy server error: {e}");
                 }
             });
         }

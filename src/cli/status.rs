@@ -1,5 +1,7 @@
 use crate::Result;
+use crate::cli::list::build_proxy_url;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 
 /// Display the status of a daemon
@@ -38,6 +40,30 @@ impl Status {
                 println!("PID: {pid}");
             }
             println!("Status: {}", daemon.status.style());
+            // Show active port if available
+            if let Some(port) = daemon.active_port {
+                println!("Port: {port} (active)");
+            } else if !daemon.resolved_port.is_empty() {
+                let ports = daemon
+                    .resolved_port
+                    .iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                println!("Port: {ports}");
+            }
+            // Show proxy URL only when the proxy server is globally enabled AND the daemon
+            // has a port (active or resolved).  Without a port the proxy cannot route to this
+            // daemon, so printing a URL would be misleading — matching the behaviour of `list`.
+            let s = settings();
+            if s.proxy.enable
+                && daemon.proxy.unwrap_or(s.proxy.enable)
+                && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
+            {
+                if let Some(url) = build_proxy_url(&qualified_id, daemon.slug.as_deref(), s) {
+                    println!("Proxy: {url}");
+                }
+            }
         } else {
             miette::bail!("Daemon {} not found", qualified_id);
         }
