@@ -400,17 +400,23 @@ fn test_status_shows_proxy_url() {
 
     let project = env.project_dir().join("proxy-status");
     fs::create_dir_all(&project).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port: u16 = listener.local_addr().unwrap().port();
     fs::write(
         project.join("pitchfork.toml"),
-        r#"
+        format!(
+            r#"
 [daemons.server]
-run = "sleep 60"
-"#,
+run = "python3 -m http.server {port}"
+expected_port = [{port}]
+"#
+        ),
     )
     .unwrap();
+    drop(listener);
 
     let _ = env.run_command_in_dir(&["start", "server"], &project);
-    env.sleep(Duration::from_secs(1));
+    env.sleep(Duration::from_secs(2));
 
     // Run status with proxy enabled
     let status_output = env.run_command_in_dir_with_env(
@@ -445,14 +451,20 @@ fn test_start_shows_proxy_url() {
 
     let project = env.project_dir().join("proxy-start");
     fs::create_dir_all(&project).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port: u16 = listener.local_addr().unwrap().port();
     fs::write(
         project.join("pitchfork.toml"),
-        r#"
+        format!(
+            r#"
 [daemons.app]
-run = "sleep 60"
-"#,
+run = "python3 -m http.server {port}"
+expected_port = [{port}]
+"#
+        ),
     )
     .unwrap();
+    drop(listener);
 
     // Start with proxy enabled
     let start_output = env.run_command_in_dir_with_env(
@@ -584,19 +596,25 @@ fn test_proxy_url_global_namespace() {
     let project = env.project_dir().join("global-proxy");
     fs::create_dir_all(&project).unwrap();
     // Use "global" namespace by not having a pitchfork.toml in parent
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port: u16 = listener.local_addr().unwrap().port();
     fs::write(
         project.join("pitchfork.toml"),
-        r#"
+        format!(
+            r#"
 namespace = "global"
 
 [daemons.myapi]
-run = "sleep 60"
-"#,
+run = "python3 -m http.server {port}"
+expected_port = [{port}]
+"#
+        ),
     )
     .unwrap();
+    drop(listener);
 
     let _ = env.run_command_in_dir(&["start", "myapi"], &project);
-    env.sleep(Duration::from_secs(1));
+    env.sleep(Duration::from_secs(2));
 
     let status_output = env.run_command_in_dir_with_env(
         &["status", "myapi"],
@@ -627,19 +645,25 @@ fn test_proxy_url_local_namespace() {
 
     let project = env.project_dir().join("myproject");
     fs::create_dir_all(&project).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port: u16 = listener.local_addr().unwrap().port();
     fs::write(
         project.join("pitchfork.toml"),
-        r#"
+        format!(
+            r#"
 namespace = "myproject"
 
 [daemons.api]
-run = "sleep 60"
-"#,
+run = "python3 -m http.server {port}"
+expected_port = [{port}]
+"#
+        ),
     )
     .unwrap();
+    drop(listener);
 
     let _ = env.run_command_in_dir(&["start", "api"], &project);
-    env.sleep(Duration::from_secs(1));
+    env.sleep(Duration::from_secs(2));
 
     let status_output = env.run_command_in_dir_with_env(
         &["status", "api"],

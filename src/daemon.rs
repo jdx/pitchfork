@@ -102,9 +102,9 @@ pub struct Daemon {
     /// Optional stable slug alias for this daemon (used in proxy URLs and CLI commands).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub slug: Option<String>,
-    /// Whether to proxy this daemon.
-    #[serde(default)]
-    pub proxy: bool,
+    /// Whether to proxy this daemon (None = inherit global proxy.enable setting).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy: Option<bool>,
     #[serde(default)]
     pub auto_bump_port: bool,
     #[serde(default)]
@@ -117,8 +117,17 @@ pub struct Daemon {
     pub watch: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub watch_base_dir: Option<PathBuf>,
-    #[serde(default)]
-    pub mise: bool,
+    /// Whether to use mise for this daemon (None = inherit global general.mise setting).
+    ///
+    /// # Schema compatibility note
+    /// This field changed from `bool` to `Option<bool>` with `skip_serializing_if = "Option::is_none"`.
+    /// - **Upgrade (old → new):** safe — old files contain `mise = true/false`, which deserialize
+    ///   correctly as `Some(true)` / `Some(false)`.
+    /// - **Downgrade (new → old):** if `mise` is `None` (inherit global), the key is omitted from
+    ///   the state file. An old binary reads the missing key as `false`, ignoring `general.mise = true`.
+    ///   Any daemon that relied on the global setting would silently stop using mise after a downgrade.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mise: Option<bool>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -150,14 +159,18 @@ pub struct RunOptions {
     pub watch: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub watch_base_dir: Option<PathBuf>,
-    #[serde(default)]
-    pub mise: bool,
+    /// Whether to use mise for this daemon (None = inherit global general.mise setting).
+    ///
+    /// # Schema compatibility note
+    /// See `Daemon::mise` for downgrade implications when this field is `None`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mise: Option<bool>,
     /// Optional stable slug alias for this daemon.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub slug: Option<String>,
-    /// Whether to proxy this daemon.
-    #[serde(default)]
-    pub proxy: bool,
+    /// Whether to proxy this daemon (None = inherit global proxy.enable setting).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy: Option<bool>,
 }
 
 impl Display for Daemon {

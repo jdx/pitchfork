@@ -252,7 +252,7 @@
           ]
         },
         "slug": {
-          "description": "Optional stable slug alias for this daemon.\n\nA slug is a short, globally-unique identifier that can be used instead of\n`namespace/id` in CLI commands and proxy URLs. For example, a daemon with\n`slug = \"api\"` can be accessed at `api.localhost:7777` regardless of its\nnamespace, and referenced in CLI commands as just `api`.\n\nSlug validation follows the same rules as daemon names (alphanumeric, `-`, `_`, `.`).",
+          "description": "Optional stable slug alias for this daemon.\n\nA slug is a short, globally-unique identifier that can be used instead of\n`namespace/id` in CLI commands and proxy URLs. For example, a daemon with\n`slug = \"api\"` can be accessed at `api.localhost:7777` regardless of its\nnamespace, and referenced in CLI commands as just `api`.\n\nSlug validation: must be non-empty, alphanumeric with `-` and `_` allowed. Dots (`.`)\nare explicitly forbidden to avoid ambiguity with the `<id>.<namespace>` proxy routing\npattern.",
           "type": [
             "string",
             "null"

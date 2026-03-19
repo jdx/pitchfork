@@ -82,21 +82,14 @@ fn build_daemon_list(
     let pitchfork_id = DaemonId::pitchfork();
 
     // First, add all daemons from state file
-    for mut daemon in state_daemons {
+    for daemon in state_daemons {
         if daemon.id == pitchfork_id {
             continue; // Skip supervisor itself
         }
 
-        // Override the stored proxy flag with the current config value so that
-        // `pitchfork list` always reflects the live configuration rather than
-        // the value that was in effect when the daemon was last started.
-        // Falls back to the current global proxy.enable setting when the daemon
-        // is not (or no longer) present in any config file.
-        daemon.proxy = config
-            .daemons
-            .get(&daemon.id)
-            .map(|d| d.proxy.unwrap_or(settings().proxy.enable))
-            .unwrap_or(settings().proxy.enable);
+        // proxy and mise are stored as Option<bool> in the Daemon struct.
+        // None means "inherit from global settings", which is resolved at display/routing time.
+        // No override needed here — daemon_list consumers call .unwrap_or(settings()...) themselves.
 
         seen_ids.insert(daemon.id.clone());
         entries.push(DaemonListEntry {
@@ -142,10 +135,10 @@ fn build_daemon_list(
             env: None,
             watch: vec![],
             watch_base_dir: None,
-            mise: daemon_config.mise.unwrap_or(settings().general.mise),
+            mise: daemon_config.mise,
             active_port: None,
             slug: daemon_config.slug.clone(),
-            proxy: daemon_config.proxy.unwrap_or(settings().proxy.enable),
+            proxy: daemon_config.proxy,
         };
 
         entries.push(DaemonListEntry {

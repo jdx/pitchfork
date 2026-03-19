@@ -53,8 +53,14 @@ impl Proxy {
 /// On macOS, this installs the certificate into the current user's login
 /// keychain. No `sudo` required.
 ///
-/// On Linux, this copies the certificate to /usr/local/share/ca-certificates/
-/// and runs `update-ca-certificates`, which DOES require sudo.
+/// On Linux, the appropriate CA certificate directory and update command are
+/// detected automatically based on the running distribution:
+///   - Debian/Ubuntu: /usr/local/share/ca-certificates/ + update-ca-certificates
+///   - RHEL/Fedora/CentOS: /etc/pki/ca-trust/source/anchors/ + update-ca-trust
+///   - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat
+///   - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates
+///
+/// This DOES require sudo on Linux.
 ///
 /// Example:
 ///   pitchfork proxy trust
@@ -141,49 +147,98 @@ fn install_cert(cert_path: &std::path::Path) -> Result<()> {
 fn install_cert(cert_path: &std::path::Path) -> Result<()> {
     use std::process::Command;
 
-    // Linux: requires sudo to write to /usr/local/share/ca-certificates/
-    let dest = std::path::Path::new("/usr/local/share/ca-certificates/pitchfork-proxy.crt");
-    let ca_certs_dir = std::path::Path::new("/usr/local/share/ca-certificates");
+    // Detect the distro family by probing well-known CA anchor directories.
+    // Each entry is (anchor_dir, dest_filename, update_command).
+    // Priority order: check which directories actually exist on this system.
+    let candidates: &[(&str, &str, &[&str])] = &[
+        // Debian / Ubuntu
+        (
+            "/usr/local/share/ca-certificates",
+            "pitchfork-proxy.crt",
+            &["update-ca-certificates"],
+        ),
+        // RHEL / Fedora / CentOS / Rocky / AlmaLinux
+        (
+            "/etc/pki/ca-trust/source/anchors",
+            "pitchfork-proxy.crt",
+            &["update-ca-trust"],
+        ),
+        // Arch Linux (p11-kit / ca-certificates-utils)
+        (
+            "/etc/ca-certificates/trust-source/anchors",
+            "pitchfork-proxy.crt",
+            &["trust", "extract-compat"],
+        ),
+        // openSUSE / SLES
+        (
+            "/etc/pki/trust/anchors",
+            "pitchfork-proxy.crt",
+            &["update-ca-certificates"],
+        ),
+    ];
+
+    let (anchor_dir, dest_name, update_cmd) = candidates
+        .iter()
+        .find(|(dir, _, _)| std::path::Path::new(dir).exists())
+        .copied()
+        .ok_or_else(|| {
+            miette::miette!(
+                "Could not detect a supported CA certificate directory on this system.\n\
+                 \n\
+                 Supported distributions: Debian/Ubuntu, RHEL/Fedora/CentOS, Arch Linux, openSUSE.\n\
+                 \n\
+                 Please install the certificate manually:\n\
+                 1. Copy {} to your distro's CA anchor directory.\n\
+                 2. Run the appropriate update command (e.g. update-ca-certificates).",
+                cert_path.display()
+            )
+        })?;
+
+    let dest = std::path::Path::new(anchor_dir).join(dest_name);
 
     // Check write access using libc::access(W_OK) which correctly reflects
     // effective UID/GID permissions, unlike Permissions::readonly() which only
     // inspects the owner-write bit and always returns false for directories.
     let has_write_access = {
         use std::ffi::CString;
-        let path_cstr = CString::new(ca_certs_dir.to_string_lossy().as_bytes())
-            .unwrap_or_else(|_| CString::new("/").unwrap());
+        let path_cstr =
+            CString::new(anchor_dir.as_bytes()).unwrap_or_else(|_| CString::new("/").unwrap());
         // SAFETY: path_cstr is a valid NUL-terminated C string.
         unsafe { libc::access(path_cstr.as_ptr(), libc::W_OK) == 0 }
     };
 
-    if has_write_access {
-        std::fs::copy(cert_path, dest)
-            .map_err(|e| miette::miette!("Failed to copy certificate: {e}"))?;
-    } else {
+    if !has_write_access {
         miette::bail!(
             "Installing certificates on Linux requires elevated privileges.\n\
              \n\
              Run with sudo:\n\
              sudo pitchfork proxy trust\n\
              \n\
-             This copies the certificate to /usr/local/share/ca-certificates/\n\
-             and runs update-ca-certificates."
+             This copies the certificate to {anchor_dir}/\n\
+             and runs `{}`.",
+            update_cmd.join(" ")
         );
     }
 
-    let status = Command::new("update-ca-certificates")
+    std::fs::copy(cert_path, &dest)
+        .map_err(|e| miette::miette!("Failed to copy certificate to {}: {e}", dest.display()))?;
+
+    let status = Command::new(update_cmd[0])
+        .args(&update_cmd[1..])
         .status()
-        .map_err(|e| miette::miette!("Failed to run `update-ca-certificates`: {e}"))?;
+        .map_err(|e| miette::miette!("Failed to run `{}`: {e}", update_cmd.join(" ")))?;
 
     if !status.success() {
         miette::bail!(
-            "update-ca-certificates failed (exit code: {}).\n\
+            "`{}` failed (exit code: {}).\n\
              \n\
              The certificate was copied to {} but the system trust store was NOT updated.\n\
              To complete the installation manually, run:\n\
-             sudo update-ca-certificates",
+             sudo {}",
+            update_cmd.join(" "),
             status.code().unwrap_or(-1),
-            dest.display()
+            dest.display(),
+            update_cmd.join(" ")
         );
     }
     Ok(())

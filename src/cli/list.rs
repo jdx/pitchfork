@@ -96,7 +96,7 @@ impl List {
             if s.proxy.enable {
                 let proxy_cell = match build_proxy_url(&entry.id, entry.daemon.slug.as_deref(), s) {
                     Some(proxy_url)
-                        if entry.daemon.proxy
+                        if entry.daemon.proxy.unwrap_or(s.proxy.enable)
                             && (entry.daemon.active_port.is_some()
                                 || !entry.daemon.resolved_port.is_empty()) =>
                     {

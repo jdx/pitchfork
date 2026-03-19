@@ -284,10 +284,10 @@ mod tests {
                 env: None,
                 watch: vec![],
                 watch_base_dir: None,
-                mise: false,
+                mise: None,
                 active_port: None,
                 slug: None,
-                proxy: false,
+                proxy: None,
             },
         );
 

@@ -201,12 +201,8 @@ impl Supervisor {
             watch_base_dir: opts
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
-            mise: opts
-                .mise
-                .unwrap_or(existing.map(|d| d.mise).unwrap_or(settings().general.mise)),
-            proxy: opts
-                .proxy
-                .unwrap_or(existing.map(|d| d.proxy).unwrap_or(settings().proxy.enable)),
+            mise: opts.mise.or(existing.and_then(|d| d.mise)),
+            proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
             // active_port is intentionally NOT inherited from the existing daemon.
             // When a daemon restarts, the new process has not yet bound a port, so
             // carrying over the old process's active_port would cause the proxy to

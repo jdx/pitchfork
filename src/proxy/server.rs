@@ -81,7 +81,17 @@ pub async fn serve() -> crate::Result<()> {
         }
     };
 
-    let client = Client::builder(TokioExecutor::new()).build(HttpConnector::new());
+    let mut connector = HttpConnector::new();
+    // Limit how long the proxy waits to establish a TCP connection to a backend.
+    // Without this, a daemon that accepts the SYN but never completes the handshake
+    // would stall the proxy indefinitely.
+    connector.set_connect_timeout(Some(std::time::Duration::from_secs(10)));
+
+    let client = Client::builder(TokioExecutor::new())
+        // Reclaim idle keep-alive connections after 30 s so that file descriptors
+        // are not held open forever when a backend goes quiet.
+        .pool_idle_timeout(std::time::Duration::from_secs(30))
+        .build(connector);
 
     let state = ProxyState {
         client: Arc::new(client),
@@ -93,11 +103,17 @@ pub async fn serve() -> crate::Result<()> {
     let app = Router::new().fallback(proxy_handler).with_state(state);
 
     // Resolve bind address from settings (default: 127.0.0.1 for local-only access).
-    let bind_ip: std::net::IpAddr = s
-        .proxy
-        .host
-        .parse()
-        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let bind_ip: std::net::IpAddr = match s.proxy.host.parse() {
+        Ok(ip) => ip,
+        Err(_) => {
+            log::warn!(
+                "proxy.host {:?} is not a valid IP address — falling back to 127.0.0.1. \
+                 The proxy will only be reachable on the loopback interface.",
+                s.proxy.host
+            );
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+    };
     let addr = SocketAddr::from((bind_ip, effective_port));
 
     if s.proxy.https {
@@ -334,6 +350,11 @@ pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> c
             std::fs::write(key_path, key_pair.serialize_pem()).map_err(|e| {
                 miette::miette!("Failed to write CA key to {}: {e}", key_path.display())
             })?;
+            log::debug!(
+                "CA private key written to {} (file permissions are not restricted \
+                 on non-Unix platforms — consider restricting access manually)",
+                key_path.display()
+            );
         }
     }
 
@@ -724,6 +745,12 @@ impl SniCertResolver {
                         "Failed to persist cert for '{domain}' to {}: {e}",
                         disk_path.display()
                     );
+                } else {
+                    log::debug!(
+                        "Leaf cert for '{domain}' written to {} (file permissions are not \
+                         restricted on non-Unix platforms — consider restricting access manually)",
+                        disk_path.display()
+                    );
                 }
             }
         }
@@ -766,7 +793,14 @@ fn get_request_host(req: &Request) -> Option<String> {
 
 /// Inject `X-Forwarded-*` headers into a proxied request.
 ///
-/// Preserves any existing forwarded headers (appends to `X-Forwarded-For`).
+/// Because the proxy is a **first-hop** dev tool (not a mid-tier forwarder),
+/// all four headers are **unconditionally overwritten** with values derived
+/// from the actual incoming connection.  Any values supplied by the connecting
+/// client are discarded.
+///
+/// Trusting client-supplied `x-forwarded-for` / `x-forwarded-proto` would
+/// allow a local process to spoof a remote IP or trick a backend's
+/// HTTPS-detection logic (CSRF checks, secure-cookie flags, redirect rules).
 fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) {
     let remote_addr = req
         .extensions()
@@ -777,28 +811,32 @@ fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) 
     let proto = if is_tls { "https" } else { "http" };
     let default_port = if is_tls { "443" } else { "80" };
 
-    // Helper to read an existing header value as a string
-    let get_header = |name: &str| -> Option<String> {
-        req.headers()
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string)
-    };
+    // Always set fresh values — we are the edge, never a mid-tier forwarder.
+    // Discard any x-forwarded-* headers supplied by the connecting client.
+    let forwarded_for = remote_addr.clone();
+    let forwarded_proto = proto.to_string();
+    let forwarded_host = host_header.to_string();
+    let forwarded_port = host_header
+        .rsplit_once(':')
+        .map(|(_, port)| port.to_string())
+        .unwrap_or_else(|| default_port.to_string());
 
-    let forwarded_for = get_header("x-forwarded-for")
-        .map(|existing| format!("{existing}, {remote_addr}"))
-        .unwrap_or_else(|| remote_addr.clone());
-
-    let forwarded_proto = get_header("x-forwarded-proto").unwrap_or_else(|| proto.to_string());
-
-    let forwarded_host = get_header("x-forwarded-host").unwrap_or_else(|| host_header.to_string());
-
-    let forwarded_port = get_header("x-forwarded-port").unwrap_or_else(|| {
-        host_header
-            .rsplit_once(':')
-            .map(|(_, port)| port.to_string())
-            .unwrap_or_else(|| default_port.to_string())
-    });
+    // Strip any client-supplied x-forwarded-* and RFC 7239 Forwarded headers
+    // before inserting ours, so that no trace of the original values reaches
+    // the backend.  The RFC 7239 `Forwarded` header is stripped alongside the
+    // legacy `x-forwarded-*` set because backends that read it (Django, Rails,
+    // Spring) would otherwise see client-injected spoofed IPs or protocols.
+    for name in [
+        "x-forwarded-for",
+        "x-forwarded-proto",
+        "x-forwarded-host",
+        "x-forwarded-port",
+        "forwarded",
+    ] {
+        if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes()) {
+            req.headers_mut().remove(&header_name);
+        }
+    }
 
     let headers = [
         ("x-forwarded-for", forwarded_for),
@@ -809,13 +847,6 @@ fn inject_forwarded_headers(req: &mut Request, is_tls: bool, host_header: &str) 
     for (name, value) in headers {
         if let Ok(v) = HeaderValue::from_str(&value) {
             let header_name = axum::http::HeaderName::from_static(name);
-            // Always use `insert` (overwrite) for all forwarded headers.
-            //
-            // For X-Forwarded-For we already built the full chain in the
-            // `forwarded_for` string above ("<existing>, <remote_addr>"), so
-            // we must use `insert` — not `append` — to avoid recording the
-            // remote IP twice (once in the concatenated string and once as a
-            // second header value).
             req.headers_mut().insert(header_name, v);
         }
     }
@@ -839,10 +870,12 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     // Security: strip (zero out) the hop counter on the very first hop to
     // prevent external clients from forging a high value and triggering a
     // 508 Loop Detected response (denial-of-service).  A request is
-    // considered "first hop" when it does not carry the `x-pitchfork`
-    // response header that pitchfork adds to every proxied response — i.e.
-    // it did not come from another pitchfork proxy instance.
-    let is_from_pitchfork = req.headers().contains_key(PITCHFORK_HEADER);
+    // considered "first hop" when it does not carry the `x-pitchfork-hops`
+    // request header that pitchfork injects when forwarding — i.e. it did
+    // not come from another pitchfork proxy instance.
+    // Note: `x-pitchfork` is a *response* header added by pitchfork and is
+    // never present on incoming requests, so it cannot be used here.
+    let is_from_pitchfork = req.headers().contains_key(PROXY_HOPS_HEADER);
     let hops: u64 = if is_from_pitchfork {
         req.headers()
             .get(PROXY_HOPS_HEADER)
@@ -866,8 +899,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
     // Resolve the target port from the host
     let target_port = match resolve_target_port(&host, &state.tld).await {
-        Some(port) => port,
-        None => {
+        Ok(Some(port)) => port,
+        Ok(None) => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!(
@@ -877,6 +910,9 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                     tld = state.tld
                 ),
             );
+        }
+        Err(conflict_msg) => {
+            return error_response(StatusCode::BAD_GATEWAY, &conflict_msg);
         }
     };
 
@@ -936,9 +972,32 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     // Extract the client-side OnUpgrade handle *before* consuming req
     let client_upgrade = hyper::upgrade::on(&mut req);
 
-    // Forward the request (hyper client handles upgrade transparently)
-    let result = state.client.request(req).await;
-
+    // Forward the request with a per-request timeout so that a backend that
+    // accepts the TCP connection but then stalls (deadlock, blocking I/O, etc.)
+    // cannot hold the proxy connection open forever and exhaust file descriptors.
+    //
+    // 120 s is intentionally generous for a local dev proxy — it covers slow
+    // test suites, large file uploads, and SSE streams while still bounding
+    // the worst-case resource leak.
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        state.client.request(req),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_elapsed) => {
+            let msg = format!(
+                "Request to daemon on port {target_port} timed out after 120 s.\n\
+                 The daemon accepted the connection but did not respond in time."
+            );
+            log::warn!("{msg}");
+            if let Some(ref on_error) = state.on_error {
+                on_error(&msg);
+            }
+            return error_response(StatusCode::GATEWAY_TIMEOUT, &msg);
+        }
+    };
     match result {
         Ok(mut resp) => {
             // Extract backend upgrade handle *before* consuming resp
@@ -951,8 +1010,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 HeaderValue::from_static("1"),
             );
 
-            // Strip hop-by-hop headers when serving HTTPS (HTTP/2 forbids them)
-            if state.is_tls {
+            // Strip hop-by-hop headers when serving HTTPS (HTTP/2 forbids them).
+            // Skip 101 Switching Protocols — that response is always HTTP/1.1 and
+            // the client needs the `Upgrade` header to complete the WS handshake
+            // (RFC 6455 §4.1 requires `Upgrade: websocket` in the 101 response).
+            if state.is_tls && parts.status != StatusCode::SWITCHING_PROTOCOLS {
                 for h in HOP_BY_HOP_HEADERS {
                     if let Ok(name) = axum::http::HeaderName::from_bytes(h.as_bytes()) {
                         parts.headers.remove(&name);
@@ -972,6 +1034,13 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                     {
                         let mut client_io = hyper_util::rt::TokioIo::new(client_upgraded);
                         let mut backend_io = hyper_util::rt::TokioIo::new(backend_upgraded);
+                        // No application-level timeout here: tokio::time::timeout would be a
+                        // hard wall-clock deadline for the entire tunnel, not an idle timeout.
+                        // Long-lived connections (Vite/webpack HMR, SSE-over-WS) would be
+                        // silently terminated after the deadline even if data is actively
+                        // flowing.  The OS TCP keepalive is sufficient to reap truly dead
+                        // connections; a proper idle timeout would require a custom
+                        // AsyncRead/AsyncWrite wrapper that resets the timer on each I/O op.
                         let _ =
                             tokio::io::copy_bidirectional(&mut client_io, &mut backend_io).await;
                     }
@@ -1007,12 +1076,20 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 ///
 /// Returns the `active_port` if available, otherwise falls back to `resolved_port[0]`.
 ///
+/// # Returns
+/// - `Ok(Some(port))` — daemon found, forward to this port
+/// - `Ok(None)`       — no daemon matched (generic 502)
+/// - `Err(msg)`       — routing refused with a descriptive reason (e.g. slug conflict)
+///
 /// # Locking
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
-async fn resolve_target_port(host: &str, tld: &str) -> Option<u16> {
+async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, String> {
     // Strip the TLD suffix to get the subdomain part before acquiring the lock.
-    let subdomain = strip_tld(host, tld)?;
+    let subdomain = match strip_tld(host, tld) {
+        Some(s) => s,
+        None => return Ok(None),
+    };
 
     // Take a snapshot of the daemon map and release the lock immediately so
     // that concurrent requests are not serialised behind this one.
@@ -1026,20 +1103,49 @@ async fn resolve_target_port(host: &str, tld: &str) -> Option<u16> {
     // its slug should not be routable through the proxy.
     // Note: slugs containing dots are rejected at config validation time, so
     // there is no ambiguity with the id.namespace second pass below.
-    for daemon in daemons.values() {
-        if let Some(ref slug) = daemon.slug {
-            if slug == &subdomain {
-                // Respect the per-daemon proxy opt-out flag.
-                if !daemon.proxy {
-                    return None;
-                }
-                // Slug matched: return the port (or None if daemon has no port yet).
-                // Do NOT fall through to the id.namespace pass — a slug match is
-                // authoritative and should never accidentally route to a different daemon.
-                return daemon
-                    .active_port
-                    .or_else(|| daemon.resolved_port.first().copied());
+    //
+    // Collect ALL slug matches first to detect cross-project duplicates.
+    // Two independent projects can each declare slug = "api" in their own
+    // pitchfork.toml; both end up in the shared state file.  Routing
+    // non-deterministically to whichever DaemonId sorts first in the BTreeMap
+    // would be invisible to the user, so we refuse to route at all when there
+    // is ambiguity.
+    let slug_matches: Vec<_> = daemons
+        .values()
+        .filter(|d| d.slug.as_deref() == Some(subdomain.as_str()))
+        .collect();
+
+    match slug_matches.len() {
+        0 => {} // no slug match — fall through to id.namespace pass
+        1 => {
+            let daemon = slug_matches[0];
+            // Respect the per-daemon proxy opt-out flag.
+            if !daemon.proxy.unwrap_or(settings().proxy.enable) {
+                return Ok(None);
             }
+            // Slug matched: return the port (or None if daemon has no port yet).
+            // Do NOT fall through to the id.namespace pass — a slug match is
+            // authoritative and should never accidentally route to a different daemon.
+            return Ok(daemon
+                .active_port
+                .or_else(|| daemon.resolved_port.first().copied()));
+        }
+        _ => {
+            // Multiple running daemons share the same slug (cross-project conflict).
+            // Collect the conflicting IDs from the already-snapshotted daemon map.
+            let conflicting_ids: Vec<String> = daemons
+                .iter()
+                .filter(|(_, d)| d.slug.as_deref() == Some(subdomain.as_str()))
+                .map(|(id, _)| id.to_string())
+                .collect();
+            let msg = format!(
+                "Proxy routing conflict: slug '{subdomain}' is claimed by multiple daemons: {ids}.\n\
+                 Refusing to route ambiguously.\n\
+                 Rename one of the slugs to resolve the conflict.",
+                ids = conflicting_ids.join(", ")
+            );
+            log::warn!("{msg}");
+            return Err(msg);
         }
     }
 
@@ -1061,16 +1167,22 @@ async fn resolve_target_port(host: &str, tld: &str) -> Option<u16> {
     };
 
     // Look up daemon by (namespace, id), respecting per-daemon proxy opt-out.
-    let daemon_id = DaemonId::try_new(&namespace, &id).ok()?;
-    let daemon = daemons.get(&daemon_id)?;
+    let daemon_id = match DaemonId::try_new(&namespace, &id) {
+        Ok(id) => id,
+        Err(_) => return Ok(None),
+    };
+    let daemon = match daemons.get(&daemon_id) {
+        Some(d) => d,
+        None => return Ok(None),
+    };
 
-    if !daemon.proxy {
-        return None;
+    if !daemon.proxy.unwrap_or(settings().proxy.enable) {
+        return Ok(None);
     }
 
-    daemon
+    Ok(daemon
         .active_port
-        .or_else(|| daemon.resolved_port.first().copied())
+        .or_else(|| daemon.resolved_port.first().copied()))
 }
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.

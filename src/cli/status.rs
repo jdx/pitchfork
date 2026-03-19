@@ -52,11 +52,14 @@ impl Status {
                     .join(", ");
                 println!("Port: {ports}");
             }
-            // Show proxy URL only when the proxy server is globally enabled.
-            // Showing a URL when proxy.enable = false would be misleading
-            // because the proxy server is not running and the URL is unreachable.
+            // Show proxy URL only when the proxy server is globally enabled AND the daemon
+            // has a port (active or resolved).  Without a port the proxy cannot route to this
+            // daemon, so printing a URL would be misleading — matching the behaviour of `list`.
             let s = settings();
-            if s.proxy.enable {
+            if s.proxy.enable
+                && daemon.proxy.unwrap_or(s.proxy.enable)
+                && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
+            {
                 if let Some(url) = build_proxy_url(&qualified_id, daemon.slug.as_deref(), s) {
                     println!("Proxy: {url}");
                 }

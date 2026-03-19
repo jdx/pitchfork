@@ -658,6 +658,15 @@ impl PitchforkToml {
                         std::collections::HashMap::new();
                     for (id, daemon) in &pt2.daemons {
                         if let Some(ref slug) = daemon.slug {
+                            // Slugs must not be empty.
+                            if slug.is_empty() {
+                                return Err(miette::miette!(
+                                    "slug for daemon '{}' in {} is empty. \
+                                     Slugs must be non-empty strings.",
+                                    id.qualified(),
+                                    p.display()
+                                ));
+                            }
                             // Slugs must not contain dots — a dot in a slug would
                             // create ambiguity with the `<id>.<namespace>` routing
                             // pattern and could shadow valid id.namespace routes.
@@ -666,6 +675,22 @@ impl PitchforkToml {
                                     "slug '{}' for daemon '{}' in {} contains a dot ('.'). \
                                      Slugs must not contain dots to avoid ambiguity with \
                                      the '<id>.<namespace>' proxy routing pattern.",
+                                    slug,
+                                    id.qualified(),
+                                    p.display()
+                                ));
+                            }
+                            // Slugs must only contain alphanumeric characters, hyphens,
+                            // and underscores — anything else (spaces, slashes, @, etc.)
+                            // cannot appear in a DNS subdomain and would cause silent 502s.
+                            if !slug
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                            {
+                                return Err(miette::miette!(
+                                    "slug '{}' for daemon '{}' in {} contains invalid \
+                                     characters. Slugs must be alphanumeric with '-' and \
+                                     '_' allowed.",
                                     slug,
                                     id.qualified(),
                                     p.display()
@@ -1022,7 +1047,9 @@ pub struct PitchforkTomlDaemon {
     /// `slug = "api"` can be accessed at `api.localhost:7777` regardless of its
     /// namespace, and referenced in CLI commands as just `api`.
     ///
-    /// Slug validation follows the same rules as daemon names (alphanumeric, `-`, `_`, `.`).
+    /// Slug validation: must be non-empty, alphanumeric with `-` and `_` allowed. Dots (`.`)
+    /// are explicitly forbidden to avoid ambiguity with the `<id>.<namespace>` proxy routing
+    /// pattern.
     pub slug: Option<String>,
     /// Whether to proxy this daemon via the reverse proxy.
     ///

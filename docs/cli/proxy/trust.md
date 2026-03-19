@@ -12,8 +12,14 @@ without certificate warnings.
 On macOS, this installs the certificate into the current user's login
 keychain. No `sudo` required.
 
-On Linux, this copies the certificate to /usr/local/share/ca-certificates/
-and runs `update-ca-certificates`, which DOES require sudo.
+On Linux, the appropriate CA certificate directory and update command are
+detected automatically based on the running distribution:
+  - Debian/Ubuntu: /usr/local/share/ca-certificates/ + update-ca-certificates
+  - RHEL/Fedora/CentOS: /etc/pki/ca-trust/source/anchors/ + update-ca-trust
+  - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat
+  - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates
+
+This DOES require sudo on Linux.
 
 Example:
   pitchfork proxy trust
