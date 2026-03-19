@@ -655,11 +655,8 @@ impl SniCertResolver {
                 yesterday.month() as u8,
                 yesterday.day() as u8,
             );
-            params.not_after = date_time_ymd(
-                expiry.year(),
-                expiry.month() as u8,
-                expiry.day() as u8,
-            );
+            params.not_after =
+                date_time_ymd(expiry.year(), expiry.month() as u8, expiry.day() as u8);
         }
 
         // Build SANs: exact domain + sibling wildcard (e.g. *.pf.localhost)
