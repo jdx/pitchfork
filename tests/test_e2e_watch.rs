@@ -65,14 +65,16 @@ ready_port = {}
     // Modify the watched file to trigger a restart
     fs::write(&watched_file, "modified content").unwrap();
 
-    // Poll for the daemon restart by checking PID change (up to 10 seconds)
+    // Poll for the daemon restart by checking PID change (up to 15 seconds)
     let mut new_pid = None;
-    for _ in 0..20 {
-        new_pid = env.get_daemon_pid("watch_test");
-        if new_pid != original_pid {
+    for _ in 0..30 {
+        env.sleep(Duration::from_millis(500));
+        let current_pid = env.get_daemon_pid("watch_test");
+        // Wait for PID to change AND daemon to be running again (not mid-restart)
+        if current_pid != original_pid && current_pid.is_some() {
+            new_pid = current_pid;
             break;
         }
-        env.sleep(Duration::from_millis(500));
     }
 
     // The daemon should be running with a different PID
