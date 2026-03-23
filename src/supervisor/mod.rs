@@ -35,6 +35,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::{signal, time};
 
 // Re-export types needed by other modules
@@ -48,6 +49,8 @@ pub struct Supervisor {
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
+    /// Tracks in-flight hook tasks so shutdown can wait for them to complete
+    pub(crate) hook_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -86,6 +89,7 @@ impl Supervisor {
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
+            hook_tasks: Mutex::new(Vec::new()),
         })
     }
 
@@ -267,6 +271,19 @@ impl Supervisor {
         // Signal IPC server to shut down gracefully
         if let Some(mut handle) = self.ipc_shutdown.lock().await.take() {
             handle.shutdown();
+        }
+
+        // Wait for all in-flight hook tasks to complete before exiting.
+        // This ensures on_stop/on_exit hooks fired during shutdown are not
+        // silently dropped when exit(0) terminates the process.
+        //
+        // After stop() returns, the monitoring tasks (tokio::spawn) still need
+        // one scheduling round to run and register their hook tasks. Yield here
+        // to give them that opportunity before we drain hook_tasks.
+        tokio::task::yield_now().await;
+        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.hook_tasks.lock().await);
+        for handle in handles {
+            let _ = handle.await;
         }
 
         let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);

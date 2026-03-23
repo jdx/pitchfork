@@ -7,6 +7,7 @@
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::shell::Shell;
+use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml};
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -17,6 +18,8 @@ pub(crate) enum HookType {
     OnReady,
     OnFail,
     OnRetry,
+    OnStop,
+    OnExit,
 }
 
 impl std::fmt::Display for HookType {
@@ -25,6 +28,8 @@ impl std::fmt::Display for HookType {
             HookType::OnReady => write!(f, "on_ready"),
             HookType::OnFail => write!(f, "on_fail"),
             HookType::OnRetry => write!(f, "on_retry"),
+            HookType::OnStop => write!(f, "on_stop"),
+            HookType::OnExit => write!(f, "on_exit"),
         }
     }
 }
@@ -37,6 +42,8 @@ fn get_hook_cmd(
         HookType::OnReady => h.on_ready.clone(),
         HookType::OnFail => h.on_fail.clone(),
         HookType::OnRetry => h.on_retry.clone(),
+        HookType::OnStop => h.on_stop.clone(),
+        HookType::OnExit => h.on_exit.clone(),
     })
 }
 
@@ -44,6 +51,10 @@ fn get_hook_cmd(
 ///
 /// Reads the hook command from fresh config (`PitchforkToml::all_merged()`),
 /// then spawns it in the background. Errors are logged but never block the caller.
+///
+/// The spawned task is also registered in `SUPERVISOR.hook_tasks` so that
+/// supervisor shutdown (`close()`) can await all in-flight hooks before calling
+/// `exit(0)`, ensuring hooks are not silently dropped during shutdown.
 pub(crate) fn fire_hook(
     hook_type: HookType,
     daemon_id: DaemonId,
@@ -52,7 +63,7 @@ pub(crate) fn fire_hook(
     daemon_env: Option<IndexMap<String, String>>,
     extra_env: Vec<(String, String)>,
 ) {
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
             warn!("Failed to load config for hook '{}': {}", hook_type, e);
             PitchforkToml::default()
@@ -111,4 +122,14 @@ pub(crate) fn fire_hook(
             }
         }
     });
+
+    // Register the handle so supervisor shutdown can await it.
+    // Use try_lock to avoid blocking the caller — if the lock is contended we skip
+    // registration (the hook is still fire-and-forget; we just can't guarantee it
+    // completes on shutdown in that rare case).
+    if let Ok(mut tasks) = SUPERVISOR.hook_tasks.try_lock() {
+        // Prune already-finished handles to avoid unbounded growth
+        tasks.retain(|h| !h.is_finished());
+        tasks.push(handle);
+    }
 }

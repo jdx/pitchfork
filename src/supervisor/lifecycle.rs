@@ -650,12 +650,42 @@ impl Supervisor {
                 // Another process has taken over, don't update status
                 return;
             }
+            // Capture is_stopping BEFORE the is_stopped() early-return guard to avoid a race:
+            // stop() transitions Stopping → Stopped and clears pid. If stop() wins the race
+            // and sets Stopped before this task runs, we still need to fire on_stop/on_exit.
+            // Treat both Stopping and Stopped as "intentional stop by pitchfork".
             let is_stopping = current_daemon
                 .as_ref()
-                .is_some_and(|d| d.status.is_stopping());
+                .is_some_and(|d| d.status.is_stopping() || d.status.is_stopped());
 
             if current_daemon.is_some_and(|d| d.status.is_stopped()) {
-                // was stopped by this supervisor so don't update status
+                // stop() already set status to Stopped (won the race).
+                // Still fire on_stop/on_exit so hooks are not silently dropped.
+                let exit_code = if let Ok(ref status) = exit_status {
+                    status.code().unwrap_or(-1)
+                } else {
+                    -1
+                };
+                let hook_extra_env = vec![
+                    ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
+                    ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                ];
+                fire_hook(
+                    HookType::OnStop,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    hook_retry_count,
+                    hook_daemon_env.clone(),
+                    hook_extra_env.clone(),
+                );
+                fire_hook(
+                    HookType::OnExit,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    hook_retry_count,
+                    hook_daemon_env.clone(),
+                    hook_extra_env,
+                );
                 return;
             }
             if let Ok(status) = exit_status {
@@ -677,6 +707,33 @@ impl Supervisor {
                     {
                         error!("Failed to update daemon state for {id}: {e}");
                     }
+                    // status.code() returns None on Unix when the process was killed by a signal
+                    // (e.g. SIGTERM). Use -1 instead of 0 to distinguish signal termination
+                    // from a clean voluntary exit (exit code 0).
+                    let exit_code = status.code().unwrap_or(-1);
+                    let exit_reason = if is_stopping { "stop" } else { "exit" };
+                    let hook_extra_env = vec![
+                        ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
+                        ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
+                    ];
+                    if is_stopping {
+                        fire_hook(
+                            HookType::OnStop,
+                            id.clone(),
+                            daemon_dir.clone(),
+                            hook_retry_count,
+                            hook_daemon_env.clone(),
+                            hook_extra_env.clone(),
+                        );
+                    }
+                    fire_hook(
+                        HookType::OnExit,
+                        id.clone(),
+                        daemon_dir.clone(),
+                        hook_retry_count,
+                        hook_daemon_env.clone(),
+                        hook_extra_env,
+                    );
                 } else {
                     // Handle error exit - mark for retry
                     // retry_count increment will be handled by interval_watch
@@ -696,7 +753,12 @@ impl Supervisor {
                     {
                         error!("Failed to update daemon state for {id}: {e}");
                     }
-                    // Fire on_fail hook if retries are exhausted
+                    let exit_reason = "fail";
+                    let hook_extra_env = vec![
+                        ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
+                        ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
+                    ];
+                    // Fire on_fail and on_exit hooks only when retries are exhausted
                     if hook_retry_count >= hook_retry {
                         fire_hook(
                             HookType::OnFail,
@@ -704,7 +766,15 @@ impl Supervisor {
                             daemon_dir.clone(),
                             hook_retry_count,
                             hook_daemon_env.clone(),
-                            vec![("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string())],
+                            hook_extra_env.clone(),
+                        );
+                        fire_hook(
+                            HookType::OnExit,
+                            id.clone(),
+                            daemon_dir.clone(),
+                            hook_retry_count,
+                            hook_daemon_env.clone(),
+                            hook_extra_env,
                         );
                     }
                 }
@@ -725,6 +795,26 @@ impl Supervisor {
                 {
                     error!("Failed to update daemon state for {id}: {e}");
                 }
+                let hook_extra_env = vec![
+                    ("PITCHFORK_EXIT_CODE".to_string(), "0".to_string()),
+                    ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                ];
+                fire_hook(
+                    HookType::OnStop,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    hook_retry_count,
+                    hook_daemon_env.clone(),
+                    hook_extra_env.clone(),
+                );
+                fire_hook(
+                    HookType::OnExit,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    hook_retry_count,
+                    hook_daemon_env.clone(),
+                    hook_extra_env,
+                );
             } else {
                 if let Err(e) = SUPERVISOR
                     .upsert_daemon(
@@ -740,7 +830,11 @@ impl Supervisor {
                 {
                     error!("Failed to update daemon state for {id}: {e}");
                 }
-                // Fire on_fail hook if retries are exhausted
+                let hook_extra_env = vec![
+                    ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
+                    ("PITCHFORK_EXIT_REASON".to_string(), "fail".to_string()),
+                ];
+                // Fire on_fail and on_exit hooks only when retries are exhausted
                 if hook_retry_count >= hook_retry {
                     fire_hook(
                         HookType::OnFail,
@@ -748,7 +842,15 @@ impl Supervisor {
                         daemon_dir.clone(),
                         hook_retry_count,
                         hook_daemon_env.clone(),
-                        vec![("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string())],
+                        hook_extra_env.clone(),
+                    );
+                    fire_hook(
+                        HookType::OnExit,
+                        id.clone(),
+                        daemon_dir.clone(),
+                        hook_retry_count,
+                        hook_daemon_env.clone(),
+                        hook_extra_env,
                     );
                 }
             }

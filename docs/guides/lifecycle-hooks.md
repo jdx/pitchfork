@@ -1,6 +1,6 @@
 # Lifecycle Hooks
 
-Run custom shell commands when daemons become ready, fail, or are retried.
+Run custom shell commands when daemons become ready, fail, are retried, or stop.
 
 ## Configuration
 
@@ -16,6 +16,8 @@ ready_http = "http://localhost:3000/health"
 on_ready = "curl -X POST https://alerts.example.com/ready"
 on_fail = "./scripts/cleanup.sh"
 on_retry = "echo 'retrying api server...'"
+on_stop = "./scripts/notify-stopped.sh"
+on_exit = "./scripts/cleanup.sh"
 ```
 
 ## Hook Types
@@ -49,6 +51,28 @@ Fires before each retry attempt.
 on_retry = "echo 'Retrying api (attempt $PITCHFORK_RETRY_COUNT)...'"
 ```
 
+### `on_stop`
+
+Fires when the daemon is explicitly stopped by pitchfork (via `pitchfork stop`, `auto = ["stop"]` directory exit, or supervisor shutdown).
+
+```toml
+[daemons.api.hooks]
+on_stop = "./scripts/notify-stopped.sh"
+```
+
+### `on_exit`
+
+Fires on **any** daemon termination — intentional stop, clean exit, or crash. Also fires during supervisor shutdown. Use this for cleanup that should always run regardless of why the daemon stopped.
+
+> **Note:** For daemons with `retry > 0`, `on_exit` fires **only after all retries are exhausted**, not on each individual crash attempt. Use `on_retry` if you need to react to every failure.
+
+```toml
+[daemons.infra.hooks]
+on_exit = "docker compose down --volumes"
+```
+
+The `PITCHFORK_EXIT_CODE` and `PITCHFORK_EXIT_REASON` environment variables are available to distinguish the cause.
+
 ## Environment Variables
 
 All hooks receive these environment variables:
@@ -58,7 +82,8 @@ All hooks receive these environment variables:
 | `PITCHFORK_DAEMON_ID` | The daemon's fully-qualified ID (`namespace/name`) |
 | `PITCHFORK_DAEMON_NAMESPACE` | The daemon's namespace |
 | `PITCHFORK_RETRY_COUNT` | Current retry attempt (0 on first run) |
-| `PITCHFORK_EXIT_CODE` | Exit code of the failed process (`on_fail` only) |
+| `PITCHFORK_EXIT_CODE` | Exit code of the process (`on_fail`, `on_stop`, `on_exit`). On Unix, processes terminated by a signal (e.g. SIGTERM) have no POSIX exit code; in that case this is set to `-1`. |
+| `PITCHFORK_EXIT_REASON` | Why the daemon stopped. Typically `"stop"` (intentional stop by pitchfork) or `"fail"` (non-zero exit); `"exit"` indicates an unexpected clean exit (process quit on its own with code 0). Available in `on_stop` and `on_exit`. |
 
 Any custom `env` variables from the daemon config are also passed to hooks.
 
@@ -103,4 +128,24 @@ retry = 2
 [daemons.processor.hooks]
 on_fail = "./scripts/release-locks.sh"
 on_ready = "./scripts/acquire-locks.sh"
+```
+
+**Tear down infrastructure on any exit:**
+
+```toml
+[daemons.infra]
+run = "docker compose up"
+
+[daemons.infra.hooks]
+on_exit = "docker compose down --volumes --remove-orphans"
+```
+
+**Distinguish stop reason in a shared cleanup script:**
+
+```toml
+[daemons.api]
+run = "npm run server"
+
+[daemons.api.hooks]
+on_exit = "sh -c 'echo \"Daemon exited: reason=$PITCHFORK_EXIT_REASON code=$PITCHFORK_EXIT_CODE\" >> /var/log/api-exits.log'"
 ```

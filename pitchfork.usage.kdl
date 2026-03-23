@@ -83,6 +83,12 @@ cmd config help="manage/edit pitchfork.toml files" {
         flag --on-retry help="Command to run before each retry attempt" {
             arg <ON_RETRY>
         }
+        flag --on-stop help="Command to run when the daemon is explicitly stopped by pitchfork" {
+            arg <ON_STOP>
+        }
+        flag --on-exit help="Command to run on any daemon termination (clean exit, crash, or stop)" {
+            arg <ON_EXIT>
+        }
         flag --cron-schedule help="Cron schedule expression (6 fields: second minute hour day month weekday)" {
             arg <CRON_SCHEDULE>
         }
