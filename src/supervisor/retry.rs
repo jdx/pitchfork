@@ -107,6 +107,8 @@ impl Supervisor {
                     watch: daemon.watch.clone(),
                     watch_base_dir: daemon.watch_base_dir.clone(),
                     mise: daemon.mise,
+                    slug: daemon.slug.clone(),
+                    proxy: daemon.proxy,
                 };
                 if let Err(e) = self.run(retry_opts).await {
                     error!("failed to retry daemon {id}: {e}");

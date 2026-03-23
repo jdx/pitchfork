@@ -162,7 +162,7 @@ EOF
   # Create a script that outputs the PORT env var
   cat > check_port.sh <<'EOF'
 #!/bin/bash
-echo "PORT_VALUE=$PORT" >&2
+echo "PORT_VALUE=$PORT"
 sleep 1
 echo "ready"
 sleep 30

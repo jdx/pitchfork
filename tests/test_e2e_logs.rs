@@ -44,6 +44,7 @@ fn wait_for_web_server(child: &mut Child) -> (u16, JoinHandle<()>) {
         .stderr
         .take()
         .expect("supervisor stderr should be piped");
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let (port_tx, port_rx) = mpsc::channel();
     let stderr_thread = std::thread::spawn(move || {

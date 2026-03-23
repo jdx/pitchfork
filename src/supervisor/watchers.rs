@@ -188,6 +188,8 @@ impl Supervisor {
                                 watch: daemon.watch.clone(),
                                 watch_base_dir: daemon.watch_base_dir.clone(),
                                 mise: daemon.mise,
+                                slug: daemon.slug.clone(),
+                                proxy: daemon.proxy,
                             };
                             if let Err(e) = self.run(opts).await {
                                 error!("failed to run cron daemon {id}: {e}");
@@ -431,6 +433,8 @@ impl Supervisor {
             watch: daemon.watch.clone(),
             watch_base_dir: daemon.watch_base_dir.clone(),
             mise: daemon.mise,
+            slug: daemon.slug.clone(),
+            proxy: daemon.proxy,
         };
 
         match self.run(run_opts).await {

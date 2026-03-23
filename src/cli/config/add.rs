@@ -259,6 +259,8 @@ impl Add {
                 env,
                 hooks,
                 mise: None,
+                slug: None,
+                proxy: None,
                 path: None,
             },
         );

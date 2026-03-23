@@ -523,6 +523,8 @@ impl EditorState {
             env: None,
             hooks: None,
             mise: None,
+            slug: None,
+            proxy: None,
             path: Some(self.config_path.clone()),
         };
 

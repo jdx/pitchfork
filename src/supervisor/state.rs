@@ -41,6 +41,12 @@ pub(crate) struct UpsertDaemonOpts {
     pub expected_port: Vec<u16>,
     /// Resolved ports actually used after auto-bump (may differ from expected)
     pub resolved_port: Vec<u16>,
+    /// The first port the process is actually listening on (detected at runtime).
+    pub active_port: Option<u16>,
+    /// Optional stable slug alias for this daemon.
+    pub slug: Option<String>,
+    /// Whether to proxy this daemon (None = use global proxy.enable setting).
+    pub proxy: Option<bool>,
     pub auto_bump_port: Option<bool>,
     pub port_bump_attempts: Option<u32>,
     pub depends: Option<Vec<DaemonId>>,
@@ -90,6 +96,9 @@ impl UpsertDaemonOpts {
                 ready_cmd: None,
                 expected_port: Vec::new(),
                 resolved_port: Vec::new(),
+                active_port: None,
+                slug: None,
+                proxy: None,
                 auto_bump_port: None,
                 port_bump_attempts: None,
                 depends: None,
@@ -192,9 +201,15 @@ impl Supervisor {
             watch_base_dir: opts
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
-            mise: opts
-                .mise
-                .unwrap_or(existing.map(|d| d.mise).unwrap_or(settings().general.mise)),
+            mise: opts.mise.or(existing.and_then(|d| d.mise)),
+            proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
+            // active_port is intentionally NOT inherited from the existing daemon.
+            // When a daemon restarts, the new process has not yet bound a port, so
+            // carrying over the old process's active_port would cause the proxy to
+            // route to a port that is no longer listening.  The port will be
+            // re-detected by detect_and_store_active_port once the new process is ready.
+            active_port: opts.active_port,
+            slug: opts.slug.or(existing.and_then(|d| d.slug.clone())),
         };
         state_file.daemons.insert(opts.id.clone(), daemon.clone());
         if let Err(err) = state_file.write() {
