@@ -114,6 +114,14 @@ Command to run when daemon fails
 
 Command to run before each retry attempt
 
+### `--on-stop <ON_STOP>`
+
+Command to run when the daemon is explicitly stopped by pitchfork
+
+### `--on-exit <ON_EXIT>`
+
+Command to run on any daemon termination (clean exit, crash, or stop)
+
 ### `--cron-schedule <CRON_SCHEDULE>`
 
 Cron schedule expression (6 fields: second minute hour day month weekday)

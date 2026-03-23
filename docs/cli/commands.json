@@ -531,6 +531,44 @@
                 }
               },
               {
+                "name": "on-stop",
+                "usage": "--on-stop <ON_STOP>",
+                "help": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "help_first_line": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "short": [],
+                "long": [
+                  "on-stop"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_STOP",
+                  "usage": "<ON_STOP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-exit",
+                "usage": "--on-exit <ON_EXIT>",
+                "help": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "help_first_line": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "short": [],
+                "long": [
+                  "on-exit"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_EXIT",
+                  "usage": "<ON_EXIT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "cron-schedule",
                 "usage": "--cron-schedule <CRON_SCHEDULE>",
                 "help": "Cron schedule expression (6 fields: second minute hour day month weekday)",

@@ -73,11 +73,28 @@ fi
 
 ### `PITCHFORK_EXIT_CODE`
 
-The exit code from the failed daemon process. Only available in `on_fail` hooks.
+The exit code from the daemon process. Available in `on_fail`, `on_stop`, and `on_exit` hooks.
 
 ```bash
-# In an on_fail hook
+# In an on_exit hook
 echo "Daemon exited with code: $PITCHFORK_EXIT_CODE"
+```
+
+### `PITCHFORK_EXIT_REASON`
+
+The reason the daemon stopped. Available in `on_stop` and `on_exit` hooks.
+
+| Value | Meaning |
+|-------|---------|
+| `stop` | Explicitly stopped by pitchfork (`pitchfork stop`, `auto = ["stop"]`, or supervisor shutdown) |
+| `exit` | Process exited on its own with exit code 0 |
+| `fail` | Process exited with a non-zero exit code |
+
+```bash
+# In an on_exit hook
+if [ "$PITCHFORK_EXIT_REASON" = "fail" ]; then
+  echo "Daemon crashed with code $PITCHFORK_EXIT_CODE"
+fi
 ```
 
 ## Example: Debug Setup

@@ -108,6 +108,12 @@ pub struct Add {
     /// Command to run before each retry attempt
     #[clap(long)]
     on_retry: Option<String>,
+    /// Command to run when the daemon is explicitly stopped by pitchfork
+    #[clap(long)]
+    on_stop: Option<String>,
+    /// Command to run on any daemon termination (clean exit, crash, or stop)
+    #[clap(long)]
+    on_exit: Option<String>,
     /// Cron schedule expression (6 fields: second minute hour day month weekday)
     #[clap(long)]
     cron_schedule: Option<String>,
@@ -182,12 +188,18 @@ impl Add {
         }
 
         // Build hooks if any are specified
-        let hooks = if self.on_ready.is_some() || self.on_fail.is_some() || self.on_retry.is_some()
+        let hooks = if self.on_ready.is_some()
+            || self.on_fail.is_some()
+            || self.on_retry.is_some()
+            || self.on_stop.is_some()
+            || self.on_exit.is_some()
         {
             Some(PitchforkTomlHooks {
                 on_ready: self.on_ready.clone(),
                 on_fail: self.on_fail.clone(),
                 on_retry: self.on_retry.clone(),
+                on_stop: self.on_stop.clone(),
+                on_exit: self.on_exit.clone(),
             })
         } else {
             None
