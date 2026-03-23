@@ -24,7 +24,9 @@ The command waits for the daemon to be ready before returning.
 Examples:
   pitchfork start api           Start a single daemon
   pitchfork start api worker    Start multiple daemons
-  pitchfork start --all         Start all daemons in pitchfork.toml
+  pitchfork start -l            Start all local daemons in pitchfork.toml
+  pitchfork start -g            Start all global daemons in config.toml
+  pitchfork start -a            Start all daemons (local and global)
   pitchfork start api -f        Restart daemon if already running
   pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
   pitchfork start api --output 'Listening on'
@@ -36,9 +38,32 @@ Examples:
 )]
 pub struct Start {
     /// ID of the daemon(s) in pitchfork.toml to start
+    #[clap(
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
     id: Vec<String>,
-    /// Start all daemons in all pitchfork.tomls
-    #[clap(long, short)]
+    /// Start all local daemons in pitchfork.toml
+    #[clap(
+        long,
+        short = 'l',
+        visible_alias = "all-local",
+        conflicts_with = "all",
+        conflicts_with = "global"
+    )]
+    local: bool,
+    /// Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
+    #[clap(
+        long,
+        short = 'g',
+        visible_alias = "all-global",
+        conflicts_with = "local",
+        conflicts_with = "all"
+    )]
+    global: bool,
+    /// Start all daemons (both local and global)
+    #[clap(long, short = 'a', conflicts_with = "local", conflicts_with = "global")]
     all: bool,
     #[clap(long, hide = true)]
     shell_pid: Option<u32>,
@@ -74,8 +99,8 @@ pub struct Start {
 impl Start {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.all || !self.id.is_empty(),
-            "At least one daemon ID must be provided"
+            self.local || self.global || self.all || !self.id.is_empty(),
+            "At least one daemon ID or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
@@ -83,6 +108,10 @@ impl Start {
         // Compute daemon IDs to start
         let ids: Vec<DaemonId> = if self.all {
             IpcClient::get_all_configured_daemons()?
+        } else if self.global {
+            IpcClient::get_global_configured_daemons()?
+        } else if self.local {
+            IpcClient::get_local_configured_daemons()?
         } else {
             PitchforkToml::resolve_ids(&self.id)?
         };
