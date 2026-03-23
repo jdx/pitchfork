@@ -81,7 +81,8 @@ impl Supervisor {
                     daemon.retry_count + 1,
                     daemon.env.clone(),
                     vec![],
-                );
+                )
+                .await;
                 let retry_opts = RunOptions {
                     id: id.clone(),
                     cmd,

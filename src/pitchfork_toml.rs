@@ -831,6 +831,12 @@ pub struct PitchforkTomlHooks {
     /// Command to run before each retry attempt
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub on_retry: Option<String>,
+    /// Command to run when the daemon is explicitly stopped by pitchfork
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_stop: Option<String>,
+    /// Command to run on any daemon termination (clean exit, crash, or stop)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_exit: Option<String>,
 }
 
 /// Configuration for a single daemon (internal representation with DaemonId)

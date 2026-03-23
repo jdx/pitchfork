@@ -30,11 +30,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::process::exit;
 use std::sync::atomic;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
+use tokio::task::JoinHandle;
 use tokio::{signal, time};
 
 // Re-export types needed by other modules
@@ -48,6 +49,15 @@ pub struct Supervisor {
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
+    /// Tracks in-flight hook tasks so shutdown can wait for them to complete
+    pub(crate) hook_tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Number of monitoring tasks that are still running (between process exit
+    /// and hook registration completion). Used by `close()` to know when it is
+    /// safe to drain `hook_tasks`.
+    pub(crate) active_monitors: AtomicU32,
+    /// Signalled by each monitoring task after it finishes registering hooks
+    /// (or decides it has nothing to register). `close()` waits on this.
+    pub(crate) monitor_done: Notify,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -86,6 +96,9 @@ impl Supervisor {
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
+            hook_tasks: Mutex::new(Vec::new()),
+            active_monitors: AtomicU32::new(0),
+            monitor_done: Notify::new(),
         })
     }
 
@@ -267,6 +280,38 @@ impl Supervisor {
         // Signal IPC server to shut down gracefully
         if let Some(mut handle) = self.ipc_shutdown.lock().await.take() {
             handle.shutdown();
+        }
+
+        // Wait for all in-flight monitoring tasks to finish registering their
+        // hook handles. Each monitoring task increments `active_monitors` when
+        // its process exits, and decrements it (+ notifies `monitor_done`)
+        // after all fire_hook() calls complete. This replaces the old
+        // yield_now() approach which had a race window.
+        let drain_timeout = time::sleep(Duration::from_secs(5));
+        tokio::pin!(drain_timeout);
+        loop {
+            if self.active_monitors.load(atomic::Ordering::Acquire) == 0 {
+                break;
+            }
+            tokio::select! {
+                _ = self.monitor_done.notified() => {}
+                _ = &mut drain_timeout => {
+                    warn!("timed out waiting for monitoring tasks to register hooks, proceeding with shutdown");
+                    break;
+                }
+            }
+        }
+        let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.hook_tasks.lock().await);
+        let hook_timeout = Duration::from_secs(30);
+        for handle in handles {
+            match time::timeout(hook_timeout, handle).await {
+                Ok(_) => {} // Hook completed (success or error, doesn't matter)
+                Err(_) => {
+                    warn!(
+                        "hook task did not complete within {hook_timeout:?} during shutdown, skipping"
+                    );
+                }
+            }
         }
 
         let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);

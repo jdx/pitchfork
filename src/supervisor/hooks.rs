@@ -7,6 +7,7 @@
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::shell::Shell;
+use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml};
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -17,6 +18,8 @@ pub(crate) enum HookType {
     OnReady,
     OnFail,
     OnRetry,
+    OnStop,
+    OnExit,
 }
 
 impl std::fmt::Display for HookType {
@@ -25,6 +28,8 @@ impl std::fmt::Display for HookType {
             HookType::OnReady => write!(f, "on_ready"),
             HookType::OnFail => write!(f, "on_fail"),
             HookType::OnRetry => write!(f, "on_retry"),
+            HookType::OnStop => write!(f, "on_stop"),
+            HookType::OnExit => write!(f, "on_exit"),
         }
     }
 }
@@ -37,6 +42,8 @@ fn get_hook_cmd(
         HookType::OnReady => h.on_ready.clone(),
         HookType::OnFail => h.on_fail.clone(),
         HookType::OnRetry => h.on_retry.clone(),
+        HookType::OnStop => h.on_stop.clone(),
+        HookType::OnExit => h.on_exit.clone(),
     })
 }
 
@@ -44,7 +51,11 @@ fn get_hook_cmd(
 ///
 /// Reads the hook command from fresh config (`PitchforkToml::all_merged()`),
 /// then spawns it in the background. Errors are logged but never block the caller.
-pub(crate) fn fire_hook(
+///
+/// The spawned task is also registered in `SUPERVISOR.hook_tasks` so that
+/// supervisor shutdown (`close()`) can await all in-flight hooks before calling
+/// `exit(0)`, ensuring hooks are not silently dropped during shutdown.
+pub(crate) async fn fire_hook(
     hook_type: HookType,
     daemon_id: DaemonId,
     daemon_dir: PathBuf,
@@ -52,7 +63,7 @@ pub(crate) fn fire_hook(
     daemon_env: Option<IndexMap<String, String>>,
     extra_env: Vec<(String, String)>,
 ) {
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
             warn!("Failed to load config for hook '{}': {}", hook_type, e);
             PitchforkToml::default()
@@ -111,4 +122,14 @@ pub(crate) fn fire_hook(
             }
         }
     });
+
+    // Register the handle so supervisor shutdown can await it.
+    // Use lock().await instead of try_lock() to guarantee registration — fire_hook
+    // is called from async monitoring tasks (not latency-sensitive hot paths), so
+    // awaiting the lock is safe and eliminates the silent-drop window where a
+    // JoinHandle could be lost under lock contention.
+    let mut tasks = SUPERVISOR.hook_tasks.lock().await;
+    // Prune already-finished handles to avoid unbounded growth
+    tasks.retain(|h| !h.is_finished());
+    tasks.push(handle);
 }
