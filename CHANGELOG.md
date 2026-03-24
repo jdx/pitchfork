@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0](https://github.com/jdx/pitchfork/compare/v2.1.0...v2.2.0) - 2026-03-24
+
+### Added
+
+- *(hooks)* add `on_stop` and `on_exit` ([#291](https://github.com/jdx/pitchfork/pull/291))
+- impl `start --all-local` and `--all-global` ([#282](https://github.com/jdx/pitchfork/pull/282))
+
+### Other
+
+- *(deps)* lock file maintenance ([#292](https://github.com/jdx/pitchfork/pull/292))
+
 ## [2.1.0](https://github.com/jdx/pitchfork/compare/v2.0.0...v2.1.0) - 2026-03-08
 
 ### Added
