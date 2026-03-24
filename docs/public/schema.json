@@ -260,6 +260,13 @@
       "description": "Lifecycle hooks for a daemon",
       "type": "object",
       "properties": {
+        "on_exit": {
+          "description": "Command to run on any daemon termination (clean exit, crash, or stop)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "on_fail": {
           "description": "Command to run when the daemon fails and all retries are exhausted",
           "type": [
@@ -276,6 +283,13 @@
         },
         "on_retry": {
           "description": "Command to run before each retry attempt",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "on_stop": {
+          "description": "Command to run when the daemon is explicitly stopped by pitchfork",
           "type": [
             "string",
             "null"

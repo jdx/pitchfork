@@ -21,6 +21,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::iter::once;
 use std::net::TcpListener;
+use std::sync::atomic;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
 use tokio::select;
@@ -112,7 +113,8 @@ impl Supervisor {
                                 attempt + 1,
                                 opts.env.clone(),
                                 vec![],
-                            );
+                            )
+                            .await;
                             time::sleep(Duration::from_secs(backoff_secs)).await;
                             continue;
                         } else {
@@ -445,7 +447,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                 }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
@@ -466,7 +468,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                 }
                     },
                     Some(result) = exit_rx.recv() => {
@@ -516,7 +518,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
                                     http_check_interval = None;
                                 }
@@ -546,7 +548,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
                                     port_check_interval = None;
                                 }
@@ -579,7 +581,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
                                     cmd_check_interval = None;
                                 }
@@ -607,7 +609,7 @@ impl Supervisor {
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
-                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]);
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                         }
                         // Disable timer after it fires
                         delay_timer = None;
@@ -643,114 +645,119 @@ impl Supervisor {
             };
             let current_daemon = SUPERVISOR.get_daemon(&id).await;
 
-            // Check if this monitoring task is for the current daemon process
+            // Signal that this monitoring task is processing its exit path.
+            // The RAII guard will decrement the counter and notify close()
+            // when the task finishes (including all fire_hook registrations),
+            // regardless of which return path is taken.
+            SUPERVISOR
+                .active_monitors
+                .fetch_add(1, atomic::Ordering::Release);
+            struct MonitorGuard;
+            impl Drop for MonitorGuard {
+                fn drop(&mut self) {
+                    SUPERVISOR
+                        .active_monitors
+                        .fetch_sub(1, atomic::Ordering::Release);
+                    SUPERVISOR.monitor_done.notify_waiters();
+                }
+            }
+            let _monitor_guard = MonitorGuard;
+            // Check if this monitoring task is for the current daemon process.
+            // Allow Stopped/Stopping daemons through: stop() clears pid atomically,
+            // so d.pid != Some(pid) would be true, but we still need the is_stopped()
+            // branch below to fire on_stop/on_exit hooks.
             if current_daemon.is_none()
-                || current_daemon.as_ref().is_some_and(|d| d.pid != Some(pid))
+                || current_daemon.as_ref().is_some_and(|d| {
+                    d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
+                })
             {
                 // Another process has taken over, don't update status
                 return;
             }
-            let is_stopping = current_daemon
+            // Capture the intentional-stop flag BEFORE any state changes.
+            // stop() transitions Stopping → Stopped and clears pid. If stop() wins the race
+            // and sets Stopped before this task runs, we still need to fire on_stop/on_exit.
+            // Treat both Stopping and Stopped as "intentional stop by pitchfork".
+            let already_stopped = current_daemon
                 .as_ref()
-                .is_some_and(|d| d.status.is_stopping());
+                .is_some_and(|d| d.status.is_stopped());
+            let is_stopping = already_stopped
+                || current_daemon
+                    .as_ref()
+                    .is_some_and(|d| d.status.is_stopping());
 
-            if current_daemon.is_some_and(|d| d.status.is_stopped()) {
-                // was stopped by this supervisor so don't update status
-                return;
+            // --- Phase 1: Determine exit_code, exit_reason, and update daemon state ---
+            let (exit_code, exit_reason) = match (&exit_status, is_stopping) {
+                (Ok(status), true) => {
+                    // Intentional stop (by pitchfork). status.code() returns None
+                    // on Unix when killed by signal (e.g. SIGTERM); use -1 to
+                    // distinguish from a clean exit code 0.
+                    (status.code().unwrap_or(-1), "stop")
+                }
+                (Ok(status), false) if status.success() => (status.code().unwrap_or(-1), "exit"),
+                (Ok(status), false) => (status.code().unwrap_or(-1), "fail"),
+                (Err(_), true) => {
+                    // child.wait() error while stopping (e.g. sysinfo reaped the process)
+                    (-1, "stop")
+                }
+                (Err(_), false) => (-1, "fail"),
+            };
+
+            // Update daemon state unless stop() already did it (won the race).
+            if !already_stopped {
+                if let Ok(status) = &exit_status {
+                    info!("daemon {id} exited with status {status}");
+                }
+                let (new_status, last_exit_success) = match exit_reason {
+                    "stop" | "exit" => (
+                        DaemonStatus::Stopped,
+                        exit_status.as_ref().map(|s| s.success()).unwrap_or(true),
+                    ),
+                    _ => (DaemonStatus::Errored(exit_code), false),
+                };
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = new_status;
+                                o.last_exit_success = Some(last_exit_success);
+                            })
+                            .build(),
+                    )
+                    .await
+                {
+                    error!("Failed to update daemon state for {id}: {e}");
+                }
             }
-            if let Ok(status) = exit_status {
-                info!("daemon {id} exited with status {status}");
-                if status.success() || is_stopping {
-                    // If stopping, always mark as Stopped with success
-                    // This allows monitoring task to clear PID after stop() was called
-                    if let Err(e) = SUPERVISOR
-                        .upsert_daemon(
-                            UpsertDaemonOpts::builder(id.clone())
-                                .set(|o| {
-                                    o.pid = None; // Clear PID now that process has exited
-                                    o.status = DaemonStatus::Stopped;
-                                    o.last_exit_success = Some(status.success());
-                                })
-                                .build(),
-                        )
-                        .await
-                    {
-                        error!("Failed to update daemon state for {id}: {e}");
-                    }
-                } else {
-                    // Handle error exit - mark for retry
-                    // retry_count increment will be handled by interval_watch
-                    let exit_code = status.code().unwrap_or(-1);
-                    let err_status = DaemonStatus::Errored(exit_code);
-                    if let Err(e) = SUPERVISOR
-                        .upsert_daemon(
-                            UpsertDaemonOpts::builder(id.clone())
-                                .set(|o| {
-                                    o.pid = None;
-                                    o.status = err_status;
-                                    o.last_exit_success = Some(false);
-                                })
-                                .build(),
-                        )
-                        .await
-                    {
-                        error!("Failed to update daemon state for {id}: {e}");
-                    }
-                    // Fire on_fail hook if retries are exhausted
-                    if hook_retry_count >= hook_retry {
-                        fire_hook(
-                            HookType::OnFail,
-                            id.clone(),
-                            daemon_dir.clone(),
-                            hook_retry_count,
-                            hook_daemon_env.clone(),
-                            vec![("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string())],
-                        );
-                    }
+
+            // --- Phase 2: Fire hooks ---
+            let hook_extra_env = vec![
+                ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
+                ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
+            ];
+
+            // Determine which hooks to fire based on exit reason
+            let hooks_to_fire: Vec<HookType> = match exit_reason {
+                "stop" => vec![HookType::OnStop, HookType::OnExit],
+                "exit" => vec![HookType::OnExit],
+                // "fail": fire on_fail + on_exit only when retries are exhausted
+                _ if hook_retry_count >= hook_retry => {
+                    vec![HookType::OnFail, HookType::OnExit]
                 }
-            } else if is_stopping {
-                // Process was being intentionally stopped but child.wait() returned
-                // an error (e.g. due to sysinfo reaping the process first)
-                if let Err(e) = SUPERVISOR
-                    .upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Stopped;
-                                o.last_exit_success = Some(true);
-                            })
-                            .build(),
-                    )
-                    .await
-                {
-                    error!("Failed to update daemon state for {id}: {e}");
-                }
-            } else {
-                if let Err(e) = SUPERVISOR
-                    .upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Errored(-1);
-                                o.last_exit_success = Some(false);
-                            })
-                            .build(),
-                    )
-                    .await
-                {
-                    error!("Failed to update daemon state for {id}: {e}");
-                }
-                // Fire on_fail hook if retries are exhausted
-                if hook_retry_count >= hook_retry {
-                    fire_hook(
-                        HookType::OnFail,
-                        id.clone(),
-                        daemon_dir.clone(),
-                        hook_retry_count,
-                        hook_daemon_env.clone(),
-                        vec![("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string())],
-                    );
-                }
+                _ => vec![],
+            };
+
+            for hook_type in hooks_to_fire {
+                fire_hook(
+                    hook_type,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    hook_retry_count,
+                    hook_daemon_env.clone(),
+                    hook_extra_env.clone(),
+                )
+                .await;
             }
         });
 
