@@ -60,7 +60,7 @@ impl Status {
                 && daemon.proxy.unwrap_or(s.proxy.enable)
                 && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
             {
-                if let Some(url) = build_proxy_url(&qualified_id, daemon.slug.as_deref(), s) {
+                if let Some(url) = build_proxy_url(daemon.slug.as_deref(), s) {
                     println!("Proxy: {url}");
                 }
             }

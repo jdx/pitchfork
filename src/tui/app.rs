@@ -505,8 +505,6 @@ impl EditorState {
     pub fn to_daemon_config(&self) -> PitchforkTomlDaemon {
         let mut config = PitchforkTomlDaemon {
             ready_cmd: self.preserved_ready_cmd.clone(),
-            slug: None,
-            proxy: None,
             path: Some(self.config_path.clone()),
             ..PitchforkTomlDaemon::default()
         };

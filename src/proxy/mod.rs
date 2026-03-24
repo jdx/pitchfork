@@ -1,12 +1,11 @@
 //! Reverse proxy server for pitchfork daemons.
 //!
-//! Routes `<id>.<namespace>.<tld>:<port>` to the daemon's actual listening port.
+//! Routes `<slug>.<tld>:<port>` to the daemon's actual listening port.
+//! Only daemons with an explicit `slug` are routable — no slug means not proxied.
 //!
 //! # URL Routing
 //!
 //! ```text
-//! api.myproject.localhost:7777  →  localhost:3000
-//! api.localhost:7777            →  localhost:3000  (global namespace)
 //! myapp.localhost:7777          →  localhost:8080  (via slug)
 //! ```
 

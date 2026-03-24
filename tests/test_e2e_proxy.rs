@@ -351,6 +351,7 @@ fn test_list_shows_proxy_url() {
 [daemons.api]
 run = "python3 -m http.server {port}"
 expected_port = [{port}]
+slug = "api"
 "#
         ),
     )
@@ -409,6 +410,7 @@ fn test_status_shows_proxy_url() {
 [daemons.server]
 run = "python3 -m http.server {port}"
 expected_port = [{port}]
+slug = "server"
 "#
         ),
     )
@@ -460,6 +462,7 @@ fn test_start_shows_proxy_url() {
 [daemons.app]
 run = "python3 -m http.server {port}"
 expected_port = [{port}]
+slug = "app"
 "#
         ),
     )
@@ -587,7 +590,7 @@ run = "sleep 1"
 // Proxy URL Format Tests (unit-style via CLI)
 // ============================================================================
 
-/// Test proxy URL format for global namespace daemon
+/// Test proxy URL format for global namespace daemon (no slug = no proxy URL)
 #[test]
 fn test_proxy_url_global_namespace() {
     let env = TestEnv::new();
@@ -626,18 +629,18 @@ expected_port = [{port}]
         ],
     );
     let status_str = String::from_utf8_lossy(&status_output.stdout);
-    println!("global namespace proxy status: {status_str}");
+    println!("global namespace proxy status (no slug): {status_str}");
 
-    // Global namespace: myapi.localhost:7777 (no namespace in URL)
+    // No slug = no proxy URL. The status output should NOT contain a Proxy: line.
     assert!(
-        status_str.contains("myapi.localhost:7777"),
-        "Global namespace daemon should have URL without namespace: {status_str}"
+        !status_str.contains("Proxy:"),
+        "Daemon without a slug should not have a proxy URL: {status_str}"
     );
 
     let _ = env.run_command_in_dir(&["stop", "myapi"], &project);
 }
 
-/// Test proxy URL format for local namespace daemon
+/// Test proxy URL format for local namespace daemon (no slug = no proxy URL)
 #[test]
 fn test_proxy_url_local_namespace() {
     let env = TestEnv::new();
@@ -675,12 +678,12 @@ expected_port = [{port}]
         ],
     );
     let status_str = String::from_utf8_lossy(&status_output.stdout);
-    println!("local namespace proxy status: {status_str}");
+    println!("local namespace proxy status (no slug): {status_str}");
 
-    // Local namespace: api.myproject.localhost:7777
+    // No slug = no proxy URL. The status output should NOT contain a Proxy: line.
     assert!(
-        status_str.contains("api.myproject.localhost:7777"),
-        "Local namespace daemon should have URL with namespace: {status_str}"
+        !status_str.contains("Proxy:"),
+        "Daemon without a slug should not have a proxy URL: {status_str}"
     );
 
     let _ = env.run_command_in_dir(&["stop", "api"], &project);

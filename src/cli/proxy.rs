@@ -7,13 +7,13 @@ use crate::Result;
     long_about = "\
 Manage the pitchfork reverse proxy
 
-The reverse proxy routes requests from stable URLs like:
-  http://api.myproject.localhost:7777
+The reverse proxy routes requests from stable slug-based URLs like:
+  http://myapp.localhost:7777
 
 to the daemon's actual listening port (e.g. localhost:3000).
 
-This gives daemons stable, human-friendly URLs that don't change when
-ports are auto-bumped or reassigned.
+Only daemons with a `slug` are routable through the proxy.
+No slug = not proxied. This is an explicit opt-in model.
 
 Enable the proxy in your pitchfork.toml or settings:
   [settings.proxy]
@@ -311,10 +311,12 @@ impl ProxyStatus {
             println!();
         }
 
-        println!("Example URLs:");
-        println!("  {scheme}://api.myproject.{tld}:{effective_port}  →  daemon 'myproject/api'");
-        println!("  {scheme}://api.{tld}:{effective_port}             →  daemon 'global/api'");
-        println!("  {scheme}://myapp.{tld}:{effective_port}           →  daemon with slug 'myapp'");
+        println!("Example URLs (slug-based routing only):");
+        println!("  {scheme}://myapp.{tld}:{effective_port}  →  daemon with slug 'myapp'");
+        println!();
+        println!("Daemons without a slug are not proxied. Assign a slug in pitchfork.toml:");
+        println!("  [daemons.api]");
+        println!("  slug = \"myapp\"");
 
         Ok(())
     }

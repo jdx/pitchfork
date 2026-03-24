@@ -163,7 +163,7 @@ impl Start {
                         daemon_state.and_then(|d| d.proxy).unwrap_or(s.proxy.enable);
                     if proxy_enabled {
                         let slug = daemon_state.and_then(|d| d.slug.clone());
-                        if let Some(proxy_url) = build_proxy_url(id, slug.as_deref(), s) {
+                        if let Some(proxy_url) = build_proxy_url(slug.as_deref(), s) {
                             println!("  → Proxy: {proxy_url}");
                         }
                     }

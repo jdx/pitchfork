@@ -5,13 +5,13 @@
 
 Manage the pitchfork reverse proxy
 
-The reverse proxy routes requests from stable URLs like:
-  http://api.myproject.localhost:7777
+The reverse proxy routes requests from stable slug-based URLs like:
+  http://myapp.localhost:7777
 
 to the daemon's actual listening port (e.g. localhost:3000).
 
-This gives daemons stable, human-friendly URLs that don't change when
-ports are auto-bumped or reassigned.
+Only daemons with a `slug` are routable through the proxy.
+No slug = not proxied. This is an explicit opt-in model.
 
 Enable the proxy in your pitchfork.toml or settings:
   [settings.proxy]

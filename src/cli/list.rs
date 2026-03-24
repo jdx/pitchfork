@@ -101,7 +101,7 @@ impl List {
                 Cell::new(disabled_marker),
             ];
             if s.proxy.enable {
-                let proxy_cell = match build_proxy_url(&entry.id, entry.daemon.slug.as_deref(), s) {
+                let proxy_cell = match build_proxy_url(entry.daemon.slug.as_deref(), s) {
                     Some(proxy_url)
                         if entry.daemon.proxy.unwrap_or(s.proxy.enable)
                             && (entry.daemon.active_port.is_some()
@@ -121,20 +121,18 @@ impl List {
     }
 }
 
-/// Build the proxy URL for a daemon based on its ID, optional slug, and proxy settings.
+/// Build the proxy URL for a daemon based on its slug and proxy settings.
 ///
-/// If a `slug` is provided, it takes precedence over the `<id>.<namespace>` pattern,
-/// producing a shorter URL like `<slug>.<tld>:<port>`.
+/// Only daemons with a `slug` are routable through the proxy — no slug means
+/// not proxied.  This matches the routing logic in `resolve_target_port`.
 ///
-/// Returns `None` if `proxy.port` is invalid (out of range or zero), so callers
-/// can skip displaying a URL rather than showing one that points to a port the
-/// proxy server is not actually listening on.  This mirrors the behaviour of
-/// `serve()`, which bails out with an error for the same invalid-port condition.
-pub fn build_proxy_url(
-    id: &DaemonId,
-    slug: Option<&str>,
-    s: &crate::settings::Settings,
-) -> Option<String> {
+/// Returns `None` if:
+/// - The daemon has no slug (not proxied)
+/// - `proxy.port` is invalid (out of range or zero)
+pub fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
+    // No slug = not proxied.
+    let slug = slug?;
+
     let scheme = if s.proxy.https { "https" } else { "http" };
     let tld = &s.proxy.tld;
     let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
@@ -142,14 +140,7 @@ pub fn build_proxy_url(
     // Return None for an invalid port so callers don't display a broken URL.
     let effective_port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
 
-    let host = if let Some(slug) = slug {
-        // Slug overrides the id.namespace pattern
-        format!("{slug}.{tld}")
-    } else if id.namespace() == "global" {
-        format!("{}.{tld}", id.name())
-    } else {
-        format!("{}.{}.{tld}", id.name(), id.namespace())
-    };
+    let host = format!("{slug}.{tld}");
 
     // Omit port for standard ports (80 for http, 443 for https)
     Some(if effective_port == standard_port {

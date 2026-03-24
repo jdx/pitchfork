@@ -333,10 +333,10 @@ impl Supervisor {
                         o.watch = Some(opts.watch.clone());
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = opts.mise;
-                        o.slug = opts.slug.clone();
-                        o.proxy = opts.proxy;
                         o.memory_limit = opts.memory_limit;
                         o.cpu_limit = opts.cpu_limit;
+                        o.slug = opts.slug.clone();
+                        o.proxy = opts.proxy;
                     })
                     .build(),
             )
@@ -508,30 +508,30 @@ impl Supervisor {
 
             loop {
                 select! {
-                    Ok(Some(line)) = stdout.next_line() => {
-                        let formatted = format_line(line.clone());
-                        if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
-                            error!("Failed to write to log for daemon {id}: {e}");
-                        }
-                        trace!("stdout: {id} {formatted}");
+                                Ok(Some(line)) = stdout.next_line() => {
+                                    let formatted = format_line(line.clone());
+                                    if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
+                                        error!("Failed to write to log for daemon {id}: {e}");
+                                    }
+                                    trace!("stdout: {id} {formatted}");
 
                         // Check if output matches ready pattern
                         if !ready_notified
                             && let Some(ref pattern) = ready_pattern
-                                && pattern.is_match(&line) {
-                                    info!("daemon {id} ready: output matched pattern");
-                                    ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
-                                    let _ = log_appender.flush().await;
-                    if let Some(tx) = ready_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
-                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                    if !active_port_spawned && has_port_config {
-                        active_port_spawned = true;
-                        detect_and_store_active_port(id.clone(), daemon_pid);
-                    }
-                                }
+                            && pattern.is_match(&line)
+                        {
+                            info!("daemon {id} ready: output matched pattern");
+                            ready_notified = true;
+                            let _ = log_appender.flush().await;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            if !active_port_spawned && has_port_config {
+                                active_port_spawned = true;
+                                detect_and_store_active_port(id.clone(), daemon_pid);
+                            }
+                        }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
                         let formatted = format_line(line.clone());
@@ -540,23 +540,22 @@ impl Supervisor {
                         }
                         trace!("stderr: {id} {formatted}");
 
-                        // Check if output matches ready pattern (also check stderr)
                         if !ready_notified
                             && let Some(ref pattern) = ready_pattern
-                                && pattern.is_match(&line) {
-                                    info!("daemon {id} ready: output matched pattern");
-                                    ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
-                                    let _ = log_appender.flush().await;
-                    if let Some(tx) = ready_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
-                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                    if !active_port_spawned && has_port_config {
-                        active_port_spawned = true;
-                        detect_and_store_active_port(id.clone(), daemon_pid);
-                    }
-                                }
+                            && pattern.is_match(&line)
+                        {
+                            info!("daemon {id} ready: output matched pattern");
+                            ready_notified = true;
+                            let _ = log_appender.flush().await;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            if !active_port_spawned && has_port_config {
+                                active_port_spawned = true;
+                                detect_and_store_active_port(id.clone(), daemon_pid);
+                            }
+                        }
                     },
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
@@ -587,7 +586,7 @@ impl Supervisor {
                             debug!("daemon {id} was already marked ready, not sending notification");
                         }
                         break;
-                    }
+                    },
                     _ = async {
                         if let Some(ref mut interval) = http_check_interval {
                             interval.tick().await;

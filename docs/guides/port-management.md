@@ -62,7 +62,7 @@ The reverse proxy routes requests from stable URLs to the daemon's actual port.
 Without the proxy, you need to know the actual port your daemon is running on — which can change if ports are auto-bumped. With the proxy:
 
 ```
-http://api.myproject.localhost:7777  →  http://localhost:3001
+http://myapp.localhost:7777  →  http://localhost:3001
 ```
 
 The URL stays the same even if the port changes. This is especially useful for:
@@ -70,6 +70,8 @@ The URL stays the same even if the port changes. This is especially useful for:
 - AI agents that need stable endpoints
 - Browser bookmarks
 - Webhook configurations
+
+Only daemons with an explicit `slug` are routable through the proxy — no slug means not proxied.
 
 ### Enabling the Proxy
 
@@ -88,13 +90,14 @@ PITCHFORK_PROXY_ENABLE=true pitchfork supervisor start
 ### URL Format
 
 ```
-http://<id>.<namespace>.<tld>:<port>
+http://<slug>.<tld>:<port>
 ```
 
 Examples:
-- `http://api.myproject.localhost:7777` — daemon `myproject/api`
-- `http://api.localhost:7777` — daemon `global/api` (namespace omitted)
 - `http://myapp.localhost:7777` — daemon with `slug = "myapp"`
+- `http://api.localhost:7777` — daemon with `slug = "api"`
+
+Daemons without a slug are not exposed through the proxy.
 
 ### Configuration
 
@@ -110,11 +113,19 @@ tls_key = ""           # Path to TLS key (auto-generated if empty)
 
 ### Daemon Slugs
 
-You can assign a daemon a short `slug` alias. In proxy URLs, the slug replaces the `<id>.<namespace>` portion:
+Assign a daemon a short `slug` alias to make it routable through the proxy:
+
+```toml
+[daemons.api]
+run = "node server.js"
+slug = "api"
+```
 
 ```
-http://myapp.localhost:7777   # daemon with slug = "myapp"
+http://api.localhost:7777   # daemon with slug = "api"
 ```
+
+No slug = not proxied. This is an explicit opt-in: if you don't want a daemon proxied, simply don't give it a slug.
 
 See the [Namespace guide](/concepts/namespaces) for full details on slugs.
 
@@ -142,8 +153,8 @@ proxy = false   # opt out — this daemon won't be proxied
 To use standard HTTP/HTTPS ports without the port number in URLs:
 
 ```
-http://api.myproject.localhost   (port 80)
-https://api.myproject.localhost  (port 443)
+http://api.localhost   (port 80)
+https://api.localhost  (port 443)
 ```
 
 ### Binding to Privileged Ports
@@ -286,16 +297,16 @@ Proxy URLs are shown in CLI output when the proxy is enabled:
 ```bash
 $ pitchfork start api
 Daemon 'myproject/api' started on port(s): 3000
-  → Proxy: http://api.myproject.localhost:7777
+  → Proxy: http://api.localhost:7777
 
 $ pitchfork list
 Name   PID    Status   Proxy URL
-api    12345  running  http://api.myproject.localhost:7777
+api    12345  running  http://api.localhost:7777
 
 $ pitchfork status api
 Name: myproject/api
 PID: 12345
 Status: running
 Port: 3000 (active)
-Proxy: http://api.myproject.localhost:7777
+Proxy: http://api.localhost:7777
 ```

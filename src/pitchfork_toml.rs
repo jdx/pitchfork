@@ -243,12 +243,13 @@ fn validate_slug_chars(slug: &str, daemon_id: &str, path: &std::path::Path) -> R
             path.display()
         ));
     }
-    // Dots create ambiguity with the `<id>.<namespace>` routing pattern.
+    // Dots are invalid in DNS subdomain labels and would create ambiguity
+    // in the `<slug>.<tld>` proxy routing pattern.
     if slug.contains('.') {
         return Err(miette::miette!(
             "slug '{}' for daemon '{}' in {} contains a dot ('.'). \
-             Slugs must not contain dots to avoid ambiguity with \
-             the '<id>.<namespace>' proxy routing pattern.",
+             Slugs must not contain dots because they are used as \
+             DNS subdomain labels in proxy URLs (<slug>.<tld>).",
             slug,
             daemon_id,
             path.display()
@@ -1232,14 +1233,13 @@ impl PitchforkTomlDaemon {
                 self.path.as_deref(),
             )),
             mise: self.mise,
-            slug: None,
-            proxy: None,
+            slug: self.slug.clone(),
+            proxy: self.proxy,
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
         }
     }
 }
-
 fn example_run_command() -> &'static str {
     "exec node server.js"
 }

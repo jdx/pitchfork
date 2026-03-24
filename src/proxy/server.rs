@@ -1065,15 +1065,14 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
 /// Resolve the target port for a given hostname.
 ///
-/// Resolution order:
-/// 1. Check if any daemon has a matching `slug` (and `proxy != Some(false)`)
-/// 2. Parse `<id>.<namespace>.<tld>` pattern
-/// 3. Parse `<id>.<tld>` pattern (global namespace)
+/// Only slug-based routing is supported: the subdomain portion of the hostname
+/// must match a daemon's `slug` field.  Daemons without a slug are not exposed
+/// through the proxy — this is an explicit opt-in model.
 ///
 /// Returns the `active_port` if available, otherwise falls back to `resolved_port[0]`.
 ///
 /// # Returns
-/// - `Ok(Some(port))` — daemon found, forward to this port
+/// - `Ok(Some(port))` — daemon found via slug, forward to this port
 /// - `Ok(None)`       — no daemon matched (generic 502)
 /// - `Err(msg)`       — routing refused with a descriptive reason (e.g. slug conflict)
 ///
@@ -1093,11 +1092,8 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
         state_file.daemons.clone()
     };
 
-    // First pass: check for slug match.
-    // A daemon with proxy = false has explicitly opted out of proxying;
-    // its slug should not be routable through the proxy.
-    // Note: slugs containing dots are rejected at config validation time, so
-    // there is no ambiguity with the id.namespace second pass below.
+    // Only slug-based routing is supported.  A daemon must have an explicit
+    // `slug` to be reachable through the proxy — no slug means not proxied.
     //
     // Collect ALL slug matches first to detect cross-project duplicates.
     // Two independent projects can each declare slug = "api" in their own
@@ -1105,31 +1101,24 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
     // non-deterministically to whichever DaemonId sorts first in the BTreeMap
     // would be invisible to the user, so we refuse to route at all when there
     // is ambiguity.
-    //
-    // Collect (id, daemon) pairs so we can build conflicting_ids directly from
-    // slug_matches without a second pass over the daemon map.
     let slug_matches: Vec<(&DaemonId, &Daemon)> = daemons
         .iter()
         .filter(|(_, d)| d.slug.as_deref() == Some(subdomain.as_str()))
         .collect();
 
     match slug_matches.as_slice() {
-        [] => {} // no slug match — fall through to id.namespace pass
+        [] => Ok(None), // no slug match — daemon is not proxied
         [(_, daemon)] => {
             // Respect the per-daemon proxy opt-out flag.
             if !daemon.proxy.unwrap_or(settings().proxy.enable) {
                 return Ok(None);
             }
-            // Slug matched: return the port (or None if daemon has no port yet).
-            // Do NOT fall through to the id.namespace pass — a slug match is
-            // authoritative and should never accidentally route to a different daemon.
-            return Ok(daemon
+            Ok(daemon
                 .active_port
-                .or_else(|| daemon.resolved_port.first().copied()));
+                .or_else(|| daemon.resolved_port.first().copied()))
         }
         _ => {
             // Multiple running daemons share the same slug (cross-project conflict).
-            // Build conflicting_ids directly from slug_matches — no second pass needed.
             let conflicting_ids: Vec<String> =
                 slug_matches.iter().map(|(id, _)| id.to_string()).collect();
             let msg = format!(
@@ -1139,39 +1128,9 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
                 conflicting_ids.join(", ")
             );
             log::warn!("{msg}");
-            return Err(msg);
+            Err(msg)
         }
     }
-
-    // Second pass: try `<id>.<namespace>` pattern.
-    // The subdomain format is `<id>.<namespace>` where namespace is the
-    // *last* dot-separated component (e.g. `api.myproject` → id=`api`, ns=`myproject`).
-    // For a single component (no dot) treat it as the global namespace.
-    let (id, namespace) = if let Some((id, namespace)) = subdomain.split_once('.') {
-        // `api.myproject` → id=`api`, namespace=`myproject`
-        // `v2.api.myproject` is not a valid pattern; the daemon id cannot
-        // contain dots, so we only split on the first dot.
-        (id.to_string(), namespace.to_string())
-    } else {
-        // <id> only — treat as global namespace
-        (subdomain.to_string(), "global".to_string())
-    };
-
-    // Look up daemon by (namespace, id), respecting per-daemon proxy opt-out.
-    let Ok(daemon_id) = DaemonId::try_new(&namespace, &id) else {
-        return Ok(None);
-    };
-    let Some(daemon) = daemons.get(&daemon_id) else {
-        return Ok(None);
-    };
-
-    if !daemon.proxy.unwrap_or(settings().proxy.enable) {
-        return Ok(None);
-    }
-
-    Ok(daemon
-        .active_port
-        .or_else(|| daemon.resolved_port.first().copied()))
 }
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
