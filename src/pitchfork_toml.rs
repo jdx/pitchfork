@@ -36,8 +36,9 @@ impl JsonSchema for MemoryLimit {
 ///
 /// Backed by `std::time::Duration` and uses the `humantime` crate for parsing and display.
 /// Sets `RLIMIT_CPU` on Unix to limit the total CPU time a child process may consume.
-/// When the soft limit is exceeded, the process receives `SIGXCPU`; when the hard limit
-/// is exceeded, the process is killed with `SIGKILL`.
+/// Sub-second values are rounded up to a minimum of 1 second.
+/// The soft limit is set slightly below the hard limit (by up to 5 seconds) so the
+/// process receives `SIGXCPU` first and has a grace window before `SIGKILL` arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CpuTimeLimit(pub Duration);
 
@@ -982,8 +983,9 @@ pub struct PitchforkTomlDaemon {
     /// Sets RLIMIT_AS on Unix to restrict the virtual address space of the child process.
     pub memory_limit: Option<MemoryLimit>,
     /// CPU time limit for the daemon process (e.g. "5m", "300s", "1h30m").
-    /// Sets RLIMIT_CPU on Unix. Exceeding the soft limit sends SIGXCPU; exceeding
-    /// the hard limit sends SIGKILL.
+    /// Sets RLIMIT_CPU on Unix. Sub-second values are rounded up to at least 1s.
+    /// The soft limit is set slightly below the hard limit so the process receives
+    /// SIGXCPU first and has a grace window before SIGKILL.
     pub cpu_time_limit: Option<CpuTimeLimit>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,

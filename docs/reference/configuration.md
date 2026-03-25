@@ -386,7 +386,8 @@ cpu_time_limit = "1h30m"
 **Supported formats:** `"30s"`, `"5m"`, `"1h"`, `"1h30m"`, `"2h30m45s"`, etc.
 
 **Behavior:**
-- When the soft limit is reached, the process receives `SIGXCPU`
+- Sub-second values (e.g. `"500ms"`) are rounded up to a minimum of 1 second
+- The soft limit is set slightly below the hard limit (up to 5 seconds less) so the process receives `SIGXCPU` first and has a grace window for cleanup
 - When the hard limit is reached, the process is killed with `SIGKILL`
 - This measures actual CPU time consumed, not wall-clock time — an idle process won't hit this limit
 - Only affects the child process and its descendants, not the pitchfork supervisor itself

@@ -129,7 +129,7 @@
           ]
         },
         "cpu_time_limit": {
-          "description": "CPU time limit for the daemon process (e.g. \"5m\", \"300s\", \"1h30m\").\nSets RLIMIT_CPU on Unix. Exceeding the soft limit sends SIGXCPU; exceeding\nthe hard limit sends SIGKILL.",
+          "description": "CPU time limit for the daemon process (e.g. \"5m\", \"300s\", \"1h30m\").\nSets RLIMIT_CPU on Unix. Sub-second values are rounded up to at least 1s.\nThe soft limit is set slightly below the hard limit so the process receives\nSIGXCPU first and has a grace window before SIGKILL.",
           "anyOf": [
             {
               "$ref": "#/$defs/CpuTimeLimit"
