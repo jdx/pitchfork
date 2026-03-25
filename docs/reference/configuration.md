@@ -350,7 +350,7 @@ This is especially useful for daemons running via `pitchfork boot` (login daemon
 
 ### `memory_limit`
 
-Maximum virtual address space (memory) for the daemon process. Accepts human-readable byte sizes. On Unix, this sets `RLIMIT_AS` via `setrlimit` before the child process starts.
+Maximum physical memory (RSS) for the daemon process. Accepts human-readable byte sizes. The supervisor periodically monitors the daemon's RSS and stops it if it exceeds the limit.
 
 ```toml
 [daemons.worker]
@@ -365,33 +365,38 @@ memory_limit = "2GiB"
 **Supported formats:** `"50MB"`, `"512MB"`, `"1GiB"`, `"256KiB"`, etc. Both SI (MB, GB) and binary (MiB, GiB) units are accepted.
 
 **Behavior:**
-- When the process tries to allocate memory beyond this limit, the allocation fails (typically causing the process to crash or exit)
-- Only affects the child process and its descendants, not the pitchfork supervisor itself
-- Default: no limit (inherits system defaults)
+- The supervisor checks RSS at each interval tick (default ~1s)
+- When a daemon's RSS exceeds the limit, it is stopped via `SIGTERM` (then `SIGKILL` if unresponsive)
+- If `retry` is configured, the daemon will be restarted after being stopped
+- Works reliably with all runtimes (JVM, Node.js, Go, Python, etc.) since it measures actual physical memory, not virtual address space
+- For multi-process daemons (e.g. gunicorn workers, nginx workers), RSS is aggregated across the root process and all its descendants, consistent with the process-group kill used for enforcement
+- Only affects the daemon's process group, not the pitchfork supervisor itself
+- Default: no limit
 
-### `cpu_time_limit`
+### `cpu_limit`
 
-Maximum CPU time the daemon process may consume. Accepts human-readable duration strings. On Unix, this sets `RLIMIT_CPU` via `setrlimit` before the child process starts.
+Maximum CPU usage as a percentage for the daemon process. The supervisor periodically monitors the daemon's CPU usage and stops it if it exceeds the limit.
 
 ```toml
 [daemons.worker]
 run = "python compute.py"
-cpu_time_limit = "5m"
+cpu_limit = 80     # 80% of one CPU core
 
 [daemons.batch]
 run = "./run-batch.sh"
-cpu_time_limit = "1h30m"
+cpu_limit = 200    # Up to 2 CPU cores
 ```
 
-**Supported formats:** `"30s"`, `"5m"`, `"1h"`, `"1h30m"`, `"2h30m45s"`, etc.
+**Supported values:** Any positive number. `100` = 100% of one CPU core. Values above 100 are valid on multi-core systems (e.g. `200` allows up to 2 full cores).
 
 **Behavior:**
-- Sub-second values (e.g. `"500ms"`) are rounded up to a minimum of 1 second
-- The soft limit is set slightly below the hard limit (up to 5 seconds less) so the process receives `SIGXCPU` first and has a grace window for cleanup
-- When the hard limit is reached, the process is killed with `SIGKILL`
-- This measures actual CPU time consumed, not wall-clock time — an idle process won't hit this limit
-- Only affects the child process and its descendants, not the pitchfork supervisor itself
-- Default: no limit (inherits system defaults)
+- The supervisor checks CPU usage at each interval tick (default ~1s)
+- When a daemon's CPU usage exceeds the limit, it is stopped via `SIGTERM` (then `SIGKILL` if unresponsive)
+- If `retry` is configured, the daemon will be restarted after being stopped
+- CPU usage is measured as a percentage of one core (not system-wide)
+- For multi-process daemons (e.g. gunicorn workers, nginx workers), CPU usage is aggregated across the root process and all its descendants, consistent with the process-group kill used for enforcement
+- Only affects the daemon's process group, not the pitchfork supervisor itself
+- Default: no limit
 
 ## Complete Example
 
@@ -419,7 +424,7 @@ auto = ["start", "stop"]
 retry = 5
 env = { NODE_ENV = "development", PORT = "3000" }
 memory_limit = "2GiB"
-cpu_time_limit = "1h"
+cpu_limit = 200
 
 [daemons.api.hooks]
 on_ready = "curl -X POST https://alerts.example.com/ready"

@@ -10,7 +10,6 @@ use miette::Context;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// A byte-size type that accepts human-readable strings like "50MB", "1GiB", etc.
 ///
@@ -32,58 +31,52 @@ impl JsonSchema for MemoryLimit {
     }
 }
 
-/// A CPU time limit type that accepts human-readable duration strings like "5m", "300s", "1h30m".
+/// A CPU usage limit expressed as a percentage (e.g. `80.0` means 80% of one CPU core).
 ///
-/// Backed by `std::time::Duration` and uses the `humantime` crate for parsing and display.
-/// Sets `RLIMIT_CPU` on Unix to limit the total CPU time a child process may consume.
-/// Sub-second values are rounded up to a minimum of 1 second.
-/// The soft limit is set slightly below the hard limit (by up to 5 seconds) so the
-/// process receives `SIGXCPU` first and has a grace window before `SIGKILL` arrives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CpuTimeLimit(pub Duration);
+/// The supervisor periodically checks each daemon's CPU usage and kills processes
+/// that exceed this limit. Values above 100% are valid on multi-core systems
+/// (e.g. `200.0` allows up to 2 full cores).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuLimit(pub f32);
 
-impl std::fmt::Display for CpuTimeLimit {
+impl std::fmt::Display for CpuLimit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", humantime::format_duration(self.0))
+        write!(f, "{}%", self.0)
     }
 }
 
-impl std::str::FromStr for CpuTimeLimit {
-    type Err = humantime::DurationError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        humantime::parse_duration(s).map(CpuTimeLimit)
-    }
-}
-
-impl Serialize for CpuTimeLimit {
+impl Serialize for CpuLimit {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_f64(self.0 as f64)
     }
 }
 
-impl<'de> Deserialize<'de> for CpuTimeLimit {
+impl<'de> Deserialize<'de> for CpuLimit {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
+        let v = f64::deserialize(deserializer)?;
+        if v <= 0.0 {
+            return Err(serde::de::Error::custom("cpu_limit must be positive"));
+        }
+        Ok(CpuLimit(v as f32))
     }
 }
 
-impl JsonSchema for CpuTimeLimit {
+impl JsonSchema for CpuLimit {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("CpuTimeLimit")
+        std::borrow::Cow::Borrowed("CpuLimit")
     }
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "type": "string",
-            "description": "CPU time limit in human-readable duration format, e.g. '5m', '300s', '1h30m'"
+            "type": "number",
+            "description": "CPU usage limit as a percentage (e.g. 80 for 80% of one core, 200 for 2 cores)",
+            "exclusiveMinimum": 0
         })
     }
 }
@@ -147,9 +140,9 @@ struct PitchforkTomlDaemonRaw {
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
-    /// CPU time limit for the daemon process (e.g. "5m", "300s", "1h30m")
+    /// CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores)
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cpu_time_limit: Option<CpuTimeLimit>,
+    pub cpu_limit: Option<CpuLimit>,
 }
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files.
@@ -787,7 +780,7 @@ impl PitchforkToml {
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
                 memory_limit: raw_daemon.memory_limit,
-                cpu_time_limit: raw_daemon.cpu_time_limit,
+                cpu_limit: raw_daemon.cpu_limit,
                 path: Some(path.to_path_buf()),
             };
             pt.daemons.insert(id, daemon);
@@ -875,7 +868,7 @@ impl PitchforkToml {
                     hooks: daemon.hooks.clone(),
                     mise: daemon.mise,
                     memory_limit: daemon.memory_limit,
-                    cpu_time_limit: daemon.cpu_time_limit,
+                    cpu_limit: daemon.cpu_limit,
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
@@ -980,13 +973,11 @@ pub struct PitchforkTomlDaemon {
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
-    /// Sets RLIMIT_AS on Unix to restrict the virtual address space of the child process.
+    /// The supervisor periodically monitors RSS and kills the process if it exceeds the limit.
     pub memory_limit: Option<MemoryLimit>,
-    /// CPU time limit for the daemon process (e.g. "5m", "300s", "1h30m").
-    /// Sets RLIMIT_CPU on Unix. Sub-second values are rounded up to at least 1s.
-    /// The soft limit is set slightly below the hard limit so the process receives
-    /// SIGXCPU first and has a grace window before SIGKILL.
-    pub cpu_time_limit: Option<CpuTimeLimit>,
+    /// CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores).
+    /// The supervisor periodically monitors CPU usage and kills the process if it exceeds the limit.
+    pub cpu_limit: Option<CpuLimit>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -1014,7 +1005,7 @@ impl Default for PitchforkTomlDaemon {
             hooks: None,
             mise: None,
             memory_limit: None,
-            cpu_time_limit: None,
+            cpu_limit: None,
             path: None,
         }
     }
@@ -1063,7 +1054,7 @@ impl PitchforkTomlDaemon {
                 .and_then(|p| p.parent().map(|p| p.to_path_buf())),
             mise: self.mise.unwrap_or(settings().general.mise),
             memory_limit: self.memory_limit,
-            cpu_time_limit: self.cpu_time_limit,
+            cpu_limit: self.cpu_limit,
         }
     }
 }

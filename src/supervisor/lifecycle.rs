@@ -272,45 +272,12 @@ impl Supervisor {
             }
         }
 
-        // Put each daemon in its own session/process group so we can kill the
-        // entire tree atomically with a single signal to the group.
         #[cfg(unix)]
         {
-            let memory_limit_bytes = opts.memory_limit.map(|ml| ml.0);
-            let cpu_time_limit_secs = opts.cpu_time_limit.map(|ct| {
-                // Round up so sub-second values like "500ms" become 1 instead of 0.
-                // RLIMIT_CPU = 0 would kill the process immediately.
-                ct.0.as_secs().max(1) + if ct.0.subsec_nanos() > 0 { 1 } else { 0 }
-            });
             unsafe {
                 cmd.pre_exec(move || {
                     if libc::setsid() == -1 {
                         return Err(std::io::Error::last_os_error());
-                    }
-                    // Apply memory limit via RLIMIT_AS (virtual address space)
-                    if let Some(limit) = memory_limit_bytes {
-                        let rlim = libc::rlimit {
-                            rlim_cur: limit,
-                            rlim_max: limit,
-                        };
-                        if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                    }
-                    // Apply CPU time limit via RLIMIT_CPU (total CPU seconds)
-                    // Set the soft limit slightly below the hard limit so the process
-                    // receives SIGXCPU first and has a grace window to clean up before
-                    // SIGKILL arrives at the hard limit.
-                    if let Some(secs) = cpu_time_limit_secs {
-                        let grace = if secs <= 5 { 1 } else { 5 };
-                        let soft = secs.saturating_sub(grace).max(1);
-                        let rlim = libc::rlimit {
-                            rlim_cur: soft,
-                            rlim_max: secs,
-                        };
-                        if libc::setrlimit(libc::RLIMIT_CPU, &rlim) != 0 {
-                            return Err(std::io::Error::last_os_error());
-                        }
                     }
                     Ok(())
                 });
@@ -357,7 +324,7 @@ impl Supervisor {
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = Some(opts.mise);
                         o.memory_limit = opts.memory_limit;
-                        o.cpu_time_limit = opts.cpu_time_limit;
+                        o.cpu_limit = opts.cpu_limit;
                     })
                     .build(),
             )

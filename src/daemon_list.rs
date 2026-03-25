@@ -109,7 +109,7 @@ fn build_daemon_list(
             port_bump_attempts: settings().default_port_bump_attempts(),
             mise: daemon_config.mise.unwrap_or(settings().general.mise),
             memory_limit: daemon_config.memory_limit,
-            cpu_time_limit: daemon_config.cpu_time_limit,
+            cpu_limit: daemon_config.cpu_limit,
             ..Daemon::default()
         };
 

@@ -275,6 +275,67 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
     }
 
+    /// Get aggregated stats for an entire process group (root PID + all descendants).
+    ///
+    /// Since daemons are spawned with `setsid()`, the daemon PID == PGID.
+    /// This method sums RSS and CPU% across the root process and all its
+    /// descendants so that multi-process daemons (e.g. gunicorn workers,
+    /// nginx workers) are correctly accounted for in resource limit checks.
+    ///
+    /// Uptime is taken from the root process; disk I/O is summed.
+    pub fn get_group_stats(&self, pid: u32) -> Option<ProcessStats> {
+        let system = self.lock_system();
+        let root_pid = sysinfo::Pid::from_u32(pid);
+        let root = system.process(root_pid)?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let root_disk = root.disk_usage();
+        let mut stats = ProcessStats {
+            cpu_percent: root.cpu_usage(),
+            memory_bytes: root.memory(),
+            uptime_secs: now.saturating_sub(root.start_time()),
+            disk_read_bytes: root_disk.read_bytes,
+            disk_write_bytes: root_disk.written_bytes,
+        };
+
+        // Walk all processes to find descendants of the root PID.
+        // A process is a descendant if walking its parent chain reaches root_pid.
+        for (child_pid, child) in system.processes() {
+            if *child_pid == root_pid {
+                continue;
+            }
+            // Walk parent chain to check if this process is a descendant
+            let mut proc = child;
+            let mut is_descendant = false;
+            loop {
+                match proc.parent() {
+                    Some(ppid) if ppid == root_pid => {
+                        is_descendant = true;
+                        break;
+                    }
+                    Some(ppid) => match system.process(ppid) {
+                        Some(p) => proc = p,
+                        None => break,
+                    },
+                    None => break,
+                }
+            }
+            if is_descendant {
+                let disk = child.disk_usage();
+                stats.cpu_percent += child.cpu_usage();
+                stats.memory_bytes += child.memory();
+                stats.disk_read_bytes += disk.read_bytes;
+                stats.disk_write_bytes += disk.written_bytes;
+            }
+        }
+
+        Some(stats)
+    }
+
     /// Get process stats (cpu%, memory bytes, uptime secs, disk I/O) for a given PID
     pub fn get_stats(&self, pid: u32) -> Option<ProcessStats> {
         let system = self.lock_system();

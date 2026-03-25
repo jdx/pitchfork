@@ -1,6 +1,6 @@
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::pitchfork_toml::{CpuTimeLimit, CronRetrigger, MemoryLimit};
+use crate::pitchfork_toml::{CpuLimit, CronRetrigger, MemoryLimit};
 use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -112,9 +112,9 @@ pub struct Daemon {
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
-    /// CPU time limit for the daemon process (e.g. "5m", "300s")
+    /// CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores)
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cpu_time_limit: Option<CpuTimeLimit>,
+    pub cpu_limit: Option<CpuLimit>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -151,9 +151,9 @@ pub struct RunOptions {
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
-    /// CPU time limit for the daemon process (e.g. "5m", "300s")
+    /// CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores)
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cpu_time_limit: Option<CpuTimeLimit>,
+    pub cpu_limit: Option<CpuLimit>,
 }
 
 impl Default for Daemon {
@@ -188,7 +188,7 @@ impl Default for Daemon {
             watch_base_dir: None,
             mise: false,
             memory_limit: None,
-            cpu_time_limit: None,
+            cpu_limit: None,
         }
     }
 }
@@ -225,7 +225,7 @@ impl Daemon {
             watch_base_dir: self.watch_base_dir.clone(),
             mise: self.mise,
             memory_limit: self.memory_limit,
-            cpu_time_limit: self.cpu_time_limit,
+            cpu_limit: self.cpu_limit,
         }
     }
 }
@@ -258,7 +258,7 @@ impl Default for RunOptions {
             watch_base_dir: None,
             mise: false,
             memory_limit: None,
-            cpu_time_limit: None,
+            cpu_limit: None,
         }
     }
 }

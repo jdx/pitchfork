@@ -37,9 +37,10 @@
     "daemons"
   ],
   "$defs": {
-    "CpuTimeLimit": {
-      "description": "CPU time limit in human-readable duration format, e.g. '5m', '300s', '1h30m'",
-      "type": "string"
+    "CpuLimit": {
+      "description": "CPU usage limit as a percentage (e.g. 80 for 80% of one core, 200 for 2 cores)",
+      "type": "number",
+      "exclusiveMinimum": 0
     },
     "CronRetrigger": {
       "description": "Retrigger behavior for cron-scheduled daemons",
@@ -128,11 +129,11 @@
             "null"
           ]
         },
-        "cpu_time_limit": {
-          "description": "CPU time limit for the daemon process (e.g. \"5m\", \"300s\", \"1h30m\").\nSets RLIMIT_CPU on Unix. Sub-second values are rounded up to at least 1s.\nThe soft limit is set slightly below the hard limit so the process receives\nSIGXCPU first and has a grace window before SIGKILL.",
+        "cpu_limit": {
+          "description": "CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores).\nThe supervisor periodically monitors CPU usage and kills the process if it exceeds the limit.",
           "anyOf": [
             {
-              "$ref": "#/$defs/CpuTimeLimit"
+              "$ref": "#/$defs/CpuLimit"
             },
             {
               "type": "null"
@@ -197,7 +198,7 @@
           ]
         },
         "memory_limit": {
-          "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nSets RLIMIT_AS on Unix to restrict the virtual address space of the child process.",
+          "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nThe supervisor periodically monitors RSS and kills the process if it exceeds the limit.",
           "anyOf": [
             {
               "$ref": "#/$defs/MemoryLimit"

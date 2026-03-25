@@ -9,6 +9,7 @@ use super::{SUPERVISOR, Supervisor, interval_duration};
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
 use crate::{Result, env};
@@ -32,7 +33,7 @@ impl Supervisor {
             .collect()
     }
 
-    /// Start the interval watcher for periodic refresh
+    /// Start the interval watcher for periodic refresh and resource monitoring
     pub(crate) fn interval_watch(&self) -> Result<()> {
         tokio::spawn(async move {
             let mut interval = time::interval(interval_duration());
@@ -43,9 +44,95 @@ impl Supervisor {
                 {
                     error!("failed to refresh: {err}");
                 }
+                // Check resource limits (CPU and memory) for all running daemons
+                if let Err(err) = SUPERVISOR.check_resource_limits().await {
+                    error!("failed to check resource limits: {err}");
+                }
             }
         });
         Ok(())
+    }
+
+    /// Check resource limits (CPU and memory) for all running daemons.
+    ///
+    /// For each daemon with a `memory_limit` or `cpu_limit` configured, this method
+    /// reads the current RSS / CPU% from sysinfo and stops the daemon (with retry
+    /// support) if it exceeds the configured threshold.
+    async fn check_resource_limits(&self) -> Result<()> {
+        let pitchfork_id = DaemonId::pitchfork();
+        let daemons: Vec<_> = {
+            let state = self.state_file.lock().await;
+            state
+                .daemons
+                .values()
+                .filter(|d| {
+                    d.id != pitchfork_id
+                        && d.pid.is_some()
+                        && d.status.is_running()
+                        && (d.memory_limit.is_some() || d.cpu_limit.is_some())
+                })
+                .cloned()
+                .collect()
+        };
+
+        if daemons.is_empty() {
+            return Ok(());
+        }
+
+        // Refresh all processes so we can walk the process tree for each daemon.
+        // This is necessary to aggregate stats across multi-process daemons
+        // (e.g. gunicorn/nginx workers) where child processes may consume
+        // significant resources beyond the root PID.
+        PROCS.refresh_processes();
+
+        for daemon in &daemons {
+            let Some(pid) = daemon.pid else { continue };
+            let Some(stats) = PROCS.get_group_stats(pid) else {
+                continue;
+            };
+
+            // Check memory limit (RSS)
+            if let Some(mem_limit) = daemon.memory_limit {
+                if stats.memory_bytes > mem_limit.0 {
+                    warn!(
+                        "daemon {} (pid {}) exceeded memory limit: {} > {}, stopping",
+                        daemon.id,
+                        pid,
+                        stats.memory_display(),
+                        mem_limit,
+                    );
+                    self.stop_for_resource_violation(&daemon.id).await;
+                    continue; // Don't check CPU if we're already stopping
+                }
+            }
+
+            // Check CPU limit (percentage)
+            if let Some(cpu_limit) = daemon.cpu_limit {
+                if stats.cpu_percent > cpu_limit.0 {
+                    warn!(
+                        "daemon {} (pid {}) exceeded CPU limit: {:.1}% > {}%, stopping",
+                        daemon.id, pid, stats.cpu_percent, cpu_limit.0,
+                    );
+                    self.stop_for_resource_violation(&daemon.id).await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Stop a daemon due to a resource limit violation.
+    ///
+    /// Uses the normal stop flow so retry logic can still kick in if configured.
+    async fn stop_for_resource_violation(&self, id: &DaemonId) {
+        match self.stop(id).await {
+            Ok(_) => {
+                info!("stopped daemon {id} due to resource limit violation");
+            }
+            Err(e) => {
+                error!("failed to stop daemon {id} after resource violation: {e}");
+            }
+        }
     }
 
     /// Start the cron watcher for scheduled daemon execution
