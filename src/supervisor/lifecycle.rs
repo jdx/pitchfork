@@ -275,13 +275,39 @@ impl Supervisor {
         // Put each daemon in its own session/process group so we can kill the
         // entire tree atomically with a single signal to the group.
         #[cfg(unix)]
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        {
+            let memory_limit_bytes = opts.memory_limit.map(|ml| ml.0);
+            let cpu_time_limit_secs = opts.cpu_time_limit.map(|ct| ct.0.as_secs());
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Apply memory limit via RLIMIT_AS (virtual address space)
+                    if let Some(limit) = memory_limit_bytes {
+                        let rlim = libc::rlimit {
+                            rlim_cur: limit,
+                            rlim_max: limit,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    // Apply CPU time limit via RLIMIT_CPU (total CPU seconds)
+                    // When the soft limit is exceeded, the process receives SIGXCPU.
+                    // When the hard limit is exceeded, the process is killed with SIGKILL.
+                    if let Some(secs) = cpu_time_limit_secs {
+                        let rlim = libc::rlimit {
+                            rlim_cur: secs,
+                            rlim_max: secs,
+                        };
+                        if libc::setrlimit(libc::RLIMIT_CPU, &rlim) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                    }
+                    Ok(())
+                });
+            }
         }
 
         let mut child = cmd.spawn().into_diagnostic()?;
@@ -323,6 +349,8 @@ impl Supervisor {
                         o.watch = Some(opts.watch.clone());
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = Some(opts.mise);
+                        o.memory_limit = opts.memory_limit;
+                        o.cpu_time_limit = opts.cpu_time_limit;
                     })
                     .build(),
             )

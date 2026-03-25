@@ -88,25 +88,10 @@ fn test_write_pitchfork_toml() -> Result<()> {
         DaemonId::try_new(&toml_ns, "test_daemon").unwrap(),
         pitchfork_toml::PitchforkTomlDaemon {
             run: "echo 'test'".to_string(),
-            auto: vec![],
-            cron: None,
             retry: pitchfork_toml::Retry::from(5),
-            ready_delay: None,
-            ready_output: None,
-            ready_http: None,
-            ready_port: None,
-            ready_cmd: None,
-            expected_port: Vec::new(),
-            auto_bump_port: false,
             port_bump_attempts: 10,
-            boot_start: None,
-            depends: vec![],
-            watch: vec![],
-            dir: None,
-            env: None,
-            hooks: None,
-            mise: None,
             path: Some(toml_path.clone()),
+            ..pitchfork_toml::PitchforkTomlDaemon::default()
         },
     );
     pt.daemons = daemons;
@@ -843,25 +828,8 @@ fn test_dir_env_not_serialized_when_none() -> Result<()> {
         DaemonId::try_new(&ns, "test").unwrap(),
         pitchfork_toml::PitchforkTomlDaemon {
             run: "echo test".to_string(),
-            auto: vec![],
-            cron: None,
-            retry: pitchfork_toml::Retry::default(),
-            ready_delay: None,
-            ready_output: None,
-            ready_http: None,
-            ready_port: None,
-            ready_cmd: None,
-            expected_port: Vec::new(),
-            auto_bump_port: false,
             port_bump_attempts: 10,
-            boot_start: None,
-            depends: vec![],
-            watch: vec![],
-            dir: None,
-            env: None,
-            hooks: None,
-            mise: None,
-            path: None,
+            ..pitchfork_toml::PitchforkTomlDaemon::default()
         },
     );
     pt.daemons = daemons;

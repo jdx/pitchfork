@@ -504,26 +504,9 @@ impl EditorState {
 
     pub fn to_daemon_config(&self) -> PitchforkTomlDaemon {
         let mut config = PitchforkTomlDaemon {
-            run: String::new(),
-            auto: vec![],
-            cron: None,
-            retry: Retry(0),
-            ready_delay: None,
-            ready_output: None,
-            ready_http: None,
-            ready_port: None,
             ready_cmd: self.preserved_ready_cmd.clone(),
-            expected_port: Vec::new(),
-            auto_bump_port: false,
-            port_bump_attempts: 10,
-            boot_start: None,
-            depends: vec![],
-            watch: vec![],
-            dir: None,
-            env: None,
-            hooks: None,
-            mise: None,
             path: Some(self.config_path.clone()),
+            ..PitchforkTomlDaemon::default()
         };
 
         let mut cron_schedule: Option<String> = None;

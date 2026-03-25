@@ -1,6 +1,6 @@
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::pitchfork_toml::CronRetrigger;
+use crate::pitchfork_toml::{CpuTimeLimit, CronRetrigger, MemoryLimit};
 use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -109,6 +109,12 @@ pub struct Daemon {
     pub watch_base_dir: Option<PathBuf>,
     #[serde(default)]
     pub mise: bool,
+    /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU time limit for the daemon process (e.g. "5m", "300s")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cpu_time_limit: Option<CpuTimeLimit>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -142,6 +148,119 @@ pub struct RunOptions {
     pub watch_base_dir: Option<PathBuf>,
     #[serde(default)]
     pub mise: bool,
+    /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU time limit for the daemon process (e.g. "5m", "300s")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cpu_time_limit: Option<CpuTimeLimit>,
+}
+
+impl Default for Daemon {
+    fn default() -> Self {
+        Self {
+            id: DaemonId::default(),
+            title: None,
+            pid: None,
+            shell_pid: None,
+            status: DaemonStatus::default(),
+            dir: None,
+            cmd: None,
+            autostop: false,
+            cron_schedule: None,
+            cron_retrigger: None,
+            last_cron_triggered: None,
+            last_exit_success: None,
+            retry: 0,
+            retry_count: 0,
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
+            expected_port: Vec::new(),
+            resolved_port: Vec::new(),
+            auto_bump_port: false,
+            port_bump_attempts: 10,
+            depends: Vec::new(),
+            env: None,
+            watch: Vec::new(),
+            watch_base_dir: None,
+            mise: false,
+            memory_limit: None,
+            cpu_time_limit: None,
+        }
+    }
+}
+
+impl Daemon {
+    /// Build RunOptions from persisted daemon state.
+    ///
+    /// Carries over all configuration fields from the daemon state.
+    /// Callers can override specific fields on the returned value.
+    pub fn to_run_options(&self, cmd: Vec<String>) -> RunOptions {
+        RunOptions {
+            id: self.id.clone(),
+            cmd,
+            force: false,
+            shell_pid: self.shell_pid,
+            dir: self.dir.clone().unwrap_or_else(|| crate::env::CWD.clone()),
+            autostop: self.autostop,
+            cron_schedule: self.cron_schedule.clone(),
+            cron_retrigger: self.cron_retrigger,
+            retry: self.retry,
+            retry_count: self.retry_count,
+            ready_delay: self.ready_delay,
+            ready_output: self.ready_output.clone(),
+            ready_http: self.ready_http.clone(),
+            ready_port: self.ready_port,
+            ready_cmd: self.ready_cmd.clone(),
+            expected_port: self.expected_port.clone(),
+            auto_bump_port: self.auto_bump_port,
+            port_bump_attempts: self.port_bump_attempts,
+            wait_ready: false,
+            depends: self.depends.clone(),
+            env: self.env.clone(),
+            watch: self.watch.clone(),
+            watch_base_dir: self.watch_base_dir.clone(),
+            mise: self.mise,
+            memory_limit: self.memory_limit,
+            cpu_time_limit: self.cpu_time_limit,
+        }
+    }
+}
+
+impl Default for RunOptions {
+    fn default() -> Self {
+        Self {
+            id: DaemonId::default(),
+            cmd: Vec::new(),
+            force: false,
+            shell_pid: None,
+            dir: crate::env::CWD.clone(),
+            autostop: false,
+            cron_schedule: None,
+            cron_retrigger: None,
+            retry: 0,
+            retry_count: 0,
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
+            expected_port: Vec::new(),
+            auto_bump_port: false,
+            port_bump_attempts: 10,
+            wait_ready: false,
+            depends: Vec::new(),
+            env: None,
+            watch: Vec::new(),
+            watch_base_dir: None,
+            mise: false,
+            memory_limit: None,
+            cpu_time_limit: None,
+        }
+    }
 }
 
 impl Display for Daemon {

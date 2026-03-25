@@ -270,8 +270,7 @@ impl Add {
                 dir: self.dir.clone(),
                 env,
                 hooks,
-                mise: None,
-                path: None,
+                ..PitchforkTomlDaemon::default()
             },
         );
         pt.write()?;

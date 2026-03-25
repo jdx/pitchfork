@@ -5,7 +5,6 @@
 
 use super::Supervisor;
 use crate::Result;
-use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
@@ -145,11 +144,6 @@ impl Supervisor {
         for (id, daemon) in boot_daemons {
             info!("Starting boot daemon: {id}");
 
-            let dir = crate::ipc::batch::resolve_daemon_dir(
-                daemon.dir.as_deref(),
-                daemon.path.as_deref(),
-            );
-
             let cmd = match shell_words::split(&daemon.run) {
                 Ok(cmd) => cmd,
                 Err(e) => {
@@ -157,35 +151,8 @@ impl Supervisor {
                     continue;
                 }
             };
-            let run_opts = RunOptions {
-                id: id.clone(),
-                cmd,
-                force: false,
-                shell_pid: None,
-                dir,
-                autostop: false, // Boot daemons should not autostop
-                cron_schedule: daemon.cron.as_ref().map(|c| c.schedule.clone()),
-                cron_retrigger: daemon.cron.as_ref().map(|c| c.retrigger),
-                retry: daemon.retry.count(),
-                retry_count: 0,
-                ready_delay: daemon.ready_delay,
-                ready_output: daemon.ready_output.clone(),
-                ready_http: daemon.ready_http.clone(),
-                ready_port: daemon.ready_port,
-                ready_cmd: daemon.ready_cmd.clone(),
-                expected_port: daemon.expected_port.clone(),
-                auto_bump_port: daemon.auto_bump_port,
-                port_bump_attempts: daemon.port_bump_attempts,
-                wait_ready: false, // Don't block on boot daemons
-                depends: daemon.depends.clone(),
-                env: daemon.env.clone(),
-                watch: daemon.watch.clone(),
-                watch_base_dir: daemon
-                    .path
-                    .as_ref()
-                    .and_then(|p| p.parent().map(|p| p.to_path_buf())),
-                mise: daemon.mise.unwrap_or(settings().general.mise),
-            };
+            let mut run_opts = daemon.to_run_options(id, cmd);
+            run_opts.autostop = false; // Boot daemons should not autostop
 
             match self.run(run_opts).await {
                 Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {

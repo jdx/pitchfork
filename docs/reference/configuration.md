@@ -348,6 +348,50 @@ mise = true
 
 This is especially useful for daemons running via `pitchfork boot` (login daemon mode) where interactive shell hooks haven't set up tool paths. When not set, falls back to the global `general.mise` setting. See [mise Integration guide](/guides/mise-integration) for details.
 
+### `memory_limit`
+
+Maximum virtual address space (memory) for the daemon process. Accepts human-readable byte sizes. On Unix, this sets `RLIMIT_AS` via `setrlimit` before the child process starts.
+
+```toml
+[daemons.worker]
+run = "python worker.py"
+memory_limit = "512MB"
+
+[daemons.api]
+run = "node server.js"
+memory_limit = "2GiB"
+```
+
+**Supported formats:** `"50MB"`, `"512MB"`, `"1GiB"`, `"256KiB"`, etc. Both SI (MB, GB) and binary (MiB, GiB) units are accepted.
+
+**Behavior:**
+- When the process tries to allocate memory beyond this limit, the allocation fails (typically causing the process to crash or exit)
+- Only affects the child process and its descendants, not the pitchfork supervisor itself
+- Default: no limit (inherits system defaults)
+
+### `cpu_time_limit`
+
+Maximum CPU time the daemon process may consume. Accepts human-readable duration strings. On Unix, this sets `RLIMIT_CPU` via `setrlimit` before the child process starts.
+
+```toml
+[daemons.worker]
+run = "python compute.py"
+cpu_time_limit = "5m"
+
+[daemons.batch]
+run = "./run-batch.sh"
+cpu_time_limit = "1h30m"
+```
+
+**Supported formats:** `"30s"`, `"5m"`, `"1h"`, `"1h30m"`, `"2h30m45s"`, etc.
+
+**Behavior:**
+- When the soft limit is reached, the process receives `SIGXCPU`
+- When the hard limit is reached, the process is killed with `SIGKILL`
+- This measures actual CPU time consumed, not wall-clock time — an idle process won't hit this limit
+- Only affects the child process and its descendants, not the pitchfork supervisor itself
+- Default: no limit (inherits system defaults)
+
 ## Complete Example
 
 ```toml
@@ -373,6 +417,8 @@ ready_http = "http://localhost:3000/health"
 auto = ["start", "stop"]
 retry = 5
 env = { NODE_ENV = "development", PORT = "3000" }
+memory_limit = "2GiB"
+cpu_time_limit = "1h"
 
 [daemons.api.hooks]
 on_ready = "curl -X POST https://alerts.example.com/ready"

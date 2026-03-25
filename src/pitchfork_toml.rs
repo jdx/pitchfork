@@ -4,11 +4,88 @@ use crate::settings::SettingsPartial;
 use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::{Result, env};
+use humanbyte::HumanByte;
 use indexmap::IndexMap;
 use miette::Context;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// A byte-size type that accepts human-readable strings like "50MB", "1GiB", etc.
+///
+/// Backed by `u64` and uses the `humanbyte` crate for parsing and display.
+/// Used for `memory_limit` configuration in daemon definitions.
+#[derive(Clone, Copy, PartialEq, Eq, HumanByte)]
+pub struct MemoryLimit(pub u64);
+
+impl JsonSchema for MemoryLimit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("MemoryLimit")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'"
+        })
+    }
+}
+
+/// A CPU time limit type that accepts human-readable duration strings like "5m", "300s", "1h30m".
+///
+/// Backed by `std::time::Duration` and uses the `humantime` crate for parsing and display.
+/// Sets `RLIMIT_CPU` on Unix to limit the total CPU time a child process may consume.
+/// When the soft limit is exceeded, the process receives `SIGXCPU`; when the hard limit
+/// is exceeded, the process is killed with `SIGKILL`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuTimeLimit(pub Duration);
+
+impl std::fmt::Display for CpuTimeLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", humantime::format_duration(self.0))
+    }
+}
+
+impl std::str::FromStr for CpuTimeLimit {
+    type Err = humantime::DurationError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        humantime::parse_duration(s).map(CpuTimeLimit)
+    }
+}
+
+impl Serialize for CpuTimeLimit {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for CpuTimeLimit {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for CpuTimeLimit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("CpuTimeLimit")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "CPU time limit in human-readable duration format, e.g. '5m', '300s', '1h30m'"
+        })
+    }
+}
 
 /// Internal structure for reading config files (uses String keys for short daemon names)
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -66,6 +143,12 @@ struct PitchforkTomlDaemonRaw {
     pub hooks: Option<PitchforkTomlHooks>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU time limit for the daemon process (e.g. "5m", "300s", "1h30m")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cpu_time_limit: Option<CpuTimeLimit>,
 }
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files.
@@ -702,6 +785,8 @@ impl PitchforkToml {
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
+                memory_limit: raw_daemon.memory_limit,
+                cpu_time_limit: raw_daemon.cpu_time_limit,
                 path: Some(path.to_path_buf()),
             };
             pt.daemons.insert(id, daemon);
@@ -788,6 +873,8 @@ impl PitchforkToml {
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
                     mise: daemon.mise,
+                    memory_limit: daemon.memory_limit,
+                    cpu_time_limit: daemon.cpu_time_limit,
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
@@ -891,8 +978,92 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
+    /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
+    /// Sets RLIMIT_AS on Unix to restrict the virtual address space of the child process.
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU time limit for the daemon process (e.g. "5m", "300s", "1h30m").
+    /// Sets RLIMIT_CPU on Unix. Exceeding the soft limit sends SIGXCPU; exceeding
+    /// the hard limit sends SIGKILL.
+    pub cpu_time_limit: Option<CpuTimeLimit>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
+}
+
+impl Default for PitchforkTomlDaemon {
+    fn default() -> Self {
+        Self {
+            run: String::new(),
+            auto: Vec::new(),
+            cron: None,
+            retry: Retry::default(),
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
+            expected_port: Vec::new(),
+            auto_bump_port: false,
+            port_bump_attempts: 10,
+            boot_start: None,
+            depends: Vec::new(),
+            watch: Vec::new(),
+            dir: None,
+            env: None,
+            hooks: None,
+            mise: None,
+            memory_limit: None,
+            cpu_time_limit: None,
+            path: None,
+        }
+    }
+}
+
+impl PitchforkTomlDaemon {
+    /// Build RunOptions from this daemon configuration.
+    ///
+    /// Carries over all config fields and resolves the working directory.
+    /// Callers can override specific fields on the returned value.
+    pub fn to_run_options(
+        &self,
+        id: &crate::daemon_id::DaemonId,
+        cmd: Vec<String>,
+    ) -> crate::daemon::RunOptions {
+        use crate::daemon::RunOptions;
+
+        let dir = crate::ipc::batch::resolve_daemon_dir(self.dir.as_deref(), self.path.as_deref());
+
+        RunOptions {
+            id: id.clone(),
+            cmd,
+            force: false,
+            shell_pid: None,
+            dir,
+            autostop: self.auto.contains(&PitchforkTomlAuto::Stop),
+            cron_schedule: self.cron.as_ref().map(|c| c.schedule.clone()),
+            cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
+            retry: self.retry.count(),
+            retry_count: 0,
+            ready_delay: self.ready_delay,
+            ready_output: self.ready_output.clone(),
+            ready_http: self.ready_http.clone(),
+            ready_port: self.ready_port,
+            ready_cmd: self.ready_cmd.clone(),
+            expected_port: self.expected_port.clone(),
+            auto_bump_port: self.auto_bump_port,
+            port_bump_attempts: self.port_bump_attempts,
+            wait_ready: false,
+            depends: self.depends.clone(),
+            env: self.env.clone(),
+            watch: self.watch.clone(),
+            watch_base_dir: self
+                .path
+                .as_ref()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+            mise: self.mise.unwrap_or(settings().general.mise),
+            memory_limit: self.memory_limit,
+            cpu_time_limit: self.cpu_time_limit,
+        }
+    }
 }
 
 fn example_run_command() -> &'static str {

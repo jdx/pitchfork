@@ -6,7 +6,6 @@
 //! - File watching for daemon auto-restart
 
 use super::{SUPERVISOR, Supervisor, interval_duration};
-use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
@@ -163,32 +162,11 @@ impl Supervisor {
                             // Use force: true for Always retrigger to ensure restart
                             let force =
                                 matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
-                            let opts = RunOptions {
-                                id: id.clone(),
-                                cmd,
-                                force,
-                                shell_pid: None,
-                                dir,
-                                autostop: daemon.autostop,
-                                cron_schedule: Some(schedule_str.clone()),
-                                cron_retrigger: Some(retrigger),
-                                retry: daemon.retry,
-                                retry_count: daemon.retry_count,
-                                ready_delay: daemon.ready_delay,
-                                ready_output: daemon.ready_output.clone(),
-                                ready_http: daemon.ready_http.clone(),
-                                ready_port: daemon.ready_port,
-                                ready_cmd: daemon.ready_cmd.clone(),
-                                expected_port: daemon.expected_port.clone(),
-                                auto_bump_port: daemon.auto_bump_port,
-                                port_bump_attempts: daemon.port_bump_attempts,
-                                wait_ready: false,
-                                depends: daemon.depends.clone(),
-                                env: daemon.env.clone(),
-                                watch: daemon.watch.clone(),
-                                watch_base_dir: daemon.watch_base_dir.clone(),
-                                mise: daemon.mise,
-                            };
+                            let mut opts = daemon.to_run_options(cmd);
+                            opts.dir = dir;
+                            opts.force = force;
+                            opts.cron_schedule = Some(schedule_str.clone());
+                            opts.cron_retrigger = Some(retrigger);
                             if let Err(e) = self.run(opts).await {
                                 error!("failed to run cron daemon {id}: {e}");
                             }
@@ -393,12 +371,6 @@ impl Supervisor {
             }
         };
 
-        let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-
-        // Extract values from daemon before stopping
-        let shell_pid = daemon.shell_pid;
-        let autostop = daemon.autostop;
-
         // Stop the daemon first
         let _ = self.stop(id).await;
 
@@ -406,32 +378,9 @@ impl Supervisor {
         time::sleep(settings().supervisor_restart_delay()).await;
 
         // Restart the daemon
-        let run_opts = RunOptions {
-            id: id.clone(),
-            cmd,
-            force: true,
-            shell_pid,
-            dir,
-            autostop,
-            cron_schedule: daemon.cron_schedule.clone(),
-            cron_retrigger: daemon.cron_retrigger,
-            retry: daemon.retry,
-            retry_count: 0,
-            ready_delay: daemon.ready_delay,
-            ready_output: daemon.ready_output.clone(),
-            ready_http: daemon.ready_http.clone(),
-            ready_port: daemon.ready_port,
-            ready_cmd: daemon.ready_cmd.clone(),
-            expected_port: daemon.expected_port.clone(),
-            auto_bump_port: daemon.auto_bump_port,
-            port_bump_attempts: daemon.port_bump_attempts,
-            wait_ready: false, // Don't block on file-triggered restarts
-            depends: daemon.depends.clone(),
-            env: daemon.env.clone(),
-            watch: daemon.watch.clone(),
-            watch_base_dir: daemon.watch_base_dir.clone(),
-            mise: daemon.mise,
-        };
+        let mut run_opts = daemon.to_run_options(cmd);
+        run_opts.force = true;
+        run_opts.retry_count = 0;
 
         match self.run(run_opts).await {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {

@@ -37,6 +37,10 @@
     "daemons"
   ],
   "$defs": {
+    "CpuTimeLimit": {
+      "description": "CPU time limit in human-readable duration format, e.g. '5m', '300s', '1h30m'",
+      "type": "string"
+    },
     "CronRetrigger": {
       "description": "Retrigger behavior for cron-scheduled daemons",
       "oneOf": [
@@ -66,6 +70,10 @@
       "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
       "type": "string",
       "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
+    },
+    "MemoryLimit": {
+      "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'",
+      "type": "string"
     },
     "PitchforkTomlAuto": {
       "description": "Auto start/stop configuration",
@@ -120,6 +128,17 @@
             "null"
           ]
         },
+        "cpu_time_limit": {
+          "description": "CPU time limit for the daemon process (e.g. \"5m\", \"300s\", \"1h30m\").\nSets RLIMIT_CPU on Unix. Exceeding the soft limit sends SIGXCPU; exceeding\nthe hard limit sends SIGKILL.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CpuTimeLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cron": {
           "description": "Cron scheduling configuration for periodic execution",
           "anyOf": [
@@ -171,6 +190,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PitchforkTomlHooks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_limit": {
+          "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nSets RLIMIT_AS on Unix to restrict the virtual address space of the child process.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryLimit"
             },
             {
               "type": "null"
