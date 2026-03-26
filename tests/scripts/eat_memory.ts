@@ -4,6 +4,11 @@
 const targetMB = parseInt(process.argv[2] ?? "64", 10);
 const buffers: Buffer[] = [];
 
+// Print startup message BEFORE allocating memory.
+// This ensures the log line is captured even if the process is killed
+// mid-allocation by a resource limit check.
+console.log(`Starting memory allocation of ${targetMB}MB`);
+
 // Allocate in 1MB chunks
 for (let i = 0; i < targetMB; i++) {
   const buf = Buffer.alloc(1024 * 1024); // 1MB

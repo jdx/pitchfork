@@ -208,35 +208,53 @@ ready_delay = 1
         String::from_utf8_lossy(&start_output.stderr)
     );
 
-    // Wait for:
-    // - Daemon starts and allocates memory (~1-2s)
+    // Wait for the full cycle:
+    // - Daemon starts and allocates memory (~1-3s, bun startup varies)
     // - Interval tick detects violation and kills it (~2s)
-    // - Monitor task sets Errored, retry checker restarts (~2s)
-    // - Second instance allocates memory (~1-2s)
+    // - Monitor task sets Errored, retry checker restarts (~2-4s)
+    // - Second instance starts and begins allocating (~1-3s)
     // - Interval tick detects violation again and kills it (~2s)
     // - Monitor task sets Errored, retries exhausted
-    // Total: ~10-12s, use 16s for safety
-    println!("Waiting 16 seconds for daemon to be killed, retried, and killed again...");
-    env.sleep(Duration::from_secs(16));
+    // Total: ~8-15s locally, but CI can be much slower.
+    // Poll instead of fixed sleep to be robust on slow CI machines.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let final_status = loop {
+        env.sleep(Duration::from_secs(2));
+        let status = env.get_daemon_status("mem_hog");
+        println!("  poll: status={status:?}");
+        if let Some(ref s) = status {
+            if s.contains("errored") {
+                // Check if retry has been attempted by looking at logs
+                let logs = env.read_logs("mem_hog");
+                let startup_count = logs.matches("Starting memory allocation of 64MB").count();
+                if startup_count >= 2 {
+                    break status;
+                }
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            break status;
+        }
+    };
+    println!("Final status: {final_status:?}");
 
-    // Check daemon status - should be Errored after exhausting retries
-    let status = env.get_daemon_status("mem_hog");
-    println!("Daemon status after 16s: {status:?}");
-
-    let status = status.unwrap();
+    let status = final_status.unwrap();
     assert!(
         status.contains("errored"),
         "Daemon should be Errored after resource violation + exhausted retries, but was: {status}"
     );
 
-    // Verify logs show TWO allocation messages (original + 1 retry)
+    // Verify logs show TWO startup messages (original + 1 retry).
+    // We check "Starting memory allocation" (printed before allocation begins)
+    // rather than "Allocated" (printed after), because the process may be killed
+    // mid-allocation before the "Allocated" message is output.
     let logs = env.read_logs("mem_hog");
     println!("Logs:\n{logs}");
 
-    let alloc_count = logs.matches("Allocated 64MB of memory").count();
+    let startup_count = logs.matches("Starting memory allocation of 64MB").count();
     assert_eq!(
-        alloc_count, 2,
-        "Logs should contain exactly 2 allocation messages (original + 1 retry), found {alloc_count}"
+        startup_count, 2,
+        "Logs should contain exactly 2 startup messages (original + 1 retry), found {startup_count}"
     );
 
     // Clean up

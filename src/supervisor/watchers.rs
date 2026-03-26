@@ -37,6 +37,9 @@ impl Supervisor {
     pub(crate) fn interval_watch(&self) -> Result<()> {
         tokio::spawn(async move {
             let mut interval = time::interval(interval_duration());
+            // Track consecutive CPU-over-limit samples per daemon.
+            // Kept outside the state file because it is ephemeral runtime data.
+            let mut cpu_violation_counts: HashMap<DaemonId, u32> = HashMap::new();
             loop {
                 interval.tick().await;
                 if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > interval_duration()
@@ -45,7 +48,10 @@ impl Supervisor {
                     error!("failed to refresh: {err}");
                 }
                 // Check resource limits (CPU and memory) for all running daemons
-                if let Err(err) = SUPERVISOR.check_resource_limits().await {
+                if let Err(err) = SUPERVISOR
+                    .check_resource_limits(&mut cpu_violation_counts)
+                    .await
+                {
                     error!("failed to check resource limits: {err}");
                 }
             }
@@ -60,7 +66,10 @@ impl Supervisor {
     /// the configured threshold. The kill is done without setting `Stopping` status,
     /// so the monitor task treats it as a failure (`Errored`), which allows retry
     /// logic to kick in if configured.
-    async fn check_resource_limits(&self) -> Result<()> {
+    async fn check_resource_limits(
+        &self,
+        cpu_violation_counts: &mut HashMap<DaemonId, u32>,
+    ) -> Result<()> {
         // Quick check: does any daemon have resource limits configured?
         // This avoids acquiring the state lock on every tick when no limits are set.
         let daemons: Vec<_> = {
@@ -95,13 +104,29 @@ impl Supervisor {
         // significant resources beyond the root PID.
         PROCS.refresh_processes();
 
+        // Collect all root PIDs and fetch stats in a single pass (O(N) instead
+        // of O(D × N) when calling get_group_stats per daemon).
+        let pids: Vec<u32> = daemons.iter().filter_map(|d| d.pid).collect();
+        let batch_stats = PROCS.get_batch_group_stats(&pids);
+        let stats_map: HashMap<u32, _> = batch_stats
+            .into_iter()
+            .filter_map(|(pid, stats)| stats.map(|s| (pid, s)))
+            .collect();
+
+        // Track which daemon IDs are still active so we can prune stale entries
+        // from cpu_violation_counts at the end.
+        let mut active_ids: HashSet<&DaemonId> = HashSet::new();
+
         for daemon in &daemons {
             let Some(pid) = daemon.pid else { continue };
-            let Some(stats) = PROCS.get_group_stats(pid) else {
+            let Some(stats) = stats_map.get(&pid) else {
                 continue;
             };
+            active_ids.insert(&daemon.id);
 
-            // Check memory limit (RSS)
+            // Check memory limit (RSS) — immediate kill, no grace period.
+            // Memory violations are not transient: once RSS exceeds the limit
+            // the process is unlikely to release it without intervention.
             if let Some(mem_limit) = daemon.memory_limit {
                 if stats.memory_bytes > mem_limit.0 {
                     warn!(
@@ -111,22 +136,43 @@ impl Supervisor {
                         stats.memory_display(),
                         mem_limit,
                     );
+                    cpu_violation_counts.remove(&daemon.id);
                     self.stop_for_resource_violation(&daemon.id, pid).await;
                     continue; // Don't check CPU if we're already killing
                 }
             }
 
-            // Check CPU limit (percentage)
+            // Check CPU limit (percentage) with consecutive-sample threshold.
+            // A single spike (JIT warm-up, burst response) should not kill the
+            // daemon; only sustained over-limit usage triggers enforcement.
             if let Some(cpu_limit) = daemon.cpu_limit {
+                let threshold = (settings().supervisor.cpu_violation_threshold).max(1) as u32;
                 if stats.cpu_percent > cpu_limit.0 {
-                    warn!(
-                        "daemon {} (pid {}) exceeded CPU limit: {:.1}% > {}%, stopping",
-                        daemon.id, pid, stats.cpu_percent, cpu_limit.0,
-                    );
-                    self.stop_for_resource_violation(&daemon.id, pid).await;
+                    let count = cpu_violation_counts.entry(daemon.id.clone()).or_insert(0);
+                    *count += 1;
+                    if *count >= threshold {
+                        warn!(
+                            "daemon {} (pid {}) exceeded CPU limit for {} consecutive checks: \
+                             {:.1}% > {}%, stopping",
+                            daemon.id, pid, count, stats.cpu_percent, cpu_limit.0,
+                        );
+                        cpu_violation_counts.remove(&daemon.id);
+                        self.stop_for_resource_violation(&daemon.id, pid).await;
+                    } else {
+                        debug!(
+                            "daemon {} (pid {}) CPU {:.1}% > {}% ({}/{} consecutive violations)",
+                            daemon.id, pid, stats.cpu_percent, cpu_limit.0, count, threshold,
+                        );
+                    }
+                } else {
+                    // Below limit — reset the counter
+                    cpu_violation_counts.remove(&daemon.id);
                 }
             }
         }
+
+        // Prune counters for daemons that are no longer running/tracked
+        cpu_violation_counts.retain(|id, _| active_ids.contains(id));
 
         Ok(())
     }

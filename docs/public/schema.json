@@ -458,6 +458,14 @@
     "SettingsSupervisorPartial": {
       "type": "object",
       "properties": {
+        "cpu_violation_threshold": {
+          "description": "Consecutive CPU-over-limit samples before killing a daemon",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "cron_check_interval": {
           "description": "Interval for checking cron schedules",
           "type": [

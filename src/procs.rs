@@ -275,37 +275,21 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
     }
 
-    /// Get aggregated stats for an entire process group (root PID + all descendants).
+    /// Get aggregated stats for multiple process groups in a single pass.
     ///
-    /// Since daemons are spawned with `setsid()`, the daemon PID == PGID.
-    /// This method sums RSS and CPU% across the root process and all its
-    /// descendants so that multi-process daemons (e.g. gunicorn workers,
-    /// nginx workers) are correctly accounted for in resource limit checks.
-    ///
-    /// Uptime is taken from the root process; disk I/O is summed.
-    pub fn get_group_stats(&self, pid: u32) -> Option<ProcessStats> {
+    /// Builds the parent→children map once (O(N)) and then BFS-es from each
+    /// root PID (O(D_i) per daemon). Total cost is O(N + ΣD_i) instead of
+    /// O(D × N) when calling `get_group_stats` in a loop.
+    pub fn get_batch_group_stats(&self, pids: &[u32]) -> Vec<(u32, Option<ProcessStats>)> {
         let system = self.lock_system();
-        let root_pid = sysinfo::Pid::from_u32(pid);
-        let root = system.process(root_pid)?;
+        let processes = system.processes();
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let root_disk = root.disk_usage();
-        let mut stats = ProcessStats {
-            cpu_percent: root.cpu_usage(),
-            memory_bytes: root.memory(),
-            uptime_secs: now.saturating_sub(root.start_time()),
-            disk_read_bytes: root_disk.read_bytes,
-            disk_write_bytes: root_disk.written_bytes,
-        };
-
-        // Build a parent → children map in O(N), then BFS from root_pid in O(D)
-        // where D is the number of descendants. This avoids the previous O(N × D)
-        // approach of walking the parent chain for every process.
-        let processes = system.processes();
+        // Build parent → children map once for all daemons
         let mut children_map: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> =
             std::collections::HashMap::new();
         for (child_pid, child) in processes {
@@ -314,26 +298,45 @@ impl Procs {
             }
         }
 
-        // BFS from root_pid to find all descendants
-        let mut queue = std::collections::VecDeque::new();
-        if let Some(direct_children) = children_map.get(&root_pid) {
-            queue.extend(direct_children);
-        }
-        while let Some(child_pid) = queue.pop_front() {
-            if let Some(child) = processes.get(&child_pid) {
-                let disk = child.disk_usage();
-                stats.cpu_percent += child.cpu_usage();
-                stats.memory_bytes += child.memory();
-                stats.disk_read_bytes += disk.read_bytes;
-                stats.disk_write_bytes += disk.written_bytes;
-            }
-            if let Some(grandchildren) = children_map.get(&child_pid) {
-                queue.extend(grandchildren);
-            }
-        }
+        pids.iter()
+            .map(|&pid| {
+                let root_pid = sysinfo::Pid::from_u32(pid);
+                let Some(root) = processes.get(&root_pid) else {
+                    return (pid, None);
+                };
 
-        Some(stats)
+                let root_disk = root.disk_usage();
+                let mut stats = ProcessStats {
+                    cpu_percent: root.cpu_usage(),
+                    memory_bytes: root.memory(),
+                    uptime_secs: now.saturating_sub(root.start_time()),
+                    disk_read_bytes: root_disk.read_bytes,
+                    disk_write_bytes: root_disk.written_bytes,
+                };
+
+                // BFS from root_pid to find all descendants
+                let mut queue = std::collections::VecDeque::new();
+                if let Some(direct_children) = children_map.get(&root_pid) {
+                    queue.extend(direct_children);
+                }
+                while let Some(child_pid) = queue.pop_front() {
+                    if let Some(child) = processes.get(&child_pid) {
+                        let disk = child.disk_usage();
+                        stats.cpu_percent += child.cpu_usage();
+                        stats.memory_bytes += child.memory();
+                        stats.disk_read_bytes += disk.read_bytes;
+                        stats.disk_write_bytes += disk.written_bytes;
+                    }
+                    if let Some(grandchildren) = children_map.get(&child_pid) {
+                        queue.extend(grandchildren);
+                    }
+                }
+
+                (pid, Some(stats))
+            })
+            .collect()
     }
+
     /// Get process stats (cpu%, memory bytes, uptime secs, disk I/O) for a given PID
     pub fn get_stats(&self, pid: u32) -> Option<ProcessStats> {
         let system = self.lock_system();

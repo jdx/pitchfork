@@ -365,7 +365,7 @@ memory_limit = "2GiB"
 **Supported formats:** `"50MB"`, `"512MB"`, `"1GiB"`, `"256KiB"`, etc. Both SI (MB, GB) and binary (MiB, GiB) units are accepted.
 
 **Behavior:**
-- The supervisor checks RSS at each interval tick (default ~1s)
+- The supervisor checks RSS at each interval tick (configured by `general.interval`, default `10s`)
 - When a daemon's RSS exceeds the limit, the process group is killed via `SIGTERM` (then `SIGKILL` if unresponsive)
 - The daemon is marked as `Errored`, so if `retry` is configured, it will be restarted (consuming a retry attempt)
 - Works reliably with all runtimes (JVM, Node.js, Go, Python, etc.) since it measures actual physical memory, not virtual address space
@@ -390,8 +390,9 @@ cpu_limit = 200    # Up to 2 CPU cores
 **Supported values:** Any positive number. `100` = 100% of one CPU core. Values above 100 are valid on multi-core systems (e.g. `200` allows up to 2 full cores).
 
 **Behavior:**
-- The supervisor checks CPU usage at each interval tick (default ~1s)
-- When a daemon's CPU usage exceeds the limit, the process group is killed via `SIGTERM` (then `SIGKILL` if unresponsive)
+- The supervisor checks CPU usage at each interval tick (configured by `general.interval`, default `10s`)
+- To avoid killing daemons during transient spikes (e.g. JIT warm-up, burst responses), the process is only killed after **3 consecutive** samples exceed the limit. A single sample below the limit resets the counter. This threshold is configurable via `settings.supervisor.cpu_violation_threshold` (default: `3`).
+- When the consecutive threshold is reached, the process group is killed via `SIGTERM` (then `SIGKILL` if unresponsive)
 - The daemon is marked as `Errored`, so if `retry` is configured, it will be restarted (consuming a retry attempt)
 - CPU usage is measured as a percentage of one core (not system-wide)
 - For multi-process daemons (e.g. gunicorn workers, nginx workers), CPU usage is aggregated across the root process and all its descendants, consistent with the process-group kill used for enforcement
