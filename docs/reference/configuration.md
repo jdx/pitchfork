@@ -350,7 +350,7 @@ This is especially useful for daemons running via `pitchfork boot` (login daemon
 
 ### `memory_limit`
 
-Maximum physical memory (RSS) for the daemon process. Accepts human-readable byte sizes. The supervisor periodically monitors the daemon's RSS and stops it if it exceeds the limit.
+Maximum physical memory (RSS) for the daemon process. Accepts human-readable byte sizes. The supervisor periodically monitors the daemon's RSS and kills it if it exceeds the limit.
 
 ```toml
 [daemons.worker]
@@ -366,8 +366,8 @@ memory_limit = "2GiB"
 
 **Behavior:**
 - The supervisor checks RSS at each interval tick (default ~1s)
-- When a daemon's RSS exceeds the limit, it is stopped via `SIGTERM` (then `SIGKILL` if unresponsive)
-- If `retry` is configured, the daemon will be restarted after being stopped
+- When a daemon's RSS exceeds the limit, the process group is killed via `SIGTERM` (then `SIGKILL` if unresponsive)
+- The daemon is marked as `Errored`, so if `retry` is configured, it will be restarted (consuming a retry attempt)
 - Works reliably with all runtimes (JVM, Node.js, Go, Python, etc.) since it measures actual physical memory, not virtual address space
 - For multi-process daemons (e.g. gunicorn workers, nginx workers), RSS is aggregated across the root process and all its descendants, consistent with the process-group kill used for enforcement
 - Only affects the daemon's process group, not the pitchfork supervisor itself
@@ -375,7 +375,7 @@ memory_limit = "2GiB"
 
 ### `cpu_limit`
 
-Maximum CPU usage as a percentage for the daemon process. The supervisor periodically monitors the daemon's CPU usage and stops it if it exceeds the limit.
+Maximum CPU usage as a percentage for the daemon process. The supervisor periodically monitors the daemon's CPU usage and kills it if it exceeds the limit.
 
 ```toml
 [daemons.worker]
@@ -391,8 +391,8 @@ cpu_limit = 200    # Up to 2 CPU cores
 
 **Behavior:**
 - The supervisor checks CPU usage at each interval tick (default ~1s)
-- When a daemon's CPU usage exceeds the limit, it is stopped via `SIGTERM` (then `SIGKILL` if unresponsive)
-- If `retry` is configured, the daemon will be restarted after being stopped
+- When a daemon's CPU usage exceeds the limit, the process group is killed via `SIGTERM` (then `SIGKILL` if unresponsive)
+- The daemon is marked as `Errored`, so if `retry` is configured, it will be restarted (consuming a retry attempt)
 - CPU usage is measured as a percentage of one core (not system-wide)
 - For multi-process daemons (e.g. gunicorn workers, nginx workers), CPU usage is aggregated across the root process and all its descendants, consistent with the process-group kill used for enforcement
 - Only affects the daemon's process group, not the pitchfork supervisor itself

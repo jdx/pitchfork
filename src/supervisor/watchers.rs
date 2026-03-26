@@ -56,12 +56,22 @@ impl Supervisor {
     /// Check resource limits (CPU and memory) for all running daemons.
     ///
     /// For each daemon with a `memory_limit` or `cpu_limit` configured, this method
-    /// reads the current RSS / CPU% from sysinfo and stops the daemon (with retry
-    /// support) if it exceeds the configured threshold.
+    /// reads the current RSS / CPU% from sysinfo and kills the daemon if it exceeds
+    /// the configured threshold. The kill is done without setting `Stopping` status,
+    /// so the monitor task treats it as a failure (`Errored`), which allows retry
+    /// logic to kick in if configured.
     async fn check_resource_limits(&self) -> Result<()> {
-        let pitchfork_id = DaemonId::pitchfork();
+        // Quick check: does any daemon have resource limits configured?
+        // This avoids acquiring the state lock on every tick when no limits are set.
         let daemons: Vec<_> = {
+            let pitchfork_id = DaemonId::pitchfork();
             let state = self.state_file.lock().await;
+            let has_any_limits = state.daemons.values().any(|d| {
+                d.id != pitchfork_id && (d.memory_limit.is_some() || d.cpu_limit.is_some())
+            });
+            if !has_any_limits {
+                return Ok(());
+            }
             state
                 .daemons
                 .values()
@@ -101,8 +111,8 @@ impl Supervisor {
                         stats.memory_display(),
                         mem_limit,
                     );
-                    self.stop_for_resource_violation(&daemon.id).await;
-                    continue; // Don't check CPU if we're already stopping
+                    self.stop_for_resource_violation(&daemon.id, pid).await;
+                    continue; // Don't check CPU if we're already killing
                 }
             }
 
@@ -113,7 +123,7 @@ impl Supervisor {
                         "daemon {} (pid {}) exceeded CPU limit: {:.1}% > {}%, stopping",
                         daemon.id, pid, stats.cpu_percent, cpu_limit.0,
                     );
-                    self.stop_for_resource_violation(&daemon.id).await;
+                    self.stop_for_resource_violation(&daemon.id, pid).await;
                 }
             }
         }
@@ -121,17 +131,16 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Stop a daemon due to a resource limit violation.
+    /// Kill a daemon due to a resource limit violation.
     ///
-    /// Uses the normal stop flow so retry logic can still kick in if configured.
-    async fn stop_for_resource_violation(&self, id: &DaemonId) {
-        match self.stop(id).await {
-            Ok(_) => {
-                info!("stopped daemon {id} due to resource limit violation");
-            }
-            Err(e) => {
-                error!("failed to stop daemon {id} after resource violation: {e}");
-            }
+    /// Unlike `stop()`, this does NOT set the daemon status to `Stopping` first.
+    /// Instead, it kills the process group directly, which causes the monitor task
+    /// to observe a non-zero exit and set the status to `Errored`. This allows
+    /// the retry checker to restart the daemon if `retry` is configured.
+    async fn stop_for_resource_violation(&self, id: &DaemonId, pid: u32) {
+        info!("killing daemon {id} (pid {pid}) due to resource limit violation");
+        if let Err(e) = PROCS.kill_process_group_async(pid).await {
+            error!("failed to kill daemon {id} (pid {pid}) after resource violation: {e}");
         }
     }
 

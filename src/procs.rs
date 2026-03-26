@@ -302,40 +302,38 @@ impl Procs {
             disk_write_bytes: root_disk.written_bytes,
         };
 
-        // Walk all processes to find descendants of the root PID.
-        // A process is a descendant if walking its parent chain reaches root_pid.
-        for (child_pid, child) in system.processes() {
-            if *child_pid == root_pid {
-                continue;
+        // Build a parent → children map in O(N), then BFS from root_pid in O(D)
+        // where D is the number of descendants. This avoids the previous O(N × D)
+        // approach of walking the parent chain for every process.
+        let processes = system.processes();
+        let mut children_map: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> =
+            std::collections::HashMap::new();
+        for (child_pid, child) in processes {
+            if let Some(ppid) = child.parent() {
+                children_map.entry(ppid).or_default().push(*child_pid);
             }
-            // Walk parent chain to check if this process is a descendant
-            let mut proc = child;
-            let mut is_descendant = false;
-            loop {
-                match proc.parent() {
-                    Some(ppid) if ppid == root_pid => {
-                        is_descendant = true;
-                        break;
-                    }
-                    Some(ppid) => match system.process(ppid) {
-                        Some(p) => proc = p,
-                        None => break,
-                    },
-                    None => break,
-                }
-            }
-            if is_descendant {
+        }
+
+        // BFS from root_pid to find all descendants
+        let mut queue = std::collections::VecDeque::new();
+        if let Some(direct_children) = children_map.get(&root_pid) {
+            queue.extend(direct_children);
+        }
+        while let Some(child_pid) = queue.pop_front() {
+            if let Some(child) = processes.get(&child_pid) {
                 let disk = child.disk_usage();
                 stats.cpu_percent += child.cpu_usage();
                 stats.memory_bytes += child.memory();
                 stats.disk_read_bytes += disk.read_bytes;
                 stats.disk_write_bytes += disk.written_bytes;
             }
+            if let Some(grandchildren) = children_map.get(&child_pid) {
+                queue.extend(grandchildren);
+            }
         }
 
         Some(stats)
     }
-
     /// Get process stats (cpu%, memory bytes, uptime secs, disk I/O) for a given PID
     pub fn get_stats(&self, pid: u32) -> Option<ProcessStats> {
         let system = self.lock_system();
