@@ -98,44 +98,21 @@ pub fn build_run_options(
     let cmd = shell_words::split(&daemon_config.run)
         .map_err(|e| format!("Failed to parse command: {e}"))?;
 
-    let dir = resolve_daemon_dir(daemon_config.dir.as_deref(), daemon_config.path.as_deref());
-
-    Ok(RunOptions {
-        id: id.clone(),
-        cmd,
-        shell_pid: opts.shell_pid,
-        force: opts.force,
-        autostop: daemon_config
-            .auto
-            .contains(&crate::pitchfork_toml::PitchforkTomlAuto::Stop),
-        dir,
-        cron_schedule: daemon_config.cron.as_ref().map(|c| c.schedule.clone()),
-        cron_retrigger: daemon_config.cron.as_ref().map(|c| c.retrigger),
-        retry: daemon_config.retry.count(),
-        retry_count: 0,
-        ready_delay: opts.delay.or(daemon_config.ready_delay).or(Some(3)),
-        ready_output: opts.output.clone().or(daemon_config.ready_output.clone()),
-        ready_http: opts.http.clone().or(daemon_config.ready_http.clone()),
-        ready_port: opts.port.or(daemon_config.ready_port),
-        ready_cmd: opts.cmd.clone().or(daemon_config.ready_cmd.clone()),
-        expected_port: opts
-            .expected_port
-            .clone()
-            .unwrap_or_else(|| daemon_config.expected_port.clone()),
-        auto_bump_port: opts.auto_bump_port || daemon_config.auto_bump_port,
-        port_bump_attempts: opts
-            .port_bump_attempts
-            .unwrap_or(daemon_config.port_bump_attempts),
-        wait_ready: true,
-        depends: daemon_config.depends.clone(),
-        env: daemon_config.env.clone(),
-        watch: daemon_config.watch.clone(),
-        watch_base_dir: daemon_config
-            .path
-            .as_ref()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf())),
-        mise: daemon_config.mise.unwrap_or(settings().general.mise),
-    })
+    let mut run_opts = daemon_config.to_run_options(id, cmd);
+    run_opts.shell_pid = opts.shell_pid;
+    run_opts.force = opts.force;
+    run_opts.wait_ready = true;
+    run_opts.ready_delay = opts.delay.or(run_opts.ready_delay).or(Some(3));
+    run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
+    run_opts.ready_http = opts.http.clone().or(run_opts.ready_http);
+    run_opts.ready_port = opts.port.or(run_opts.ready_port);
+    run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
+    run_opts.expected_port = opts.expected_port.clone().unwrap_or(run_opts.expected_port);
+    run_opts.auto_bump_port = opts.auto_bump_port || run_opts.auto_bump_port;
+    run_opts.port_bump_attempts = opts
+        .port_bump_attempts
+        .unwrap_or(run_opts.port_bump_attempts);
+    Ok(run_opts)
 }
 
 impl IpcClient {
@@ -512,11 +489,7 @@ impl IpcClient {
                 force,
                 shell_pid,
                 dir,
-                autostop: false,
-                cron_schedule: None,
-                cron_retrigger: None,
                 retry,
-                retry_count: 0,
                 ready_delay: delay.or(Some(3)),
                 ready_output: output,
                 ready_http: http,
@@ -526,11 +499,9 @@ impl IpcClient {
                 auto_bump_port,
                 port_bump_attempts,
                 wait_ready: true,
-                depends: vec![],
                 env,
-                watch: vec![],
-                watch_base_dir: None,
                 mise: settings().general.mise,
+                ..RunOptions::default()
             };
 
             let result = ipc.run(run_opts).await;
@@ -712,11 +683,7 @@ impl IpcClient {
             shell_pid: opts.shell_pid,
             force: opts.force,
             dir,
-            autostop: false,
-            cron_schedule: None,
-            cron_retrigger: None,
             retry: opts.retry.unwrap_or(0),
-            retry_count: 0,
             ready_delay: opts.delay.or(Some(3)),
             ready_output: opts.output,
             ready_http: opts.http,
@@ -728,11 +695,8 @@ impl IpcClient {
                 .port_bump_attempts
                 .unwrap_or_else(|| settings().default_port_bump_attempts()),
             wait_ready: true,
-            depends: vec![],
-            env: None,
-            watch: vec![],
-            watch_base_dir: None,
             mise: settings().general.mise,
+            ..RunOptions::default()
         })
         .await
     }

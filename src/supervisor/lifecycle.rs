@@ -272,16 +272,16 @@ impl Supervisor {
             }
         }
 
-        // Put each daemon in its own session/process group so we can kill the
-        // entire tree atomically with a single signal to the group.
         #[cfg(unix)]
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        {
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
 
         let mut child = cmd.spawn().into_diagnostic()?;
@@ -323,6 +323,8 @@ impl Supervisor {
                         o.watch = Some(opts.watch.clone());
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = Some(opts.mise);
+                        o.memory_limit = opts.memory_limit;
+                        o.cpu_limit = opts.cpu_limit;
                     })
                     .build(),
             )

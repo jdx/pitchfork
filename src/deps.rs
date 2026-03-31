@@ -152,34 +152,18 @@ pub fn resolve_dependencies(
 mod tests {
     use super::*;
     use crate::daemon_id::DaemonId;
-    use crate::pitchfork_toml::{PitchforkTomlDaemon, Retry};
+    use crate::pitchfork_toml::PitchforkTomlDaemon;
     use indexmap::IndexMap;
 
     fn make_daemon(depends: Vec<&str>) -> PitchforkTomlDaemon {
         PitchforkTomlDaemon {
             run: "echo test".to_string(),
-            auto: vec![],
-            cron: None,
-            retry: Retry::default(),
-            ready_delay: None,
-            ready_output: None,
-            ready_http: None,
-            ready_port: None,
-            ready_cmd: None,
-            expected_port: Vec::new(),
-            auto_bump_port: false,
             port_bump_attempts: 10,
-            boot_start: None,
             depends: depends
                 .into_iter()
                 .map(|s| DaemonId::new("global", s))
                 .collect(),
-            watch: vec![],
-            dir: None,
-            env: None,
-            hooks: None,
-            path: None,
-            mise: None,
+            ..PitchforkTomlDaemon::default()
         }
     }
 
@@ -281,25 +265,9 @@ mod tests {
             id("api"),
             PitchforkTomlDaemon {
                 run: "echo test".to_string(),
-                auto: vec![],
-                cron: None,
-                retry: Retry::default(),
-                ready_delay: None,
-                ready_output: None,
-                ready_http: None,
-                ready_port: None,
-                ready_cmd: None,
-                expected_port: Vec::new(),
-                auto_bump_port: false,
                 port_bump_attempts: 10,
-                boot_start: None,
                 depends: vec![DaemonId::new("global", "nonexistent")],
-                watch: vec![],
-                path: None,
-                dir: None,
-                env: None,
-                hooks: None,
-                mise: None,
+                ..PitchforkTomlDaemon::default()
             },
         );
 

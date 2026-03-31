@@ -4,7 +4,6 @@
 
 use super::Supervisor;
 use super::hooks::{HookType, fire_hook};
-use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::supervisor::state::UpsertDaemonOpts;
@@ -73,42 +72,18 @@ impl Supervisor {
                         continue;
                     }
                 };
-                let dir = daemon.dir.unwrap_or_else(|| env::CWD.clone());
+                let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                 fire_hook(
                     HookType::OnRetry,
                     id.clone(),
-                    dir.clone(),
+                    dir,
                     daemon.retry_count + 1,
                     daemon.env.clone(),
                     vec![],
                 )
                 .await;
-                let retry_opts = RunOptions {
-                    id: id.clone(),
-                    cmd,
-                    force: false,
-                    shell_pid: daemon.shell_pid,
-                    dir,
-                    autostop: daemon.autostop,
-                    cron_schedule: daemon.cron_schedule,
-                    cron_retrigger: daemon.cron_retrigger,
-                    retry: daemon.retry,
-                    retry_count: daemon.retry_count + 1,
-                    ready_delay: daemon.ready_delay,
-                    ready_output: daemon.ready_output.clone(),
-                    ready_http: daemon.ready_http.clone(),
-                    ready_port: daemon.ready_port,
-                    ready_cmd: daemon.ready_cmd.clone(),
-                    expected_port: daemon.expected_port.clone(),
-                    auto_bump_port: daemon.auto_bump_port,
-                    port_bump_attempts: daemon.port_bump_attempts,
-                    wait_ready: false,
-                    depends: daemon.depends.clone(),
-                    env: daemon.env.clone(),
-                    watch: daemon.watch.clone(),
-                    watch_base_dir: daemon.watch_base_dir.clone(),
-                    mise: daemon.mise,
-                };
+                let mut retry_opts = daemon.to_run_options(cmd);
+                retry_opts.retry_count = daemon.retry_count + 1;
                 if let Err(e) = self.run(retry_opts).await {
                     error!("failed to retry daemon {id}: {e}");
                 }

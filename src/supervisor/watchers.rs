@@ -6,10 +6,10 @@
 //! - File watching for daemon auto-restart
 
 use super::{SUPERVISOR, Supervisor, interval_duration};
-use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::watch_files::{WatchFiles, expand_watch_patterns, path_matches_patterns};
 use crate::{Result, env};
@@ -33,10 +33,13 @@ impl Supervisor {
             .collect()
     }
 
-    /// Start the interval watcher for periodic refresh
+    /// Start the interval watcher for periodic refresh and resource monitoring
     pub(crate) fn interval_watch(&self) -> Result<()> {
         tokio::spawn(async move {
             let mut interval = time::interval(interval_duration());
+            // Track consecutive CPU-over-limit samples per daemon.
+            // Kept outside the state file because it is ephemeral runtime data.
+            let mut cpu_violation_counts: HashMap<DaemonId, u32> = HashMap::new();
             loop {
                 interval.tick().await;
                 if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > interval_duration()
@@ -44,9 +47,147 @@ impl Supervisor {
                 {
                     error!("failed to refresh: {err}");
                 }
+                // Check resource limits (CPU and memory) for all running daemons
+                if let Err(err) = SUPERVISOR
+                    .check_resource_limits(&mut cpu_violation_counts)
+                    .await
+                {
+                    error!("failed to check resource limits: {err}");
+                }
             }
         });
         Ok(())
+    }
+
+    /// Check resource limits (CPU and memory) for all running daemons.
+    ///
+    /// For each daemon with a `memory_limit` or `cpu_limit` configured, this method
+    /// reads the current RSS / CPU% from sysinfo and kills the daemon if it exceeds
+    /// the configured threshold. The kill is done without setting `Stopping` status,
+    /// so the monitor task treats it as a failure (`Errored`), which allows retry
+    /// logic to kick in if configured.
+    async fn check_resource_limits(
+        &self,
+        cpu_violation_counts: &mut HashMap<DaemonId, u32>,
+    ) -> Result<()> {
+        // Quick check: does any daemon have resource limits configured?
+        // This avoids acquiring the state lock on every tick when no limits are set.
+        let daemons: Vec<_> = {
+            let pitchfork_id = DaemonId::pitchfork();
+            let state = self.state_file.lock().await;
+            let has_any_limits = state.daemons.values().any(|d| {
+                d.id != pitchfork_id && (d.memory_limit.is_some() || d.cpu_limit.is_some())
+            });
+            if !has_any_limits {
+                return Ok(());
+            }
+            state
+                .daemons
+                .values()
+                .filter(|d| {
+                    d.id != pitchfork_id
+                        && d.pid.is_some()
+                        && d.status.is_running()
+                        && (d.memory_limit.is_some() || d.cpu_limit.is_some())
+                })
+                .cloned()
+                .collect()
+        };
+
+        if daemons.is_empty() {
+            return Ok(());
+        }
+
+        // Refresh all processes so we can walk the process tree for each daemon.
+        // This is necessary to aggregate stats across multi-process daemons
+        // (e.g. gunicorn/nginx workers) where child processes may consume
+        // significant resources beyond the root PID.
+        PROCS.refresh_processes();
+
+        // Collect all root PIDs and fetch stats in a single pass (O(N) instead
+        // of O(D × N) when calling get_group_stats per daemon).
+        let pids: Vec<u32> = daemons.iter().filter_map(|d| d.pid).collect();
+        let batch_stats = PROCS.get_batch_group_stats(&pids);
+        let stats_map: HashMap<u32, _> = batch_stats
+            .into_iter()
+            .filter_map(|(pid, stats)| stats.map(|s| (pid, s)))
+            .collect();
+
+        // Track which daemon IDs are still active so we can prune stale entries
+        // from cpu_violation_counts at the end.
+        let mut active_ids: HashSet<&DaemonId> = HashSet::new();
+
+        for daemon in &daemons {
+            let Some(pid) = daemon.pid else { continue };
+            let Some(stats) = stats_map.get(&pid) else {
+                continue;
+            };
+            active_ids.insert(&daemon.id);
+
+            // Check memory limit (RSS) — immediate kill, no grace period.
+            // Memory violations are not transient: once RSS exceeds the limit
+            // the process is unlikely to release it without intervention.
+            if let Some(mem_limit) = daemon.memory_limit {
+                if stats.memory_bytes > mem_limit.0 {
+                    warn!(
+                        "daemon {} (pid {}) exceeded memory limit: {} > {}, stopping",
+                        daemon.id,
+                        pid,
+                        stats.memory_display(),
+                        mem_limit,
+                    );
+                    cpu_violation_counts.remove(&daemon.id);
+                    self.stop_for_resource_violation(&daemon.id, pid).await;
+                    continue; // Don't check CPU if we're already killing
+                }
+            }
+
+            // Check CPU limit (percentage) with consecutive-sample threshold.
+            // A single spike (JIT warm-up, burst response) should not kill the
+            // daemon; only sustained over-limit usage triggers enforcement.
+            if let Some(cpu_limit) = daemon.cpu_limit {
+                let threshold = (settings().supervisor.cpu_violation_threshold).max(1) as u32;
+                if stats.cpu_percent > cpu_limit.0 {
+                    let count = cpu_violation_counts.entry(daemon.id.clone()).or_insert(0);
+                    *count += 1;
+                    if *count >= threshold {
+                        warn!(
+                            "daemon {} (pid {}) exceeded CPU limit for {} consecutive checks: \
+                             {:.1}% > {}%, stopping",
+                            daemon.id, pid, count, stats.cpu_percent, cpu_limit.0,
+                        );
+                        cpu_violation_counts.remove(&daemon.id);
+                        self.stop_for_resource_violation(&daemon.id, pid).await;
+                    } else {
+                        debug!(
+                            "daemon {} (pid {}) CPU {:.1}% > {}% ({}/{} consecutive violations)",
+                            daemon.id, pid, stats.cpu_percent, cpu_limit.0, count, threshold,
+                        );
+                    }
+                } else {
+                    // Below limit — reset the counter
+                    cpu_violation_counts.remove(&daemon.id);
+                }
+            }
+        }
+
+        // Prune counters for daemons that are no longer running/tracked
+        cpu_violation_counts.retain(|id, _| active_ids.contains(id));
+
+        Ok(())
+    }
+
+    /// Kill a daemon due to a resource limit violation.
+    ///
+    /// Unlike `stop()`, this does NOT set the daemon status to `Stopping` first.
+    /// Instead, it kills the process group directly, which causes the monitor task
+    /// to observe a non-zero exit and set the status to `Errored`. This allows
+    /// the retry checker to restart the daemon if `retry` is configured.
+    async fn stop_for_resource_violation(&self, id: &DaemonId, pid: u32) {
+        info!("killing daemon {id} (pid {pid}) due to resource limit violation");
+        if let Err(e) = PROCS.kill_process_group_async(pid).await {
+            error!("failed to kill daemon {id} (pid {pid}) after resource violation: {e}");
+        }
     }
 
     /// Start the cron watcher for scheduled daemon execution
@@ -163,32 +304,11 @@ impl Supervisor {
                             // Use force: true for Always retrigger to ensure restart
                             let force =
                                 matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
-                            let opts = RunOptions {
-                                id: id.clone(),
-                                cmd,
-                                force,
-                                shell_pid: None,
-                                dir,
-                                autostop: daemon.autostop,
-                                cron_schedule: Some(schedule_str.clone()),
-                                cron_retrigger: Some(retrigger),
-                                retry: daemon.retry,
-                                retry_count: daemon.retry_count,
-                                ready_delay: daemon.ready_delay,
-                                ready_output: daemon.ready_output.clone(),
-                                ready_http: daemon.ready_http.clone(),
-                                ready_port: daemon.ready_port,
-                                ready_cmd: daemon.ready_cmd.clone(),
-                                expected_port: daemon.expected_port.clone(),
-                                auto_bump_port: daemon.auto_bump_port,
-                                port_bump_attempts: daemon.port_bump_attempts,
-                                wait_ready: false,
-                                depends: daemon.depends.clone(),
-                                env: daemon.env.clone(),
-                                watch: daemon.watch.clone(),
-                                watch_base_dir: daemon.watch_base_dir.clone(),
-                                mise: daemon.mise,
-                            };
+                            let mut opts = daemon.to_run_options(cmd);
+                            opts.dir = dir;
+                            opts.force = force;
+                            opts.cron_schedule = Some(schedule_str.clone());
+                            opts.cron_retrigger = Some(retrigger);
                             if let Err(e) = self.run(opts).await {
                                 error!("failed to run cron daemon {id}: {e}");
                             }
@@ -393,12 +513,6 @@ impl Supervisor {
             }
         };
 
-        let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-
-        // Extract values from daemon before stopping
-        let shell_pid = daemon.shell_pid;
-        let autostop = daemon.autostop;
-
         // Stop the daemon first
         let _ = self.stop(id).await;
 
@@ -406,32 +520,9 @@ impl Supervisor {
         time::sleep(settings().supervisor_restart_delay()).await;
 
         // Restart the daemon
-        let run_opts = RunOptions {
-            id: id.clone(),
-            cmd,
-            force: true,
-            shell_pid,
-            dir,
-            autostop,
-            cron_schedule: daemon.cron_schedule.clone(),
-            cron_retrigger: daemon.cron_retrigger,
-            retry: daemon.retry,
-            retry_count: 0,
-            ready_delay: daemon.ready_delay,
-            ready_output: daemon.ready_output.clone(),
-            ready_http: daemon.ready_http.clone(),
-            ready_port: daemon.ready_port,
-            ready_cmd: daemon.ready_cmd.clone(),
-            expected_port: daemon.expected_port.clone(),
-            auto_bump_port: daemon.auto_bump_port,
-            port_bump_attempts: daemon.port_bump_attempts,
-            wait_ready: false, // Don't block on file-triggered restarts
-            depends: daemon.depends.clone(),
-            env: daemon.env.clone(),
-            watch: daemon.watch.clone(),
-            watch_base_dir: daemon.watch_base_dir.clone(),
-            mise: daemon.mise,
-        };
+        let mut run_opts = daemon.to_run_options(cmd);
+        run_opts.force = true;
+        run_opts.retry_count = 0;
 
         match self.run(run_opts).await {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {

@@ -4,11 +4,82 @@ use crate::settings::SettingsPartial;
 use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::{Result, env};
+use humanbyte::HumanByte;
 use indexmap::IndexMap;
 use miette::Context;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::path::{Path, PathBuf};
+
+/// A byte-size type that accepts human-readable strings like "50MB", "1GiB", etc.
+///
+/// Backed by `u64` and uses the `humanbyte` crate for parsing and display.
+/// Used for `memory_limit` configuration in daemon definitions.
+#[derive(Clone, Copy, PartialEq, Eq, HumanByte)]
+pub struct MemoryLimit(pub u64);
+
+impl JsonSchema for MemoryLimit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("MemoryLimit")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'"
+        })
+    }
+}
+
+/// A CPU usage limit expressed as a percentage (e.g. `80.0` means 80% of one CPU core).
+///
+/// The supervisor periodically checks each daemon's CPU usage and kills processes
+/// that exceed this limit. Values above 100% are valid on multi-core systems
+/// (e.g. `200.0` allows up to 2 full cores).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuLimit(pub f32);
+
+impl std::fmt::Display for CpuLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}%", self.0)
+    }
+}
+
+impl Serialize for CpuLimit {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_f64(self.0 as f64)
+    }
+}
+
+impl<'de> Deserialize<'de> for CpuLimit {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v = f64::deserialize(deserializer)?;
+        if v <= 0.0 {
+            return Err(serde::de::Error::custom("cpu_limit must be positive"));
+        }
+        Ok(CpuLimit(v as f32))
+    }
+}
+
+impl JsonSchema for CpuLimit {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("CpuLimit")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "number",
+            "description": "CPU usage limit as a percentage (e.g. 80 for 80% of one core, 200 for 2 cores)",
+            "exclusiveMinimum": 0
+        })
+    }
+}
 
 /// Internal structure for reading config files (uses String keys for short daemon names)
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -66,6 +137,12 @@ struct PitchforkTomlDaemonRaw {
     pub hooks: Option<PitchforkTomlHooks>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cpu_limit: Option<CpuLimit>,
 }
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files.
@@ -702,6 +779,8 @@ impl PitchforkToml {
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
+                memory_limit: raw_daemon.memory_limit,
+                cpu_limit: raw_daemon.cpu_limit,
                 path: Some(path.to_path_buf()),
             };
             pt.daemons.insert(id, daemon);
@@ -788,6 +867,8 @@ impl PitchforkToml {
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
                     mise: daemon.mise,
+                    memory_limit: daemon.memory_limit,
+                    cpu_limit: daemon.cpu_limit,
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
@@ -891,8 +972,91 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
+    /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
+    /// The supervisor periodically monitors RSS and kills the process if it exceeds the limit.
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores).
+    /// The supervisor periodically monitors CPU usage and kills the process if it exceeds the limit.
+    pub cpu_limit: Option<CpuLimit>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
+}
+
+impl Default for PitchforkTomlDaemon {
+    fn default() -> Self {
+        Self {
+            run: String::new(),
+            auto: Vec::new(),
+            cron: None,
+            retry: Retry::default(),
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
+            expected_port: Vec::new(),
+            auto_bump_port: false,
+            port_bump_attempts: 10,
+            boot_start: None,
+            depends: Vec::new(),
+            watch: Vec::new(),
+            dir: None,
+            env: None,
+            hooks: None,
+            mise: None,
+            memory_limit: None,
+            cpu_limit: None,
+            path: None,
+        }
+    }
+}
+
+impl PitchforkTomlDaemon {
+    /// Build RunOptions from this daemon configuration.
+    ///
+    /// Carries over all config fields and resolves the working directory.
+    /// Callers can override specific fields on the returned value.
+    pub fn to_run_options(
+        &self,
+        id: &crate::daemon_id::DaemonId,
+        cmd: Vec<String>,
+    ) -> crate::daemon::RunOptions {
+        use crate::daemon::RunOptions;
+
+        let dir = crate::ipc::batch::resolve_daemon_dir(self.dir.as_deref(), self.path.as_deref());
+
+        RunOptions {
+            id: id.clone(),
+            cmd,
+            force: false,
+            shell_pid: None,
+            dir,
+            autostop: self.auto.contains(&PitchforkTomlAuto::Stop),
+            cron_schedule: self.cron.as_ref().map(|c| c.schedule.clone()),
+            cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
+            retry: self.retry.count(),
+            retry_count: 0,
+            ready_delay: self.ready_delay,
+            ready_output: self.ready_output.clone(),
+            ready_http: self.ready_http.clone(),
+            ready_port: self.ready_port,
+            ready_cmd: self.ready_cmd.clone(),
+            expected_port: self.expected_port.clone(),
+            auto_bump_port: self.auto_bump_port,
+            port_bump_attempts: self.port_bump_attempts,
+            wait_ready: false,
+            depends: self.depends.clone(),
+            env: self.env.clone(),
+            watch: self.watch.clone(),
+            watch_base_dir: self
+                .path
+                .as_ref()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+            mise: self.mise.unwrap_or(settings().general.mise),
+            memory_limit: self.memory_limit,
+            cpu_limit: self.cpu_limit,
+        }
+    }
 }
 
 fn example_run_command() -> &'static str {

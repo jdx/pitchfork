@@ -36,6 +36,15 @@ pub struct DaemonId {
     name: String,
 }
 
+impl Default for DaemonId {
+    fn default() -> Self {
+        Self {
+            namespace: "global".to_string(),
+            name: "unknown".to_string(),
+        }
+    }
+}
+
 impl DaemonId {
     /// Creates a new DaemonId from namespace and name.
     ///

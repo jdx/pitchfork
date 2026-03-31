@@ -285,6 +285,8 @@ mod tests {
                 watch: vec![],
                 watch_base_dir: None,
                 mise: false,
+                memory_limit: None,
+                cpu_limit: None,
             },
         );
 

@@ -173,3 +173,90 @@ retry = 1
     // Clean up
     let _ = env.run_command(&["stop", "retry_after_ready"]);
 }
+
+#[test]
+fn test_resource_violation_triggers_retry() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let eat_memory_script = get_script_path("eat_memory.ts");
+
+    // Daemon allocates 64MB but has a 20MB memory limit, with retry=1.
+    // The supervisor should kill it for exceeding the limit, and the monitor
+    // task should set it to Errored (not Stopped), allowing retry to kick in.
+    let toml_content = format!(
+        r#"
+[daemons.mem_hog]
+run = "bun run {} 64"
+memory_limit = "20MB"
+retry = 1
+ready_delay = 1
+"#,
+        eat_memory_script.display()
+    );
+    env.create_toml(&toml_content);
+
+    // Start the daemon with fast interval (2s) so resource checks happen quickly
+    let start_output = env.run_command_with_env(&["start", "mem_hog"], &[FAST_INTERVAL]);
+
+    println!(
+        "Start stdout: {}",
+        String::from_utf8_lossy(&start_output.stdout)
+    );
+    println!(
+        "Start stderr: {}",
+        String::from_utf8_lossy(&start_output.stderr)
+    );
+
+    // Wait for the full cycle:
+    // - Daemon starts and allocates memory (~1-3s, bun startup varies)
+    // - Interval tick detects violation and kills it (~2s)
+    // - Monitor task sets Errored, retry checker restarts (~2-4s)
+    // - Second instance starts and begins allocating (~1-3s)
+    // - Interval tick detects violation again and kills it (~2s)
+    // - Monitor task sets Errored, retries exhausted
+    // Total: ~8-15s locally, but CI can be much slower.
+    // Poll instead of fixed sleep to be robust on slow CI machines.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let final_status = loop {
+        env.sleep(Duration::from_secs(2));
+        let status = env.get_daemon_status("mem_hog");
+        println!("  poll: status={status:?}");
+        if let Some(ref s) = status {
+            if s.contains("errored") {
+                // Check if retry has been attempted by looking at logs
+                let logs = env.read_logs("mem_hog");
+                let startup_count = logs.matches("Starting memory allocation of 64MB").count();
+                if startup_count >= 2 {
+                    break status;
+                }
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            break status;
+        }
+    };
+    println!("Final status: {final_status:?}");
+
+    let status = final_status.unwrap();
+    assert!(
+        status.contains("errored"),
+        "Daemon should be Errored after resource violation + exhausted retries, but was: {status}"
+    );
+
+    // Verify logs show TWO startup messages (original + 1 retry).
+    // We check "Starting memory allocation" (printed before allocation begins)
+    // rather than "Allocated" (printed after), because the process may be killed
+    // mid-allocation before the "Allocated" message is output.
+    let logs = env.read_logs("mem_hog");
+    println!("Logs:\n{logs}");
+
+    let startup_count = logs.matches("Starting memory allocation of 64MB").count();
+    assert_eq!(
+        startup_count, 2,
+        "Logs should contain exactly 2 startup messages (original + 1 retry), found {startup_count}"
+    );
+
+    // Clean up
+    let _ = env.run_command(&["stop", "mem_hog"]);
+}

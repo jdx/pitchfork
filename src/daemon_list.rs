@@ -105,33 +105,12 @@ fn build_daemon_list(
         // Create a placeholder daemon for config-only entries
         let placeholder = Daemon {
             id: daemon_id.clone(),
-            title: None,
-            pid: None,
-            shell_pid: None,
             status: DaemonStatus::Stopped,
-            dir: None,
-            cmd: None,
-            autostop: false,
-            cron_schedule: None,
-            cron_retrigger: None,
-            last_cron_triggered: None,
-            last_exit_success: None,
-            retry: 0,
-            retry_count: 0,
-            ready_delay: None,
-            ready_output: None,
-            ready_http: None,
-            ready_port: None,
-            ready_cmd: None,
-            expected_port: Vec::new(),
-            resolved_port: Vec::new(),
-            auto_bump_port: false,
             port_bump_attempts: settings().default_port_bump_attempts(),
-            depends: vec![],
-            env: None,
-            watch: vec![],
-            watch_base_dir: None,
             mise: daemon_config.mise.unwrap_or(settings().general.mise),
+            memory_limit: daemon_config.memory_limit,
+            cpu_limit: daemon_config.cpu_limit,
+            ..Daemon::default()
         };
 
         entries.push(DaemonListEntry {

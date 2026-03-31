@@ -461,3 +461,24 @@ try ports 3000, 3001, 3002, ... up to 3009 before reporting failure.
 This is a global default; individual daemons can override it with
 `port_bump_attempts` in their daemon configuration.
 """
+
+[supervisor.cpu_violation_threshold]
+type = "Integer"
+env = "PITCHFORK_CPU_VIOLATION_THRESHOLD"
+default = "3"
+description = "Consecutive CPU-over-limit samples before killing a daemon"
+docs = """
+When a daemon has `cpu_limit` configured, the supervisor checks CPU usage at
+each interval tick. To avoid killing daemons during transient spikes (e.g. JIT
+warm-up, burst responses), the process is only killed after this many
+**consecutive** samples exceed the limit. A single sample below the limit
+resets the counter.
+
+**Examples:**
+- `1` - Kill immediately on first over-limit sample (no grace period)
+- `3` - Require 3 consecutive over-limit samples (default)
+- `5` - More tolerant of short bursts
+
+With the default interval of `10s`, a threshold of `3` means a daemon must
+exceed its CPU limit for ~30 seconds before being killed.
+"""

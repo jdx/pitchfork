@@ -7,7 +7,9 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
+use crate::pitchfork_toml::CpuLimit;
 use crate::pitchfork_toml::CronRetrigger;
+use crate::pitchfork_toml::MemoryLimit;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::settings::settings;
@@ -48,6 +50,10 @@ pub(crate) struct UpsertDaemonOpts {
     pub watch: Option<Vec<String>>,
     pub watch_base_dir: Option<PathBuf>,
     pub mise: Option<bool>,
+    /// Memory limit for the daemon process
+    pub memory_limit: Option<MemoryLimit>,
+    /// CPU usage limit as a percentage
+    pub cpu_limit: Option<CpuLimit>,
 }
 
 /// Builder for UpsertDaemonOpts - ensures daemon ID is always provided.
@@ -97,6 +103,8 @@ impl UpsertDaemonOpts {
                 watch: None,
                 watch_base_dir: None,
                 mise: None,
+                memory_limit: None,
+                cpu_limit: None,
             },
         }
     }
@@ -195,6 +203,8 @@ impl Supervisor {
             mise: opts
                 .mise
                 .unwrap_or(existing.map(|d| d.mise).unwrap_or(settings().general.mise)),
+            memory_limit: opts.memory_limit.or(existing.and_then(|d| d.memory_limit)),
+            cpu_limit: opts.cpu_limit.or(existing.and_then(|d| d.cpu_limit)),
         };
         state_file.daemons.insert(opts.id.clone(), daemon.clone());
         if let Err(err) = state_file.write() {

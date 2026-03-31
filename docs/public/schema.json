@@ -37,6 +37,11 @@
     "daemons"
   ],
   "$defs": {
+    "CpuLimit": {
+      "description": "CPU usage limit as a percentage (e.g. 80 for 80% of one core, 200 for 2 cores)",
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
     "CronRetrigger": {
       "description": "Retrigger behavior for cron-scheduled daemons",
       "oneOf": [
@@ -66,6 +71,10 @@
       "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
       "type": "string",
       "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
+    },
+    "MemoryLimit": {
+      "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'",
+      "type": "string"
     },
     "PitchforkTomlAuto": {
       "description": "Auto start/stop configuration",
@@ -120,6 +129,17 @@
             "null"
           ]
         },
+        "cpu_limit": {
+          "description": "CPU usage limit as a percentage (e.g. 80 for 80%, 200 for 2 cores).\nThe supervisor periodically monitors CPU usage and kills the process if it exceeds the limit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CpuLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "cron": {
           "description": "Cron scheduling configuration for periodic execution",
           "anyOf": [
@@ -171,6 +191,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PitchforkTomlHooks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "memory_limit": {
+          "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nThe supervisor periodically monitors RSS and kills the process if it exceeds the limit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MemoryLimit"
             },
             {
               "type": "null"
@@ -427,6 +458,14 @@
     "SettingsSupervisorPartial": {
       "type": "object",
       "properties": {
+        "cpu_violation_threshold": {
+          "description": "Consecutive CPU-over-limit samples before killing a daemon",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "cron_check_interval": {
           "description": "Interval for checking cron schedules",
           "type": [
