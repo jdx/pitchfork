@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0](https://github.com/jdx/pitchfork/compare/v2.2.0...v2.3.0) - 2026-03-31
+
+### Added
+
+- impl memory/cpu limit ([#294](https://github.com/jdx/pitchfork/pull/294))
+
 ## [2.2.0](https://github.com/jdx/pitchfork/compare/v2.1.0...v2.2.0) - 2026-03-24
 
 ### Added
