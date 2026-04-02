@@ -167,9 +167,8 @@ impl IpcServer {
             let window_ms = u64::try_from(s.ipc_rate_limit_window().as_millis()).unwrap_or(1000);
             let window_ms = if window_ms < 100 {
                 warn!(
-                    "ipc.rate_limit_window is {}ms which is too small (< 100ms), \
-                    clamping to 100ms to avoid effectively disabling rate limiting",
-                    window_ms
+                    "ipc.rate_limit_window is {window_ms}ms which is too small (< 100ms), \
+                    clamping to 100ms to avoid effectively disabling rate limiting"
                 );
                 100
             } else {

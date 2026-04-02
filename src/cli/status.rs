@@ -33,7 +33,7 @@ impl Status {
 
         let daemon = StateFile::get().daemons.get(&qualified_id);
         if let Some(daemon) = daemon {
-            println!("Name: {}", qualified_id);
+            println!("Name: {qualified_id}");
             if let Some(pid) = &daemon.pid {
                 println!("PID: {pid}");
             }

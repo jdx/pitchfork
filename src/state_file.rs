@@ -291,10 +291,10 @@ mod tests {
         );
 
         let toml_str = toml::to_string(&state).unwrap();
-        println!("Serialized TOML:\n{}", toml_str);
+        println!("Serialized TOML:\n{toml_str}");
 
         let parsed: StateFile = toml::from_str(&toml_str).expect("Failed to parse TOML");
-        println!("Parsed: {:?}", parsed);
+        println!("Parsed: {parsed:?}");
 
         assert!(
             parsed

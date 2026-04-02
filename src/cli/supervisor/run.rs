@@ -14,6 +14,9 @@ pub struct Run {
     /// run as boot start (auto-start boot_start daemons)
     #[clap(long)]
     boot: bool,
+    /// Enable container/PID1 mode (reap zombies, forward signals)
+    #[clap(long, env = "PITCHFORK_CONTAINER")]
+    container: bool,
     /// Enable web UI on specified port (tries up to 10 ports if in use)
     #[clap(long, env = "PITCHFORK_WEB_PORT")]
     web_port: Option<u16>,
@@ -33,7 +36,12 @@ impl Run {
         }
 
         SUPERVISOR
-            .start(self.boot, self.web_port, self.web_path.clone())
+            .start(
+                self.boot,
+                self.container,
+                self.web_port,
+                self.web_path.clone(),
+            )
             .await
     }
 }

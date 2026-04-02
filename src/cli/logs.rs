@@ -462,9 +462,9 @@ impl Logs {
         if raw {
             for (date, id, msg) in log_lines {
                 if single_daemon {
-                    println!("{} {}", date, msg);
+                    println!("{date} {msg}");
                 } else {
-                    println!("{} {} {}", date, id, msg);
+                    println!("{date} {id} {msg}");
                 }
             }
             return Ok(());
@@ -511,10 +511,7 @@ impl Logs {
                 }
             }
             Err(e) => {
-                debug!(
-                    "Failed to spawn pager: {}, falling back to direct output",
-                    e
-                );
+                debug!("Failed to spawn pager: {e}, falling back to direct output");
                 for (date, id, msg) in log_lines {
                     println!("{}", format_log_line(&date, &id, &msg, single_daemon));
                 }
@@ -613,10 +610,7 @@ impl Logs {
                 }
             }
             Err(e) => {
-                debug!(
-                    "Failed to spawn pager: {}, falling back to direct output",
-                    e
-                );
+                debug!("Failed to spawn pager: {e}, falling back to direct output");
                 return self.stream_logs_direct(log_files, single_daemon, raw);
             }
         }
@@ -699,9 +693,9 @@ impl Logs {
         for (timestamp, daemon, message) in merger {
             let output = if raw {
                 if single_daemon {
-                    format!("{} {}\n", timestamp, message)
+                    format!("{timestamp} {message}\n")
                 } else {
-                    format!("{} {} {}\n", timestamp, daemon, message)
+                    format!("{timestamp} {daemon} {message}\n")
                 }
             } else {
                 format!(
@@ -957,8 +951,7 @@ fn migrate_legacy_log_dirs() {
                 continue;
             }
             warn!(
-                "Skipping invalid legacy log directory '{}': contains '--' but is not a valid daemon safe-path",
-                name
+                "Skipping invalid legacy log directory '{name}': contains '--' but is not a valid daemon safe-path"
             );
             continue;
         }
@@ -970,10 +963,7 @@ fn migrate_legacy_log_dirs() {
             continue;
         }
         if DaemonId::try_new("legacy", &name).is_err() {
-            warn!(
-                "Skipping invalid legacy log directory '{}': not a valid daemon ID",
-                name
-            );
+            warn!("Skipping invalid legacy log directory '{name}': not a valid daemon ID");
             continue;
         }
 
@@ -992,7 +982,7 @@ fn migrate_legacy_log_dirs() {
         if old_log.exists() {
             let _ = std::fs::rename(&old_log, &new_log);
         }
-        debug!("Migrated legacy log dir '{}' → '{}'", name, new_name);
+        debug!("Migrated legacy log dir '{name}' → '{new_name}'");
     }
 }
 

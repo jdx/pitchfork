@@ -15,6 +15,10 @@ kill existing daemon
 
 run as boot start (auto-start boot_start daemons)
 
+### `--container`
+
+Enable container/PID1 mode (reap zombies, forward signals)
+
 ### `--web-port <WEB_PORT>`
 
 Enable web UI on specified port (tries up to 10 ports if in use)

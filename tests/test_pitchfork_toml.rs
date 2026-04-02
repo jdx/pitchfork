@@ -1043,7 +1043,7 @@ fn test_global_namespace_from_config_path() {
     let user_global = env::PITCHFORK_GLOBAL_CONFIG_USER.as_path();
 
     // Test that the function returns the expected namespace
-    let namespace = namespace_from_path(&user_global).unwrap();
+    let namespace = namespace_from_path(user_global).unwrap();
     assert_eq!(
         namespace, "global",
         "Global config path should return 'global' namespace, got: {namespace}"

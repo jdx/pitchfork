@@ -5,6 +5,8 @@ use crate::pitchfork_toml::PitchforkTomlDaemon;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use crate::pitchfork_toml::PitchforkToml;
+
 /// Result of dependency resolution
 #[derive(Debug)]
 pub struct DependencyOrder {
@@ -148,22 +150,133 @@ pub fn resolve_dependencies(
     Ok(DependencyOrder { levels })
 }
 
+/// Compute the order in which daemons should be stopped, respecting
+/// reverse dependency order (dependents first, then their dependencies).
+///
+/// This is a shared helper used by both the supervisor's `close()` and
+/// the IPC `stop_daemons()` batch operation.
+///
+/// Returns a list of levels in reverse dependency order. Each level is a
+/// `Vec<DaemonId>` of daemons that can be stopped concurrently.
+/// Ad-hoc daemons (not in config) are placed in the first level.
+///
+/// Falls back to a single level containing all IDs if config loading
+/// or dependency resolution fails.
+pub fn compute_reverse_stop_order(active_ids: &[DaemonId]) -> Vec<Vec<DaemonId>> {
+    compute_reverse_stop_order_with_config(active_ids, None)
+}
+
+/// Like [`compute_reverse_stop_order`] but accepts a pre-loaded config to
+/// avoid redundant disk I/O when the caller already has one.
+pub fn compute_reverse_stop_order_with_config(
+    active_ids: &[DaemonId],
+    config: Option<&PitchforkToml>,
+) -> Vec<Vec<DaemonId>> {
+    if active_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let owned_pt;
+    let pt = match config {
+        Some(pt) => pt,
+        None => match PitchforkToml::all_merged() {
+            Ok(loaded) => {
+                owned_pt = loaded;
+                &owned_pt
+            }
+            Err(e) => {
+                warn!(
+                    "failed to load config for dependency-ordered shutdown, stopping in arbitrary order: {e}"
+                );
+                return vec![active_ids.to_vec()];
+            }
+        },
+    };
+
+    let active_set: HashSet<&DaemonId> = active_ids.iter().collect();
+    let config_ids: Vec<DaemonId> = active_ids
+        .iter()
+        .filter(|id| pt.daemons.contains_key(*id))
+        .cloned()
+        .collect();
+    let adhoc_ids: Vec<DaemonId> = active_ids
+        .iter()
+        .filter(|id| !pt.daemons.contains_key(*id))
+        .cloned()
+        .collect();
+
+    if config_ids.is_empty() {
+        // All ad-hoc daemons, no dependency ordering needed
+        return vec![active_ids.to_vec()];
+    }
+
+    match resolve_dependencies(&config_ids, &pt.daemons) {
+        Ok(dep_order) => {
+            let mut levels: Vec<Vec<DaemonId>> = Vec::new();
+
+            // Stop ad-hoc daemons first (they have no dependency info)
+            if !adhoc_ids.is_empty() {
+                levels.push(adhoc_ids);
+            }
+
+            // Then stop config daemons in reverse dependency order
+            for level in dep_order.levels.into_iter().rev() {
+                let filtered: Vec<DaemonId> = level
+                    .into_iter()
+                    .filter(|id| active_set.contains(id))
+                    .collect();
+                if !filtered.is_empty() {
+                    levels.push(filtered);
+                }
+            }
+
+            debug!("shutdown order: {levels:?}");
+            levels
+        }
+        Err(e) => {
+            warn!("dependency resolution failed during shutdown, stopping in arbitrary order: {e}");
+            vec![active_ids.to_vec()]
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::daemon_id::DaemonId;
-    use crate::pitchfork_toml::PitchforkTomlDaemon;
+    use crate::pitchfork_toml::{PitchforkTomlDaemon, Retry};
     use indexmap::IndexMap;
+
+    // Helper to build a test daemon with only `depends` set, all other fields default/None.
+    // Keeps tests concise while satisfying all required struct fields.
 
     fn make_daemon(depends: Vec<&str>) -> PitchforkTomlDaemon {
         PitchforkTomlDaemon {
             run: "echo test".to_string(),
+            auto: vec![],
+            cron: None,
+            retry: Retry::default(),
+            ready_delay: None,
+            ready_output: None,
+            ready_http: None,
+            ready_port: None,
+            ready_cmd: None,
+            expected_port: Vec::new(),
+            auto_bump_port: false,
             port_bump_attempts: 10,
+            boot_start: None,
             depends: depends
                 .into_iter()
                 .map(|s| DaemonId::new("global", s))
                 .collect(),
-            ..PitchforkTomlDaemon::default()
+            watch: vec![],
+            dir: None,
+            env: None,
+            hooks: None,
+            path: None,
+            mise: None,
+            memory_limit: None,
+            cpu_limit: None,
         }
     }
 
@@ -261,15 +374,9 @@ mod tests {
     #[test]
     fn test_missing_dependency_error() {
         let mut daemons = IndexMap::new();
-        daemons.insert(
-            id("api"),
-            PitchforkTomlDaemon {
-                run: "echo test".to_string(),
-                port_bump_attempts: 10,
-                depends: vec![DaemonId::new("global", "nonexistent")],
-                ..PitchforkTomlDaemon::default()
-            },
-        );
+        let mut daemon = make_daemon(vec![]);
+        daemon.depends = vec![DaemonId::new("global", "nonexistent")];
+        daemons.insert(id("api"), daemon);
 
         let result = resolve_dependencies(&[id("api")], &daemons);
 

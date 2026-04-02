@@ -2013,6 +2013,7 @@ dependencies = [
  "log",
  "miette",
  "mime_guess",
+ "nix",
  "notify",
  "notify-debouncer-full",
  "once_cell",

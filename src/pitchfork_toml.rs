@@ -299,8 +299,7 @@ fn namespace_from_file(path: &Path) -> Result<String> {
             path: path.to_path_buf(),
             namespace: local_ns.to_string(),
             reason: format!(
-                "namespace '{}' does not match sibling pitchfork.toml namespace '{}'",
-                local_ns, base_ns
+                "namespace '{local_ns}' does not match sibling pitchfork.toml namespace '{base_ns}'"
             ),
         }
         .into());
@@ -699,8 +698,7 @@ impl PitchforkToml {
                     path: path.to_path_buf(),
                     namespace: local_ns.to_string(),
                     reason: format!(
-                        "namespace '{}' does not match sibling pitchfork.toml namespace '{}'",
-                        local_ns, base_ns
+                        "namespace '{local_ns}' does not match sibling pitchfork.toml namespace '{base_ns}'"
                     ),
                 }
                 .into());

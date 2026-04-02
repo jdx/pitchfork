@@ -462,6 +462,22 @@ This is a global default; individual daemons can override it with
 `port_bump_attempts` in their daemon configuration.
 """
 
+[supervisor.container]
+type = "Bool"
+env = "PITCHFORK_CONTAINER"
+default = "false"
+description = "Enable container/PID1 mode for running inside Docker containers"
+docs = """
+When enabled, pitchfork operates as a proper PID 1 process inside a container:
+- Installs a SIGCHLD handler to reap all orphaned/zombie child processes
+- Routes SIGTERM/SIGINT through the graceful shutdown sequence
+
+This is essential when running pitchfork as the entrypoint of a Docker container,
+where PID 1 must reap zombie processes to prevent process table exhaustion.
+
+Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`.
+"""
+
 [supervisor.cpu_violation_threshold]
 type = "Integer"
 env = "PITCHFORK_CPU_VIOLATION_THRESHOLD"
