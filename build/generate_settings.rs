@@ -202,7 +202,7 @@ fn generate_nested_structs(
         if let Some(child_table) = value.as_table()
             && !is_leaf_setting(child_table)
         {
-            let child_prefix = format!("{}_{}", prefix, key);
+            let child_prefix = format!("{prefix}_{key}");
             tokens.extend(generate_nested_structs(&child_prefix, child_table)?);
         }
     }
@@ -279,7 +279,7 @@ fn generate_nested_defaults(
         if let Some(child_table) = value.as_table()
             && !is_leaf_setting(child_table)
         {
-            let child_prefix = format!("{}_{}", prefix, key);
+            let child_prefix = format!("{prefix}_{key}");
             tokens.extend(generate_nested_defaults(&child_prefix, child_table)?);
         }
     }
@@ -356,12 +356,12 @@ fn parse_default(default: &str, typ: &str) -> Result<TokenStream, Box<dyn std::e
         "Bool" => match default {
             "true" => quote! { true },
             "false" => quote! { false },
-            _ => return Err(format!("Invalid bool default: {}", default).into()),
+            _ => return Err(format!("Invalid bool default: {default}").into()),
         },
         "Integer" => {
             let n: i64 = default
                 .parse()
-                .map_err(|_| format!("Invalid integer default: {}", default))?;
+                .map_err(|_| format!("Invalid integer default: {default}"))?;
             quote! { #n }
         }
         "String" | "Duration" => {
@@ -383,7 +383,7 @@ fn parse_default(default: &str, typ: &str) -> Result<TokenStream, Box<dyn std::e
                 quote! { std::path::PathBuf::from(#default) }
             }
         }
-        _ => return Err(format!("Unsupported type for default: {}", typ).into()),
+        _ => return Err(format!("Unsupported type for default: {typ}").into()),
     })
 }
 
@@ -400,7 +400,7 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                         .get("type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("String");
-                    let field_path: TokenStream = format!("{}.{}", path, key).parse().unwrap();
+                    let field_path: TokenStream = format!("{path}.{key}").parse().unwrap();
 
                     // Check for deprecated env var (must be a different name from env)
                     let deprecated_env = props
@@ -533,7 +533,7 @@ fn generate_load_from_env(table: &Table, path: &str) -> TokenStream {
                 }
             } else {
                 // Nested group - recurse
-                let nested_path = format!("{}.{}", path, key);
+                let nested_path = format!("{path}.{key}");
                 let nested = generate_load_from_env(props, &nested_path);
                 stmts.push(nested);
             }
@@ -569,7 +569,7 @@ fn generate_partial_struct_and_nested(
     }
 
     // Generate THIS level's partial struct: `{struct_name}Partial`
-    let partial_struct_name = format!("{}Partial", struct_name);
+    let partial_struct_name = format!("{struct_name}Partial");
     let partial_ident = format_ident!("{}", partial_struct_name);
     let mut fields = Vec::new();
 
@@ -626,8 +626,8 @@ fn generate_partial_merge_from_body(
     for (key, value) in table {
         if let Some(props) = value.as_table() {
             if is_leaf_setting(props) {
-                let self_field: TokenStream = format!("{}.{}", self_path, key).parse().unwrap();
-                let other_field: TokenStream = format!("{}.{}", other_path, key).parse().unwrap();
+                let self_field: TokenStream = format!("{self_path}.{key}").parse().unwrap();
+                let other_field: TokenStream = format!("{other_path}.{key}").parse().unwrap();
                 stmts.push(quote! {
                     if #other_field.is_some() {
                         #self_field = #other_field.clone();
@@ -637,8 +637,8 @@ fn generate_partial_merge_from_body(
                 // Nested group: recurse
                 let nested = generate_partial_merge_from_body(
                     props,
-                    &format!("{}.{}", self_path, key),
-                    &format!("{}.{}", other_path, key),
+                    &format!("{self_path}.{key}"),
+                    &format!("{other_path}.{key}"),
                 );
                 stmts.push(nested);
             }
@@ -656,9 +656,8 @@ fn generate_apply_partial_body(table: &Table, self_path: &str, partial_path: &st
     for (key, value) in table {
         if let Some(props) = value.as_table() {
             if is_leaf_setting(props) {
-                let self_field: TokenStream = format!("{}.{}", self_path, key).parse().unwrap();
-                let partial_field: TokenStream =
-                    format!("{}.{}", partial_path, key).parse().unwrap();
+                let self_field: TokenStream = format!("{self_path}.{key}").parse().unwrap();
+                let partial_field: TokenStream = format!("{partial_path}.{key}").parse().unwrap();
                 let type_str = props
                     .get("type")
                     .and_then(|v| v.as_str())
@@ -698,8 +697,8 @@ fn generate_apply_partial_body(table: &Table, self_path: &str, partial_path: &st
                 // Nested group: recurse
                 let nested = generate_apply_partial_body(
                     props,
-                    &format!("{}.{}", self_path, key),
-                    &format!("{}.{}", partial_path, key),
+                    &format!("{self_path}.{key}"),
+                    &format!("{partial_path}.{key}"),
                 );
                 stmts.push(nested);
             }
@@ -730,9 +729,9 @@ fn generate_duration_helpers(settings: &Table) -> TokenStream {
                             format_ident!("{}_{}", prefix.replace('.', "_"), key)
                         };
                         let field_path: TokenStream = if prefix.is_empty() {
-                            format!("self.{}", key).parse().unwrap()
+                            format!("self.{key}").parse().unwrap()
                         } else {
-                            format!("self.{}.{}", prefix, key).parse().unwrap()
+                            format!("self.{prefix}.{key}").parse().unwrap()
                         };
 
                         // Get default from the field definition for fallback.
@@ -741,27 +740,25 @@ fn generate_duration_helpers(settings: &Table) -> TokenStream {
                         let setting_path = if prefix.is_empty() {
                             key.to_string()
                         } else {
-                            format!("{}.{}", prefix, key)
+                            format!("{prefix}.{key}")
                         };
                         let default_str = props
                             .get("default")
                             .and_then(|v| v.as_str())
                             .unwrap_or_else(|| panic!(
-                                "settings.toml: Duration field '{}' is missing a 'default' value",
-                                setting_path
+                                "settings.toml: Duration field '{setting_path}' is missing a 'default' value"
                             ));
                         // Remove any surrounding quotes from the default value
                         let default_duration = default_str.trim_matches('"');
 
                         let fallback: TokenStream = format!(
-                            "humantime::parse_duration(\"{}\").unwrap_or(std::time::Duration::from_secs(1))",
-                            default_duration
+                            "humantime::parse_duration(\"{default_duration}\").unwrap_or(std::time::Duration::from_secs(1))"
                         ).parse().unwrap();
 
                         let doc_comment = if prefix.is_empty() {
-                            format!("Get `{}` as Duration", key)
+                            format!("Get `{key}` as Duration")
                         } else {
-                            format!("Get `{}.{}` as Duration", prefix, key)
+                            format!("Get `{prefix}.{key}` as Duration")
                         };
 
                         methods.push(quote! {
@@ -781,7 +778,7 @@ fn generate_duration_helpers(settings: &Table) -> TokenStream {
                     let new_prefix = if prefix.is_empty() {
                         key.to_string()
                     } else {
-                        format!("{}.{}", prefix, key)
+                        format!("{prefix}.{key}")
                     };
                     collect_duration_fields(props, &new_prefix, methods);
                 }
@@ -806,7 +803,7 @@ fn generate_metadata(settings: &Table) -> Result<String, Box<dyn std::error::Err
                 let full_name = if prefix.is_empty() {
                     key.to_string()
                 } else {
-                    format!("{}.{}", prefix, key)
+                    format!("{prefix}.{key}")
                 };
 
                 if is_leaf_setting(props) {
@@ -881,6 +878,6 @@ fn parse_type(typ: &str) -> Result<TokenStream, Box<dyn std::error::Error>> {
         "String" => quote! { String },
         "Duration" => quote! { String }, // Stored as humantime string
         "Path" => quote! { std::path::PathBuf },
-        _ => return Err(format!("Unsupported type: {}", typ).into()),
+        _ => return Err(format!("Unsupported type: {typ}").into()),
     })
 }

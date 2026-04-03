@@ -299,8 +299,7 @@ fn namespace_from_file(path: &Path) -> Result<String> {
             path: path.to_path_buf(),
             namespace: local_ns.to_string(),
             reason: format!(
-                "namespace '{}' does not match sibling pitchfork.toml namespace '{}'",
-                local_ns, base_ns
+                "namespace '{local_ns}' does not match sibling pitchfork.toml namespace '{base_ns}'"
             ),
         }
         .into());
@@ -699,8 +698,7 @@ impl PitchforkToml {
                     path: path.to_path_buf(),
                     namespace: local_ns.to_string(),
                     reason: format!(
-                        "namespace '{}' does not match sibling pitchfork.toml namespace '{}'",
-                        local_ns, base_ns
+                        "namespace '{local_ns}' does not match sibling pitchfork.toml namespace '{base_ns}'"
                     ),
                 }
                 .into());
@@ -1048,10 +1046,9 @@ impl PitchforkTomlDaemon {
             depends: self.depends.clone(),
             env: self.env.clone(),
             watch: self.watch.clone(),
-            watch_base_dir: self
-                .path
-                .as_ref()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+            watch_base_dir: Some(crate::ipc::batch::resolve_config_base_dir(
+                self.path.as_deref(),
+            )),
             mise: self.mise.unwrap_or(settings().general.mise),
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,

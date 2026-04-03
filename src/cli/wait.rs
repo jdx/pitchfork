@@ -39,7 +39,7 @@ impl Wait {
         let pid = if let Some(pid) = sf.daemons.get(&qualified_id).and_then(|d| d.pid) {
             pid
         } else {
-            warn!("{} is not running", qualified_id);
+            warn!("{qualified_id} is not running");
             return Ok(());
         };
 

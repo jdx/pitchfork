@@ -185,8 +185,7 @@ on_retry = "sh -c 'echo retry >> {}'"
     assert_eq!(
         lines.len(),
         2,
-        "Should have 2 retry hook invocations (retry=2), got: {:?}",
-        lines
+        "Should have 2 retry hook invocations (retry=2), got: {lines:?}"
     );
 }
 
@@ -644,7 +643,6 @@ on_exit = "sh -c 'echo x >> {}'"
     let fire_count = content.lines().count();
     assert_eq!(
         fire_count, 1,
-        "on_exit should fire exactly once (after retries exhausted), not on each crash attempt, got {} fires",
-        fire_count
+        "on_exit should fire exactly once (after retries exhausted), not on each crash attempt, got {fire_count} fires"
     );
 }

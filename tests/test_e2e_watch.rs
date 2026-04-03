@@ -43,13 +43,12 @@ ready_port = {}
     let output = env.run_command(&["start", "watch_test"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("start stderr: {}", stderr);
-    println!("start stdout: {}", stdout);
+    println!("start stderr: {stderr}");
+    println!("start stdout: {stdout}");
 
     assert!(
         output.status.success(),
-        "Start command should succeed: {}",
-        stderr
+        "Start command should succeed: {stderr}"
     );
 
     // Get the original PID
@@ -98,7 +97,7 @@ ready_port = {}
     // Clean up
     let output = env.run_command(&["stop", "watch_test"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("stop stderr: {}", stderr);
+    println!("stop stderr: {stderr}");
 }
 
 /// Test that watch configuration persists after supervisor restart.
@@ -134,7 +133,7 @@ ready_delay = 1
     // Read the state file directly to verify watch config was persisted
     let state_path = env.state_file_path();
     let state_contents = fs::read_to_string(&state_path).expect("State file should exist");
-    println!("State file contents:\n{}", state_contents);
+    println!("State file contents:\n{state_contents}");
 
     // Verify watch patterns are in the state file
     assert!(
@@ -161,13 +160,9 @@ ready_delay = 1
     // Restart the daemon - this should restore watch config from state
     let output = env.run_command(&["start", "persist_test"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("restart stderr: {}", stderr);
+    println!("restart stderr: {stderr}");
 
-    assert!(
-        output.status.success(),
-        "Restart should succeed: {}",
-        stderr
-    );
+    assert!(output.status.success(), "Restart should succeed: {stderr}");
 
     // Verify daemon is running
     env.wait_for_status("persist_test", "running");

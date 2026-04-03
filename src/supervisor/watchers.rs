@@ -334,12 +334,7 @@ impl Supervisor {
             .iter()
             .filter(|(_, d)| !d.watch.is_empty())
             .map(|(id, d)| {
-                let base_dir = d
-                    .path
-                    .as_ref()
-                    .and_then(|p| p.parent())
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| env::CWD.clone());
+                let base_dir = crate::ipc::batch::resolve_config_base_dir(d.path.as_deref());
                 (id.clone(), d.watch.clone(), base_dir)
             })
             .collect();

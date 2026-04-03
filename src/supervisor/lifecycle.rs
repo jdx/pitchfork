@@ -268,7 +268,7 @@ impl Supervisor {
             cmd.env("PORT", resolved_ports[0].to_string());
             // Set individual ports as PORT0, PORT1, etc.
             for (i, port) in resolved_ports.iter().enumerate() {
-                cmd.env(format!("PORT{}", i), port.to_string());
+                cmd.env(format!("PORT{i}"), port.to_string());
             }
         }
 
@@ -948,10 +948,7 @@ async fn check_ports_available(
                 .into());
             }
             if bump_offset > 0 {
-                info!(
-                    "ports {:?} bumped by {} to {:?}",
-                    expected_ports, bump_offset, candidate_ports
-                );
+                info!("ports {expected_ports:?} bumped by {bump_offset} to {candidate_ports:?}");
             }
             return Ok(candidate_ports);
         }

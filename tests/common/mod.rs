@@ -153,7 +153,7 @@ impl TestEnv {
         let qualified_id = if daemon_id.contains('/') {
             daemon_id.to_string()
         } else {
-            format!("project/{}", daemon_id)
+            format!("project/{daemon_id}")
         };
 
         // Convert to filesystem-safe path (replace "/" with "--")
@@ -388,10 +388,7 @@ impl TestEnv {
                 }
                 Err(e) => {
                     // Log the error but don't panic during cleanup
-                    eprintln!(
-                        "Warning: Failed to execute supervisor stop during cleanup: {}",
-                        e
-                    );
+                    eprintln!("Warning: Failed to execute supervisor stop during cleanup: {e}");
                 }
             }
             std::thread::sleep(Duration::from_millis(500));

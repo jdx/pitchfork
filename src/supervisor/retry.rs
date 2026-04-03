@@ -107,7 +107,7 @@ impl Supervisor {
     /// Get the run command for a daemon from the pitchfork.toml configuration
     pub(crate) fn get_daemon_run_command(&self, id: &DaemonId) -> Option<String> {
         let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
-            warn!("Failed to load config for run-command lookup: {}", e);
+            warn!("Failed to load config for run-command lookup: {e}");
             crate::pitchfork_toml::PitchforkToml::default()
         });
         pt.daemons.get(id).map(|d| d.run.clone())
