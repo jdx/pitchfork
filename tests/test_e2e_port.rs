@@ -18,10 +18,9 @@ fn test_port_conflict_detection() {
     let toml_content = format!(
         r#"
 [daemons.port_conflict]
-run = "python3 -m http.server {}"
-expected_port = [{}]
-"#,
-        port, port
+run = "python3 -m http.server {port}"
+expected_port = [{port}]
+"#
     );
     env.create_toml(&toml_content);
 
@@ -41,8 +40,7 @@ expected_port = [{}]
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("already in use") || stderr.contains("port") || stderr.contains("Port"),
-        "Error message should indicate port conflict: {}",
-        stderr
+        "Error message should indicate port conflict: {stderr}"
     );
 
     // Cleanup
@@ -122,7 +120,7 @@ ready_output = "ready"
     // Check that the daemon is running
     let status_output = env.run_command(&["status", "port_bump"]);
     let status_stdout = String::from_utf8_lossy(&status_output.stdout);
-    println!("Status output: {}", status_stdout);
+    println!("Status output: {status_stdout}");
 
     assert!(
         status_stdout.contains("running") || status_stdout.contains("ready"),
@@ -189,13 +187,11 @@ expected_port = [{}]
 
     // Check that the PORT environment variable was set correctly
     let marker_content = std::fs::read_to_string(&marker_path).unwrap_or_default();
-    println!("Marker content: {}", marker_content);
+    println!("Marker content: {marker_content}");
 
     assert!(
-        marker_content.contains(&format!("PORT={}", port)),
-        "PORT environment variable should be set to {}: got {}",
-        port,
-        marker_content
+        marker_content.contains(&format!("PORT={port}")),
+        "PORT environment variable should be set to {port}: got {marker_content}"
     );
 
     // Cleanup
@@ -271,10 +267,9 @@ fn test_ready_port_sync() {
     let toml_content = format!(
         r#"
 [daemons.ready_sync]
-run = "python3 -m http.server {}"
-expected_port = [{}]
-"#,
-        port, port
+run = "python3 -m http.server {port}"
+expected_port = [{port}]
+"#
     );
     env.create_toml(&toml_content);
 
@@ -293,13 +288,12 @@ expected_port = [{}]
     // Check status
     let status_output = env.run_command(&["status", "ready_sync"]);
     let status_stdout = String::from_utf8_lossy(&status_output.stdout);
-    println!("Status: {}", status_stdout);
+    println!("Status: {status_stdout}");
 
     // The daemon should be ready (which means ready_port check passed)
     assert!(
         status_stdout.contains("ready") || status_stdout.contains("running"),
-        "Daemon should be ready/running: {}",
-        status_stdout
+        "Daemon should be ready/running: {status_stdout}"
     );
 
     // Cleanup
@@ -415,7 +409,7 @@ ready_output = "ready"
     // Check that the daemon is running
     let status_output = env.run_command(&["status", "env_bump"]);
     let status_stdout = String::from_utf8_lossy(&status_output.stdout);
-    println!("Status output: {}", status_stdout);
+    println!("Status output: {status_stdout}");
 
     assert!(
         status_stdout.contains("running") || status_stdout.contains("ready"),

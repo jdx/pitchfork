@@ -56,6 +56,7 @@ export default defineConfig({
           { text: "Log Management", link: "/guides/logs" },
           { text: "TUI Dashboard", link: "/guides/tui" },
           { text: "Web UI", link: "/guides/web-ui" },
+          { text: "Container Mode", link: "/guides/container-mode" },
           { text: "mise Integration", link: "/guides/mise-integration" },
         ],
       },

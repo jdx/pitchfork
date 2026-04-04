@@ -5,7 +5,7 @@
 use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
-use crate::deps::resolve_dependencies;
+use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork, is_global_config,
@@ -203,7 +203,7 @@ impl IpcClient {
             .iter()
             .filter(|id| {
                 if disabled_daemons.contains(id) {
-                    warn!("Daemon {} is disabled", id);
+                    warn!("Daemon {id} is disabled");
                     false
                 } else {
                     true
@@ -252,7 +252,7 @@ impl IpcClient {
                     .filter(|id| {
                         // Skip disabled daemons (dependencies might be disabled)
                         if disabled_daemons.contains(id) {
-                            warn!("Skipping disabled daemon {} (dependency)", id);
+                            warn!("Skipping disabled daemon {id} (dependency)");
                             return false;
                         }
 
@@ -266,7 +266,7 @@ impl IpcClient {
                                 if explicitly_requested.contains(id) {
                                     info!("Daemon {id} is already running, use --force to restart");
                                 } else {
-                                    debug!("Skipping already running daemon {}", id);
+                                    debug!("Skipping already running daemon {id}");
                                 }
                                 false
                             }
@@ -559,8 +559,6 @@ impl IpcClient {
     /// - Ad-hoc daemon handling (no dependencies)
     /// - Parallel execution within dependency levels
     pub async fn stop_daemons(self: &Arc<Self>, ids: &[DaemonId]) -> Result<StopResult> {
-        let pt = PitchforkToml::all_merged()?;
-
         // Get currently running daemons
         let running_daemons: HashSet<DaemonId> = self
             .active_daemons()
@@ -575,7 +573,7 @@ impl IpcClient {
             .iter()
             .filter(|id| {
                 if !running_daemons.contains(*id) {
-                    warn!("Daemon {} is not running", id);
+                    warn!("Daemon {id} is not running");
                     false
                 } else {
                     true
@@ -589,73 +587,37 @@ impl IpcClient {
             return Ok(StopResult { any_failed: false });
         }
 
-        // Separate config-based daemons from ad-hoc daemons
-        let (config_daemons, adhoc_daemons): (Vec<DaemonId>, Vec<DaemonId>) = requested_ids
-            .into_iter()
-            .partition(|id| pt.daemons.contains_key(id));
-
         let mut any_failed = false;
 
-        // Stop config-based daemons with dependency resolution (reverse order)
-        if !config_daemons.is_empty() {
-            let dep_order = resolve_dependencies(&config_daemons, &pt.daemons)?;
+        // Use shared reverse dependency ordering
+        let stop_levels = compute_reverse_stop_order(&requested_ids);
 
-            // Reverse the levels: stop dependents first, then their dependencies
-            let reversed_levels: Vec<Vec<DaemonId>> = dep_order.levels.into_iter().rev().collect();
+        for level in stop_levels {
+            // Filter to only running daemons in this level
+            let to_stop: Vec<DaemonId> = level
+                .into_iter()
+                .filter(|id| running_daemons.contains(id))
+                .collect();
 
-            for level in reversed_levels {
-                // Filter to only running daemons in this level
-                let to_stop: Vec<DaemonId> = level
-                    .into_iter()
-                    .filter(|id| running_daemons.contains(id))
-                    .collect();
-
-                if to_stop.is_empty() {
-                    continue;
-                }
-
-                // Stop all daemons in this level concurrently
-                let mut tasks = Vec::new();
-                for id in to_stop {
-                    let task = Self::spawn_stop_task(self.clone(), id);
-                    tasks.push(task);
-                }
-
-                // Wait for all stops in this level to complete
-                for task in tasks {
-                    match task.await {
-                        Ok((id, Ok(()))) => {
-                            debug!("Successfully stopped daemon {id}");
-                        }
-                        Ok((id, Err(e))) => {
-                            error!("Failed to stop daemon {id}: {e}");
-                            any_failed = true;
-                        }
-                        Err(e) => {
-                            error!("Stop task panicked: {e}");
-                            any_failed = true;
-                        }
-                    }
-                }
+            if to_stop.is_empty() {
+                continue;
             }
-        }
 
-        // Stop ad-hoc daemons (no dependency info) concurrently
-        if !adhoc_daemons.is_empty() {
-            debug!("Stopping ad-hoc daemons: {adhoc_daemons:?}");
+            // Stop all daemons in this level concurrently
             let mut tasks = Vec::new();
-            for id in adhoc_daemons {
+            for id in to_stop {
                 let task = Self::spawn_stop_task(self.clone(), id);
                 tasks.push(task);
             }
 
+            // Wait for all stops in this level to complete
             for task in tasks {
                 match task.await {
                     Ok((id, Ok(()))) => {
-                        debug!("Successfully stopped ad-hoc daemon {id}");
+                        debug!("Successfully stopped daemon {id}");
                     }
                     Ok((id, Err(e))) => {
-                        error!("Failed to stop ad-hoc daemon {id}: {e}");
+                        error!("Failed to stop daemon {id}: {e}");
                         any_failed = true;
                     }
                     Err(e) => {

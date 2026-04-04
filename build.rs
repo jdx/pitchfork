@@ -12,7 +12,7 @@ fn main() {
 
     // Generate the settings module
     if let Err(e) = generate_settings::generate() {
-        eprintln!("Failed to generate settings: {}", e);
+        eprintln!("Failed to generate settings: {e}");
         std::process::exit(1);
     }
 }

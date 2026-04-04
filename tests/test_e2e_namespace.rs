@@ -85,8 +85,7 @@ run = "echo 'Hello from project-b' && sleep 10"
     let log_a = logs_dir.join("project-a--api").join("project-a--api.log");
     assert!(
         log_a.exists(),
-        "Log file for project-a/api should exist at {:?}",
-        log_a
+        "Log file for project-a/api should exist at {log_a:?}"
     );
     let log_a_content = fs::read_to_string(&log_a).unwrap();
     assert!(
@@ -98,8 +97,7 @@ run = "echo 'Hello from project-b' && sleep 10"
     let log_b = logs_dir.join("project-b--api").join("project-b--api.log");
     assert!(
         log_b.exists(),
-        "Log file for project-b/api should exist at {:?}",
-        log_b
+        "Log file for project-b/api should exist at {log_b:?}"
     );
     let log_b_content = fs::read_to_string(&log_b).unwrap();
     assert!(
@@ -395,13 +393,11 @@ run = "echo 'encoding test' && sleep 30"
 
     assert!(
         expected_dir.exists(),
-        "Log directory should exist at {:?}",
-        expected_dir
+        "Log directory should exist at {expected_dir:?}"
     );
     assert!(
         expected_log.exists(),
-        "Log file should exist at {:?}",
-        expected_log
+        "Log file should exist at {expected_log:?}"
     );
 
     let log_content = fs::read_to_string(&expected_log).unwrap();

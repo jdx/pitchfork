@@ -18,7 +18,9 @@ mod watchers;
 
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
+use crate::deps::compute_reverse_stop_order;
 use crate::ipc::server::{IpcServer, IpcServerHandle};
+
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::state_file::StateFile;
@@ -26,7 +28,7 @@ use crate::{Result, env};
 use duct::cmd;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::process::exit;
 use std::sync::atomic;
@@ -37,6 +39,18 @@ use tokio::signal::unix::SignalKind;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::{signal, time};
+
+/// Exit statuses reaped by the container-mode zombie reaper for managed daemon
+/// PIDs. On non-Linux Unix platforms where `waitid(WNOWAIT)` is unavailable,
+/// `waitpid(None, WNOHANG)` may race with Tokio's `child.wait()`. When the
+/// zombie reaper wins, the exit status is stashed here so the monitoring task
+/// in lifecycle.rs can recover it instead of treating the ECHILD as a failure.
+///
+/// On Linux this map is unused because the reaper uses `waitid` with `WNOWAIT`
+/// to peek before reaping, which avoids the race entirely.
+#[cfg(unix)]
+pub(crate) static REAPED_STATUSES: Lazy<Mutex<HashMap<u32, i32>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 // Re-export types needed by other modules
 pub(crate) use state::UpsertDaemonOpts;
@@ -105,11 +119,18 @@ impl Supervisor {
     pub async fn start(
         &self,
         is_boot: bool,
+        container: bool,
         web_port: Option<u16>,
         web_path: Option<String>,
     ) -> Result<()> {
         let pid = std::process::id();
-        info!("Starting supervisor with pid {pid}");
+        // Determine container mode: CLI flag takes priority, then settings
+        let container_mode = container || settings().supervisor.container;
+        if container_mode {
+            info!("Starting supervisor in container/PID1 mode with pid {pid}");
+        } else {
+            info!("Starting supervisor with pid {pid}");
+        }
 
         self.upsert_daemon(
             UpsertDaemonOpts::builder(DaemonId::pitchfork())
@@ -131,6 +152,12 @@ impl Supervisor {
         self.cron_watch()?;
         self.signals()?;
         self.daemon_file_watch()?;
+
+        // In container mode, install SIGCHLD handler to reap orphaned/zombie processes
+        #[cfg(unix)]
+        if container_mode {
+            self.reap_zombies()?;
+        }
 
         // Start web server: CLI --web-port takes priority, then settings.web.auto_start + bind_port
         let s = settings();
@@ -205,6 +232,143 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Install a SIGCHLD handler that reaps orphaned zombie child processes.
+    ///
+    /// When running as PID 1 inside a container, orphaned processes are
+    /// re-parented to PID 1. Without explicit reaping, they accumulate
+    /// as zombies in the process table indefinitely.
+    ///
+    /// Only reaps processes that are NOT managed by the supervisor (i.e.
+    /// not tracked in the state file). Managed daemon processes are reaped
+    /// by their monitoring tasks via `child.wait()`.
+    ///
+    /// ## Strategy
+    ///
+    /// **Linux**: Uses `waitid(Id::All, WNOHANG | WNOWAIT | WEXITED)` to
+    /// *peek* at the next zombie without consuming its status. If the PID
+    /// belongs to a managed daemon, the reaper skips it so Tokio's
+    /// `child.wait()` can collect the status normally. Only unmanaged
+    /// orphans are actually reaped (via `waitpid(Pid, WNOHANG)`). This
+    /// eliminates the race entirely.
+    ///
+    /// **Non-Linux Unix** (e.g. macOS — mainly for local development;
+    /// container mode targets Linux): `waitid` is unavailable, so we fall
+    /// back to `waitpid(None, WNOHANG)`. If the reaper accidentally
+    /// consumes a managed PID's status, it stashes the exit code in
+    /// [`REAPED_STATUSES`] for the monitoring task to recover.
+    #[cfg(unix)]
+    fn reap_zombies(&self) -> Result<()> {
+        let mut stream = signal::unix::signal(SignalKind::child())
+            .map_err(|e| miette::miette!("Failed to register SIGCHLD handler: {e}"))?;
+        tokio::spawn(async move {
+            loop {
+                stream.recv().await;
+                // Collect PIDs of managed daemons so we don't steal their exit status
+                let managed_pids: HashSet<u32> = SUPERVISOR
+                    .state_file
+                    .lock()
+                    .await
+                    .daemons
+                    .values()
+                    .filter_map(|d| d.pid)
+                    .collect();
+                // Reap all available zombie children that are NOT managed
+                Self::reap_unmanaged_zombies(&managed_pids).await;
+            }
+        });
+        info!("container mode: SIGCHLD zombie reaper installed");
+        Ok(())
+    }
+
+    /// Linux implementation: peek with `waitid(WNOWAIT)` then selectively reap.
+    ///
+    /// `WNOWAIT` leaves the zombie in the table so we can inspect its PID
+    /// without consuming the exit status. Only if the PID is *not* managed
+    /// do we call `waitpid(Pid, WNOHANG)` to actually reap it.
+    #[cfg(target_os = "linux")]
+    async fn reap_unmanaged_zombies(managed_pids: &HashSet<u32>) {
+        use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
+        use nix::unistd::Pid;
+
+        loop {
+            // Peek at the next zombie without consuming it
+            let peek_flags = WaitPidFlag::WNOHANG | WaitPidFlag::WNOWAIT | WaitPidFlag::WEXITED;
+            match waitid(Id::All, peek_flags) {
+                Ok(WaitStatus::StillAlive) => break,
+                Ok(status) => {
+                    let Some(pid_raw) = status.pid().map(|p| p.as_raw() as u32) else {
+                        break;
+                    };
+                    if managed_pids.contains(&pid_raw) {
+                        // This is a managed daemon — leave it for Tokio's child.wait().
+                        // We must break out of the loop because waitid(Id::All) would
+                        // keep returning the same zombie if we don't consume it.
+                        trace!(
+                            "zombie reaper: skipping managed daemon pid {pid_raw}, \
+                             leaving for Tokio to reap"
+                        );
+                        break;
+                    }
+                    // Not managed — actually reap it
+                    match waitpid(Pid::from_raw(pid_raw as i32), Some(WaitPidFlag::WNOHANG)) {
+                        Ok(s) => trace!("reaped orphaned zombie child: {s:?}"),
+                        Err(nix::errno::Errno::ECHILD) => break,
+                        Err(e) => {
+                            trace!("waitpid error reaping pid {pid_raw}: {e}");
+                            break;
+                        }
+                    }
+                }
+                Err(nix::errno::Errno::ECHILD) => break, // no children at all
+                Err(e) => {
+                    trace!("waitid error in zombie reaper: {e}");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Non-Linux fallback: blind `waitpid(None, WNOHANG)` with stash recovery.
+    ///
+    /// Since `waitid(WNOWAIT)` is not available, we cannot peek. If we
+    /// accidentally reap a managed PID, we stash the exit code in
+    /// [`REAPED_STATUSES`] so the monitoring task can recover it.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    async fn reap_unmanaged_zombies(managed_pids: &HashSet<u32>) {
+        use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+
+        loop {
+            match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::StillAlive) => break,
+                Ok(status) => {
+                    let Some(pid) = status.pid().map(|p| p.as_raw() as u32) else {
+                        continue;
+                    };
+                    if managed_pids.contains(&pid) {
+                        // Race lost — stash the exit code for lifecycle recovery
+                        let exit_code = match status {
+                            WaitStatus::Exited(_, code) => code,
+                            WaitStatus::Signaled(_, sig, _) => -(sig as i32),
+                            _ => -1,
+                        };
+                        warn!(
+                            "zombie reaper reaped managed daemon pid {pid} \
+                             (exit_code={exit_code}); stashing status for recovery"
+                        );
+                        REAPED_STATUSES.lock().await.insert(pid, exit_code);
+                    } else {
+                        trace!("reaped orphaned zombie child: {status:?}");
+                    }
+                }
+                Err(nix::errno::Errno::ECHILD) => break, // no more children
+                Err(e) => {
+                    trace!("waitpid error in zombie reaper: {e}");
+                    break;
+                }
+            }
+        }
+    }
+
     #[cfg(unix)]
     fn signals(&self) -> Result<()> {
         let signals = [
@@ -267,12 +431,30 @@ impl Supervisor {
 
     pub(crate) async fn close(&self) {
         let pitchfork_id = DaemonId::pitchfork();
-        for daemon in self.active_daemons().await {
-            if daemon.id == pitchfork_id {
-                continue;
+        let active = self.active_daemons().await;
+        let active_ids: Vec<DaemonId> = active
+            .iter()
+            .filter(|d| d.id != pitchfork_id)
+            .map(|d| d.id.clone())
+            .collect();
+
+        // Stop daemons in reverse dependency order.
+        // If dependency resolution fails (e.g. config changed), fall back to
+        // stopping in arbitrary order so we still shut down cleanly.
+        // Daemons within the same level are stopped concurrently.
+        let stop_levels = compute_reverse_stop_order(&active_ids);
+        for level in &stop_levels {
+            let mut tasks = Vec::new();
+            for id in level {
+                let id = id.clone();
+                tasks.push(tokio::spawn(async move {
+                    if let Err(err) = SUPERVISOR.stop(&id).await {
+                        error!("failed to stop daemon {id}: {err}");
+                    }
+                }));
             }
-            if let Err(err) = self.stop(&daemon.id).await {
-                error!("failed to stop daemon {daemon}: {err}");
+            for task in tasks {
+                let _ = task.await;
             }
         }
         let _ = self.remove_daemon(&pitchfork_id).await;

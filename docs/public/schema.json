@@ -458,6 +458,13 @@
     "SettingsSupervisorPartial": {
       "type": "object",
       "properties": {
+        "container": {
+          "description": "Enable container/PID1 mode for running inside Docker containers",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "cpu_violation_threshold": {
           "description": "Consecutive CPU-over-limit samples before killing a daemon",
           "type": [

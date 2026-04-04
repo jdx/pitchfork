@@ -268,7 +268,7 @@ impl Supervisor {
             cmd.env("PORT", resolved_ports[0].to_string());
             // Set individual ports as PORT0, PORT1, etc.
             for (i, port) in resolved_ports.iter().enumerate() {
-                cmd.env(format!("PORT{}", i), port.to_string());
+                cmd.env(format!("PORT{i}"), port.to_string());
             }
         }
 
@@ -421,6 +421,44 @@ impl Supervisor {
             let child_pid = child.id().unwrap_or(0);
             tokio::spawn(async move {
                 let result = child.wait().await;
+                // On non-Linux Unix (e.g. macOS) the zombie reaper may win the
+                // race and consume the exit status via waitpid(None, WNOHANG)
+                // before Tokio's child.wait() gets to it. When that happens,
+                // Tokio returns an ECHILD io::Error. We recover by checking
+                // REAPED_STATUSES for the stashed exit code.
+                //
+                // On Linux this is unnecessary because the reaper uses
+                // waitid(WNOWAIT) to peek before reaping, which avoids the
+                // race entirely.
+                #[cfg(all(unix, not(target_os = "linux")))]
+                let result = match &result {
+                    Err(e) if e.raw_os_error() == Some(nix::libc::ECHILD) => {
+                        if let Some(code) = super::REAPED_STATUSES.lock().await.remove(&child_pid) {
+                            warn!(
+                                "daemon pid {child_pid} wait() got ECHILD; \
+                                 recovered exit code {code} from zombie reaper"
+                            );
+                            // Synthesize an ExitStatus from the stashed code.
+                            // On Unix we can use `ExitStatus::from_raw()` with
+                            // a wait-style status word (code << 8 for normal
+                            // exit, or raw signal number for signal death).
+                            use std::os::unix::process::ExitStatusExt;
+                            if code >= 0 {
+                                Ok(std::process::ExitStatus::from_raw(code << 8))
+                            } else {
+                                // Negative code means killed by signal (-sig)
+                                Ok(std::process::ExitStatus::from_raw((-code) & 0x7f))
+                            }
+                        } else {
+                            warn!(
+                                "daemon pid {child_pid} wait() got ECHILD but no \
+                                 stashed status found; reporting as error"
+                            );
+                            result
+                        }
+                    }
+                    _ => result,
+                };
                 debug!("daemon pid {child_pid} wait() completed with result: {result:?}");
                 let _ = exit_tx.send(result).await;
             });
@@ -948,10 +986,7 @@ async fn check_ports_available(
                 .into());
             }
             if bump_offset > 0 {
-                info!(
-                    "ports {:?} bumped by {} to {:?}",
-                    expected_ports, bump_offset, candidate_ports
-                );
+                info!("ports {expected_ports:?} bumped by {bump_offset} to {candidate_ports:?}");
             }
             return Ok(candidate_ports);
         }

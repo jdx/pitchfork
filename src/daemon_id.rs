@@ -67,10 +67,10 @@ impl DaemonId {
 
         // Validate inputs - panic on invalid values
         if let Err(e) = validate_component(&namespace, "namespace") {
-            panic!("Invalid namespace '{}': {}", namespace, e);
+            panic!("Invalid namespace '{namespace}': {e}");
         }
         if let Err(e) = validate_component(&name, "name") {
-            panic!("Invalid name '{}': {}", name, e);
+            panic!("Invalid name '{name}': {e}");
         }
 
         Self { namespace, name }
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn test_daemon_id_display() {
         let id = DaemonId::new("global", "api");
-        assert_eq!(format!("{}", id), "global/api");
+        assert_eq!(format!("{id}"), "global/api");
     }
 
     #[test]

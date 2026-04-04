@@ -65,7 +65,7 @@ pub(crate) async fn fire_hook(
 ) {
     let handle = tokio::spawn(async move {
         let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
-            warn!("Failed to load config for hook '{}': {}", hook_type, e);
+            warn!("Failed to load config for hook '{hook_type}': {e}");
             PitchforkToml::default()
         });
         let hook_cmd = pt
@@ -75,10 +75,7 @@ pub(crate) async fn fire_hook(
 
         let Some(cmd) = hook_cmd else { return };
 
-        info!(
-            "firing {} hook for daemon {}: {}",
-            hook_type, daemon_id, cmd
-        );
+        info!("firing {hook_type} hook for daemon {daemon_id}: {cmd}");
 
         let mut command = Shell::default_for_platform().command(&cmd);
         command
@@ -108,17 +105,11 @@ pub(crate) async fn fire_hook(
         match command.status().await {
             Ok(status) => {
                 if !status.success() {
-                    warn!(
-                        "{} hook for daemon {} exited with {}",
-                        hook_type, daemon_id, status
-                    );
+                    warn!("{hook_type} hook for daemon {daemon_id} exited with {status}");
                 }
             }
             Err(e) => {
-                error!(
-                    "failed to execute {} hook for daemon {}: {}",
-                    hook_type, daemon_id, e
-                );
+                error!("failed to execute {hook_type} hook for daemon {daemon_id}: {e}");
             }
         }
     });

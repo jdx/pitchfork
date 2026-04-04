@@ -279,7 +279,7 @@ impl Add {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "pitchfork.toml".to_string());
-        println!("added {} to {}", daemon_id, path_display);
+        println!("added {daemon_id} to {path_display}");
         Ok(())
     }
 
