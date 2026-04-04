@@ -664,14 +664,14 @@ impl IpcClient {
     }
 }
 
-/// Resolve the working directory for a daemon.
+/// Resolve the project base directory from a config file path.
 ///
-/// If `dir` is set in config, resolve it (absolute or relative to pitchfork.toml parent).
-/// Otherwise, use the pitchfork.toml parent directory.
-pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
-    let base_dir = config_path
+/// For `.config/pitchfork.toml` and `.config/pitchfork.local.toml`, the project
+/// directory is the grandparent (i.e. the directory containing `.config/`).
+/// For all other config files, it is the parent directory.
+pub fn resolve_config_base_dir(config_path: Option<&Path>) -> PathBuf {
+    config_path
         .and_then(|p| {
-            // Global configs use normal parent resolution
             if is_global_config(p) {
                 p.parent()
             } else if is_dot_config_pitchfork(p) {
@@ -682,7 +682,15 @@ pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> Path
             }
         })
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| crate::env::CWD.to_path_buf());
+        .unwrap_or_else(|| crate::env::CWD.to_path_buf())
+}
+
+/// Resolve the working directory for a daemon.
+///
+/// If `dir` is set in config, resolve it relative to the project base directory.
+/// Otherwise, use the project base directory directly.
+pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
+    let base_dir = resolve_config_base_dir(config_path);
     match dir {
         Some(d) => base_dir.join(d),
         None => base_dir,

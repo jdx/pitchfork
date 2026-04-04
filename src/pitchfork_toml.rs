@@ -1046,10 +1046,9 @@ impl PitchforkTomlDaemon {
             depends: self.depends.clone(),
             env: self.env.clone(),
             watch: self.watch.clone(),
-            watch_base_dir: self
-                .path
-                .as_ref()
-                .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+            watch_base_dir: Some(crate::ipc::batch::resolve_config_base_dir(
+                self.path.as_deref(),
+            )),
             mise: self.mise.unwrap_or(settings().general.mise),
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
