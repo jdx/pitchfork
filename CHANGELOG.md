@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0](https://github.com/jdx/pitchfork/compare/v2.3.0...v2.4.0) - 2026-04-09
+
+### Added
+
+- add mcp tools ([#311](https://github.com/jdx/pitchfork/pull/311))
+- impl container mode ([#305](https://github.com/jdx/pitchfork/pull/305))
+
+### Fixed
+
+- use correct base dir for `.config/pitchfork.toml` case ([#307](https://github.com/jdx/pitchfork/pull/307))
+- use FSEvent on macos to avoid `Too many files` ([#301](https://github.com/jdx/pitchfork/pull/301))
+
+### Other
+
+- *(deps)* lock file maintenance ([#310](https://github.com/jdx/pitchfork/pull/310))
+
 ## [2.3.0](https://github.com/jdx/pitchfork/compare/v2.2.0...v2.3.0) - 2026-03-31
 
 ### Added
