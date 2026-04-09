@@ -926,6 +926,24 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "mcp": {
+        "full_cmd": [
+          "mcp"
+        ],
+        "usage": "mcp",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Runs a Model Context Protocol (MCP) server over stdin/stdout",
+        "help_long": "Runs a Model Context Protocol (MCP) server over stdin/stdout\n\nThis command starts an MCP server that exposes pitchfork daemon management\nto AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.\n\nTypically used as a subprocess by an MCP-aware AI agent.\n\nExamples:\n  # In claude_desktop_config.json or similar:\n  {\n    \"mcpServers\": {\n      \"pitchfork\": {\n        \"command\": \"pitchfork\",\n        \"args\": [\"mcp\"]\n      }\n    }\n  }\n\nTools provided:\n  pitchfork_status    List all daemons and their state\n  pitchfork_start     Start a named daemon\n  pitchfork_stop      Stop a named daemon\n  pitchfork_restart   Restart a named daemon\n  pitchfork_logs      Return recent log output for a daemon",
+        "name": "mcp",
+        "aliases": [],
+        "hidden_aliases": [],
+        "after_help_long": "Examples:\n\n  # Start the MCP server (used by AI assistant tools)\n  $ pitchfork mcp\n\n  # Claude Desktop configuration (claude_desktop_config.json):\n  {\n    \"mcpServers\": {\n      \"pitchfork\": {\n        \"command\": \"pitchfork\",\n        \"args\": [\"mcp\"]\n      }\n    }\n  }\n\n  # Interactive testing with JSON-RPC:\n  $ echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}' | pitchfork mcp\n\n  # Available tools:\n  - pitchfork_status  - List all daemons and their state\n  - pitchfork_start   - Start daemon(s) by name\n  - pitchfork_stop    - Stop daemon(s) by name\n  - pitchfork_restart - Restart daemon(s) by name\n  - pitchfork_logs    - Return recent log output for daemon(s)\n",
+        "examples": []
+      },
       "restart": {
         "full_cmd": [
           "restart"
