@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0](https://github.com/jdx/pitchfork/compare/v2.4.0...v2.5.0) - 2026-04-10
+
+### Added
+
+- *(port-management)* impl proxy for local dev ([#293](https://github.com/jdx/pitchfork/pull/293))
+
+### Other
+
+- *(deps)* update rust crate indexmap to v2.14.0 ([#321](https://github.com/jdx/pitchfork/pull/321))
+- *(deps)* update rust crate xx to v2.5.3 ([#322](https://github.com/jdx/pitchfork/pull/322))
+- *(deps)* update rust crate tokio to v1.51.1 ([#320](https://github.com/jdx/pitchfork/pull/320))
+- update inconsistencies in docs ([#312](https://github.com/jdx/pitchfork/pull/312))
+
 ## [2.4.0](https://github.com/jdx/pitchfork/compare/v2.3.0...v2.4.0) - 2026-04-09
 
 ### Added
