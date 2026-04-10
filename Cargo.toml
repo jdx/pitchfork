@@ -98,7 +98,7 @@ glob = "0.3"
 globset = "0.4"
 humanbyte = { version = "0.2", features = ["serde", "derive"] }
 humantime = "2"
-listeners = "0.4"
+listeners = "0.5"
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"

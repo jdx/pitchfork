@@ -1729,9 +1729,9 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "listeners"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b1b38f243d492a4b80e68ec202f4cbbb65278562bb7f4fbc3e38e04fc56e893"
+checksum = "862c44851651b2c0941582733609f92d870550c75b25a8e3b161d7ace06bd5c9"
 dependencies = [
  "byteorder",
  "cc",
