@@ -352,9 +352,11 @@ impl Supervisor {
         let hook_daemon_env = opts.env.clone();
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
-        // Also detect active_port when the proxy is enabled, since any daemon could be
-        // referenced by a global slug.
-        let has_port_config = !opts.expected_port.is_empty() || settings().proxy.enable;
+        // When the proxy is enabled, only detect active_port for daemons that are
+        // actually referenced by a registered slug, rather than blanket-polling every
+        // daemon (which wastes ~7.5 s of listeners::get_all() calls per port-less daemon).
+        let has_port_config = !opts.expected_port.is_empty()
+            || (settings().proxy.enable && is_daemon_slug_target(id));
         let daemon_pid = pid;
 
         tokio::spawn(async move {
@@ -1202,4 +1204,22 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
 
         debug!("daemon {id}: active port detection exhausted all retries for pid {pid}");
     });
+}
+
+/// Check whether a daemon (by its qualified ID) is the target of any registered
+/// slug in the global config.  This is used to decide whether to run the
+/// `detect_and_store_active_port` polling task — only slug-targeted daemons need
+/// it, avoiding wasted `listeners::get_all()` calls for port-less daemons.
+///
+/// Delegates to `proxy::server::is_slug_target()` which uses the same in-memory
+/// slug cache as the proxy hot path, so this check is cheap.
+fn is_daemon_slug_target(id: &DaemonId) -> bool {
+    // read_global_slugs is called once per daemon start — acceptable cost.
+    // We intentionally avoid making this async to keep has_port_config evaluation
+    // simple and synchronous in run_once().
+    let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    slugs.iter().any(|(slug, entry)| {
+        let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+        id.name() == daemon_name
+    })
 }

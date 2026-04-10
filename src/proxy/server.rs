@@ -46,6 +46,95 @@ use crate::daemon_id::DaemonId;
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
 
+// ─── Slug resolution cache ──────────────────────────────────────────────────
+//
+// `read_global_slugs()` reads ~/.config/pitchfork/config.toml from disk on every
+// call, and `namespace_for_dir()` traverses the filesystem upward to find the
+// nearest pitchfork.toml.  Both are called from `resolve_target_port()` which
+// sits in the hot path of every proxied HTTP request.
+//
+// This cache stores the resolved slug → (namespace, daemon_name) mapping
+// in memory with a short TTL so that the proxy does zero disk I/O for the vast
+// majority of requests while still picking up config changes within seconds.
+
+/// How long to cache the slug resolution table before re-reading from disk.
+const SLUG_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Cached slug entry: pre-resolved namespace + daemon name for a slug.
+#[derive(Clone, Debug)]
+struct CachedSlugEntry {
+    /// Expected namespace derived from `entry.dir` (None if derivation failed).
+    namespace: Option<String>,
+    /// Daemon short name (defaults to slug name when not explicitly set).
+    daemon_name: String,
+}
+
+/// In-memory cache for the global slug registry + derived namespaces.
+struct SlugCache {
+    entries: Arc<std::collections::HashMap<String, CachedSlugEntry>>,
+    expires_at: std::time::Instant,
+}
+
+static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
+    once_cell::sync::Lazy::new(|| {
+        tokio::sync::Mutex::new(SlugCache {
+            entries: Arc::new(std::collections::HashMap::new()),
+            expires_at: std::time::Instant::now(), // expired → will be populated on first access
+        })
+    });
+
+/// Build the slug lookup table from disk (expensive — involves file I/O).
+/// Called outside the cache lock to avoid blocking concurrent proxy requests.
+fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
+    let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let mut entries = std::collections::HashMap::with_capacity(global_slugs.len());
+    for (slug, entry) in &global_slugs {
+        let ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
+        let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();
+        entries.insert(
+            slug.clone(),
+            CachedSlugEntry {
+                namespace: ns,
+                daemon_name,
+            },
+        );
+    }
+    entries
+}
+
+/// Return a snapshot of the cached slug table, refreshing from disk if expired.
+///
+/// The disk I/O happens *outside* the mutex to avoid blocking concurrent requests
+/// during the refresh.  A short race window exists where two threads may both
+/// refresh, but that is harmless (last writer wins with identical data).
+async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
+    // Fast path: cache still valid — just clone the Arc.
+    {
+        let cache = SLUG_CACHE.lock().await;
+        if std::time::Instant::now() < cache.expires_at {
+            return Arc::clone(&cache.entries);
+        }
+    } // lock released before disk I/O
+
+    // Slow path: refresh from disk (no lock held).
+    let new_entries = Arc::new(build_slug_entries());
+
+    // Store the refreshed entries.
+    {
+        let mut cache = SLUG_CACHE.lock().await;
+        cache.entries = Arc::clone(&new_entries);
+        cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
+    }
+
+    new_entries
+}
+
+/// Look up a single slug in the cached table.
+async fn cached_slug_lookup(subdomain: &str) -> Option<CachedSlugEntry> {
+    let entries = get_cached_slugs().await;
+    entries.get(subdomain).cloned()
+}
+
 /// Shared proxy state passed to each request handler.
 /// Callback type invoked on proxy errors (e.g. for logging/alerting).
 type OnErrorFn = Arc<dyn Fn(&str) + Send + Sync>;
@@ -1126,19 +1215,14 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
         return Ok(None);
     };
 
-    // Look up the slug in the global config's [slugs] section.
-    let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    let Some(entry) = global_slugs.get(&subdomain) else {
+    // Look up the slug via the in-memory cache (refreshed every SLUG_CACHE_TTL).
+    // This avoids per-request disk I/O for read_global_slugs() and namespace_for_dir().
+    let Some(cached) = cached_slug_lookup(&subdomain).await else {
         return Ok(None); // no slug match
     };
 
-    let daemon_name = entry.daemon.as_deref().unwrap_or(&subdomain);
-
-    // Derive the expected namespace from the slug's registered project directory
-    // so we route to the correct project when multiple projects have daemons
-    // with the same short name (e.g. both have "api").
-    let expected_namespace =
-        crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
+    let daemon_name = &cached.daemon_name;
+    let expected_namespace = &cached.namespace;
 
     // Find matching daemons in the state file.
     let daemons = {
@@ -1153,7 +1237,7 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
         .filter(|(id, d)| {
             id.name() == daemon_name
                 && d.status.is_running()
-                && match &expected_namespace {
+                && match expected_namespace {
                     Some(ns) => id.namespace() == ns,
                     None => true, // no namespace resolved — fall back to name-only match
                 }
