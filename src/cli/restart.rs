@@ -4,6 +4,7 @@ use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::ui::style::{nbold, ncyan, nstyle};
 use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
@@ -92,7 +93,20 @@ impl Restart {
                 }
                 if !resolved_ports.is_empty() {
                     let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
-                    println!("Daemon '{id}' restarted on port(s): {port_str}");
+                    let port_label = if resolved_ports.len() == 1 {
+                        "port"
+                    } else {
+                        "ports"
+                    };
+                    println!(
+                        "  {} {} restarted on {} {}",
+                        nstyle("↻").green(),
+                        nbold(id),
+                        port_label,
+                        ncyan(&port_str),
+                    );
+                } else {
+                    println!("  {} {} restarted", nstyle("↻").green(), nbold(id));
                 }
             }
         }

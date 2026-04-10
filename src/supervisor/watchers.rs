@@ -307,6 +307,7 @@ impl Supervisor {
                             let mut opts = daemon.to_run_options(cmd);
                             opts.dir = dir;
                             opts.force = force;
+                            opts.wait_ready = false;
                             opts.cron_schedule = Some(schedule_str.clone());
                             opts.cron_retrigger = Some(retrigger);
                             if let Err(e) = self.run(opts).await {
@@ -518,6 +519,7 @@ impl Supervisor {
         let mut run_opts = daemon.to_run_options(cmd);
         run_opts.force = true;
         run_opts.retry_count = 0;
+        run_opts.wait_ready = false; // Don't block on file-triggered restarts
 
         match self.run(run_opts).await {
             Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {

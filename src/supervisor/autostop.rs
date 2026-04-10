@@ -153,6 +153,7 @@ impl Supervisor {
             };
             let mut run_opts = daemon.to_run_options(id, cmd);
             run_opts.autostop = false; // Boot daemons should not autostop
+            run_opts.wait_ready = false; // Don't block on boot daemons
 
             match self.run(run_opts).await {
                 Ok(IpcResponse::DaemonStart { .. }) | Ok(IpcResponse::DaemonReady { .. }) => {

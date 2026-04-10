@@ -500,7 +500,11 @@ impl IpcClient {
                 port_bump_attempts,
                 wait_ready: true,
                 env,
-                mise: settings().general.mise,
+                watch: vec![],
+                watch_base_dir: None,
+                mise: None,
+                slug: None,
+                proxy: None,
                 ..RunOptions::default()
             };
 
@@ -657,7 +661,9 @@ impl IpcClient {
                 .port_bump_attempts
                 .unwrap_or_else(|| settings().default_port_bump_attempts()),
             wait_ready: true,
-            mise: settings().general.mise,
+            mise: None,
+            slug: None,
+            proxy: None,
             ..RunOptions::default()
         })
         .await

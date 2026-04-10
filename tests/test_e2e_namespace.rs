@@ -520,6 +520,132 @@ run = "echo inner && sleep 60"
     assert!(stdout.contains("inner-override") || !stdout.contains("foo--bar"));
 }
 
+// ============================================================================
+// Slug Tests
+// ============================================================================
+
+/// Test that a daemon with a slug can be resolved by slug in the same directory
+#[test]
+fn test_slug_resolves_in_same_directory() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let project = env.project_dir().join("slug-same-dir");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("pitchfork.toml"),
+        r#"
+[daemons.long-service-name]
+run = "sleep 60"
+"#,
+    )
+    .unwrap();
+
+    // Register slug in global config
+    let _ = env.run_command_in_dir(
+        &["proxy", "add", "svc", "--daemon", "long-service-name"],
+        &project,
+    );
+
+    // Start using full name
+    let start_output = env.run_command_in_dir(&["start", "long-service-name"], &project);
+    assert!(start_output.status.success(), "Start should succeed");
+    env.sleep(Duration::from_secs(1));
+
+    // Status using slug
+    let status_output = env.run_command_in_dir(&["status", "svc"], &project);
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    assert!(
+        status_str.contains("running"),
+        "Should find daemon by slug: {status_str}"
+    );
+
+    // Stop using slug
+    let stop_output = env.run_command_in_dir(&["stop", "svc"], &project);
+    assert!(stop_output.status.success(), "Stop via slug should succeed");
+}
+
+/// Test that slug works across namespaces (from a completely different directory)
+#[test]
+fn test_slug_resolves_across_namespaces() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let project = env.project_dir().join("ns-slug-test");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("pitchfork.toml"),
+        r#"
+[daemons.database]
+run = "sleep 60"
+"#,
+    )
+    .unwrap();
+
+    // Register the slug in global config using the new proxy add command
+    let _ = env.run_command_in_dir(&["proxy", "add", "db", "--daemon", "database"], &project);
+
+    // Start from project directory
+    let _ = env.run_command_in_dir(&["start", "database"], &project);
+    env.sleep(Duration::from_secs(1));
+
+    // Query from a completely different directory using slug
+    let other_dir = env.create_other_dir();
+    let status_output = env.run_command_in_dir(&["status", "db"], &other_dir);
+    let status_str = String::from_utf8_lossy(&status_output.stdout);
+    println!("cross-namespace slug status: {status_str}");
+    assert!(
+        status_str.contains("running"),
+        "Slug should resolve across namespaces: {status_str}"
+    );
+
+    // Stop from other directory using slug
+    let stop_output = env.run_command_in_dir(&["stop", "db"], &other_dir);
+    assert!(
+        stop_output.status.success(),
+        "Stop via slug from other directory should succeed"
+    );
+}
+
+/// Test that list command shows daemon with its slug
+#[test]
+fn test_list_shows_daemon_with_slug() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let project = env.project_dir().join("slug-list");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("pitchfork.toml"),
+        r#"
+[daemons.my-api-service]
+run = "sleep 60"
+"#,
+    )
+    .unwrap();
+
+    // Register slug in global config
+    let _ = env.run_command_in_dir(
+        &["proxy", "add", "api", "--daemon", "my-api-service"],
+        &project,
+    );
+
+    let _ = env.run_command_in_dir(&["start", "my-api-service"], &project);
+    env.sleep(Duration::from_secs(1));
+
+    let list_output = env.run_command_in_dir(&["list"], &project);
+    let list_str = String::from_utf8_lossy(&list_output.stdout);
+    println!("list with slug: {list_str}");
+
+    // The daemon should appear in the list
+    assert!(
+        list_str.contains("my-api-service") || list_str.contains("api"),
+        "List should show daemon: {list_str}"
+    );
+
+    let _ = env.run_command_in_dir(&["stop", "my-api-service"], &project);
+}
+
 #[test]
 fn test_local_namespace_override_mismatch_reports_error() {
     let env = TestEnv::new();

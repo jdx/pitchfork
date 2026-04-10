@@ -24,6 +24,18 @@ Pitchfork supports configuration files in multiple locations. Files are merged i
 5. `pitchfork.toml` - Project-level (in project root)
 6. `pitchfork.local.toml` - Local project overrides (highest precedence)
 
+### Global Config: Slug Registry
+
+The global config (`~/.config/pitchfork/config.toml`) also contains the `[slugs]` section — the single source of truth for reverse proxy slug→project mappings:
+
+```toml
+[slugs]
+api = { dir = "/home/user/my-api", daemon = "server" }
+docs = { dir = "/home/user/docs-site" }  # daemon defaults to "docs"
+```
+
+Manage slugs with `pitchfork proxy add` / `pitchfork proxy remove`.
+
 Within a given project directory, files take precedence in this order:
 - `.config/pitchfork.toml` has lowest precedence in that project
 - `.config/pitchfork.local.toml` overrides `.config/pitchfork.toml`

@@ -169,10 +169,20 @@ impl Supervisor {
                         } else {
                             Some(configured_port)
                         }
-                    } else {
-                        // Don't use port 0 for readiness checks - it's a special value
-                        // that requests an ephemeral port from the OS
+                    } else if opts.ready_output.is_none()
+                        && opts.ready_http.is_none()
+                        && opts.ready_cmd.is_none()
+                        && opts.ready_delay.is_none()
+                    {
+                        // No other ready check configured — use the first expected port as a
+                        // TCP port readiness check so the daemon is considered ready once it
+                        // starts listening.  Skip port 0 (ephemeral port request).
                         resolved.first().copied().filter(|&p| p != 0)
+                    } else {
+                        // Another ready check is configured (output/http/cmd/delay).
+                        // Don't add an implicit TCP port check — it could race and fire
+                        // before the daemon has produced any output.
+                        None
                     };
                     info!(
                         "daemon {id}: ports {:?} resolved to {:?}",
@@ -212,7 +222,7 @@ impl Supervisor {
             (Vec::new(), opts.ready_port)
         };
 
-        let cmd: Vec<String> = if opts.mise {
+        let cmd: Vec<String> = if opts.mise.unwrap_or(settings().general.mise) {
             match settings().resolve_mise_bin() {
                 Some(mise_bin) => {
                     let mise_bin_str = mise_bin.to_string_lossy().to_string();
@@ -322,7 +332,7 @@ impl Supervisor {
                         o.env = opts.env.clone();
                         o.watch = Some(opts.watch.clone());
                         o.watch_base_dir = opts.watch_base_dir.clone();
-                        o.mise = Some(opts.mise);
+                        o.mise = opts.mise;
                         o.memory_limit = opts.memory_limit;
                         o.cpu_limit = opts.cpu_limit;
                     })
@@ -340,6 +350,14 @@ impl Supervisor {
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
         let hook_daemon_env = opts.env.clone();
+        // Whether this daemon has any port-related config — used to skip the
+        // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
+        // When the proxy is enabled, only detect active_port for daemons that are
+        // actually referenced by a registered slug, rather than blanket-polling every
+        // daemon (which wastes ~7.5 s of listeners::get_all() calls per port-less daemon).
+        let has_port_config = !opts.expected_port.is_empty()
+            || (settings().proxy.enable && is_daemon_slug_target(id));
+        let daemon_pid = pid;
 
         tokio::spawn(async move {
             let id = id_clone;
@@ -380,6 +398,8 @@ impl Supervisor {
             let mut ready_notified = false;
             let mut ready_tx = ready_tx;
             let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
+            // Track whether we've already spawned the active_port detection task
+            let mut active_port_spawned = false;
 
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
@@ -467,28 +487,48 @@ impl Supervisor {
             // Initial None is a safety net; loop only exits via exit_rx.recv() which sets it
             let mut exit_status = None;
 
+            // If there is no ready check of any kind and no delay, the daemon is
+            // considered immediately ready and the active_port detection task would
+            // never be triggered inside the select loop.  Kick it off right away so
+            // that daemons without any readiness configuration still get their
+            // active_port populated (needed for proxy routing).
+            if has_port_config
+                && ready_pattern.is_none()
+                && ready_http.is_none()
+                && ready_port.is_none()
+                && ready_cmd.is_none()
+                && delay_timer.is_none()
+            {
+                active_port_spawned = true;
+                detect_and_store_active_port(id.clone(), daemon_pid);
+            }
+
             loop {
                 select! {
-                    Ok(Some(line)) = stdout.next_line() => {
-                        let formatted = format_line(line.clone());
-                        if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
-                            error!("Failed to write to log for daemon {id}: {e}");
-                        }
-                        trace!("stdout: {id} {formatted}");
+                                Ok(Some(line)) = stdout.next_line() => {
+                                    let formatted = format_line(line.clone());
+                                    if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
+                                        error!("Failed to write to log for daemon {id}: {e}");
+                                    }
+                                    trace!("stdout: {id} {formatted}");
 
                         // Check if output matches ready pattern
                         if !ready_notified
                             && let Some(ref pattern) = ready_pattern
-                                && pattern.is_match(&line) {
-                                    info!("daemon {id} ready: output matched pattern");
-                                    ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
-                                    let _ = log_appender.flush().await;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
-                                    }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                }
+                            && pattern.is_match(&line)
+                        {
+                            info!("daemon {id} ready: output matched pattern");
+                            ready_notified = true;
+                            let _ = log_appender.flush().await;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            if !active_port_spawned && has_port_config {
+                                active_port_spawned = true;
+                                detect_and_store_active_port(id.clone(), daemon_pid);
+                            }
+                        }
                     }
                     Ok(Some(line)) = stderr.next_line() => {
                         let formatted = format_line(line.clone());
@@ -497,19 +537,22 @@ impl Supervisor {
                         }
                         trace!("stderr: {id} {formatted}");
 
-                        // Check if output matches ready pattern (also check stderr)
                         if !ready_notified
                             && let Some(ref pattern) = ready_pattern
-                                && pattern.is_match(&line) {
-                                    info!("daemon {id} ready: output matched pattern");
-                                    ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
-                                    let _ = log_appender.flush().await;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
-                                    }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                }
+                            && pattern.is_match(&line)
+                        {
+                            info!("daemon {id} ready: output matched pattern");
+                            ready_notified = true;
+                            let _ = log_appender.flush().await;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            if !active_port_spawned && has_port_config {
+                                active_port_spawned = true;
+                                detect_and_store_active_port(id.clone(), daemon_pid);
+                            }
+                        }
                     },
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
@@ -540,7 +583,7 @@ impl Supervisor {
                             debug!("daemon {id} was already marked ready, not sending notification");
                         }
                         break;
-                    }
+                    },
                     _ = async {
                         if let Some(ref mut interval) = http_check_interval {
                             interval.tick().await;
@@ -553,14 +596,16 @@ impl Supervisor {
                                 Ok(response) if response.status().is_success() => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    // Stop checking once ready
                                     http_check_interval = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                                 Ok(response) => {
                                     trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
@@ -591,6 +636,10 @@ impl Supervisor {
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
                                     port_check_interval = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                                 Err(_) => {
                                     trace!("daemon {id} port check: port {port} not listening yet");
@@ -624,6 +673,10 @@ impl Supervisor {
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
                                     cmd_check_interval = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
                                 }
                                 Ok(_) => {
                                     trace!("daemon {id} cmd check: command returned non-zero (not ready)");
@@ -653,6 +706,10 @@ impl Supervisor {
                         }
                         // Disable timer after it fires
                         delay_timer = None;
+                        if !active_port_spawned && has_port_config {
+                            active_port_spawned = true;
+                            detect_and_store_active_port(id.clone(), daemon_pid);
+                        }
                     }
                     _ = log_flush_interval.tick() => {
                         // Periodic flush to ensure logs are written to disk
@@ -660,14 +717,23 @@ impl Supervisor {
                             error!("Failed to flush log for daemon {id}: {e}");
                         }
                     }
-                    // Note: No `else => break` because log_flush_interval.tick() is always available,
-                    // making the else branch unreachable. The loop exits via the exit_rx.recv() branch.
                 }
             }
 
             // Final flush to ensure all buffered logs are written
             if let Err(e) = log_appender.flush().await {
                 error!("Failed to final flush log for daemon {id}: {e}");
+            }
+
+            // Clear active_port since the process is no longer running
+            {
+                let mut state_file = SUPERVISOR.state_file.lock().await;
+                if let Some(d) = state_file.daemons.get_mut(&id) {
+                    d.active_port = None;
+                }
+                if let Err(e) = state_file.write() {
+                    debug!("Failed to write state after clearing active_port for {id}: {e}");
+                }
             }
 
             // Get the final exit status
@@ -1039,4 +1105,121 @@ async fn get_process_using_port(port: u16) -> Option<(u32, String)> {
     .await
     .ok()
     .flatten()
+}
+
+/// Spawn a background task that detects the first port the daemon process is listening on
+/// and stores it in the state file as `active_port`.
+///
+/// This is called once when the daemon becomes ready. The port is cleared when the daemon stops.
+///
+/// Port selection strategy:
+/// 1. If the daemon has `expected_port` configured, prefer the first port from that list
+///    (it is the port the operator explicitly designated as the primary service port).
+/// 2. Otherwise, take the first port the process is actually listening on (in the order
+///    returned by the OS), which is typically the port bound earliest.
+///
+/// Using `min()` (lowest port number) was previously used here but is incorrect: many
+/// applications listen on multiple ports (e.g. HTTP + metrics) and the lowest-numbered
+/// port is not necessarily the primary service port.
+fn detect_and_store_active_port(id: DaemonId, pid: u32) {
+    tokio::spawn(async move {
+        // Retry with exponential backoff so that slow-starting daemons (JVM,
+        // Node.js, Python, etc.) that take more than 500 ms to bind their port
+        // are still detected.  Total wait budget: 500+1000+2000+4000 = 7.5 s.
+        for delay_ms in [500u64, 1000, 2000, 4000] {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+
+            // Read daemon state atomically: check if still alive and get expected_port
+            // in a single lock acquisition to avoid TOCTOU and unnecessary lock overhead.
+            let expected_port: Option<u16> = {
+                let state_file = SUPERVISOR.state_file.lock().await;
+                match state_file.daemons.get(&id) {
+                    Some(d) if d.pid.is_none() => {
+                        debug!("daemon {id}: aborting active_port detection — process exited");
+                        return;
+                    }
+                    Some(d) => d.expected_port.first().copied().filter(|&p| p > 0),
+                    None => None,
+                }
+            };
+
+            let active_port = tokio::task::spawn_blocking(move || {
+                let listeners = listeners::get_all().ok()?;
+                let process_ports: Vec<u16> = listeners
+                    .into_iter()
+                    .filter(|listener| listener.process.pid == pid)
+                    .map(|listener| listener.socket.port())
+                    .filter(|&port| port > 0)
+                    .collect();
+
+                if process_ports.is_empty() {
+                    return None;
+                }
+
+                // Prefer the configured expected_port if the process is actually
+                // listening on it; otherwise fall back to the first port found.
+                if let Some(ep) = expected_port {
+                    if process_ports.contains(&ep) {
+                        return Some(ep);
+                    }
+                }
+
+                // No expected_port match — return the first port in the list.
+                // The list order reflects the order the OS reports listeners,
+                // which is generally the order they were bound (earliest first).
+                // Do NOT sort: the lowest-numbered port is not necessarily the
+                // primary service port (e.g. HTTP vs metrics).
+                process_ports.into_iter().next()
+            })
+            .await
+            .ok()
+            .flatten();
+
+            if let Some(port) = active_port {
+                debug!("daemon {id} active_port detected: {port}");
+                let mut state_file = SUPERVISOR.state_file.lock().await;
+                if let Some(d) = state_file.daemons.get_mut(&id) {
+                    // Guard against PID reuse: if the original process exited and the OS
+                    // assigned the same PID to an unrelated process that happens to bind
+                    // a port, we must not route proxy traffic to that unrelated service.
+                    if d.pid == Some(pid) {
+                        d.active_port = Some(port);
+                    } else {
+                        debug!(
+                            "daemon {id}: skipping active_port write — PID mismatch \
+                             (expected {pid}, current {:?})",
+                            d.pid
+                        );
+                        return;
+                    }
+                }
+                if let Err(e) = state_file.write() {
+                    debug!("Failed to write state after detecting active_port for {id}: {e}");
+                }
+                return;
+            }
+
+            debug!("daemon {id}: no active port detected for pid {pid} (will retry)");
+        }
+
+        debug!("daemon {id}: active port detection exhausted all retries for pid {pid}");
+    });
+}
+
+/// Check whether a daemon (by its qualified ID) is the target of any registered
+/// slug in the global config.  This is used to decide whether to run the
+/// `detect_and_store_active_port` polling task — only slug-targeted daemons need
+/// it, avoiding wasted `listeners::get_all()` calls for port-less daemons.
+///
+/// Delegates to `proxy::server::is_slug_target()` which uses the same in-memory
+/// slug cache as the proxy hot path, so this check is cheap.
+fn is_daemon_slug_target(id: &DaemonId) -> bool {
+    // read_global_slugs is called once per daemon start — acceptable cost.
+    // We intentionally avoid making this async to keep has_port_config evaluation
+    // simple and synchronous in run_once().
+    let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    slugs.iter().any(|(slug, entry)| {
+        let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+        id.name() == daemon_name
+    })
 }

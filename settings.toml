@@ -493,3 +493,110 @@ resets the counter.
 With the default interval of `10s`, a threshold of `3` means a daemon must
 exceed its CPU limit for ~30 seconds before being killed.
 """
+
+# =============================================================================
+# Proxy Settings
+# =============================================================================
+
+[proxy.enable]
+type = "Bool"
+env = "PITCHFORK_PROXY_ENABLE"
+default = "false"
+description = "Enable the reverse proxy server for daemons"
+docs = """
+When enabled, pitchfork starts a reverse proxy that routes requests from
+`<slug>.<tld>:<port>` to the daemon's actual listening port.
+
+Only daemons with an explicit `slug` are routable through the proxy.
+No slug = not proxied.
+
+Example: `myapp.localhost:7777` -> `localhost:3000` (daemon with slug = "myapp")
+"""
+
+[proxy.tld]
+type = "String"
+env = "PITCHFORK_PROXY_TLD"
+default = "localhost"
+description = "Top-level domain used for proxy URLs"
+docs = """
+The TLD appended to daemon hostnames in proxy URLs.
+
+With the default `localhost`, daemon URLs look like:
+  `myapp.localhost:7777`  (for a daemon with slug = "myapp")
+
+For custom TLDs (e.g. `test`), you need wildcard DNS resolution.
+On macOS, you can use dnsmasq or add entries to `/etc/resolver/`.
+"""
+
+[proxy.host]
+type = "String"
+env = "PITCHFORK_PROXY_HOST"
+default = "127.0.0.1"
+description = "Bind address for the reverse proxy server"
+docs = """
+IP address the reverse proxy listens on.
+
+**Security Warning:** The default `127.0.0.1` only allows local connections.
+Setting this to `0.0.0.0` will expose the proxy on every network interface,
+including externally routable ones -- anyone on the same LAN can then reach
+your local daemons.
+
+**Examples:**
+- `"127.0.0.1"` - Local only (default, recommended)
+- `"0.0.0.0"` - All interfaces (use with caution)
+- `"::1"` - IPv6 loopback
+"""
+
+[proxy.port]
+type = "Integer"
+env = "PITCHFORK_PROXY_PORT"
+default = "443"
+description = "Port the reverse proxy server listens on"
+docs = """
+The port pitchfork's reverse proxy binds to. Must be in the range 1-65535.
+
+Default is 443 (standard HTTPS port) since the proxy defaults to HTTPS.
+Users can override this to any port (e.g. 7777) to avoid requiring
+elevated privileges.
+
+Ports below 1024 require the supervisor to be started with elevated
+privileges (e.g. `sudo pitchfork supervisor start`).
+"""
+
+[proxy.https]
+type = "Bool"
+env = "PITCHFORK_PROXY_HTTPS"
+default = "true"
+description = "Enable HTTPS for the reverse proxy"
+docs = """
+When enabled (default), the proxy serves HTTPS instead of HTTP.
+
+You must also configure `proxy.tls_cert` and `proxy.tls_key`, or pitchfork
+will auto-generate a self-signed certificate stored in the state directory.
+
+Set to `false` to use plain HTTP (e.g. for simple local development).
+"""
+
+[proxy.tls_cert]
+type = "String"
+env = "PITCHFORK_PROXY_TLS_CERT"
+default = ""
+description = "Path to TLS certificate file (PEM format) for HTTPS proxy"
+docs = """
+Path to a PEM-encoded TLS certificate file used when `proxy.https = true`.
+
+If left empty and `proxy.https = true`, pitchfork will auto-generate a
+self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
+"""
+
+[proxy.tls_key]
+type = "String"
+env = "PITCHFORK_PROXY_TLS_KEY"
+default = ""
+description = "Path to TLS private key file (PEM format) for HTTPS proxy"
+docs = """
+Path to a PEM-encoded private key file used when `proxy.https = true`.
+
+If left empty and `proxy.https = true`, pitchfork will auto-generate a
+self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
+"""

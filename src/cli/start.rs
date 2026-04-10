@@ -1,9 +1,12 @@
 use crate::Result;
+use crate::cli::list::build_proxy_url;
 use crate::cli::logs::print_startup_logs;
 use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
+use crate::ui::style::{nbold, ncyan, ndim, nstyle};
 use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
@@ -137,10 +140,43 @@ impl Start {
                 }
                 if !resolved_ports.is_empty() {
                     let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
-                    println!("Daemon '{id}' started on port(s): {port_str}");
+                    let port_label = if resolved_ports.len() == 1 {
+                        "port"
+                    } else {
+                        "ports"
+                    };
+                    println!(
+                        "  {} {} started on {} {}",
+                        nstyle("✔").green(),
+                        nbold(id),
+                        port_label,
+                        ncyan(&port_str),
+                    );
+                } else {
+                    println!("  {} {} started", nstyle("✔").green(), nbold(id));
+                }
+                // Show proxy URL when the proxy is enabled and the daemon has a port.
+                // Look up slug from global config's [slugs] section.
+                let s = settings();
+                if s.proxy.enable && !resolved_ports.is_empty() {
+                    let global_slugs = PitchforkToml::read_global_slugs();
+                    let slug_name: Option<&str> = global_slugs
+                        .iter()
+                        .find(|(slug, entry)| {
+                            let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+                            id.name() == daemon_name
+                        })
+                        .map(|(slug, _)| slug.as_str());
+                    if let Some(proxy_url) = build_proxy_url(slug_name, s) {
+                        println!("    {} {}", ndim("↳"), ncyan(&proxy_url).underlined(),);
+                    }
                 }
             }
         }
+
+        // Surface any pending supervisor notifications (e.g. proxy bind failure)
+        // so the user sees them immediately after starting daemons.
+        super::drain_notifications(&ipc).await;
 
         if result.any_failed {
             std::process::exit(1);

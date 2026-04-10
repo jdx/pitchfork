@@ -27,6 +27,7 @@
       "default": {
         "general": {},
         "ipc": {},
+        "proxy": {},
         "supervisor": {},
         "tui": {},
         "web": {}
@@ -441,6 +442,10 @@
           "$ref": "#/$defs/SettingsIpcPartial",
           "default": {}
         },
+        "proxy": {
+          "$ref": "#/$defs/SettingsProxyPartial",
+          "default": {}
+        },
         "supervisor": {
           "$ref": "#/$defs/SettingsSupervisorPartial",
           "default": {}
@@ -452,6 +457,61 @@
         "web": {
           "$ref": "#/$defs/SettingsWebPartial",
           "default": {}
+        }
+      }
+    },
+    "SettingsProxyPartial": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "description": "Enable the reverse proxy server for daemons",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "host": {
+          "description": "Bind address for the reverse proxy server",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "https": {
+          "description": "Enable HTTPS for the reverse proxy",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "Port the reverse proxy server listens on",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "tld": {
+          "description": "Top-level domain used for proxy URLs",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_cert": {
+          "description": "Path to TLS certificate file (PEM format) for HTTPS proxy",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls_key": {
+          "description": "Path to TLS private key file (PEM format) for HTTPS proxy",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },

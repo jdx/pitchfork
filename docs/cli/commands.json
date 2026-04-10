@@ -944,6 +944,178 @@
         "after_help_long": "Examples:\n\n  # Start the MCP server (used by AI assistant tools)\n  $ pitchfork mcp\n\n  # Claude Desktop configuration (claude_desktop_config.json):\n  {\n    \"mcpServers\": {\n      \"pitchfork\": {\n        \"command\": \"pitchfork\",\n        \"args\": [\"mcp\"]\n      }\n    }\n  }\n\n  # Interactive testing with JSON-RPC:\n  $ echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}' | pitchfork mcp\n\n  # Available tools:\n  - pitchfork_status  - List all daemons and their state\n  - pitchfork_start   - Start daemon(s) by name\n  - pitchfork_stop    - Stop daemon(s) by name\n  - pitchfork_restart - Restart daemon(s) by name\n  - pitchfork_logs    - Return recent log output for daemon(s)\n",
         "examples": []
       },
+      "proxy": {
+        "full_cmd": [
+          "proxy"
+        ],
+        "usage": "proxy <SUBCOMMAND>",
+        "subcommands": {
+          "trust": {
+            "full_cmd": [
+              "proxy",
+              "trust"
+            ],
+            "usage": "proxy trust [--cert <CERT>]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "cert",
+                "usage": "--cert <CERT>",
+                "help": "Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)",
+                "help_first_line": "Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)",
+                "short": [],
+                "long": [
+                  "cert"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CERT",
+                  "usage": "<CERT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Install the proxy's self-signed TLS certificate into the system trust store",
+            "help_long": "Install the proxy's self-signed TLS certificate into the system trust store\n\nThis command installs pitchfork's auto-generated TLS certificate into your\nsystem's trust store so that browsers and tools trust HTTPS proxy URLs\nwithout certificate warnings.\n\nOn macOS, this installs the certificate into the current user's login\nkeychain. No `sudo` required.\n\nOn Linux, the appropriate CA certificate directory and update command are\ndetected automatically based on the running distribution:\n  - Debian/Ubuntu: /usr/local/share/ca-certificates/ + update-ca-certificates\n  - RHEL/Fedora/CentOS: /etc/pki/ca-trust/source/anchors/ + update-ca-trust\n  - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat\n  - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates\n\nThis DOES require sudo on Linux.\n\nExample:\n  pitchfork proxy trust\n  sudo pitchfork proxy trust    # Linux only",
+            "name": "trust",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "status": {
+            "full_cmd": [
+              "proxy",
+              "status"
+            ],
+            "usage": "proxy status",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Show all registered slugs and their current state",
+            "help_long": "Show all registered slugs and their current state\n\nDisplays the proxy configuration and lists all slugs from the global config\nwith their project directory, daemon name, and current status (running/stopped, port).",
+            "name": "status",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "add": {
+            "full_cmd": [
+              "proxy",
+              "add"
+            ],
+            "usage": "proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "SLUG",
+                "usage": "<SLUG>",
+                "help": "The slug name (used in proxy URLs, e.g. api → api.localhost)",
+                "help_first_line": "The slug name (used in proxy URLs, e.g. api → api.localhost)",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [
+              {
+                "name": "dir",
+                "usage": "--dir <DIR>",
+                "help": "Project directory (defaults to current directory)",
+                "help_first_line": "Project directory (defaults to current directory)",
+                "short": [],
+                "long": [
+                  "dir"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIR",
+                  "usage": "<DIR>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "daemon",
+                "usage": "--daemon <DAEMON>",
+                "help": "Daemon name within the project (defaults to slug name)",
+                "help_first_line": "Daemon name within the project (defaults to slug name)",
+                "short": [],
+                "long": [
+                  "daemon"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DAEMON",
+                  "usage": "<DAEMON>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Add a slug mapping to the global config",
+            "help_long": "Add a slug mapping to the global config\n\nRegisters a slug in ~/.config/pitchfork/config.toml that maps to a project\ndirectory and daemon name. The proxy uses this to route requests.\n\nIf --dir is not specified, uses the current directory.\nIf --daemon is not specified, defaults to the slug name.\n\nExample:\n  pitchfork proxy add api\n  pitchfork proxy add api --daemon server\n  pitchfork proxy add api --dir /home/user/my-api --daemon server",
+            "name": "add",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "remove": {
+            "full_cmd": [
+              "proxy",
+              "remove"
+            ],
+            "usage": "proxy remove <SLUG>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "SLUG",
+                "usage": "<SLUG>",
+                "help": "The slug name to remove",
+                "help_first_line": "The slug name to remove",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Remove a slug mapping from the global config",
+            "help_long": "Remove a slug mapping from the global config\n\nExample:\n  pitchfork proxy remove api",
+            "name": "remove",
+            "aliases": [
+              "rm"
+            ],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "help": "Manage the pitchfork reverse proxy",
+        "help_long": "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable slug-based URLs like:\n  https://myapp.localhost\n\nto the daemon's actual listening port (e.g. localhost:3000).\n\nSlugs are defined in the global config (~/.config/pitchfork/config.toml)\nunder [slugs]. Each slug maps to a project directory and daemon name.\n\nEnable the proxy in your pitchfork.toml or settings:\n  [settings.proxy]\n  enable = true\n\nSubcommands:\n  trust     Install the proxy's TLS certificate into the system trust store\n  add       Add a slug mapping to the global config\n  remove    Remove a slug mapping from the global config\n  status    Show all registered slugs and their current state",
+        "name": "proxy",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "restart": {
         "full_cmd": [
           "restart"

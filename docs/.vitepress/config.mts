@@ -48,6 +48,7 @@ export default defineConfig({
         items: [
           { text: "Shell Hook (Auto Start/Stop)", link: "/guides/shell-hook" },
           { text: "Ready Checks", link: "/guides/ready-checks" },
+          { text: "Port Management & Proxy", link: "/guides/port-management" },
           { text: "File Watching", link: "/guides/file-watching" },
           { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
           { text: "Lifecycle Hooks", link: "/guides/lifecycle-hooks" },

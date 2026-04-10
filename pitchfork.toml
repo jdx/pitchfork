@@ -4,3 +4,7 @@ auto = ["start", "stop"]
 ready_output = "http://localhost:"
 expected_port = [5173]
 auto_bump_port = true
+
+
+[settings.proxy]
+enable = true

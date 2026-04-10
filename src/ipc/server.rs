@@ -93,6 +93,28 @@ impl IpcServer {
 
         let listener = listener_result.into_diagnostic()?;
 
+        // When the supervisor is started with `sudo`, the socket file and directory
+        // are owned by root with restrictive permissions (0600/0700). Non-root CLI
+        // clients need to connect to this socket.
+        //
+        // If SUDO_UID/SUDO_GID are available, chown the socket back to the
+        // original user so permissions stay tight (0700/0600) but the real user
+        // owns the files.
+        //
+        // If not running via sudo, the socket is already owned by the current
+        // user with restrictive permissions (set by the umask above), so no
+        // permission change is needed.
+        #[cfg(unix)]
+        {
+            if let (Ok(uid_s), Ok(gid_s)) = (std::env::var("SUDO_UID"), std::env::var("SUDO_GID")) {
+                if let (Ok(uid), Ok(gid)) = (uid_s.parse::<u32>(), gid_s.parse::<u32>()) {
+                    let _ = chown_path(&env::IPC_SOCK_DIR, uid, gid);
+                    let _ = chown_path(&env::IPC_SOCK_MAIN, uid, gid);
+                    debug!("chowned IPC socket to uid={uid} gid={gid}");
+                }
+            }
+        }
+
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -305,5 +327,20 @@ impl IpcServer {
 impl Drop for IpcServer {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+/// `chown` a single path using libc. Returns Ok(()) on success.
+#[cfg(unix)]
+fn chown_path(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let ret = unsafe { libc::chown(c_path.as_ptr(), uid, gid) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }

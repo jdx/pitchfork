@@ -87,6 +87,10 @@ fn build_daemon_list(
             continue; // Skip supervisor itself
         }
 
+        // proxy and mise are stored as Option<bool> in the Daemon struct.
+        // None means "inherit from global settings", which is resolved at display/routing time.
+        // No override needed here — daemon_list consumers call .unwrap_or(settings()...) themselves.
+
         seen_ids.insert(daemon.id.clone());
         entries.push(DaemonListEntry {
             id: daemon.id.clone(),
@@ -107,7 +111,14 @@ fn build_daemon_list(
             id: daemon_id.clone(),
             status: DaemonStatus::Stopped,
             port_bump_attempts: settings().default_port_bump_attempts(),
-            mise: daemon_config.mise.unwrap_or(settings().general.mise),
+            depends: vec![],
+            env: None,
+            watch: vec![],
+            watch_base_dir: None,
+            mise: daemon_config.mise,
+            active_port: None,
+            slug: None,
+            proxy: None,
             memory_limit: daemon_config.memory_limit,
             cpu_limit: daemon_config.cpu_limit,
             ..Daemon::default()

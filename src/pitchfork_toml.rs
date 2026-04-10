@@ -81,6 +81,31 @@ impl JsonSchema for CpuLimit {
     }
 }
 
+/// Raw slug entry as read from TOML (uses String for dir path).
+/// Format in global config:
+/// ```toml
+/// [slugs]
+/// api = { dir = "/home/user/my-api", daemon = "server" }
+/// docs = { dir = "/home/user/docs-site" }  # daemon defaults to slug name
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SlugEntryRaw {
+    /// Project directory containing the pitchfork.toml
+    pub dir: String,
+    /// Daemon name within that project (defaults to slug name if omitted)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub daemon: Option<String>,
+}
+
+/// Resolved slug entry with PathBuf.
+#[derive(Debug, Clone)]
+pub struct SlugEntry {
+    /// Project directory containing the pitchfork.toml
+    pub dir: PathBuf,
+    /// Daemon name within that project (defaults to slug name if omitted)
+    pub daemon: Option<String>,
+}
+
 /// Internal structure for reading config files (uses String keys for short daemon names)
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct PitchforkTomlRaw {
@@ -90,6 +115,10 @@ struct PitchforkTomlRaw {
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
     #[serde(default)]
     pub settings: Option<SettingsPartial>,
+    /// Slug registry (only meaningful in global config).
+    /// Maps slug names to their configuration (dir + optional daemon name).
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub slugs: IndexMap<String, SlugEntryRaw>,
 }
 
 /// Internal daemon config for reading (uses String for depends).
@@ -169,6 +198,12 @@ pub struct PitchforkToml {
     /// this field being reflected in `settings()`.
     #[serde(default)]
     pub(crate) settings: SettingsPartial,
+    /// Slug registry (merged from global config files).
+    /// Maps slug names to their project directory and optional daemon name.
+    /// Only populated from global config files (`~/.config/pitchfork/config.toml`
+    /// or `/etc/pitchfork/config.toml`).
+    #[schemars(skip)]
+    pub slugs: IndexMap<String, SlugEntry>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -347,6 +382,37 @@ impl PitchforkToml {
             };
         }
 
+        // Check for slug match in global slugs registry
+        let global_slugs = Self::read_global_slugs();
+        if let Some(entry) = global_slugs.get(user_id) {
+            // Load the project's config from the slug's dir to find the daemon ID
+            let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
+            if let Ok(project_config) = Self::all_merged_from(&entry.dir) {
+                // Find daemon by short name in that project
+                let matches: Vec<DaemonId> = project_config
+                    .daemons
+                    .keys()
+                    .filter(|id| id.name() == daemon_name)
+                    .cloned()
+                    .collect();
+                match matches.as_slice() {
+                    [] => {}
+                    [id] => return Ok(vec![id.clone()]),
+                    _ => {
+                        let mut candidates: Vec<String> =
+                            matches.iter().map(|id| id.qualified()).collect();
+                        candidates.sort();
+                        return Err(miette::miette!(
+                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                            user_id,
+                            daemon_name,
+                            candidates.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+
         // Look for matching qualified IDs in the config
         let matches: Vec<DaemonId> = self
             .daemons
@@ -408,6 +474,35 @@ impl PitchforkToml {
         user_id: &str,
         current_namespace: &str,
     ) -> Result<DaemonId> {
+        // Check for slug match in global slugs registry
+        let global_slugs = Self::read_global_slugs();
+        if let Some(entry) = global_slugs.get(user_id) {
+            let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
+            if let Ok(project_config) = Self::all_merged_from(&entry.dir) {
+                let matches: Vec<DaemonId> = project_config
+                    .daemons
+                    .keys()
+                    .filter(|id| id.name() == daemon_name)
+                    .cloned()
+                    .collect();
+                match matches.as_slice() {
+                    [] => {}
+                    [id] => return Ok(id.clone()),
+                    _ => {
+                        let mut candidates: Vec<String> =
+                            matches.iter().map(|id| id.qualified()).collect();
+                        candidates.sort();
+                        return Err(miette::miette!(
+                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                            user_id,
+                            daemon_name,
+                            candidates.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+
         // Try to find the daemon in the current namespace first
         // Use try_new to validate user input
         let preferred_id = DaemonId::try_new(current_namespace, user_id)?;
@@ -652,6 +747,7 @@ impl PitchforkToml {
                         }
                         ns_to_origin.insert(ns, (p.clone(), origin_dir));
                     }
+
                     pt.merge(pt2)
                 }
                 Err(e) => eprintln!("error reading {}: {}", p.display(), e),
@@ -667,6 +763,7 @@ impl PitchforkToml {
             daemons: Default::default(),
             namespace: None,
             settings: SettingsPartial::default(),
+            slugs: IndexMap::new(),
             path: Some(path),
         }
     }
@@ -789,6 +886,17 @@ impl PitchforkToml {
             pt.settings = settings;
         }
 
+        // Copy slugs registry (only meaningful in global config files)
+        for (slug, entry) in raw_config.slugs {
+            pt.slugs.insert(
+                slug,
+                SlugEntry {
+                    dir: PathBuf::from(entry.dir),
+                    daemon: entry.daemon,
+                },
+            );
+        }
+
         Ok(pt)
     }
 
@@ -810,7 +918,19 @@ impl PitchforkToml {
         if let Some(path) = &self.path {
             let _lock = xx::fslock::get(path, false)
                 .wrap_err_with(|| format!("failed to acquire lock on {}", path.display()))?;
+            self.write_unlocked()
+        } else {
+            Err(FileError::NoPath.into())
+        }
+    }
 
+    /// Write the config file without acquiring a file lock.
+    ///
+    /// The caller MUST hold the file lock (via `xx::fslock::get`) before
+    /// calling this method. This is used by `register_slug` which needs to
+    /// hold a single lock across a read-modify-write cycle.
+    fn write_unlocked(&self) -> Result<()> {
+        if let Some(path) = &self.path {
             // Determine the namespace for this config file
             let config_namespace = if path.exists() {
                 namespace_from_path(path)?
@@ -871,6 +991,17 @@ impl PitchforkToml {
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
 
+            // Copy slugs registry to raw format
+            for (slug, entry) in &self.slugs {
+                raw.slugs.insert(
+                    slug.clone(),
+                    SlugEntryRaw {
+                        dir: entry.dir.to_string_lossy().to_string(),
+                        daemon: entry.daemon.clone(),
+                    },
+                );
+            }
+
             let raw_str = toml::to_string(&raw).map_err(|e| FileError::SerializeError {
                 path: path.clone(),
                 source: e,
@@ -893,8 +1024,94 @@ impl PitchforkToml {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
+        // Merge slugs - pt's values override self's values
+        for (slug, entry) in pt.slugs {
+            self.slugs.insert(slug, entry);
+        }
         // Merge settings - pt's values override self's values
         self.settings.merge_from(&pt.settings);
+    }
+
+    /// Read the global slug registry from the user-level global config.
+    ///
+    /// Returns a map of slug → SlugEntry from `[slugs]` in
+    /// `~/.config/pitchfork/config.toml`.
+    pub fn read_global_slugs() -> IndexMap<String, SlugEntry> {
+        match Self::read(&*env::PITCHFORK_GLOBAL_CONFIG_USER) {
+            Ok(pt) => pt.slugs,
+            Err(_) => IndexMap::new(),
+        }
+    }
+
+    /// Check if a slug is registered in the global config's `[slugs]` section.
+    #[allow(dead_code)]
+    pub fn is_slug_registered(slug: &str) -> bool {
+        Self::read_global_slugs().contains_key(slug)
+    }
+
+    /// Add a slug entry to the global config's `[slugs]` section.
+    ///
+    /// Reads the global config, adds/updates the slug entry, and writes it back.
+    pub fn add_slug(slug: &str, dir: &Path, daemon: Option<&str>) -> Result<()> {
+        let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
+
+        // Ensure the config directory exists
+        if let Some(parent) = global_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                miette::miette!(
+                    "Failed to create config directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        // Hold a single file lock across the entire read-modify-write cycle to
+        // prevent TOCTOU races. Without this, another process could modify the
+        // file between our read() and write() calls, and we'd overwrite its changes.
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+
+        let mut pt = if global_path.exists() {
+            let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
+                path: global_path.to_path_buf(),
+                source: e,
+            })?;
+            Self::parse_str(&raw, global_path)?
+        } else {
+            Self::new(global_path.to_path_buf())
+        };
+
+        pt.slugs.insert(
+            slug.to_string(),
+            SlugEntry {
+                dir: dir.to_path_buf(),
+                daemon: daemon.map(str::to_string),
+            },
+        );
+        pt.write_unlocked()
+    }
+
+    /// Remove a slug from the global config's `[slugs]` section.
+    pub fn remove_slug(slug: &str) -> Result<bool> {
+        let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
+        if !global_path.exists() {
+            return Ok(false);
+        }
+
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+
+        let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
+            path: global_path.to_path_buf(),
+            source: e,
+        })?;
+        let mut pt = Self::parse_str(&raw, global_path)?;
+
+        let removed = pt.slugs.shift_remove(slug).is_some();
+        if removed {
+            pt.write_unlocked()?;
+        }
+        Ok(removed)
     }
 }
 
@@ -1049,13 +1266,14 @@ impl PitchforkTomlDaemon {
             watch_base_dir: Some(crate::ipc::batch::resolve_config_base_dir(
                 self.path.as_deref(),
             )),
-            mise: self.mise.unwrap_or(settings().general.mise),
+            mise: self.mise,
+            slug: None,
+            proxy: None,
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
         }
     }
 }
-
 fn example_run_command() -> &'static str {
     "exec node server.js"
 }

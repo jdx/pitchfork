@@ -12,6 +12,7 @@ mod enable;
 mod list;
 pub mod logs;
 mod mcp;
+mod proxy;
 mod restart;
 mod run;
 mod schema;
@@ -44,6 +45,7 @@ enum Commands {
     List(list::List),
     Logs(logs::Logs),
     Mcp(mcp::Mcp),
+    Proxy(proxy::Proxy),
     Restart(restart::Restart),
     Run(run::Run),
     Schema(schema::Schema),
@@ -70,6 +72,7 @@ pub async fn run() -> Result<()> {
         Commands::List(list) => list.run().await,
         Commands::Logs(logs) => logs.run().await,
         Commands::Mcp(mcp) => mcp.run().await,
+        Commands::Proxy(proxy) => proxy.run().await,
         Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
         Commands::Schema(schema) => schema.run().await,
@@ -80,5 +83,27 @@ pub async fn run() -> Result<()> {
         Commands::Tui(tui) => tui.run().await,
         Commands::Usage(usage) => usage.run().await,
         Commands::Wait(wait) => wait.run().await,
+    }
+}
+
+/// Drain and display any pending notifications from the supervisor.
+///
+/// Notifications are queued by the supervisor for events that happen
+/// asynchronously (e.g. proxy bind failure) and would otherwise be invisible
+/// to CLI users.  Call this at the end of user-facing commands that connect
+/// to the supervisor via IPC.
+pub(crate) async fn drain_notifications(ipc: &crate::ipc::client::IpcClient) {
+    use log::LevelFilter;
+    if let Ok(notifications) = ipc.get_notifications().await {
+        for (level, msg) in notifications {
+            match level {
+                LevelFilter::Trace => trace!("{msg}"),
+                LevelFilter::Debug => debug!("{msg}"),
+                LevelFilter::Info => info!("{msg}"),
+                LevelFilter::Warn => warn!("{msg}"),
+                LevelFilter::Error => error!("{msg}"),
+                _ => {}
+            }
+        }
     }
 }

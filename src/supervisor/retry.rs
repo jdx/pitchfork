@@ -76,7 +76,7 @@ impl Supervisor {
                 fire_hook(
                     HookType::OnRetry,
                     id.clone(),
-                    dir,
+                    dir.clone(),
                     daemon.retry_count + 1,
                     daemon.env.clone(),
                     vec![],
