@@ -87,7 +87,7 @@ strum = { version = "0.28", features = ["derive"] }
 sysinfo = "0.38"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-toml = { version = "0.9", features = ["preserve_order"] }
+toml = { version = "1.0", features = ["preserve_order"] }
 rmcp = { version = "1", features = ["server", "transport-io"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 xx = { version = "2", features = ["fslock", "hash"] }
@@ -106,7 +106,7 @@ libc = "0.2"
 nix = { version = "0.31", features = ["signal", "process"] }
 
 [build-dependencies]
-toml = "0.9"
+toml = "1.0"
 quote = "1.0"
 proc-macro2 = "1.0"
 syn = "2.0"
