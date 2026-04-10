@@ -38,7 +38,7 @@ Within a given project directory, files take precedence in this order:
 |----------------|---------|
 | `state.toml` | Persistent daemon state |
 | `logs/` | Daemon log files |
-| `ipc/main.sock` | Unix socket for CLI-supervisor communication |
+| `sock/main.sock` | Unix socket for CLI-supervisor communication |
 
 ### State File
 
@@ -68,7 +68,7 @@ See [Namespaces](/concepts/namespaces) for more details on how daemon IDs work a
 
 ### IPC Socket
 
-`~/.local/state/pitchfork/ipc/main.sock`
+`~/.local/state/pitchfork/sock/main.sock`
 
 Unix domain socket used for communication between CLI commands and the supervisor daemon.
 
@@ -80,4 +80,3 @@ Varies by platform:
 |----------|----------|
 | macOS | `~/Library/LaunchAgents/com.pitchfork.agent.plist` |
 | Linux | `~/.config/systemd/user/pitchfork.service` |
-| Windows | Registry at `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` |

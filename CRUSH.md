@@ -44,7 +44,7 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 
 ### How It Works
 
-- CLI commands connect to the supervisor at `~/.local/state/pitchfork/ipc/main.sock`
+- CLI commands connect to the supervisor at `~/.local/state/pitchfork/sock/main.sock`
 - If supervisor isn't running, CLI auto-starts it in background
 - Supervisor spawns and monitors daemons, handles retries, cron scheduling, and autostop
 - State persisted to `~/.local/state/pitchfork/state.toml` with file locking for concurrency
@@ -63,7 +63,7 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 ### Background Watchers (in supervisor)
 
 - **Interval watcher (10s)**: Refresh process state, autostop, retry failed daemons
-- **Cron watcher (60s)**: Trigger scheduled tasks based on cron expressions
+- **Cron watcher (10s)**: Trigger scheduled tasks based on cron expressions
 
 ### Config Hierarchy
 

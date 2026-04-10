@@ -82,7 +82,7 @@ PITCHFORK_LOG=trace pitchfork supervisor start --force
 
 2. Remove stale socket:
    ```bash
-   rm ~/.local/state/pitchfork/ipc/main.sock
+   rm ~/.local/state/pitchfork/sock/main.sock
    ```
 
 3. Start fresh:
@@ -156,7 +156,7 @@ lsof -i :3000  # Replace 3000 with your port
 **How stop works:**
 
 Pitchfork uses a graceful shutdown strategy:
-1. **SIGTERM** - Wait up to ~3 seconds for graceful shutdown (fast 10ms checks initially, then 50ms)
+1. **SIGTERM** - Wait up to `stop_timeout` (default 5 seconds) for graceful shutdown
 2. **SIGKILL** - Force termination if process doesn't respond
 
 Most well-behaved processes exit within milliseconds of the first SIGTERM.

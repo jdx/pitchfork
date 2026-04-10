@@ -46,7 +46,6 @@ boot_start = false  # Won't start at boot
 |----------|--------|
 | macOS | LaunchAgents |
 | Linux | systemd user services |
-| Windows | Registry entries |
 
 When boot start is enabled:
 1. System login triggers the pitchfork supervisor
