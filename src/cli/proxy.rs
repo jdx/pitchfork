@@ -8,19 +8,22 @@ use crate::Result;
 Manage the pitchfork reverse proxy
 
 The reverse proxy routes requests from stable slug-based URLs like:
-  http://myapp.localhost:7777
+  https://myapp.localhost
 
 to the daemon's actual listening port (e.g. localhost:3000).
 
-Only daemons with a `slug` are routable through the proxy.
-No slug = not proxied. This is an explicit opt-in model.
+Slugs are defined in the global config (~/.config/pitchfork/config.toml)
+under [slugs]. Each slug maps to a project directory and daemon name.
 
 Enable the proxy in your pitchfork.toml or settings:
   [settings.proxy]
   enable = true
 
 Subcommands:
-  trust    Install the proxy's TLS certificate into the system trust store"
+  trust     Install the proxy's TLS certificate into the system trust store
+  add       Add a slug mapping to the global config
+  remove    Remove a slug mapping from the global config
+  status    Show all registered slugs and their current state"
 )]
 pub struct Proxy {
     #[clap(subcommand)]
@@ -31,6 +34,8 @@ pub struct Proxy {
 enum ProxyCommands {
     Trust(Trust),
     Status(ProxyStatus),
+    Add(Add),
+    Remove(Remove),
 }
 
 impl Proxy {
@@ -38,6 +43,8 @@ impl Proxy {
         match &self.command {
             ProxyCommands::Trust(trust) => trust.run().await,
             ProxyCommands::Status(status) => status.run().await,
+            ProxyCommands::Add(add) => add.run().await,
+            ProxyCommands::Remove(remove) => remove.run().await,
         }
     }
 }
@@ -254,13 +261,17 @@ fn install_cert(_cert_path: &std::path::Path) -> Result<()> {
 
 // ─── proxy status ─────────────────────────────────────────────────────────────
 
-/// Show the current proxy configuration and status
+/// Show all registered slugs and their current state
+///
+/// Displays the proxy configuration and lists all slugs from the global config
+/// with their project directory, daemon name, and current status (running/stopped, port).
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment)]
 struct ProxyStatus {}
 
 impl ProxyStatus {
     async fn run(&self) -> Result<()> {
+        use crate::pitchfork_toml::PitchforkToml;
         use crate::settings::settings;
         let s = settings();
 
@@ -304,19 +315,192 @@ impl ProxyStatus {
         }
         println!();
 
-        if effective_port < 1024 {
-            println!("⚠  Port {effective_port} is a privileged port (< 1024).");
-            println!("   The supervisor must be started with sudo:");
-            println!("   sudo pitchfork supervisor start");
+        // Show all registered slugs from global config
+        let slugs = PitchforkToml::read_global_slugs();
+        if slugs.is_empty() {
+            println!("No slugs registered.");
             println!();
+            println!("Add a slug with:");
+            println!("  pitchfork proxy add <slug>");
+            println!("  pitchfork proxy add <slug> --dir /path/to/project --daemon <name>");
+        } else {
+            println!("Registered slugs:");
+            println!();
+
+            // Read state file for daemon status
+            let state_file =
+                crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE).ok();
+
+            let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
+
+            for (slug, entry) in &slugs {
+                let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+                let url = if effective_port == standard_port {
+                    format!("{scheme}://{slug}.{tld}")
+                } else {
+                    format!("{scheme}://{slug}.{tld}:{effective_port}")
+                };
+
+                // Try to find the daemon in the state file, scoped to the slug's
+                // registered project directory to avoid picking the wrong daemon
+                // when multiple projects have daemons with the same short name.
+                let expected_ns =
+                    crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
+                let status_str = if let Some(sf) = &state_file {
+                    let daemon_entry = sf.daemons.iter().find(|(id, _)| {
+                        id.name() == daemon_name
+                            && match &expected_ns {
+                                Some(ns) => id.namespace() == ns,
+                                None => true,
+                            }
+                    });
+                    if let Some((_, daemon)) = daemon_entry {
+                        let port_str = daemon
+                            .active_port
+                            .or_else(|| daemon.resolved_port.first().copied())
+                            .map(|p| format!(" (port {p})"))
+                            .unwrap_or_default();
+                        if daemon.status.is_running() {
+                            format!("running{port_str}")
+                        } else {
+                            format!("{}", daemon.status)
+                        }
+                    } else {
+                        "not started".to_string()
+                    }
+                } else {
+                    "unknown".to_string()
+                };
+
+                println!("  {slug}");
+                println!("    URL:    {url}");
+                println!("    Dir:    {}", entry.dir.display());
+                println!("    Daemon: {daemon_name}");
+                println!("    Status: {status_str}");
+                println!();
+            }
         }
 
-        println!("Example URLs (slug-based routing only):");
-        println!("  {scheme}://myapp.{tld}:{effective_port}  →  daemon with slug 'myapp'");
-        println!();
-        println!("Daemons without a slug are not proxied. Assign a slug in pitchfork.toml:");
-        println!("  [daemons.api]");
-        println!("  slug = \"myapp\"");
+        Ok(())
+    }
+}
+
+// ─── proxy add ───────────────────────────────────────────────────────────────
+
+/// Add a slug mapping to the global config
+///
+/// Registers a slug in ~/.config/pitchfork/config.toml that maps to a project
+/// directory and daemon name. The proxy uses this to route requests.
+///
+/// If --dir is not specified, uses the current directory.
+/// If --daemon is not specified, defaults to the slug name.
+///
+/// Example:
+///   pitchfork proxy add api
+///   pitchfork proxy add api --daemon server
+///   pitchfork proxy add api --dir /home/user/my-api --daemon server
+#[derive(Debug, clap::Args)]
+#[clap(verbatim_doc_comment)]
+struct Add {
+    /// The slug name (used in proxy URLs, e.g. api → api.localhost)
+    slug: String,
+    /// Project directory (defaults to current directory)
+    #[clap(long)]
+    dir: Option<std::path::PathBuf>,
+    /// Daemon name within the project (defaults to slug name)
+    #[clap(long)]
+    daemon: Option<String>,
+}
+
+impl Add {
+    async fn run(&self) -> Result<()> {
+        use crate::pitchfork_toml::PitchforkToml;
+
+        // Validate slug characters
+        let slug = &self.slug;
+        if slug.is_empty() {
+            miette::bail!("Slug must be non-empty.");
+        }
+        if slug.contains('.') {
+            miette::bail!(
+                "Slug '{slug}' contains a dot ('.'). \
+                 Slugs must not contain dots because they are used as \
+                 DNS subdomain labels in proxy URLs (<slug>.<tld>)."
+            );
+        }
+        if !slug
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            miette::bail!(
+                "Slug '{slug}' contains invalid characters. \
+                 Slugs must be alphanumeric with '-' and '_' allowed."
+            );
+        }
+
+        let dir = self.dir.clone().unwrap_or_else(|| crate::env::CWD.clone());
+        let dir = dir.canonicalize().unwrap_or(dir);
+
+        let daemon = self.daemon.as_deref();
+
+        // Don't store daemon name if it matches the slug (it defaults to slug)
+        let stored_daemon = if daemon == Some(slug.as_str()) {
+            None
+        } else {
+            daemon
+        };
+
+        PitchforkToml::add_slug(slug, &dir, stored_daemon)?;
+
+        let global_path = &*crate::env::PITCHFORK_GLOBAL_CONFIG_USER;
+        let daemon_display = daemon.unwrap_or(slug);
+        println!(
+            "Added slug '{slug}' → {} (daemon: {daemon_display})",
+            dir.display()
+        );
+        println!("  Config: {}", global_path.display());
+
+        let s = crate::settings::settings();
+        if s.proxy.enable {
+            let scheme = if s.proxy.https { "https" } else { "http" };
+            let tld = &s.proxy.tld;
+            let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
+            if let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) {
+                let url = if effective_port == standard_port {
+                    format!("{scheme}://{slug}.{tld}")
+                } else {
+                    format!("{scheme}://{slug}.{tld}:{effective_port}")
+                };
+                println!("  URL:    {url}");
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ─── proxy remove ────────────────────────────────────────────────────────────
+
+/// Remove a slug mapping from the global config
+///
+/// Example:
+///   pitchfork proxy remove api
+#[derive(Debug, clap::Args)]
+#[clap(visible_alias = "rm", verbatim_doc_comment)]
+struct Remove {
+    /// The slug name to remove
+    slug: String,
+}
+
+impl Remove {
+    async fn run(&self) -> Result<()> {
+        use crate::pitchfork_toml::PitchforkToml;
+
+        if PitchforkToml::remove_slug(&self.slug)? {
+            println!("Removed slug '{}'", self.slug);
+        } else {
+            println!("Slug '{}' was not registered.", self.slug);
+        }
 
         Ok(())
     }

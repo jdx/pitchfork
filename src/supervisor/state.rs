@@ -210,8 +210,6 @@ impl Supervisor {
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
             mise: opts.mise.or(existing.and_then(|d| d.mise)),
-            memory_limit: opts.memory_limit.or(existing.and_then(|d| d.memory_limit)),
-            cpu_limit: opts.cpu_limit.or(existing.and_then(|d| d.cpu_limit)),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
             // active_port is intentionally NOT inherited from the existing daemon.
             // When a daemon restarts, the new process has not yet bound a port, so
@@ -220,6 +218,8 @@ impl Supervisor {
             // re-detected by detect_and_store_active_port once the new process is ready.
             active_port: opts.active_port,
             slug: opts.slug.or(existing.and_then(|d| d.slug.clone())),
+            memory_limit: opts.memory_limit.or(existing.and_then(|d| d.memory_limit)),
+            cpu_limit: opts.cpu_limit.or(existing.and_then(|d| d.cpu_limit)),
         };
         state_file.daemons.insert(opts.id.clone(), daemon.clone());
         if let Err(err) = state_file.write() {

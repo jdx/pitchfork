@@ -21,24 +21,22 @@ fn test_slug_start_stop() {
         r#"
 [daemons.api-server]
 run = "sleep 60"
-slug = "api"
 "#,
     )
     .unwrap();
 
-    // Start using the daemon name (slug cannot be used for start — it resolves
-    // to the daemon via config, which requires the daemon name or qualified ID)
-    let output = env.run_command_in_dir(&["start", "api-server"], &project);
+    // Register slug in global config
+    let _ = env.run_command_in_dir(&["proxy", "add", "api", "--daemon", "api-server"], &project);
+
+    // Start using the slug from the same project directory.
+    let output = env.run_command_in_dir(&["start", "api"], &project);
     println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("start stderr: {}", String::from_utf8_lossy(&output.stderr));
-    assert!(
-        output.status.success(),
-        "Start via daemon name should succeed"
-    );
+    assert!(output.status.success(), "Start via slug should succeed");
 
     env.sleep(Duration::from_secs(1));
 
-    // Status using slug (slug resolves to the running daemon via state file)
+    // Status using slug
     let status_output = env.run_command_in_dir(&["status", "api"], &project);
     let status_str = String::from_utf8_lossy(&status_output.stdout);
     println!("status: {status_str}");
@@ -75,10 +73,12 @@ fn test_slug_cross_directory() {
         r#"
 [daemons.backend]
 run = "sleep 60"
-slug = "be"
 "#,
     )
     .unwrap();
+
+    // Register the slug in global config
+    let _ = env.run_command_in_dir(&["proxy", "add", "be", "--daemon", "backend"], &project);
 
     // Start from project directory using daemon name
     let output = env.run_command_in_dir(&["start", "backend"], &project);
@@ -87,8 +87,7 @@ slug = "be"
     env.sleep(Duration::from_secs(1));
 
     // Query using slug from a different directory (no pitchfork.toml there).
-    // The slug is resolved via the runtime state file, which records the slug
-    // for every running daemon regardless of which directory it was started from.
+    // The slug is resolved via the global config's [slugs] registry.
     let other_dir = env.create_other_dir();
     let status_output = env.run_command_in_dir(&["status", "be"], &other_dir);
     let status_str = String::from_utf8_lossy(&status_output.stdout);
@@ -112,7 +111,7 @@ fn test_slug_priority_over_name() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    // Project A: daemon named "web" with slug "frontend"
+    // Project A: daemon named "web" with slug "frontend" (registered via proxy add)
     let project_a = env.project_dir().join("proj-a");
     fs::create_dir_all(&project_a).unwrap();
     fs::write(
@@ -120,10 +119,12 @@ fn test_slug_priority_over_name() {
         r#"
 [daemons.web]
 run = "sleep 60"
-slug = "frontend"
 "#,
     )
     .unwrap();
+
+    // Register slug "frontend" → proj-a daemon "web"
+    let _ = env.run_command_in_dir(&["proxy", "add", "frontend", "--daemon", "web"], &project_a);
 
     // Project B: daemon named "frontend" (no slug)
     let project_b = env.project_dir().join("proj-b");
@@ -197,10 +198,15 @@ fn test_slug_priority_over_same_name() {
         r#"
 [daemons.frontend]
 run = "sleep 60"
-slug = "frontend-slug"
 "#,
     )
     .unwrap();
+
+    // Register slug "frontend-slug" → proj-c daemon "frontend"
+    let _ = env.run_command_in_dir(
+        &["proxy", "add", "frontend-slug", "--daemon", "frontend"],
+        &project_c,
+    );
 
     // Project D: daemon also named "frontend" (no slug)
     let project_d = env.project_dir().join("proj-d");
@@ -257,13 +263,15 @@ fn test_slug_logs() {
         r#"
 [daemons.myservice]
 run = "echo 'slug log test' && sleep 30"
-slug = "svc"
 "#,
     )
     .unwrap();
 
-    // Start using daemon name; slug is used for subsequent commands
-    let _ = env.run_command_in_dir(&["start", "myservice"], &project);
+    // Register slug in global config
+    let _ = env.run_command_in_dir(&["proxy", "add", "svc", "--daemon", "myservice"], &project);
+
+    // Start using the slug; later commands should resolve it the same way.
+    let _ = env.run_command_in_dir(&["start", "svc"], &project);
     env.sleep(Duration::from_secs(2));
 
     // Get logs using slug
@@ -291,13 +299,15 @@ fn test_slug_restart() {
         r#"
 [daemons.worker]
 run = "sleep 60"
-slug = "w"
 "#,
     )
     .unwrap();
 
-    // Start using daemon name; slug is used for subsequent commands
-    let _ = env.run_command_in_dir(&["start", "worker"], &project);
+    // Register slug
+    let _ = env.run_command_in_dir(&["proxy", "add", "w", "--daemon", "worker"], &project);
+
+    // Start using the slug; restart should keep working via the same slug.
+    let _ = env.run_command_in_dir(&["start", "w"], &project);
     env.sleep(Duration::from_secs(1));
 
     // Restart using slug
@@ -351,7 +361,6 @@ fn test_list_shows_proxy_url() {
 [daemons.api]
 run = "python3 -m http.server {port}"
 expected_port = [{port}]
-slug = "api"
 "#
         ),
     )
@@ -359,6 +368,9 @@ slug = "api"
     // Drop the listener only after the config file is written, minimising the
     // TOCTOU window to the time between this drop and the daemon's bind().
     drop(listener);
+
+    // Register slug
+    let _ = env.run_command_in_dir(&["proxy", "add", "api"], &project);
 
     let _ = env.run_command_in_dir(&["start", "api"], &project);
     // Give the daemon time to start and bind the port
@@ -410,12 +422,14 @@ fn test_status_shows_proxy_url() {
 [daemons.server]
 run = "python3 -m http.server {port}"
 expected_port = [{port}]
-slug = "server"
 "#
         ),
     )
     .unwrap();
     drop(listener);
+
+    // Register slug
+    let _ = env.run_command_in_dir(&["proxy", "add", "server"], &project);
 
     let _ = env.run_command_in_dir(&["start", "server"], &project);
     env.sleep(Duration::from_secs(2));
@@ -462,12 +476,14 @@ fn test_start_shows_proxy_url() {
 [daemons.app]
 run = "python3 -m http.server {port}"
 expected_port = [{port}]
-slug = "app"
 "#
         ),
     )
     .unwrap();
     drop(listener);
+
+    // Register slug
+    let _ = env.run_command_in_dir(&["proxy", "add", "app"], &project);
 
     // Start with proxy enabled
     let start_output = env.run_command_in_dir_with_env(

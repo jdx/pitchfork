@@ -537,10 +537,15 @@ fn test_slug_resolves_in_same_directory() {
         r#"
 [daemons.long-service-name]
 run = "sleep 60"
-slug = "svc"
 "#,
     )
     .unwrap();
+
+    // Register slug in global config
+    let _ = env.run_command_in_dir(
+        &["proxy", "add", "svc", "--daemon", "long-service-name"],
+        &project,
+    );
 
     // Start using full name
     let start_output = env.run_command_in_dir(&["start", "long-service-name"], &project);
@@ -573,10 +578,12 @@ fn test_slug_resolves_across_namespaces() {
         r#"
 [daemons.database]
 run = "sleep 60"
-slug = "db"
 "#,
     )
     .unwrap();
+
+    // Register the slug in global config using the new proxy add command
+    let _ = env.run_command_in_dir(&["proxy", "add", "db", "--daemon", "database"], &project);
 
     // Start from project directory
     let _ = env.run_command_in_dir(&["start", "database"], &project);
@@ -613,10 +620,15 @@ fn test_list_shows_daemon_with_slug() {
         r#"
 [daemons.my-api-service]
 run = "sleep 60"
-slug = "api"
 "#,
     )
     .unwrap();
+
+    // Register slug in global config
+    let _ = env.run_command_in_dir(
+        &["proxy", "add", "api", "--daemon", "my-api-service"],
+        &project,
+    );
 
     let _ = env.run_command_in_dir(&["start", "my-api-service"], &project);
     env.sleep(Duration::from_secs(1));

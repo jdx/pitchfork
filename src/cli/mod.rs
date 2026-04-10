@@ -85,3 +85,25 @@ pub async fn run() -> Result<()> {
         Commands::Wait(wait) => wait.run().await,
     }
 }
+
+/// Drain and display any pending notifications from the supervisor.
+///
+/// Notifications are queued by the supervisor for events that happen
+/// asynchronously (e.g. proxy bind failure) and would otherwise be invisible
+/// to CLI users.  Call this at the end of user-facing commands that connect
+/// to the supervisor via IPC.
+pub(crate) async fn drain_notifications(ipc: &crate::ipc::client::IpcClient) {
+    use log::LevelFilter;
+    if let Ok(notifications) = ipc.get_notifications().await {
+        for (level, msg) in notifications {
+            match level {
+                LevelFilter::Trace => trace!("{msg}"),
+                LevelFilter::Debug => debug!("{msg}"),
+                LevelFilter::Info => info!("{msg}"),
+                LevelFilter::Warn => warn!("{msg}"),
+                LevelFilter::Error => error!("{msg}"),
+                _ => {}
+            }
+        }
+    }
+}

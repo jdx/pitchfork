@@ -1011,7 +1011,7 @@
               "proxy",
               "add"
             ],
-            "usage": "proxy add [FLAGS] <SLUG>",
+            "usage": "proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>",
             "subcommands": {},
             "args": [
               {
@@ -1031,7 +1031,9 @@
                 "help": "Project directory (defaults to current directory)",
                 "help_first_line": "Project directory (defaults to current directory)",
                 "short": [],
-                "long": ["dir"],
+                "long": [
+                  "dir"
+                ],
                 "hide": false,
                 "global": false,
                 "arg": {
@@ -1048,7 +1050,9 @@
                 "help": "Daemon name within the project (defaults to slug name)",
                 "help_first_line": "Daemon name within the project (defaults to slug name)",
                 "short": [],
-                "long": ["daemon"],
+                "long": [
+                  "daemon"
+                ],
                 "hide": false,
                 "global": false,
                 "arg": {
@@ -1093,7 +1097,9 @@
             "help": "Remove a slug mapping from the global config",
             "help_long": "Remove a slug mapping from the global config\n\nExample:\n  pitchfork proxy remove api",
             "name": "remove",
-            "aliases": ["rm"],
+            "aliases": [
+              "rm"
+            ],
             "hidden_aliases": [],
             "examples": []
           }

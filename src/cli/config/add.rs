@@ -272,8 +272,6 @@ impl Add {
                 hooks,
                 ..PitchforkTomlDaemon {
                     mise: None,
-                    slug: None,
-                    proxy: None,
                     path: None,
                     ..PitchforkTomlDaemon::default()
                 }

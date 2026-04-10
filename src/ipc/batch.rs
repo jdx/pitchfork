@@ -500,6 +500,8 @@ impl IpcClient {
                 port_bump_attempts,
                 wait_ready: true,
                 env,
+                watch: vec![],
+                watch_base_dir: None,
                 mise: None,
                 slug: None,
                 proxy: None,

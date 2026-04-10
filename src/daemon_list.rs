@@ -117,8 +117,8 @@ fn build_daemon_list(
             watch_base_dir: None,
             mise: daemon_config.mise,
             active_port: None,
-            slug: daemon_config.slug.clone(),
-            proxy: daemon_config.proxy,
+            slug: None,
+            proxy: None,
             memory_limit: daemon_config.memory_limit,
             cpu_limit: daemon_config.cpu_limit,
             ..Daemon::default()

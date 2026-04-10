@@ -30,6 +30,8 @@ use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::exit;
 use std::sync::atomic;
 use std::sync::atomic::{AtomicBool, AtomicU32};
@@ -135,6 +137,13 @@ impl Supervisor {
         web_port: Option<u16>,
         web_path: Option<String>,
     ) -> Result<()> {
+        // Ensure the state directory and its contents are accessible by non-root
+        // users. This is needed when the supervisor is started with `sudo` — all
+        // files it creates are owned by root, which prevents normal CLI clients
+        // from reading/writing state or connecting to the IPC socket.
+        #[cfg(unix)]
+        fix_state_dir_permissions();
+
         let pid = std::process::id();
         // Determine container mode: CLI flag takes priority, then settings
         let container_mode = container || settings().supervisor.container;
@@ -227,11 +236,29 @@ impl Supervisor {
                     }
                 }
             }
+            // Spawn the proxy server and wait for its bind result via a oneshot
+            // channel.  This avoids the TOCTOU race of a pre-flight bind check
+            // while still surfacing binding failures immediately.
+            let (bind_tx, bind_rx) = tokio::sync::oneshot::channel();
             tokio::spawn(async {
-                if let Err(e) = crate::proxy::server::serve().await {
+                if let Err(e) = crate::proxy::server::serve(bind_tx).await {
                     error!("Proxy server error: {e}");
                 }
             });
+            match bind_rx.await {
+                Ok(Ok(())) => {
+                    // Proxy bound successfully — nothing to do.
+                }
+                Ok(Err(msg)) => {
+                    error!("{msg}");
+                    self.add_notification(log::LevelFilter::Error, msg).await;
+                }
+                Err(_) => {
+                    // Sender dropped without sending — serve() panicked or
+                    // returned before signalling.  Already logged by the
+                    // spawn error handler above.
+                }
+            }
         }
 
         let (ipc, ipc_handle) = IpcServer::new()?;
@@ -548,5 +575,142 @@ impl Supervisor {
             .lock()
             .await
             .push((level, message));
+    }
+}
+
+/// Fix ownership on the state directory so non-root users can access files
+/// created by a `sudo`-started supervisor.
+///
+/// When `SUDO_UID`/`SUDO_GID` are set (i.e. the supervisor was launched via
+/// `sudo`), we `chown` the state directory and safe subdirectories back to the
+/// original user. This is strictly better than `chmod 0o666` because it does
+/// not widen the permission bits — the files stay owner-only (0o600/0o700) but
+/// the *owner* is the real user, not root.
+///
+/// **Security**: The `proxy/` subtree is intentionally skipped. It contains
+/// `ca-key.pem` which must remain `0o600` and owned by the process that
+/// generated it. Changing its ownership or permissions would expose the CA
+/// private key to other local users.
+///
+/// If `SUDO_UID`/`SUDO_GID` are not available (e.g. direct root login), we
+/// fall back to relaxing permissions on only the `sock/` and `logs/`
+/// subdirectories (plus `state.toml`) so CLI clients can still function.
+#[cfg(unix)]
+fn fix_state_dir_permissions() {
+    let state_dir = &*env::PITCHFORK_STATE_DIR;
+    if !state_dir.exists() {
+        return;
+    }
+
+    // Try to recover the original (pre-sudo) user identity
+    let sudo_ids = parse_sudo_ids();
+
+    if let Some((uid, gid)) = sudo_ids {
+        // Best path: chown back to the original user. Permissions stay tight.
+        chown_recursive(state_dir, uid, gid, true);
+        debug!(
+            "chowned state directory to uid={uid} gid={gid} at {}",
+            state_dir.display()
+        );
+    } else {
+        // Fallback: relax permissions on safe subdirectories only.
+        // proxy/ is never touched.
+        chmod_safe_subtrees(state_dir);
+        debug!(
+            "relaxed permissions on safe subtrees at {}",
+            state_dir.display()
+        );
+    }
+}
+
+/// Parse `SUDO_UID` and `SUDO_GID` environment variables into numeric IDs.
+#[cfg(unix)]
+fn parse_sudo_ids() -> Option<(u32, u32)> {
+    let uid: u32 = std::env::var("SUDO_UID").ok()?.parse().ok()?;
+    let gid: u32 = std::env::var("SUDO_GID").ok()?.parse().ok()?;
+    Some((uid, gid))
+}
+
+/// Recursively `chown` a directory tree. If `skip_proxy` is true, the `proxy/`
+/// subdirectory is skipped entirely to protect the CA private key.
+#[cfg(unix)]
+fn chown_recursive(dir: &std::path::Path, uid: u32, gid: u32, skip_proxy: bool) {
+    // chown the directory itself
+    let _ = chown_path(dir, uid, gid);
+
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip proxy/ at the top level of the state directory
+            if skip_proxy {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "proxy" {
+                        continue;
+                    }
+                }
+            }
+            chown_recursive(&path, uid, gid, false);
+        } else {
+            let _ = chown_path(&path, uid, gid);
+        }
+    }
+}
+
+/// `chown` a single path using libc. Returns Ok(()) on success.
+#[cfg(unix)]
+fn chown_path(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let ret = unsafe { libc::chown(c_path.as_ptr(), uid, gid) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// Fallback: relax permissions on safe subdirectories only (sock/, logs/, and
+/// state.toml). The proxy/ subtree is never touched.
+#[cfg(unix)]
+fn chmod_safe_subtrees(state_dir: &std::path::Path) {
+    // The state directory itself needs to be traversable
+    let _ = fs::set_permissions(state_dir, fs::Permissions::from_mode(0o755));
+
+    // state.toml — needs to be readable by CLI clients
+    let state_file = state_dir.join("state.toml");
+    if state_file.exists() {
+        let _ = fs::set_permissions(&state_file, fs::Permissions::from_mode(0o644));
+    }
+
+    // Safe subdirectories: sock/ and logs/
+    for subdir_name in &["sock", "logs"] {
+        let subdir = state_dir.join(subdir_name);
+        if subdir.is_dir() {
+            chmod_recursive(&subdir);
+        }
+    }
+}
+
+/// Recursively chmod: directories → 0o755, files → 0o644.
+#[cfg(unix)]
+fn chmod_recursive(dir: &std::path::Path) {
+    let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o755));
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            chmod_recursive(&path);
+        } else {
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o644));
+        }
     }
 }

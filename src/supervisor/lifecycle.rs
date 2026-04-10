@@ -335,8 +335,6 @@ impl Supervisor {
                         o.mise = opts.mise;
                         o.memory_limit = opts.memory_limit;
                         o.cpu_limit = opts.cpu_limit;
-                        o.slug = opts.slug.clone();
-                        o.proxy = opts.proxy;
                     })
                     .build(),
             )
@@ -354,12 +352,9 @@ impl Supervisor {
         let hook_daemon_env = opts.env.clone();
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
-        // Include `slug.is_some()` only when proxy is not explicitly disabled, because a
-        // daemon with proxy = false is never routed through the proxy regardless of its slug,
-        // so there is no need to detect its active_port for routing purposes.
-        let has_port_config = !opts.expected_port.is_empty()
-            || opts.proxy.unwrap_or(settings().proxy.enable)
-            || (opts.slug.is_some() && opts.proxy != Some(false));
+        // Also detect active_port when the proxy is enabled, since any daemon could be
+        // referenced by a global slug.
+        let has_port_config = !opts.expected_port.is_empty() || settings().proxy.enable;
         let daemon_pid = pid;
 
         tokio::spawn(async move {
@@ -599,13 +594,11 @@ impl Supervisor {
                                 Ok(response) if response.status().is_success() => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
                                     let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    // Stop checking once ready
                                     http_check_interval = None;
                                     if !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
@@ -722,8 +715,6 @@ impl Supervisor {
                             error!("Failed to flush log for daemon {id}: {e}");
                         }
                     }
-                    // Note: No `else => break` because log_flush_interval.tick() is always available,
-                    // making the else branch unreachable. The loop exits via the exit_rx.recv() branch.
                 }
             }
 
@@ -1136,27 +1127,18 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
         for delay_ms in [500u64, 1000, 2000, 4000] {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
-            // Bail out early if the daemon has already exited — no point retrying.
-            // active_port is cleared by the exit handler the moment the process stops,
-            // and we cannot find ports for a dead PID anyway.
-            {
+            // Read daemon state atomically: check if still alive and get expected_port
+            // in a single lock acquisition to avoid TOCTOU and unnecessary lock overhead.
+            let expected_port: Option<u16> = {
                 let state_file = SUPERVISOR.state_file.lock().await;
-                if let Some(d) = state_file.daemons.get(&id) {
-                    if d.pid.is_none() {
+                match state_file.daemons.get(&id) {
+                    Some(d) if d.pid.is_none() => {
                         debug!("daemon {id}: aborting active_port detection — process exited");
                         return;
                     }
+                    Some(d) => d.expected_port.first().copied().filter(|&p| p > 0),
+                    None => None,
                 }
-            }
-
-            // Read the expected_port from the state file so we can prefer it.
-            let expected_port: Option<u16> = {
-                let state_file = SUPERVISOR.state_file.lock().await;
-                state_file
-                    .daemons
-                    .get(&id)
-                    .and_then(|d| d.expected_port.first().copied())
-                    .filter(|&p| p > 0)
             };
 
             let active_port = tokio::task::spawn_blocking(move || {

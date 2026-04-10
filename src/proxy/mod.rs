@@ -1,7 +1,8 @@
 //! Reverse proxy server for pitchfork daemons.
 //!
 //! Routes `<slug>.<tld>:<port>` to the daemon's actual listening port.
-//! Only daemons with an explicit `slug` are routable — no slug means not proxied.
+//! Slugs are defined in the global config (`~/.config/pitchfork/config.toml`)
+//! under `[slugs]`. Each slug maps to a project directory and daemon name.
 //!
 //! # URL Routing
 //!

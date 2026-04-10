@@ -56,11 +56,18 @@ impl Status {
             // has a port (active or resolved).  Without a port the proxy cannot route to this
             // daemon, so printing a URL would be misleading — matching the behaviour of `list`.
             let s = settings();
-            if s.proxy.enable
-                && daemon.proxy.unwrap_or(s.proxy.enable)
-                && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
+            if s.proxy.enable && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
             {
-                if let Some(url) = build_proxy_url(daemon.slug.as_deref(), s) {
+                // Look up slug from global config
+                let global_slugs = PitchforkToml::read_global_slugs();
+                let slug = global_slugs
+                    .iter()
+                    .find(|(slug, entry)| {
+                        let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+                        qualified_id.name() == daemon_name
+                    })
+                    .map(|(slug, _)| slug.as_str());
+                if let Some(url) = build_proxy_url(slug, s) {
                     println!("Proxy: {url}");
                 }
             }

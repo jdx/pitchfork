@@ -3,4 +3,7 @@
 
 - **Usage**: `pitchfork proxy status`
 
-Show the current proxy configuration and status
+Show all registered slugs and their current state
+
+Displays the proxy configuration and lists all slugs from the global config
+with their project directory, daemon name, and current status (running/stopped, port).

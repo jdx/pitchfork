@@ -223,13 +223,6 @@
           "default": 10,
           "minimum": 0
         },
-        "proxy": {
-          "description": "Whether to proxy this daemon via the reverse proxy.\n\n- `None` (default): inherit from global `settings.proxy.enable`\n- `Some(true)`: always proxy this daemon\n- `Some(false)`: never proxy this daemon",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",
           "type": [
@@ -280,13 +273,6 @@
           "type": "string",
           "examples": [
             "exec node server.js"
-          ]
-        },
-        "slug": {
-          "description": "Optional stable slug alias for this daemon.\n\nA slug is a short, globally-unique identifier that can be used instead of\n`namespace/id` in CLI commands and proxy URLs. For example, a daemon with\n`slug = \"api\"` can be accessed at `api.localhost:7777` regardless of its\nnamespace, and referenced in CLI commands as just `api`.\n\nSlug validation: must be non-empty, alphanumeric with `-` and `_` allowed. Dots (`.`)\nare explicitly forbidden to avoid ambiguity with the `<id>.<namespace>` proxy routing\npattern.",
-          "type": [
-            "string",
-            "null"
           ]
         },
         "watch": {

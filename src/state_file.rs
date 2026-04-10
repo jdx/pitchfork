@@ -285,11 +285,11 @@ mod tests {
                 watch: vec![],
                 watch_base_dir: None,
                 mise: None,
-                memory_limit: None,
-                cpu_limit: None,
                 active_port: None,
                 slug: None,
                 proxy: None,
+                memory_limit: None,
+                cpu_limit: None,
             },
         );
 

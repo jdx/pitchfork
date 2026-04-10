@@ -81,6 +81,31 @@ impl JsonSchema for CpuLimit {
     }
 }
 
+/// Raw slug entry as read from TOML (uses String for dir path).
+/// Format in global config:
+/// ```toml
+/// [slugs]
+/// api = { dir = "/home/user/my-api", daemon = "server" }
+/// docs = { dir = "/home/user/docs-site" }  # daemon defaults to slug name
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SlugEntryRaw {
+    /// Project directory containing the pitchfork.toml
+    pub dir: String,
+    /// Daemon name within that project (defaults to slug name if omitted)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub daemon: Option<String>,
+}
+
+/// Resolved slug entry with PathBuf.
+#[derive(Debug, Clone)]
+pub struct SlugEntry {
+    /// Project directory containing the pitchfork.toml
+    pub dir: PathBuf,
+    /// Daemon name within that project (defaults to slug name if omitted)
+    pub daemon: Option<String>,
+}
+
 /// Internal structure for reading config files (uses String keys for short daemon names)
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct PitchforkTomlRaw {
@@ -90,6 +115,10 @@ struct PitchforkTomlRaw {
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
     #[serde(default)]
     pub settings: Option<SettingsPartial>,
+    /// Slug registry (only meaningful in global config).
+    /// Maps slug names to their configuration (dir + optional daemon name).
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub slugs: IndexMap<String, SlugEntryRaw>,
 }
 
 /// Internal daemon config for reading (uses String for depends).
@@ -137,12 +166,6 @@ struct PitchforkTomlDaemonRaw {
     pub hooks: Option<PitchforkTomlHooks>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
-    /// Optional stable slug alias for this daemon (used in proxy URLs and CLI commands).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub slug: Option<String>,
-    /// Whether to proxy this daemon (None = use global proxy.enable setting).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy: Option<bool>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
@@ -175,6 +198,12 @@ pub struct PitchforkToml {
     /// this field being reflected in `settings()`.
     #[serde(default)]
     pub(crate) settings: SettingsPartial,
+    /// Slug registry (merged from global config files).
+    /// Maps slug names to their project directory and optional daemon name.
+    /// Only populated from global config files (`~/.config/pitchfork/config.toml`
+    /// or `/etc/pitchfork/config.toml`).
+    #[schemars(skip)]
+    pub slugs: IndexMap<String, SlugEntry>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -229,46 +258,6 @@ fn read_namespace_override_from_file(path: &Path) -> Result<Option<String>> {
         source: e,
     })?;
     parse_namespace_override_from_content(path, &content)
-}
-
-/// Validate that a slug is non-empty, contains no dots, and uses only alphanumeric
-/// characters, hyphens, and underscores.
-///
-/// Returns an error with a descriptive message if any constraint is violated.
-fn validate_slug_chars(slug: &str, daemon_id: &str, path: &std::path::Path) -> Result<()> {
-    if slug.is_empty() {
-        return Err(miette::miette!(
-            "slug for daemon '{}' in {} is empty. Slugs must be non-empty strings.",
-            daemon_id,
-            path.display()
-        ));
-    }
-    // Dots are invalid in DNS subdomain labels and would create ambiguity
-    // in the `<slug>.<tld>` proxy routing pattern.
-    if slug.contains('.') {
-        return Err(miette::miette!(
-            "slug '{}' for daemon '{}' in {} contains a dot ('.'). \
-             Slugs must not contain dots because they are used as \
-             DNS subdomain labels in proxy URLs (<slug>.<tld>).",
-            slug,
-            daemon_id,
-            path.display()
-        ));
-    }
-    // Only alphanumeric, hyphens, and underscores are valid DNS subdomain characters.
-    if !slug
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(miette::miette!(
-            "slug '{}' for daemon '{}' in {} contains invalid characters. \
-             Slugs must be alphanumeric with '-' and '_' allowed.",
-            slug,
-            daemon_id,
-            path.display()
-        ));
-    }
-    Ok(())
 }
 
 fn validate_namespace(path: &Path, namespace: &str) -> Result<String> {
@@ -393,26 +382,34 @@ impl PitchforkToml {
             };
         }
 
-        // Check for slug match first (slugs take priority over name matching)
-        let slug_matches: Vec<DaemonId> = self
-            .daemons
-            .iter()
-            .filter(|(_, d)| d.slug.as_deref() == Some(user_id))
-            .map(|(id, _)| id.clone())
-            .collect();
-        match slug_matches.as_slice() {
-            [] => {}
-            [id] => return Ok(vec![id.clone()]),
-            _ => {
-                // Slugs must be globally unique — report the collision clearly.
-                let mut candidates: Vec<String> =
-                    slug_matches.iter().map(|id| id.qualified()).collect();
-                candidates.sort();
-                return Err(miette::miette!(
-                    "slug '{}' matches multiple daemons: {}. Slugs must be globally unique.",
-                    user_id,
-                    candidates.join(", ")
-                ));
+        // Check for slug match in global slugs registry
+        let global_slugs = Self::read_global_slugs();
+        if let Some(entry) = global_slugs.get(user_id) {
+            // Load the project's config from the slug's dir to find the daemon ID
+            let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
+            if let Ok(project_config) = Self::all_merged_from(&entry.dir) {
+                // Find daemon by short name in that project
+                let matches: Vec<DaemonId> = project_config
+                    .daemons
+                    .keys()
+                    .filter(|id| id.name() == daemon_name)
+                    .cloned()
+                    .collect();
+                match matches.as_slice() {
+                    [] => {}
+                    [id] => return Ok(vec![id.clone()]),
+                    _ => {
+                        let mut candidates: Vec<String> =
+                            matches.iter().map(|id| id.qualified()).collect();
+                        candidates.sort();
+                        return Err(miette::miette!(
+                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                            user_id,
+                            daemon_name,
+                            candidates.join(", ")
+                        ));
+                    }
+                }
             }
         }
 
@@ -477,52 +474,31 @@ impl PitchforkToml {
         user_id: &str,
         current_namespace: &str,
     ) -> Result<DaemonId> {
-        // Check for slug match first (slugs take priority over name matching)
-        let slug_matches: Vec<DaemonId> = self
-            .daemons
-            .iter()
-            .filter(|(_, d)| d.slug.as_deref() == Some(user_id))
-            .map(|(id, _)| id.clone())
-            .collect();
-        match slug_matches.as_slice() {
-            [] => {}
-            [id] => return Ok(id.clone()),
-            _ => {
-                // Slugs must be unique, but handle gracefully
-                let mut candidates: Vec<String> =
-                    slug_matches.iter().map(|id| id.qualified()).collect();
-                candidates.sort();
-                return Err(miette::miette!(
-                    "slug '{}' matches multiple daemons: {}. Slugs must be globally unique.",
-                    user_id,
-                    candidates.join(", ")
-                ));
-            }
-        }
-
-        // Config has no slug match — fall back to the runtime state file.
-        // This enables cross-directory slug resolution: a daemon started from
-        // another directory (whose pitchfork.toml is not visible from CWD) can
-        // still be addressed by its slug from anywhere.
-        if let Ok(state) = StateFile::read(&*env::PITCHFORK_STATE_FILE) {
-            let state_slug_matches: Vec<DaemonId> = state
-                .daemons
-                .iter()
-                .filter(|(_, d)| d.slug.as_deref() == Some(user_id))
-                .map(|(id, _)| id.clone())
-                .collect();
-            match state_slug_matches.as_slice() {
-                [] => {}
-                [id] => return Ok(id.clone()),
-                _ => {
-                    let mut candidates: Vec<String> =
-                        state_slug_matches.iter().map(|id| id.qualified()).collect();
-                    candidates.sort();
-                    return Err(miette::miette!(
-                        "slug '{}' matches multiple running daemons: {}. Slugs must be globally unique.",
-                        user_id,
-                        candidates.join(", ")
-                    ));
+        // Check for slug match in global slugs registry
+        let global_slugs = Self::read_global_slugs();
+        if let Some(entry) = global_slugs.get(user_id) {
+            let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
+            if let Ok(project_config) = Self::all_merged_from(&entry.dir) {
+                let matches: Vec<DaemonId> = project_config
+                    .daemons
+                    .keys()
+                    .filter(|id| id.name() == daemon_name)
+                    .cloned()
+                    .collect();
+                match matches.as_slice() {
+                    [] => {}
+                    [id] => return Ok(id.clone()),
+                    _ => {
+                        let mut candidates: Vec<String> =
+                            matches.iter().map(|id| id.qualified()).collect();
+                        candidates.sort();
+                        return Err(miette::miette!(
+                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                            user_id,
+                            daemon_name,
+                            candidates.join(", ")
+                        ));
+                    }
                 }
             }
         }
@@ -741,8 +717,6 @@ impl PitchforkToml {
 
         let paths = Self::list_paths_from(cwd);
         let mut ns_to_origin: HashMap<String, (PathBuf, PathBuf)> = HashMap::new();
-        // slug → (first daemon qualified id, config path) for uniqueness check
-        let mut slug_to_origin: HashMap<String, (String, PathBuf)> = HashMap::new();
 
         let mut pt = Self::default();
         for p in paths {
@@ -774,44 +748,6 @@ impl PitchforkToml {
                         ns_to_origin.insert(ns, (p.clone(), origin_dir));
                     }
 
-                    // Validate slug uniqueness across all config files,
-                    // including within the same file (pt2-internal duplicates).
-                    let mut pt2_slug_seen: std::collections::HashMap<String, String> =
-                        std::collections::HashMap::new();
-                    for (id, daemon) in &pt2.daemons {
-                        if let Some(slug) = &daemon.slug {
-                            validate_slug_chars(slug, &id.qualified(), &p)?;
-                            // Check for intra-file duplicate first
-                            if let Some(other_id) = pt2_slug_seen.get(slug.as_str()) {
-                                return Err(miette::miette!(
-                                    "slug '{}' is used by both '{}' and '{}' in {}. \
-                                     Slugs must be globally unique.",
-                                    slug,
-                                    other_id,
-                                    id.qualified(),
-                                    p.display()
-                                ));
-                            }
-                            pt2_slug_seen.insert(slug.clone(), id.qualified());
-
-                            // Check against slugs from previously merged files
-                            if let Some((existing_id, existing_path)) =
-                                slug_to_origin.get(slug.as_str())
-                            {
-                                return Err(miette::miette!(
-                                    "slug '{}' is used by both '{}' (in {}) and '{}' (in {}). \
-                                     Slugs must be globally unique.",
-                                    slug,
-                                    existing_id,
-                                    existing_path.display(),
-                                    id.qualified(),
-                                    p.display()
-                                ));
-                            }
-                            slug_to_origin.insert(slug.clone(), (id.qualified(), p.clone()));
-                        }
-                    }
-
                     pt.merge(pt2)
                 }
                 Err(e) => eprintln!("error reading {}: {}", p.display(), e),
@@ -827,6 +763,7 @@ impl PitchforkToml {
             daemons: Default::default(),
             namespace: None,
             settings: SettingsPartial::default(),
+            slugs: IndexMap::new(),
             path: Some(path),
         }
     }
@@ -937,8 +874,6 @@ impl PitchforkToml {
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
-                slug: raw_daemon.slug,
-                proxy: raw_daemon.proxy,
                 memory_limit: raw_daemon.memory_limit,
                 cpu_limit: raw_daemon.cpu_limit,
                 path: Some(path.to_path_buf()),
@@ -949,6 +884,17 @@ impl PitchforkToml {
         // Copy settings if present
         if let Some(settings) = raw_config.settings {
             pt.settings = settings;
+        }
+
+        // Copy slugs registry (only meaningful in global config files)
+        for (slug, entry) in raw_config.slugs {
+            pt.slugs.insert(
+                slug,
+                SlugEntry {
+                    dir: PathBuf::from(entry.dir),
+                    daemon: entry.daemon,
+                },
+            );
         }
 
         Ok(pt)
@@ -972,7 +918,19 @@ impl PitchforkToml {
         if let Some(path) = &self.path {
             let _lock = xx::fslock::get(path, false)
                 .wrap_err_with(|| format!("failed to acquire lock on {}", path.display()))?;
+            self.write_unlocked()
+        } else {
+            Err(FileError::NoPath.into())
+        }
+    }
 
+    /// Write the config file without acquiring a file lock.
+    ///
+    /// The caller MUST hold the file lock (via `xx::fslock::get`) before
+    /// calling this method. This is used by `register_slug` which needs to
+    /// hold a single lock across a read-modify-write cycle.
+    fn write_unlocked(&self) -> Result<()> {
+        if let Some(path) = &self.path {
             // Determine the namespace for this config file
             let config_namespace = if path.exists() {
                 namespace_from_path(path)?
@@ -1027,12 +985,21 @@ impl PitchforkToml {
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
                     mise: daemon.mise,
-                    slug: daemon.slug.clone(),
-                    proxy: daemon.proxy,
                     memory_limit: daemon.memory_limit,
                     cpu_limit: daemon.cpu_limit,
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
+            }
+
+            // Copy slugs registry to raw format
+            for (slug, entry) in &self.slugs {
+                raw.slugs.insert(
+                    slug.clone(),
+                    SlugEntryRaw {
+                        dir: entry.dir.to_string_lossy().to_string(),
+                        daemon: entry.daemon.clone(),
+                    },
+                );
             }
 
             let raw_str = toml::to_string(&raw).map_err(|e| FileError::SerializeError {
@@ -1057,8 +1024,94 @@ impl PitchforkToml {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
+        // Merge slugs - pt's values override self's values
+        for (slug, entry) in pt.slugs {
+            self.slugs.insert(slug, entry);
+        }
         // Merge settings - pt's values override self's values
         self.settings.merge_from(&pt.settings);
+    }
+
+    /// Read the global slug registry from the user-level global config.
+    ///
+    /// Returns a map of slug → SlugEntry from `[slugs]` in
+    /// `~/.config/pitchfork/config.toml`.
+    pub fn read_global_slugs() -> IndexMap<String, SlugEntry> {
+        match Self::read(&*env::PITCHFORK_GLOBAL_CONFIG_USER) {
+            Ok(pt) => pt.slugs,
+            Err(_) => IndexMap::new(),
+        }
+    }
+
+    /// Check if a slug is registered in the global config's `[slugs]` section.
+    #[allow(dead_code)]
+    pub fn is_slug_registered(slug: &str) -> bool {
+        Self::read_global_slugs().contains_key(slug)
+    }
+
+    /// Add a slug entry to the global config's `[slugs]` section.
+    ///
+    /// Reads the global config, adds/updates the slug entry, and writes it back.
+    pub fn add_slug(slug: &str, dir: &Path, daemon: Option<&str>) -> Result<()> {
+        let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
+
+        // Ensure the config directory exists
+        if let Some(parent) = global_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                miette::miette!(
+                    "Failed to create config directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        // Hold a single file lock across the entire read-modify-write cycle to
+        // prevent TOCTOU races. Without this, another process could modify the
+        // file between our read() and write() calls, and we'd overwrite its changes.
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+
+        let mut pt = if global_path.exists() {
+            let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
+                path: global_path.to_path_buf(),
+                source: e,
+            })?;
+            Self::parse_str(&raw, global_path)?
+        } else {
+            Self::new(global_path.to_path_buf())
+        };
+
+        pt.slugs.insert(
+            slug.to_string(),
+            SlugEntry {
+                dir: dir.to_path_buf(),
+                daemon: daemon.map(str::to_string),
+            },
+        );
+        pt.write_unlocked()
+    }
+
+    /// Remove a slug from the global config's `[slugs]` section.
+    pub fn remove_slug(slug: &str) -> Result<bool> {
+        let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
+        if !global_path.exists() {
+            return Ok(false);
+        }
+
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+
+        let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
+            path: global_path.to_path_buf(),
+            source: e,
+        })?;
+        let mut pt = Self::parse_str(&raw, global_path)?;
+
+        let removed = pt.slugs.shift_remove(slug).is_some();
+        if removed {
+            pt.write_unlocked()?;
+        }
+        Ok(removed)
     }
 }
 
@@ -1134,23 +1187,6 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
-    /// Optional stable slug alias for this daemon.
-    ///
-    /// A slug is a short, globally-unique identifier that can be used instead of
-    /// `namespace/id` in CLI commands and proxy URLs. For example, a daemon with
-    /// `slug = "api"` can be accessed at `api.localhost:7777` regardless of its
-    /// namespace, and referenced in CLI commands as just `api`.
-    ///
-    /// Slug validation: must be non-empty, alphanumeric with `-` and `_` allowed. Dots (`.`)
-    /// are explicitly forbidden to avoid ambiguity with the `<id>.<namespace>` proxy routing
-    /// pattern.
-    pub slug: Option<String>,
-    /// Whether to proxy this daemon via the reverse proxy.
-    ///
-    /// - `None` (default): inherit from global `settings.proxy.enable`
-    /// - `Some(true)`: always proxy this daemon
-    /// - `Some(false)`: never proxy this daemon
-    pub proxy: Option<bool>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
     /// The supervisor periodically monitors RSS and kills the process if it exceeds the limit.
     pub memory_limit: Option<MemoryLimit>,
@@ -1183,8 +1219,6 @@ impl Default for PitchforkTomlDaemon {
             env: None,
             hooks: None,
             mise: None,
-            slug: None,
-            proxy: None,
             memory_limit: None,
             cpu_limit: None,
             path: None,
@@ -1233,8 +1267,8 @@ impl PitchforkTomlDaemon {
                 self.path.as_deref(),
             )),
             mise: self.mise,
-            slug: self.slug.clone(),
-            proxy: self.proxy,
+            slug: None,
+            proxy: None,
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
         }

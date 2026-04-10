@@ -485,3 +485,31 @@ env = { PORT = "5173" }
 run = "./scripts/backup.sh"
 cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
 ```
+
+## Global Config: Slug Registry
+
+Slugs for the reverse proxy are defined **only** in the global config (`~/.config/pitchfork/config.toml`), not in per-project `pitchfork.toml` files. The global config is the single source of truth for slug→project mappings.
+
+```toml
+# ~/.config/pitchfork/config.toml
+
+[slugs]
+api = { dir = "/home/user/my-api", daemon = "server" }
+frontend = { dir = "/home/user/my-app", daemon = "dev" }
+# If daemon name matches slug, it can be omitted:
+docs = { dir = "/home/user/docs-site" }  # defaults daemon = "docs"
+```
+
+Each slug entry maps to:
+- `dir` — the project directory containing the `pitchfork.toml`
+- `daemon` (optional) — the daemon name within that project. Defaults to the slug name if omitted.
+
+Use `pitchfork proxy add` to manage slugs:
+
+```bash
+pitchfork proxy add api                                    # current dir, daemon = "api"
+pitchfork proxy add api --daemon server                    # current dir, daemon = "server"
+pitchfork proxy add api --dir /home/user/api --daemon srv  # explicit dir and daemon
+pitchfork proxy remove api                                 # remove a slug
+pitchfork proxy status                                     # show all slugs and their state
+```

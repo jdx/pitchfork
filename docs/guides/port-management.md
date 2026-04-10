@@ -62,7 +62,7 @@ The reverse proxy routes requests from stable URLs to the daemon's actual port.
 Without the proxy, you need to know the actual port your daemon is running on — which can change if ports are auto-bumped. With the proxy:
 
 ```
-http://myapp.localhost:7777  →  http://localhost:3001
+https://myapp.localhost  →  http://localhost:3001
 ```
 
 The URL stays the same even if the port changes. This is especially useful for:
@@ -71,79 +71,101 @@ The URL stays the same even if the port changes. This is especially useful for:
 - Browser bookmarks
 - Webhook configurations
 
-Only daemons with an explicit `slug` are routable through the proxy — no slug means not proxied.
+### Quick start
 
-### Enabling the Proxy
-
-In your `pitchfork.toml`:
+1. Enable the proxy in `pitchfork.toml`:
 
 ```toml
 [settings.proxy]
 enable = true
 ```
 
-Or via environment variable:
+2. Start the supervisor:
+
 ```bash
-PITCHFORK_PROXY_ENABLE=true pitchfork supervisor start
+sudo pitchfork supervisor start --force   # port 80 or 443 requires sudo
 ```
 
-### URL Format
+3. Add a slug in the **global** config:
+
+```bash
+pitchfork proxy add api
+# or with explicit dir and daemon name:
+pitchfork proxy add api --dir /path/to/project --daemon server
+```
+
+This registers the slug in `~/.config/pitchfork/config.toml`:
+
+```toml
+[slugs]
+api = { dir = "/path/to/project", daemon = "server" }
+```
+
+4. Start the daemon:
+
+```bash
+pitchfork start api
+```
+
+5. Open the proxy URL:
+
+```bash
+open https://api.localhost
+```
+
+If this is your first time using the auto-generated HTTPS certificate, trust it once:
+
+```bash
+pitchfork proxy trust         # On Linux, run the trust step with `sudo`
+```
+
+### Slugs
+
+Slugs are defined in the global config (`~/.config/pitchfork/config.toml`) under `[slugs]`. Each slug maps to a project directory and (optionally) a specific daemon name:
+
+```toml
+# ~/.config/pitchfork/config.toml
+
+[slugs]
+api = { dir = "/home/user/my-api", daemon = "server" }
+frontend = { dir = "/home/user/my-app", daemon = "dev" }
+# If daemon name matches slug, it can be omitted:
+docs = { dir = "/home/user/docs-site" }  # defaults daemon = "docs"
+```
+
+**Why global config only?**
+- **Single source of truth** — no sync step needed, no risk of stale state
+- **Cross-directory resolution** — slugs work from any directory
+- **Explicit and auditable** — one file shows all your proxied services
+- **Auto-start ready** — the proxy knows the dir and can load project config automatically
+
+### URL format
+
+Proxy URLs use this shape:
 
 ```
-http://<slug>.<tld>:<port>
+https://<slug>.<tld>
 ```
 
 Examples:
-- `http://myapp.localhost:7777` — daemon with `slug = "myapp"`
-- `http://api.localhost:7777` — daemon with `slug = "api"`
+- `https://myapp.localhost` — standard HTTPS port 443, by default
+- `https://api.localhost:7777` — custom port
 
-Daemons without a slug are not exposed through the proxy.
+### Managing slugs
 
-### Configuration
+```bash
+# Add a slug for current directory
+pitchfork proxy add myapp
 
-```toml
-[settings.proxy]
-enable = true          # Enable the proxy (default: false)
-tld = "localhost"      # Top-level domain (default: localhost)
-port = 7777            # Proxy port (default: 7777)
-https = false          # Enable HTTPS (default: false)
-tls_cert = ""          # Path to TLS cert (auto-generated if empty)
-tls_key = ""           # Path to TLS key (auto-generated if empty)
-```
+# Add a slug with explicit dir and daemon
+pitchfork proxy add api --dir /home/user/api --daemon server
 
-### Daemon Slugs
+# Remove a slug
+pitchfork proxy remove api
+# or: pitchfork proxy rm api
 
-Assign a daemon a short `slug` alias to make it routable through the proxy:
-
-```toml
-[daemons.api]
-run = "node server.js"
-slug = "api"
-```
-
-```
-http://api.localhost:7777   # daemon with slug = "api"
-```
-
-No slug = not proxied. This is an explicit opt-in: if you don't want a daemon proxied, simply don't give it a slug.
-
-See the [Namespace guide](/concepts/namespaces) for full details on slugs.
-
-### Per-Daemon Proxy Control
-
-Override the global proxy setting for individual daemons:
-
-```toml
-[settings.proxy]
-enable = true   # proxy enabled globally
-
-[daemons.api]
-run = "node server.js"
-# proxy = true  # inherits global setting (default)
-
-[daemons.internal-worker]
-run = "python worker.py"
-proxy = false   # opt out — this daemon won't be proxied
+# Show all slugs and their status
+pitchfork proxy status
 ```
 
 ---
@@ -163,17 +185,18 @@ Ports below 1024 require elevated privileges on Unix systems. You must start the
 
 ```bash
 # HTTP on port 80
-sudo PITCHFORK_PROXY_WEB_PORT=80 pitchfork supervisor start
+sudo PITCHFORK_PROXY_PORT=80 PITCHFORK_PROXY_HTTPS=false pitchfork supervisor start
 
-# HTTPS on port 443
-sudo PITCHFORK_PROXY_WEB_PORT=443 PITCHFORK_PROXY_HTTPS=true pitchfork supervisor start
+# HTTPS on port 443 (default)
+sudo pitchfork supervisor start
 ```
 
 Or in `pitchfork.toml`:
 ```toml
 [settings.proxy]
 enable = true
-web_port = 80   # requires: sudo pitchfork supervisor start
+port = 80     # requires: sudo pitchfork supervisor start
+https = false
 ```
 
 ::: warning Requires sudo
@@ -186,13 +209,13 @@ Binding to ports below 1024 (including 80 and 443) requires the supervisor to be
 
 ### Auto-Generated Certificate
 
-When `proxy.https = true` and no certificate is configured, pitchfork auto-generates a self-signed certificate:
+When `proxy.https = true` (the default) and no certificate is configured, pitchfork auto-generates a self-signed certificate:
 
 ```toml
 [settings.proxy]
 enable = true
-https = true
-web_port = 443   # optional: use standard HTTPS port
+# https = true is the default
+# port = 443 is the default
 ```
 
 The certificate is stored in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
@@ -273,13 +296,26 @@ echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/test
 sudo brew services start dnsmasq
 ```
 
+::: info
+Later we will add built-in support for custom TLDs without manual DNS configuration.
+:::
+
 ---
 
 ## Proxy Commands
 
 ```bash
-# Show proxy configuration and status
+# Show all registered slugs and their status
 pitchfork proxy status
+
+# Add a slug for the current directory
+pitchfork proxy add myapp
+
+# Add with explicit project dir and daemon name
+pitchfork proxy add api --dir /path/to/project --daemon server
+
+# Remove a slug
+pitchfork proxy remove api
 
 # Install TLS certificate into system trust store
 pitchfork proxy trust
@@ -292,21 +328,21 @@ pitchfork proxy trust --cert /path/to/cert.pem
 
 ## Viewing Proxy URLs
 
-Proxy URLs are shown in CLI output when the proxy is enabled:
+Proxy URLs are shown in CLI output when the proxy is enabled and the daemon has a registered slug:
 
 ```bash
 $ pitchfork start api
 Daemon 'myproject/api' started on port(s): 3000
-  → Proxy: http://api.localhost:7777
+  → Proxy: https://api.localhost
 
 $ pitchfork list
 Name   PID    Status   Proxy URL
-api    12345  running  http://api.localhost:7777
+api    12345  running  https://api.localhost
 
 $ pitchfork status api
 Name: myproject/api
 PID: 12345
 Status: running
 Port: 3000 (active)
-Proxy: http://api.localhost:7777
+Proxy: https://api.localhost
 ```

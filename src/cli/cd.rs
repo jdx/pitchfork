@@ -4,7 +4,6 @@ use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto};
 use crate::{Result, env};
 use duct::cmd;
 use itertools::Itertools;
-use log::LevelFilter;
 use miette::IntoDiagnostic;
 use std::collections::HashSet;
 
@@ -52,16 +51,7 @@ impl Cd {
             if args.len() > 3 {
                 cmd(&*env::PITCHFORK_BIN, args).run().into_diagnostic()?;
             }
-            for (level, msg) in ipc.get_notifications().await? {
-                match level {
-                    LevelFilter::Trace => trace!("{msg}"),
-                    LevelFilter::Debug => debug!("{msg}"),
-                    LevelFilter::Info => info!("{msg}"),
-                    LevelFilter::Warn => warn!("{msg}"),
-                    LevelFilter::Error => error!("{msg}"),
-                    _ => {}
-                }
-            }
+            super::drain_notifications(&ipc).await;
         } else {
             debug!("No daemon running");
         }

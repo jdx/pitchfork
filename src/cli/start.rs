@@ -6,6 +6,7 @@ use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
+use crate::ui::style::{nbold, ncyan, ndim, nstyle};
 use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
@@ -139,37 +140,43 @@ impl Start {
                 }
                 if !resolved_ports.is_empty() {
                     let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
-                    println!("Daemon '{id}' started on port(s): {port_str}");
+                    let port_label = if resolved_ports.len() == 1 {
+                        "port"
+                    } else {
+                        "ports"
+                    };
+                    println!(
+                        "  {} {} started on {} {}",
+                        nstyle("✔").green(),
+                        nbold(id),
+                        port_label,
+                        ncyan(&port_str),
+                    );
+                } else {
+                    println!("  {} {} started", nstyle("✔").green(), nbold(id));
                 }
-                // Show proxy URL only when the proxy server is globally enabled AND the daemon
-                // has a port (active or resolved).  Without a port the proxy cannot route to
-                // this daemon, so printing a URL would be misleading — matching `list` behaviour.
-                // Use `resolved_ports` from the IPC response (authoritative, always fresh) to
-                // determine whether a port is available.  Fall back to a fresh StateFile read
-                // for slug/proxy metadata (slug name, per-daemon proxy flag) that is not
-                // included in the start response.
-                // NOTE: active_port is intentionally NOT read from the state file here.
-                // detect_and_store_active_port runs asynchronously with at least a 500 ms
-                // delay, so the state file will almost always show active_port = None at
-                // this point.  The proxy URL is built from resolved_port as a fallback,
-                // which is correct and stable.
+                // Show proxy URL when the proxy is enabled and the daemon has a port.
+                // Look up slug from global config's [slugs] section.
                 let s = settings();
                 if s.proxy.enable && !resolved_ports.is_empty() {
-                    // Read fresh state to get slug and per-daemon proxy flag.
-                    let fresh_state =
-                        crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE).ok();
-                    let daemon_state = fresh_state.as_ref().and_then(|sf| sf.daemons.get(id));
-                    let proxy_enabled =
-                        daemon_state.and_then(|d| d.proxy).unwrap_or(s.proxy.enable);
-                    if proxy_enabled {
-                        let slug = daemon_state.and_then(|d| d.slug.clone());
-                        if let Some(proxy_url) = build_proxy_url(slug.as_deref(), s) {
-                            println!("  → Proxy: {proxy_url}");
-                        }
+                    let global_slugs = PitchforkToml::read_global_slugs();
+                    let slug_name: Option<&str> = global_slugs
+                        .iter()
+                        .find(|(slug, entry)| {
+                            let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+                            id.name() == daemon_name
+                        })
+                        .map(|(slug, _)| slug.as_str());
+                    if let Some(proxy_url) = build_proxy_url(slug_name, s) {
+                        println!("    {} {}", ndim("↳"), ncyan(&proxy_url).underlined(),);
                     }
                 }
             }
         }
+
+        // Surface any pending supervisor notifications (e.g. proxy bind failure)
+        // so the user sees them immediately after starting daemons.
+        super::drain_notifications(&ipc).await;
 
         if result.any_failed {
             std::process::exit(1);

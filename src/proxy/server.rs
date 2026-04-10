@@ -42,7 +42,6 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use tokio::net::TcpListener;
 
-use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
@@ -70,13 +69,17 @@ struct ProxyState {
 /// certificate (auto-generated if not present).
 ///
 /// This function is intended to be spawned as a background task.
-pub async fn serve() -> crate::Result<()> {
+pub async fn serve(
+    bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+) -> crate::Result<()> {
     let s = settings();
     let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
-        miette::bail!(
+        let msg = format!(
             "proxy.port {} is out of valid port range (1-65535), proxy server cannot start",
             s.proxy.port
         );
+        let _ = bind_tx.send(Err(msg.clone()));
+        miette::bail!("{msg}");
     };
 
     let mut connector = HttpConnector::new();
@@ -115,20 +118,30 @@ pub async fn serve() -> crate::Result<()> {
     let addr = SocketAddr::from((bind_ip, effective_port));
 
     if s.proxy.https {
-        serve_https_with_http_fallback(app, addr, s, effective_port).await
+        serve_https_with_http_fallback(app, addr, s, effective_port, bind_tx).await
     } else {
-        serve_http(app, addr, effective_port).await
+        serve_http(app, addr, effective_port, bind_tx).await
     }
 }
 
 /// Serve plain HTTP.
-async fn serve_http(app: Router, addr: SocketAddr, effective_port: u16) -> crate::Result<()> {
-    let listener = TcpListener::bind(addr).await.map_err(|e| {
-        miette::miette!(
-            "Failed to bind proxy server to port {effective_port}: {e}\n\
-             Hint: ports below 1024 require elevated privileges (sudo)."
-        )
-    })?;
+async fn serve_http(
+    app: Router,
+    addr: SocketAddr,
+    effective_port: u16,
+    bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+) -> crate::Result<()> {
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => {
+            let _ = bind_tx.send(Ok(()));
+            l
+        }
+        Err(e) => {
+            let msg = bind_error_message(effective_port, &e);
+            let _ = bind_tx.send(Err(msg.clone()));
+            return Err(miette::miette!("{msg}"));
+        }
+    };
 
     log::info!("Proxy server listening on http://{addr}");
     if effective_port < 1024 {
@@ -158,6 +171,7 @@ async fn serve_https_with_http_fallback(
     addr: SocketAddr,
     s: &crate::settings::Settings,
     effective_port: u16,
+    bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
 ) -> crate::Result<()> {
     use rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
@@ -186,12 +200,17 @@ async fn serve_https_with_http_fallback(
 
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
-    let listener = TcpListener::bind(addr).await.map_err(|e| {
-        miette::miette!(
-            "Failed to bind HTTPS proxy server to port {effective_port}: {e}\n\
-             Hint: ports below 1024 require elevated privileges (sudo)."
-        )
-    })?;
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => {
+            let _ = bind_tx.send(Ok(()));
+            l
+        }
+        Err(e) => {
+            let msg = bind_error_message(effective_port, &e);
+            let _ = bind_tx.send(Err(msg.clone()));
+            return Err(miette::miette!("{msg}"));
+        }
+    };
 
     log::info!("Proxy server listening on https://{addr} (HTTP also accepted)");
     if effective_port < 1024 {
@@ -259,11 +278,13 @@ async fn serve_https_with_http_fallback(
     _addr: SocketAddr,
     _s: &crate::settings::Settings,
     _effective_port: u16,
+    bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
 ) -> crate::Result<()> {
-    miette::bail!(
-        "HTTPS proxy support requires the `proxy-tls` feature.\n\
+    let msg = "HTTPS proxy support requires the `proxy-tls` feature.\n\
          Rebuild pitchfork with: cargo build --features proxy-tls"
-    )
+        .to_string();
+    let _ = bind_tx.send(Err(msg.clone()));
+    miette::bail!("{msg}")
 }
 
 /// Resolve the CA certificate and key paths from settings.
@@ -858,8 +879,22 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     let Some(raw_host) = get_request_host(&req) else {
         return error_response(StatusCode::BAD_REQUEST, "Missing Host header");
     };
-    // Strip port from host for routing
-    let host = raw_host.split(':').next().unwrap_or(&raw_host).to_string();
+    // Strip port from host for routing.
+    // IPv6 addresses in Host headers are bracketed per RFC 2732: `[::1]:port`.
+    // Splitting naïvely on ':' would break on the colons inside the address.
+    let host = if raw_host.starts_with('[') {
+        // IPv6: "[::1]:port" or "[::1]"
+        raw_host
+            .split("]:")
+            .next()
+            .unwrap_or(&raw_host)
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string()
+    } else {
+        // IPv4 / hostname: "host:port" or "host"
+        raw_host.split(':').next().unwrap_or(&raw_host).to_string()
+    };
 
     // Loop detection: check hop count.
     //
@@ -901,8 +936,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 StatusCode::BAD_GATEWAY,
                 &format!(
                     "No daemon found for host '{host}'.\n\
-                     Make sure the daemon is running and has a port configured.\n\
-                     Expected format: <id>.<namespace>.{tld} or <slug>.{tld}",
+                     Make sure the daemon has a slug, is running, and has a port configured.\n\
+                     Expected format: <slug>.{tld}",
                     tld = state.tld
                 ),
             );
@@ -1006,6 +1041,9 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 HeaderValue::from_static("1"),
             );
 
+            // Strip the internal hop-counter so it is never leaked to external clients.
+            parts.headers.remove(PROXY_HOPS_HEADER);
+
             // Strip hop-by-hop headers when serving HTTPS (HTTP/2 forbids them).
             // Skip 101 Switching Protocols — that response is always HTTP/1.1 and
             // the client needs the `Upgrade` header to complete the WS handshake
@@ -1065,72 +1103,75 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
 /// Resolve the target port for a given hostname.
 ///
-/// Only slug-based routing is supported: the subdomain portion of the hostname
-/// must match a daemon's `slug` field.  Daemons without a slug are not exposed
-/// through the proxy — this is an explicit opt-in model.
+/// Slug-based routing using the global config's `[slugs]` section:
+/// 1. Strip TLD to get subdomain (the slug)
+/// 2. Look up slug in global config → find project dir + daemon name
+/// 3. Check state file for a running daemon with that name → get its port
 ///
-/// Returns the `active_port` if available, otherwise falls back to `resolved_port[0]`.
+/// Returns the `active_port` of a running daemon.  Stopped daemons are not routable
+/// even if they still have a `resolved_port` in the state file (that port may have
+/// been reclaimed by another process).
 ///
 /// # Returns
 /// - `Ok(Some(port))` — daemon found via slug, forward to this port
 /// - `Ok(None)`       — no daemon matched (generic 502)
-/// - `Err(msg)`       — routing refused with a descriptive reason (e.g. slug conflict)
+/// - `Err(msg)`       — routing refused with a descriptive reason
 ///
 /// # Locking
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, String> {
-    // Strip the TLD suffix to get the subdomain part before acquiring the lock.
+    // Strip the TLD suffix to get the subdomain part.
     let Some(subdomain) = strip_tld(host, tld) else {
         return Ok(None);
     };
 
-    // Take a snapshot of the daemon map and release the lock immediately so
-    // that concurrent requests are not serialised behind this one.
+    // Look up the slug in the global config's [slugs] section.
+    let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let Some(entry) = global_slugs.get(&subdomain) else {
+        return Ok(None); // no slug match
+    };
+
+    let daemon_name = entry.daemon.as_deref().unwrap_or(&subdomain);
+
+    // Derive the expected namespace from the slug's registered project directory
+    // so we route to the correct project when multiple projects have daemons
+    // with the same short name (e.g. both have "api").
+    let expected_namespace =
+        crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
+
+    // Find matching daemons in the state file.
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
         state_file.daemons.clone()
     };
 
-    // Only slug-based routing is supported.  A daemon must have an explicit
-    // `slug` to be reachable through the proxy — no slug means not proxied.
-    //
-    // Collect ALL slug matches first to detect cross-project duplicates.
-    // Two independent projects can each declare slug = "api" in their own
-    // pitchfork.toml; both end up in the shared state file.  Routing
-    // non-deterministically to whichever DaemonId sorts first in the BTreeMap
-    // would be invisible to the user, so we refuse to route at all when there
-    // is ambiguity.
-    let slug_matches: Vec<(&DaemonId, &Daemon)> = daemons
+    // Find running daemons whose short name matches the slug's daemon name,
+    // scoped to the slug's registered project namespace when available.
+    let running_matches: Vec<(&DaemonId, &crate::daemon::Daemon)> = daemons
         .iter()
-        .filter(|(_, d)| d.slug.as_deref() == Some(subdomain.as_str()))
+        .filter(|(id, d)| {
+            id.name() == daemon_name
+                && d.status.is_running()
+                && match &expected_namespace {
+                    Some(ns) => id.namespace() == ns,
+                    None => true, // no namespace resolved — fall back to name-only match
+                }
+        })
         .collect();
 
-    match slug_matches.as_slice() {
-        [] => Ok(None), // no slug match — daemon is not proxied
-        [(_, daemon)] => {
-            // Respect the per-daemon proxy opt-out flag.
-            if !daemon.proxy.unwrap_or(settings().proxy.enable) {
-                return Ok(None);
-            }
-            Ok(daemon
-                .active_port
-                .or_else(|| daemon.resolved_port.first().copied()))
-        }
+    let daemon = match running_matches.as_slice() {
+        [] => return Ok(None), // daemon not running
+        [(_, d)] => *d,
         _ => {
-            // Multiple running daemons share the same slug (cross-project conflict).
-            let conflicting_ids: Vec<String> =
-                slug_matches.iter().map(|(id, _)| id.to_string()).collect();
-            let msg = format!(
-                "Proxy routing conflict: slug '{subdomain}' is claimed by multiple daemons: {}.\n\
-                 Refusing to route ambiguously.\n\
-                 Rename one of the slugs to resolve the conflict.",
-                conflicting_ids.join(", ")
-            );
-            log::warn!("{msg}");
-            Err(msg)
+            // Multiple running daemons still match — pick the first one
+            running_matches[0].1
         }
-    }
+    };
+
+    Ok(daemon
+        .active_port
+        .or_else(|| daemon.resolved_port.first().copied()))
 }
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
@@ -1143,6 +1184,22 @@ fn strip_tld(host: &str, tld: &str) -> Option<String> {
     host.strip_suffix(&format!(".{tld}"))
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// Build a human-friendly error message for port binding failures.
+fn bind_error_message(port: u16, err: &std::io::Error) -> String {
+    if port < 1024 {
+        format!(
+            "Failed to bind proxy server to port {port}: {err}\n\
+             Hint: ports below 1024 require elevated privileges. \
+             Try: sudo pitchfork supervisor start"
+        )
+    } else {
+        format!(
+            "Failed to bind proxy server to port {port}: {err}\n\
+             Hint: another process may already be using this port."
+        )
+    }
 }
 
 /// Build a plain-text error response.
