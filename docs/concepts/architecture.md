@@ -17,7 +17,7 @@ Technical overview of pitchfork's internal design.
 │  • Sends IPC requests                                       │
 └───────────────────────────┬────────────────────────────────┘
                             │ Unix Socket
-                            │ ~/.local/state/pitchfork/ipc/main.sock
+                            │ ~/.local/state/pitchfork/sock/main.sock
                             ▼
 ┌────────────────────────────────────────────────────────────┐
 │                       SUPERVISOR                            │
@@ -70,11 +70,19 @@ The supervisor runs independently and manages all daemons.
 - Refreshes process list (checks which PIDs are alive)
 - Handles autostop (stops daemons when shell leaves directory)
 - Retries failed daemons with remaining retry attempts
+- Checks resource limits (memory and CPU) for running daemons
 
-### Cron Watcher (60 seconds)
+### Cron Watcher (10 seconds)
 
 - Checks daemons with cron schedules
 - Triggers according to retrigger policy
+
+### File Watcher
+
+- Monitors directories matching daemon `watch` glob patterns
+- Debounces changes (default 1 second) to avoid rapid restarts
+- Dynamically adds/removes watch directories as daemons start/stop
+- Only restarts running daemons (stopped daemons ignore changes)
 
 ## Daemon States
 
@@ -84,6 +92,7 @@ The supervisor runs independently and manages all daemons.
 | Waiting | Waiting for ready check |
 | Stopping | Being terminated (SIGTERM sent) |
 | Stopped | Exited successfully (code 0) |
+| Failed | Failed to start (pre-ready check) |
 | Errored | Exited with error (code ≠ 0) |
 
 ## State Persistence
@@ -124,7 +133,7 @@ When starting a daemon:
 
 When stopping a daemon, pitchfork uses a graceful shutdown strategy:
 
-1. **SIGTERM** - Send termination signal, wait up to ~3 seconds
+1. **SIGTERM** - Send termination signal, wait up to `stop_timeout` (default: 5 seconds)
 2. **SIGKILL** - Force kill if process still running
 
 This ensures:
@@ -145,4 +154,4 @@ Child processes are terminated before the parent process.
 | Port | TCP port is listening |
 | Command | Shell command exits with code 0 |
 
-First check to succeed marks daemon as ready.
+First check to succeed (output/HTTP/port/command) marks daemon as ready. Delay only fires when no other check type is configured.

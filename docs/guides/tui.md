@@ -64,6 +64,7 @@ The TUI uses familiar vim keybindings for efficient navigation.
 | `n` | Create new daemon |
 | `E` | Edit selected daemon config |
 | `?` | Show help |
+| `p` | Show network ports view |
 | `q` / `Esc` | Quit |
 
 ### Config Editor

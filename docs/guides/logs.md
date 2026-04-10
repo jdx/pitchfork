@@ -135,7 +135,7 @@ pitchfork logs pitchfork
 
 ## Log Location
 
-Logs are stored in `~/.local/state/pitchfork/logs/<daemon-name>/`.
+Logs are stored in `~/.local/state/pitchfork/logs/<namespace>--<name>/`. See [File Locations](/reference/file-locations#logs) for details on the path format.
 
 Each daemon has its own log file that persists across restarts.
 

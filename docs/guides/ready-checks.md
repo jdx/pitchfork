@@ -20,7 +20,7 @@ pitchfork start myapp --delay 10
 ```toml
 [daemons.myapp]
 run = "node server.js"
-ready_delay = 5  # Wait 5 seconds (default: 3)
+ready_delay = 5  # Wait 5 seconds (CLI default: 3)
 ```
 
 **Best for:** Simple services where a time delay is sufficient.
@@ -139,7 +139,8 @@ The command check polls every 500ms. Use this when you need more complex readine
 | Port | TCP connection to port succeeds |
 | Command | Shell command returns exit code 0 |
 
-- If multiple checks are configured, the first one to succeed marks the daemon as ready
+- If multiple checks are configured (HTTP, port, command), the first one to succeed marks the daemon as ready
+- **Delay check** only fires when no other check type (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`) is configured. It acts as the fallback default.
 - If the daemon exits with a non-zero code before becoming ready, `pitchfork start/run` exits with that same code
 
 ## Common Patterns

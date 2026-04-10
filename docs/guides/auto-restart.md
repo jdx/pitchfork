@@ -74,7 +74,7 @@ ERROR: daemon api failed with exit code 1
 
 **Behavior:**
 - The supervisor detects the crash in the background
-- Retries every 10 seconds
+- Retries at each supervisor interval tick (default: 10 seconds, configurable via `settings.general.interval`)
 - Continues until retry count is exhausted
 - Happens independently of CLI commands
 

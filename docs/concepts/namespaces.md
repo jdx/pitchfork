@@ -100,13 +100,14 @@ backend/api   12346  running
 Daemon IDs have the following restrictions:
 
 | Rule | Valid | Invalid |
-|------|-------|---------|
+|------|-------|---------| 
 | No double dashes | `my-app` | `my--app` |
 | No slashes in short ID | `api` | `api/v2` |
 | Single slash for qualified ID | `project/api` | `a/b/c` |
 | No spaces | `my_app` | `my app` |
 | No parent references | `myapp` | `../etc` |
-| ASCII only | `myapp123` | `myäpp` |
+| No leading/trailing dashes | `my-app` | `-app` or `app-` |
+| ASCII alphanumeric, `_`, `-`, `.` only | `myapp123` | `myäpp` or `app@v1` |
 
 The `--` sequence is reserved for internal path encoding (converting `namespace/daemon` to `namespace--daemon` for filesystem storage).
 

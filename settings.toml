@@ -196,14 +196,9 @@ description = "Automatically start web UI when supervisor starts"
 docs = """
 When enabled, the web UI server will automatically start alongside the supervisor.
 
-By default, this is disabled. You can start the web UI manually with:
+By default, this is disabled. You can also start the web UI manually with:
 ```
-pitchfork web
-```
-
-Or enable auto-start via environment variable:
-```
-export PITCHFORK_WEB_AUTO_START=true
+pitchfork supervisor start --web-port=3120
 ```
 """
 

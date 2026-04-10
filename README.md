@@ -30,19 +30,24 @@
 
 Pitchfork is a CLI for managing daemons with a focus on developer experience.
 
-- **Start services once** - Only start daemons if they have not already been started
-- **Auto start/stop** - Automatically start daemons when entering a project directory, stop when leaving
-- **Ready checks** - Based on delay, output or HTTP response
-- **Restart on failure** - Automatically restart daemons when they crash
-- **Cron jobs** - Schedule recurring tasks
-- **Start on boot** - Automatically start daemons when your system boots
-- **Project configuration** - Define all your project's daemons in `pitchfork.toml`
+- **Start services once** — Only start daemons if they have not already been started
+- **Auto start/stop** — Shell hook starts daemons when entering a project directory, stops when leaving
+- **Ready checks** — Delay, output regex, HTTP endpoint, TCP port, or custom command
+- **Dependency management** — Topological start ordering with parallel execution
+- **File watching** — Auto-restart daemons when source files change
+- **Cron scheduling** — Schedule recurring tasks with configurable retrigger modes
+- **Lifecycle hooks** — Run commands on ready, fail, retry, stop, and exit events
+- **Resource limits** — Enforce memory and CPU limits per daemon
+- **TUI & Web UI** — Interactive terminal dashboard and browser-based interface
+- **MCP server** — Expose daemon management to AI assistants (Claude, Cursor, etc.)
+- **Container mode** — Run as PID 1 with zombie reaping and signal forwarding
 
 ## Use Cases
 
 - Launching development services like web APIs and databases
 - Running rsync/unison to synchronize directories with a remote machine
 - Managing background processes for your project
+- Running pitchfork as a container entrypoint (Docker/Kubernetes)
 
 ## Quickstart
 
@@ -98,8 +103,8 @@ $ pitchfork start redis api
 Enable automatic daemon management when entering/leaving project directories:
 
 ```sh-session
-echo '$(pitchfork activate bash)' >> ~/.bashrc
-echo '$(pitchfork activate zsh)' >> ~/.zshrc
+echo 'eval "$(pitchfork activate bash)"' >> ~/.bashrc
+echo 'eval "$(pitchfork activate zsh)"' >> ~/.zshrc
 echo 'pitchfork activate fish | source' >> ~/.config/fish/config.fish
 ```
 
@@ -152,7 +157,7 @@ depends = ["postgres", "redis"]
 
 [daemons.sync]
 run = "rsync -avz --delete remote:/data/ ./local-data/"
-cron = "0 */5 * * * *"  # Run every 5 minutes
+cron = { schedule = "0 */5 * * * *" }  # Run every 5 minutes
 ```
 
 Start everything:

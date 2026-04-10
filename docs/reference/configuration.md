@@ -54,12 +54,13 @@ run = "command to execute"
 Daemon names must follow these rules:
 
 | Rule | Valid | Invalid |
-|------|-------|---------|
+|------|-------|---------| 
 | No double dashes | `my-app` | `my--app` |
 | No slashes | `api` | `api/v2` |
 | No spaces | `my_app` | `my app` |
 | No parent references | `myapp` | `..` or `foo..bar` |
-| ASCII only | `myapp123` | `myäpp` |
+| No leading/trailing dashes | `my-app` | `-app` or `app-` |
+| ASCII alphanumeric, `_`, `-`, `.` only | `myapp123` | `myäpp` or `app@v1` |
 
 The `--` sequence is reserved for internal use (namespace encoding). See [Namespaces](/concepts/namespaces) for details.
 
@@ -165,7 +166,7 @@ auto = ["start", "stop"]  # Both auto-start and auto-stop
 
 ### `ready_delay`
 
-Seconds to wait before considering the daemon ready. Default: `3`
+Seconds to wait before considering the daemon ready. When started via `pitchfork start` or `pitchfork run`, defaults to `3` seconds if no other ready check is configured.
 
 ```toml
 [daemons.api]
@@ -287,6 +288,48 @@ watch = ["src/**/*.ts", "package.json"]
 - Changes are debounced for 1 second to avoid rapid restarts
 
 See [File Watching guide](/guides/file-watching) for more details.
+
+### `expected_port`
+
+TCP ports the daemon is expected to bind to. Used for port conflict detection before starting a daemon.
+
+```toml
+[daemons.api]
+run = "node server.js"
+expected_port = [3000]
+
+[daemons.multi]
+run = "./start.sh"
+expected_port = [8080, 8443]
+```
+
+### `auto_bump_port`
+
+When `true`, pitchfork automatically finds an available port if the expected port is already in use. All ports in `expected_port` are bumped by the same offset to maintain relative spacing. Default: `false`
+
+```toml
+[daemons.api]
+run = "node server.js"
+expected_port = [3000]
+auto_bump_port = true
+```
+
+**Behavior:**
+- Tries incrementing all ports by the same offset (1, 2, 3, ...) up to `port_bump_attempts` (default: 10)
+- Resolved ports are available via `pitchfork status` and in the start output
+- Useful for running multiple instances of the same service
+
+### `port_bump_attempts`
+
+Maximum number of port increment attempts when `auto_bump_port` is enabled. Default: `10`
+
+```toml
+[daemons.api]
+run = "node server.js"
+expected_port = [3000]
+auto_bump_port = true
+port_bump_attempts = 20
+```
 
 ### `boot_start`
 
