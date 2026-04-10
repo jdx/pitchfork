@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
-      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
       - run: communique generate "${{ needs.release-plz-release.outputs.tag }}" --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
@@ -80,7 +80,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install mise
-        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
       - name: Squash generated docs into release PR
         run: |
           if [ -n "${{ steps.release-plz.outputs.pr }}" ]; then
