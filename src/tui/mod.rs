@@ -49,7 +49,7 @@ pub async fn run() -> Result<()> {
     result
 }
 
-async fn run_with_cleanup<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> {
+async fn run_with_cleanup(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     // Connect to supervisor (auto-start if needed)
     let client = Arc::new(IpcClient::connect(true).await?);
 
@@ -61,8 +61,8 @@ async fn run_with_cleanup<B: Backend>(terminal: &mut Terminal<B>) -> Result<()> 
     run_app(terminal, &mut app, &client).await
 }
 
-async fn run_app<B: Backend>(
-    terminal: &mut Terminal<B>,
+async fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     client: &Arc<IpcClient>,
 ) -> Result<()> {
