@@ -623,10 +623,11 @@ default = "30s"
 description = "Maximum time to wait for an auto-started daemon to become ready"
 docs = """
 When a daemon is auto-started via a proxy request, the proxy waits up to
-this duration for the daemon to bind a port before giving up.
+this duration for the **entire** auto-start operation to complete — including
+waiting for the daemon's readiness signal and detecting the bound port.
 
-If the daemon does not become ready within this timeout, the browser
-receives an error page indicating the startup timed out.
+If the daemon does not become ready and bind a port within this timeout,
+the browser receives an error page indicating the startup timed out.
 
 **Examples:**
 - `"15s"` - Shorter timeout for fast-starting services
