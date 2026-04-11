@@ -69,7 +69,7 @@ hyper-util = { version = "0.1", features = [
     "tokio",
 ] }
 http-body-util = "0.1"
-rcgen = { version = "0.13", optional = true, features = ["x509-parser"] }
+rcgen = { version = "0.14", optional = true, features = ["x509-parser"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # Force hyper-rustls (pulled in by reqwest) to use ring instead of aws-lc-rs.
