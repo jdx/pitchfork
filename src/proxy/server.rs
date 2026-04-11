@@ -490,10 +490,8 @@ pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> c
 /// acceptable.
 #[cfg(feature = "proxy-tls")]
 struct SniCertResolver {
-    /// The CA key pair (used to sign leaf certs).
-    ca_key: rcgen::KeyPair,
-    /// The CA certificate (used as issuer for leaf certs).
-    ca_cert: rcgen::Certificate,
+    /// The CA issuer (key + parsed cert params, used to sign leaf certs).
+    issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
     /// Directory where per-domain PEM files are cached on disk.
     host_certs_dir: std::path::PathBuf,
     /// L1 cache: domain → certified key (in-memory).
@@ -517,8 +515,6 @@ impl std::fmt::Debug for SniCertResolver {
 impl SniCertResolver {
     /// Load the CA from disk and prepare the resolver.
     fn new(ca_cert_path: &std::path::Path, ca_key_path: &std::path::Path) -> crate::Result<Self> {
-        use rcgen::CertificateParams;
-
         let ca_key_pem = std::fs::read_to_string(ca_key_path)
             .map_err(|e| miette::miette!("Failed to read CA key {}: {e}", ca_key_path.display()))?;
         let ca_cert_pem = std::fs::read_to_string(ca_cert_path).map_err(|e| {
@@ -533,19 +529,9 @@ impl SniCertResolver {
         let ca_key = rcgen::KeyPair::from_pem(&ca_key_pem)
             .map_err(|e| miette::miette!("Failed to parse CA key: {e}"))?;
 
-        // Parse the actual CA cert from disk using rcgen's from_ca_cert_pem.
-        // We use `self_signed` here only to reconstruct the in-memory
-        // `rcgen::Certificate` object that is needed to sign leaf certs via
-        // `signed_by`.  The resulting object is used solely as the issuer
-        // reference for leaf cert signing — it is never serialised back to
-        // disk, so the new serial number / timestamps it carries do not matter.
-        // Leaf certs signed by this object will chain to the on-disk CA that
-        // browsers/OS have already trusted, because the public key and subject
-        // are identical.
-        let ca_cert = CertificateParams::from_ca_cert_pem(&ca_cert_pem)
-            .map_err(|e| miette::miette!("Failed to parse CA cert params: {e}"))?
-            .self_signed(&ca_key)
-            .map_err(|e| miette::miette!("Failed to reconstruct CA cert: {e}"))?;
+        // Parse the CA cert + key into an Issuer for signing leaf certs.
+        let issuer = rcgen::Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)
+            .map_err(|e| miette::miette!("Failed to parse CA cert: {e}"))?;
 
         // Ensure the host-certs directory exists
         let host_certs_dir = ca_cert_path
@@ -556,8 +542,7 @@ impl SniCertResolver {
             .map_err(|e| miette::miette!("Failed to create host-certs dir: {e}"))?;
 
         Ok(Self {
-            ca_key,
-            ca_cert,
+            issuer,
             host_certs_dir,
             cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             pending: std::sync::Mutex::new(std::collections::HashSet::new()),
@@ -698,42 +683,14 @@ impl SniCertResolver {
             miette::bail!("No certificates found in {}", path.display());
         }
 
-        // Check that the first certificate has not expired.
-        // rcgen's CertificateParams::not_after is a `time::OffsetDateTime`.
-        // We compare it against the current UTC time to detect expired certs.
+        // Check that the first certificate has not expired using x509-parser.
         {
-            use rcgen::CertificateParams;
-            // Re-parse the PEM to get the validity period.
-            // CertificateParams::from_ca_cert_pem works for any DER-encoded cert.
-            let first_pem_block: String = {
-                let lines: Vec<&str> = pem
-                    .lines()
-                    .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE-----"))
-                    .take_while(|l| !l.starts_with("-----END CERTIFICATE-----"))
-                    .collect();
-                if lines.is_empty() {
-                    String::new()
-                } else {
-                    // Re-attach the END line that take_while dropped
-                    let end_line = "-----END CERTIFICATE-----";
-                    format!("{}\n{end_line}", lines.join("\n"))
-                }
-            };
-            if first_pem_block.is_empty() {
-                // Could not extract a PEM block — treat as corrupt and force regeneration.
-                miette::bail!(
-                    "Could not extract PEM certificate block from {} — will regenerate",
-                    path.display()
-                );
-            }
-            // Propagate parse errors so the caller can fall through to regeneration
-            // rather than silently serving a cert whose expiry we cannot verify.
-            let params = CertificateParams::from_ca_cert_pem(&first_pem_block).map_err(|e| {
-                miette::miette!("Failed to parse cert params from {}: {e}", path.display())
+            let (_, cert) = x509_parser::parse_x509_certificate(&cert_ders[0]).map_err(|e| {
+                miette::miette!("Failed to parse certificate from {}: {e}", path.display())
             })?;
             use chrono::Utc;
             let now_ts = Utc::now().timestamp();
-            let not_after_ts = params.not_after.unix_timestamp();
+            let not_after_ts = cert.validity().not_after.timestamp();
             if not_after_ts < now_ts {
                 miette::bail!(
                     "Cached certificate at {} has expired — will regenerate",
@@ -807,7 +764,7 @@ impl SniCertResolver {
         let leaf_key = rcgen::KeyPair::generate()
             .map_err(|e| miette::miette!("Failed to generate leaf key: {e}"))?;
         let leaf_cert = params
-            .signed_by(&leaf_key, &self.ca_cert, &self.ca_key)
+            .signed_by(&leaf_key, &self.issuer)
             .map_err(|e| miette::miette!("Failed to sign leaf cert for '{domain}': {e}"))?;
 
         // Convert to rustls types
