@@ -50,7 +50,7 @@ use tokio::{signal, time};
 ///
 /// On Linux this map is unused because the reaper uses `waitid` with `WNOWAIT`
 /// to peek before reaping, which avoids the race entirely.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) static REAPED_STATUSES: Lazy<Mutex<HashMap<u32, i32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
