@@ -1014,24 +1014,37 @@ async fn check_ports_available(
                 continue;
             }
 
-            // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks
-            // Bind to 0.0.0.0 to detect conflicts on all interfaces, not just localhost
+            // Use spawn_blocking to avoid blocking the async runtime during TCP bind checks.
+            //
+            // We check multiple addresses to avoid false-negatives caused by SO_REUSEADDR.
+            // On macOS/BSD, Rust's TcpListener::bind sets SO_REUSEADDR by default, which
+            // allows binding 0.0.0.0:port even when 127.0.0.1:port is already in use
+            // (because 0.0.0.0 is technically a different address).  Most daemons bind
+            // to localhost, so checking 127.0.0.1 is essential to detect real conflicts.
+            // We also check [::1] to cover IPv6 loopback listeners.
             //
             // NOTE: This check has a time-of-check-to-time-of-use (TOCTOU) race condition.
             // Another process could grab the port between our check and the daemon actually
             // binding. This is inherent to the approach and acceptable for our use case
             // since we're primarily detecting conflicts with already-running daemons.
-            let port_check =
-                tokio::task::spawn_blocking(move || match TcpListener::bind(("0.0.0.0", port)) {
-                    Ok(listener) => {
-                        drop(listener);
-                        true
+            let port_check = tokio::task::spawn_blocking(move || {
+                let addrs: &[&str] = &["0.0.0.0", "127.0.0.1", "::1"];
+                for &addr in addrs {
+                    match TcpListener::bind((addr, port)) {
+                        Ok(listener) => drop(listener),
+                        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return false,
+                        Err(_) => {
+                            // AddrNotAvailable, PermissionDenied, etc. are not port
+                            // conflicts — skip this address family and keep checking.
+                            continue;
+                        }
                     }
-                    Err(_) => false,
-                })
-                .await
-                .into_diagnostic()
-                .wrap_err("failed to check port availability")?;
+                }
+                true
+            })
+            .await
+            .into_diagnostic()
+            .wrap_err("failed to check port availability")?;
 
             if !port_check {
                 all_available = false;
