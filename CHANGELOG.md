@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0](https://github.com/jdx/pitchfork/compare/v2.5.0...v2.6.0) - 2026-04-12
+
+### Added
+
+- *(proxy)* auto start when visiting the proxied URL ([#347](https://github.com/jdx/pitchfork/pull/347))
+
+### Fixed
+
+- some issues related to sudo supervisor ([#323](https://github.com/jdx/pitchfork/pull/323))
+- *(port)* should fail when ready_port is in use ([#350](https://github.com/jdx/pitchfork/pull/350))
+- *(deps)* update rcgen to 0.14 ([#349](https://github.com/jdx/pitchfork/pull/349))
+- *(deps)* update reqwest to 0.13 ([#348](https://github.com/jdx/pitchfork/pull/348))
+- detect port conflicts on loopback addresses, not just 0.0.0.0 ([#345](https://github.com/jdx/pitchfork/pull/345))
+- narrow REAPED_STATUSES cfg to non-Linux unix only ([#346](https://github.com/jdx/pitchfork/pull/346))
+- *(deps)* update rust crate ratatui to 0.30 ([#331](https://github.com/jdx/pitchfork/pull/331))
+- *(deps)* update rust crate toml to v1 ([#344](https://github.com/jdx/pitchfork/pull/344))
+- *(deps)* update rust crate strum to 0.28 ([#334](https://github.com/jdx/pitchfork/pull/334))
+- *(deps)* update rust crate notify-debouncer-full to 0.7 ([#330](https://github.com/jdx/pitchfork/pull/330))
+- *(deps)* update rust crate nix to 0.31 ([#329](https://github.com/jdx/pitchfork/pull/329))
+- *(deps)* update rust crate listeners to 0.5 ([#328](https://github.com/jdx/pitchfork/pull/328))
+- *(deps)* update rust crate sysinfo to 0.38 ([#335](https://github.com/jdx/pitchfork/pull/335))
+- *(deps)* update rust crate cron to 0.16 ([#324](https://github.com/jdx/pitchfork/pull/324))
+- *(deps)* update rust crate crossterm to 0.29 ([#325](https://github.com/jdx/pitchfork/pull/325))
+
+### Other
+
+- *(deps)* update rust crate rmcp to v1.4.0 ([#327](https://github.com/jdx/pitchfork/pull/327))
+
 ## [2.5.0](https://github.com/jdx/pitchfork/compare/v2.4.0...v2.5.0) - 2026-04-10
 
 ### Added
