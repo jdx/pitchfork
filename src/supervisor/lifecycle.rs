@@ -15,12 +15,11 @@ use crate::shell::Shell;
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use itertools::Itertools;
-use miette::{IntoDiagnostic, WrapErr};
+use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::iter::once;
-use std::net::TcpListener;
 use std::sync::atomic;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
@@ -219,6 +218,18 @@ impl Supervisor {
                 }
             }
         } else {
+            // When ready_port is set without expected_port, check that the port
+            // is not already occupied.  If another process is listening on it,
+            // the TCP readiness probe would immediately succeed and pitchfork
+            // would falsely consider the daemon ready — routing proxy traffic to
+            // the wrong process.
+            if let Some(port) = opts.ready_port {
+                if port > 0 {
+                    if let Some((pid, process)) = detect_port_conflict(port).await {
+                        return Ok(IpcResponse::PortConflict { port, process, pid });
+                    }
+                }
+            }
             (Vec::new(), opts.ready_port)
         };
 
@@ -1027,26 +1038,7 @@ async fn check_ports_available(
             // Another process could grab the port between our check and the daemon actually
             // binding. This is inherent to the approach and acceptable for our use case
             // since we're primarily detecting conflicts with already-running daemons.
-            let port_check = tokio::task::spawn_blocking(move || {
-                let addrs: &[&str] = &["0.0.0.0", "127.0.0.1", "::1"];
-                for &addr in addrs {
-                    match TcpListener::bind((addr, port)) {
-                        Ok(listener) => drop(listener),
-                        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return false,
-                        Err(_) => {
-                            // AddrNotAvailable, PermissionDenied, etc. are not port
-                            // conflicts — skip this address family and keep checking.
-                            continue;
-                        }
-                    }
-                }
-                true
-            })
-            .await
-            .into_diagnostic()
-            .wrap_err("failed to check port availability")?;
-
-            if !port_check {
+            if is_port_in_use(port).await {
                 all_available = false;
                 conflicting_port = Some(port);
                 break;
@@ -1071,27 +1063,10 @@ async fn check_ports_available(
         }
 
         // Port is in use
-        if bump_offset == 0 {
-            // First attempt - try to get process info using lsof
+        if bump_offset == 0 && !auto_bump {
             if let Some(port) = conflicting_port {
-                if let Some((pid, process_name)) = get_process_using_port(port).await {
-                    if !auto_bump {
-                        return Err(PortError::InUse {
-                            port,
-                            process: process_name,
-                            pid,
-                        }
-                        .into());
-                    }
-                } else if !auto_bump {
-                    // Couldn't identify process, but port is definitely in use
-                    return Err(PortError::InUse {
-                        port,
-                        process: "unknown".to_string(),
-                        pid: 0,
-                    }
-                    .into());
-                }
+                let (pid, process) = identify_port_owner(port).await;
+                return Err(PortError::InUse { port, process, pid }.into());
             }
         }
     }
@@ -1104,20 +1079,54 @@ async fn check_ports_available(
     .into())
 }
 
-/// Get the process using a specific port.
+/// Check whether a port is currently in use by attempting to bind on multiple addresses.
 ///
-/// Returns (pid, process_name) if found, None otherwise.
-async fn get_process_using_port(port: u16) -> Option<(u32, String)> {
+/// Returns `true` when at least one bind attempt gets `AddrInUse`, meaning another
+/// process is listening.  Other errors (e.g. `AddrNotAvailable` on an address family
+/// the OS doesn't support) are ignored so they don't produce false positives.
+async fn is_port_in_use(port: u16) -> bool {
     tokio::task::spawn_blocking(move || {
-        listeners::get_all()
-            .ok()?
-            .into_iter()
-            .find(|listener| listener.socket.port() == port)
-            .map(|listener| (listener.process.pid, listener.process.name))
+        for &addr in &["0.0.0.0", "127.0.0.1", "::1"] {
+            match std::net::TcpListener::bind((addr, port)) {
+                Ok(listener) => drop(listener),
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return true,
+                Err(_) => continue,
+            }
+        }
+        false
     })
     .await
-    .ok()
-    .flatten()
+    .unwrap_or(false)
+}
+
+/// Best-effort lookup of the process occupying a port via `listeners::get_all()`.
+///
+/// Returns `(pid, process_name)`.  Falls back to `(0, "unknown")` when the
+/// system call fails (permission error, unsupported OS, etc.).
+async fn identify_port_owner(port: u16) -> (u32, String) {
+    tokio::task::spawn_blocking(move || {
+        listeners::get_all()
+            .ok()
+            .and_then(|list| {
+                list.into_iter()
+                    .find(|l| l.socket.port() == port)
+                    .map(|l| (l.process.pid, l.process.name))
+            })
+            .unwrap_or((0, "unknown".to_string()))
+    })
+    .await
+    .unwrap_or((0, "unknown".to_string()))
+}
+
+/// Detect whether a port is in use, and if so, identify the owning process.
+///
+/// Combines `is_port_in_use` (reliable bind probe) with `identify_port_owner`
+/// (best-effort process lookup).  Returns `None` when the port is free.
+async fn detect_port_conflict(port: u16) -> Option<(u32, String)> {
+    if !is_port_in_use(port).await {
+        return None;
+    }
+    Some(identify_port_owner(port).await)
 }
 
 /// Spawn a background task that detects the first port the daemon process is listening on

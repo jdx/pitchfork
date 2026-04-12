@@ -102,6 +102,7 @@ Configs merge in order (later overrides earlier):
 - **Serialization**: Heavy use of serde with TOML for config/state, MessagePack for IPC
 - **File locking**: Always lock state file for concurrent access (`xx::fslock`)
 - **Daemon commands**: Prepend `exec` to eliminate shell process overhead
+- **Idiomatical Rust**: Prefer Idiomatical Rust patterns and idioms
 
 ## Conventional Commits
 
