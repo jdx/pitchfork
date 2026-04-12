@@ -2,6 +2,18 @@
 
 Where pitchfork stores its files.
 
+## Directory Resolution
+
+Pitchfork resolves key directories as follows:
+
+| Directory | Resolution Order |
+|-----------|-----------------|
+| **Home** | `SUDO_USER`'s home (when euid=0) → `dirs::home_dir()` → `/tmp` |
+| **Config** | `PITCHFORK_CONFIG_DIR` env → `~/.config/pitchfork` |
+| **State** | `PITCHFORK_STATE_DIR` env → (sudo) `~/.local/state/pitchfork` · (non-sudo) `dirs::state_dir()/pitchfork` → `~/.local/state/pitchfork` |
+
+> **Note:** Under `sudo` (euid=0), the home directory (`~`) is resolved from `SUDO_USER` via the system password database, and `dirs::state_dir()` is bypassed to ensure all paths stay consistent with non-sudo invocations. On macOS `dirs::state_dir()` returns `None`, so the fallback `~/.local/state` is always used.
+
 ## Configuration Files
 
 Pitchfork supports configuration files in multiple locations. Files are merged in order, with later files overriding earlier ones.

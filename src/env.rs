@@ -16,6 +16,23 @@ pub static PITCHFORK_BIN: Lazy<PathBuf> = Lazy::new(|| {
 pub static CWD: Lazy<PathBuf> = Lazy::new(|| current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
 pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| {
+    // When running under `sudo`, HOME points to /var/root (macOS) or /root (Linux).
+    // Resolve the *original* user's home via SUDO_USER so all derived paths
+    // (state file, IPC socket, config, logs) remain consistent with the
+    // non-sudo invocation. This prevents a second supervisor instance from
+    // being spawned in a separate directory tree.
+    //
+    // Guard: only honour SUDO_USER when the effective UID is 0 (i.e. we are
+    // actually running as root). SUDO_USER can leak into non-sudo environments
+    // (e.g. inherited env, containers) and would misdirect all state paths.
+    #[cfg(unix)]
+    if nix::unistd::Uid::effective().is_root() {
+        if let Ok(sudo_user) = std::env::var("SUDO_USER") {
+            if let Some(home) = home_dir_for_user(&sudo_user) {
+                return home;
+            }
+        }
+    }
     dirs::home_dir().unwrap_or_else(|| {
         eprintln!("Warning: Could not determine home directory");
         PathBuf::from("/tmp")
@@ -29,11 +46,18 @@ pub static PITCHFORK_GLOBAL_CONFIG_USER: Lazy<PathBuf> =
 pub static PITCHFORK_GLOBAL_CONFIG_SYSTEM: Lazy<PathBuf> =
     Lazy::new(|| PathBuf::from("/etc/pitchfork/config.toml"));
 pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
-    var_path("PITCHFORK_STATE_DIR").unwrap_or(
-        dirs::state_dir()
-            .unwrap_or(HOME_DIR.join(".local").join("state"))
-            .join("pitchfork"),
-    )
+    if let Some(p) = var_path("PITCHFORK_STATE_DIR") {
+        return p;
+    }
+    // Under sudo, dirs::state_dir() would resolve against root's HOME,
+    // bypassing our SUDO_USER correction. Use HOME_DIR directly instead.
+    #[cfg(unix)]
+    if nix::unistd::Uid::effective().is_root() {
+        return HOME_DIR.join(".local").join("state").join("pitchfork");
+    }
+    dirs::state_dir()
+        .unwrap_or_else(|| HOME_DIR.join(".local").join("state"))
+        .join("pitchfork")
 });
 pub static PITCHFORK_STATE_FILE: Lazy<PathBuf> =
     Lazy::new(|| PITCHFORK_STATE_DIR.join("state.toml"));
@@ -75,3 +99,13 @@ fn var_false(name: &str) -> bool {
 //         .map(|val| val == "true" || val == "1")
 //         .unwrap_or(false)
 // }
+
+/// Look up a user's home directory via the system password database.
+/// Returns `None` if the user does not exist or the lookup fails.
+#[cfg(unix)]
+fn home_dir_for_user(username: &str) -> Option<PathBuf> {
+    nix::unistd::User::from_name(username)
+        .ok()
+        .flatten()
+        .map(|u| u.dir)
+}

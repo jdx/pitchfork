@@ -624,8 +624,15 @@ fn fix_state_dir_permissions() {
 }
 
 /// Parse `SUDO_UID` and `SUDO_GID` environment variables into numeric IDs.
+///
+/// Returns `None` unless the effective UID is 0 (root). This prevents stale
+/// `SUDO_UID`/`SUDO_GID` values inherited into non-sudo environments from
+/// triggering incorrect `chown` operations.
 #[cfg(unix)]
 fn parse_sudo_ids() -> Option<(u32, u32)> {
+    if !nix::unistd::Uid::effective().is_root() {
+        return None;
+    }
     let uid: u32 = std::env::var("SUDO_UID").ok()?.parse().ok()?;
     let gid: u32 = std::env::var("SUDO_GID").ok()?.parse().ok()?;
     Some((uid, gid))

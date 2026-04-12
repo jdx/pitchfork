@@ -4,8 +4,6 @@ use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
-#[cfg(unix)]
-use sysinfo::Signal;
 
 pub struct Procs {
     system: Mutex<sysinfo::System>,
@@ -71,10 +69,9 @@ impl Procs {
     }
 
     pub async fn kill_process_group_async(&self, pid: u32) -> Result<bool> {
-        let result = tokio::task::spawn_blocking(move || PROCS.kill_process_group(pid))
+        tokio::task::spawn_blocking(move || PROCS.kill_process_group(pid))
             .await
-            .into_diagnostic()?;
-        Ok(result)
+            .into_diagnostic()?
     }
 
     /// Kill an entire process group with graceful shutdown strategy:
@@ -83,8 +80,10 @@ impl Procs {
     ///
     /// Since daemons are spawned with setsid(), the daemon PID == PGID,
     /// so this atomically signals all descendant processes.
+    ///
+    /// Returns `Err` if the signal could not be sent (e.g. permission denied).
     #[cfg(unix)]
-    fn kill_process_group(&self, pid: u32) -> bool {
+    fn kill_process_group(&self, pid: u32) -> Result<bool> {
         let pgid = pid as i32;
 
         debug!("killing process group {pgid}");
@@ -98,7 +97,12 @@ impl Procs {
             let err = std::io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::ESRCH) {
                 debug!("process group {pgid} no longer exists");
-                return false;
+                return Ok(false);
+            }
+            if err.raw_os_error() == Some(libc::EPERM) {
+                return Err(miette::miette!(
+                    "failed to send SIGTERM to process group {pgid}: permission denied"
+                ));
             }
             warn!("failed to send SIGTERM to process group {pgid}: {err}");
         }
@@ -126,7 +130,7 @@ impl Procs {
             elapsed_ms += sleep_duration.as_millis() as u64;
             if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
                 debug!("process group {pgid} terminated after SIGTERM ({elapsed_ms} ms)",);
-                return true;
+                return Ok(true);
             }
         }
 
@@ -135,26 +139,29 @@ impl Procs {
             "process group {pgid} did not respond to SIGTERM after {}ms, sending SIGKILL",
             stop_timeout.as_millis()
         );
-        unsafe {
-            libc::killpg(pgid, libc::SIGKILL);
+        let ret = unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        if ret == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ESRCH) {
+                warn!("failed to send SIGKILL to process group {pgid}: {err}");
+            }
         }
 
         // Brief wait for SIGKILL to take effect
         std::thread::sleep(std::time::Duration::from_millis(100));
-        true
+        Ok(true)
     }
 
     #[cfg(not(unix))]
-    fn kill_process_group(&self, pid: u32) -> bool {
+    fn kill_process_group(&self, pid: u32) -> Result<bool> {
         // On non-unix platforms, fall back to single-process kill
         self.kill(pid)
     }
 
     pub async fn kill_async(&self, pid: u32) -> Result<bool> {
-        let result = tokio::task::spawn_blocking(move || PROCS.kill(pid))
+        tokio::task::spawn_blocking(move || PROCS.kill(pid))
             .await
-            .into_diagnostic()?;
-        Ok(result)
+            .into_diagnostic()?
     }
 
     /// Kill a process with graceful shutdown strategy:
@@ -163,12 +170,15 @@ impl Procs {
     ///
     /// This ensures fast-exiting processes don't wait unnecessarily,
     /// while stubborn processes eventually get forcefully terminated.
-    fn kill(&self, pid: u32) -> bool {
+    ///
+    /// Returns `Err` if the signal could not be sent (e.g. permission denied
+    /// when targeting a process owned by another user/root).
+    fn kill(&self, pid: u32) -> Result<bool> {
         let sysinfo_pid = sysinfo::Pid::from_u32(pid);
 
         // Check if process exists or is a zombie (already terminated but not reaped)
         if self.is_terminated_or_zombie(sysinfo_pid) {
-            return false;
+            return Ok(false);
         }
 
         debug!("killing process {pid}");
@@ -179,15 +189,30 @@ impl Procs {
                 process.kill();
                 process.wait();
             }
-            return true;
+            return Ok(true);
         }
 
         #[cfg(unix)]
         {
-            // Send SIGTERM for graceful shutdown
-            if let Some(process) = self.lock_system().process(sysinfo_pid) {
-                debug!("sending SIGTERM to process {pid}");
-                process.kill_with(Signal::Term);
+            // Send SIGTERM for graceful shutdown using libc::kill directly
+            // so we can distinguish EPERM (permission denied) from ESRCH
+            // (process already gone — possible in a narrow race window).
+            debug!("sending SIGTERM to process {pid}");
+            let ret = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() == Some(libc::ESRCH) {
+                    debug!("process {pid} no longer exists");
+                    return Ok(false);
+                }
+                if err.raw_os_error() == Some(libc::EPERM) {
+                    return Err(miette::miette!(
+                        "failed to send SIGTERM to process {pid}: permission denied"
+                    ));
+                }
+                return Err(miette::miette!(
+                    "failed to send SIGTERM to process {pid}: {err}"
+                ));
             }
 
             // Fast check: 10ms intervals, then slower 50ms polling for stop_timeout.
@@ -209,7 +234,7 @@ impl Procs {
                         "process {pid} terminated after SIGTERM ({} ms)",
                         (i + 1) * fast_ms as usize
                     );
-                    return true;
+                    return Ok(true);
                 }
             }
 
@@ -222,21 +247,26 @@ impl Procs {
                         "process {pid} terminated after SIGTERM ({} ms)",
                         fast_total_ms + (i + 1) as u64 * slow_ms
                     );
-                    return true;
+                    return Ok(true);
                 }
             }
 
             // SIGKILL as last resort after stop_timeout
-            if let Some(process) = self.lock_system().process(sysinfo_pid) {
-                warn!(
-                    "process {pid} did not respond to SIGTERM after {}ms, sending SIGKILL",
-                    stop_timeout.as_millis()
-                );
-                process.kill_with(Signal::Kill);
-                process.wait();
+            warn!(
+                "process {pid} did not respond to SIGTERM after {}ms, sending SIGKILL",
+                stop_timeout.as_millis()
+            );
+            let ret = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::ESRCH) {
+                    warn!("failed to send SIGKILL to process {pid}: {err}");
+                }
             }
 
-            true
+            // Brief wait for SIGKILL to take effect
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Ok(true)
         }
     }
 

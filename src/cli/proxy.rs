@@ -118,8 +118,8 @@ fn install_cert(cert_path: &std::path::Path) -> Result<()> {
     use std::process::Command;
 
     // Resolve the login keychain path for the current user.
-    let home = std::env::var("HOME").map_err(|_| miette::miette!("$HOME is not set"))?;
-    let keychain = format!("{home}/Library/Keychains/login.keychain-db");
+    let home = &*crate::env::HOME_DIR;
+    let keychain = format!("{}/Library/Keychains/login.keychain-db", home.display());
 
     // Install into the current user's login keychain — no sudo required.
     // Must specify -k explicitly; without it macOS targets the admin domain

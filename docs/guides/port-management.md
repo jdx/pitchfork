@@ -4,8 +4,6 @@ Pitchfork provides smart port management and an optional reverse proxy that give
 
 ## Port Assignment
 
-### Expected Ports
-
 Configure the ports your daemon expects to use:
 
 ```toml
@@ -14,44 +12,26 @@ run = "node server.js"
 expected_port = [3000]
 ```
 
-Pitchfork will:
-1. Check if port 3000 is available before starting
-2. Inject `PORT=3000` into the daemon's environment
-3. Fail with a clear error if the port is already in use
+Pitchfork checks if the port is available before starting, injects `PORT=3000` into the daemon's environment, and fails with a clear error if the port is already in use.
 
 ### Auto Port Bumping
 
-When a port is occupied, pitchfork can automatically find the next available port:
+When a port is occupied, enable `auto_bump_port` to automatically find the next available port:
 
 ```toml
 [daemons.api]
 run = "node server.js"
 expected_port = [3000]
 auto_bump_port = true
+port_bump_attempts = 10   # default: 3
 ```
 
-With `auto_bump_port = true`, pitchfork tries 3000, 3001, 3002, ... until it finds a free port. The daemon receives the actual port via `$PORT`.
-
-Control how many attempts are made:
-
-```toml
-[daemons.api]
-run = "node server.js"
-expected_port = [3000]
-auto_bump_port = true
-port_bump_attempts = 10   # try up to 10 ports (default: 3)
-```
-
-Or via environment variable:
-```bash
-PITCHFORK_PORT_BUMP_ATTEMPTS=10 pitchfork start api
-```
+The daemon receives the actual allocated port via `$PORT`.
 
 ### Active Port Tracking
 
-After a daemon starts, pitchfork detects which port the process is actually listening on. This detected port is the source of truth for the reverse proxy — it's what gets routed when you access the proxy URL.
+After a daemon starts, pitchfork detects the port the process is actually listening on. This detected port is the source of truth for the reverse proxy.
 
----
 
 ## Reverse Proxy
 
@@ -133,12 +113,6 @@ frontend = { dir = "/home/user/my-app", daemon = "dev" }
 docs = { dir = "/home/user/docs-site" }  # defaults daemon = "docs"
 ```
 
-**Why global config only?**
-- **Single source of truth** — no sync step needed, no risk of stale state
-- **Cross-directory resolution** — slugs work from any directory
-- **Explicit and auditable** — one file shows all your proxied services
-- **Auto-start ready** — the proxy knows the dir and can load project config automatically
-
 ### URL format
 
 Proxy URLs use this shape:
@@ -167,8 +141,6 @@ pitchfork proxy remove api
 # Show all slugs and their status
 pitchfork proxy status
 ```
-
----
 
 ## Standard Ports (80/443)
 
@@ -203,7 +175,6 @@ https = false
 Binding to ports below 1024 (including 80 and 443) requires the supervisor to be started with `sudo`. The proxy will fail to start if it cannot bind to the configured port.
 :::
 
----
 
 ## HTTPS Support
 
@@ -267,8 +238,6 @@ tls_cert = "/path/to/_wildcard.localhost+2.pem"
 tls_key = "/path/to/_wildcard.localhost+2-key.pem"
 ```
 
----
-
 ## Custom TLD
 
 Use a custom TLD instead of `localhost`:
@@ -300,7 +269,6 @@ sudo brew services start dnsmasq
 Later we will add built-in support for custom TLDs without manual DNS configuration.
 :::
 
----
 
 ## Proxy Commands
 
@@ -338,6 +306,8 @@ The entire auto-start operation — including waiting for the daemon's readiness
 [settings.proxy]
 auto_start_timeout = "60s"
 ```
+
+---
 
 ## Viewing Proxy URLs
 
