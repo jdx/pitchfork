@@ -104,13 +104,20 @@ impl IpcServer {
         // If not running via sudo, the socket is already owned by the current
         // user with restrictive permissions (set by the umask above), so no
         // permission change is needed.
+        //
+        // Guard: only act when euid==0 to avoid stale SUDO_UID/SUDO_GID values
+        // inherited into non-sudo environments.
         #[cfg(unix)]
         {
-            if let (Ok(uid_s), Ok(gid_s)) = (std::env::var("SUDO_UID"), std::env::var("SUDO_GID")) {
-                if let (Ok(uid), Ok(gid)) = (uid_s.parse::<u32>(), gid_s.parse::<u32>()) {
-                    let _ = chown_path(&env::IPC_SOCK_DIR, uid, gid);
-                    let _ = chown_path(&env::IPC_SOCK_MAIN, uid, gid);
-                    debug!("chowned IPC socket to uid={uid} gid={gid}");
+            if nix::unistd::Uid::effective().is_root() {
+                if let (Ok(uid_s), Ok(gid_s)) =
+                    (std::env::var("SUDO_UID"), std::env::var("SUDO_GID"))
+                {
+                    if let (Ok(uid), Ok(gid)) = (uid_s.parse::<u32>(), gid_s.parse::<u32>()) {
+                        let _ = chown_path(&env::IPC_SOCK_DIR, uid, gid);
+                        let _ = chown_path(&env::IPC_SOCK_MAIN, uid, gid);
+                        debug!("chowned IPC socket to uid={uid} gid={gid}");
+                    }
                 }
             }
         }

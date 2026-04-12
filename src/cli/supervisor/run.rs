@@ -1,8 +1,5 @@
 use crate::Result;
-use crate::cli::supervisor::kill_or_stop;
-use crate::daemon_id::DaemonId;
-use crate::env;
-use crate::state_file::StateFile;
+use crate::cli::supervisor::{KillOrStopOutcome, resolve_existing_supervisor};
 use crate::supervisor::SUPERVISOR;
 
 /// Runs the internal pitchfork daemon in the foreground
@@ -27,12 +24,20 @@ pub struct Run {
 
 impl Run {
     pub async fn run(&self) -> Result<()> {
-        let pid_file = StateFile::read(&*env::PITCHFORK_STATE_FILE)?;
-        if let Some(d) = pid_file.daemons.get(&DaemonId::pitchfork())
-            && let Some(pid) = d.pid
-            && !(kill_or_stop(pid, self.force).await?)
-        {
-            return Ok(());
+        let (existing_pid, outcome) = resolve_existing_supervisor(self.force).await?;
+        match outcome {
+            KillOrStopOutcome::StillRunning => {
+                let pid = existing_pid.expect("StillRunning implies a pid exists");
+                warn!(
+                    "Pitchfork supervisor is already running with pid {pid}. Use `--force` to replace it."
+                );
+                return Ok(());
+            }
+            KillOrStopOutcome::Killed => {
+                let pid = existing_pid.expect("Killed implies a pid exists");
+                info!("Killed existing supervisor with pid {pid}");
+            }
+            KillOrStopOutcome::AlreadyDead => {}
         }
 
         SUPERVISOR
