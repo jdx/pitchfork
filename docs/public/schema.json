@@ -463,6 +463,20 @@
     "SettingsProxyPartial": {
       "type": "object",
       "properties": {
+        "auto_start": {
+          "description": "Automatically start daemons when accessed via proxy URL",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "auto_start_timeout": {
+          "description": "Maximum time to wait for an auto-started daemon to become ready",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "enable": {
           "description": "Enable the reverse proxy server for daemons",
           "type": [

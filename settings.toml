@@ -600,3 +600,37 @@ Path to a PEM-encoded private key file used when `proxy.https = true`.
 If left empty and `proxy.https = true`, pitchfork will auto-generate a
 self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
 """
+
+[proxy.auto_start]
+type = "Bool"
+env = "PITCHFORK_PROXY_AUTO_START"
+default = "true"
+description = "Automatically start daemons when accessed via proxy URL"
+docs = """
+When enabled (default), visiting a proxy URL for a stopped daemon will
+automatically start that daemon. The browser receives a "Starting…" page
+that refreshes every 2 seconds until the daemon is ready, at which point
+the request is proxied normally.
+
+Set to `false` to disable auto-start and return a plain 502 error for
+stopped daemons (the previous behaviour).
+"""
+
+[proxy.auto_start_timeout]
+type = "Duration"
+env = "PITCHFORK_PROXY_AUTO_START_TIMEOUT"
+default = "30s"
+description = "Maximum time to wait for an auto-started daemon to become ready"
+docs = """
+When a daemon is auto-started via a proxy request, the proxy waits up to
+this duration for the **entire** auto-start operation to complete — including
+waiting for the daemon's readiness signal and detecting the bound port.
+
+If the daemon does not become ready and bind a port within this timeout,
+the browser receives an error page indicating the startup timed out.
+
+**Examples:**
+- `"15s"` - Shorter timeout for fast-starting services
+- `"30s"` - Default, suitable for most daemons
+- `"60s"` - For daemons with slow initialisation (e.g. large Java apps)
+"""

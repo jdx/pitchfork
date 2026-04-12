@@ -326,6 +326,19 @@ pitchfork proxy trust --cert /path/to/cert.pem
 
 ---
 
+## Auto-Start
+
+When you visit a proxy URL for a daemon that isn't running, pitchfork can automatically start it for you. Instead of a `502 Bad Gateway` error, you'll see a "Starting…" page that refreshes every 2 seconds until the daemon is ready.
+
+This is enabled by default. No extra setup is needed beyond the normal proxy configuration.
+
+The entire auto-start operation — including waiting for the daemon's readiness signal and detecting its bound port — is bounded by `proxy.auto_start_timeout` (default 30 s). If the daemon doesn't become ready within this window the browser receives a timeout error. Increase the timeout for daemons with slow initialisation:
+
+```toml
+[settings.proxy]
+auto_start_timeout = "60s"
+```
+
 ## Viewing Proxy URLs
 
 Proxy URLs are shown in CLI output when the proxy is enabled and the daemon has a registered slug:

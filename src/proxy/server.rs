@@ -67,6 +67,8 @@ struct CachedSlugEntry {
     namespace: Option<String>,
     /// Daemon short name (defaults to slug name when not explicitly set).
     daemon_name: String,
+    /// Project directory for this slug (needed for auto-start).
+    dir: std::path::PathBuf,
 }
 
 /// In-memory cache for the global slug registry + derived namespaces.
@@ -96,6 +98,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
             CachedSlugEntry {
                 namespace: ns,
                 daemon_name,
+                dir: entry.dir.clone(),
             },
         );
     }
@@ -133,6 +136,29 @@ async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugE
 async fn cached_slug_lookup(subdomain: &str) -> Option<CachedSlugEntry> {
     let entries = get_cached_slugs().await;
     entries.get(subdomain).cloned()
+}
+
+// ─── Auto-start deduplication ───────────────────────────────────────────────
+//
+// When auto_start is enabled, concurrent proxy requests for the same stopped
+// daemon must not trigger multiple start operations.  This set tracks daemon
+// IDs that are currently being auto-started.
+
+static AUTO_START_IN_PROGRESS: once_cell::sync::Lazy<
+    tokio::sync::Mutex<std::collections::HashSet<DaemonId>>,
+> = once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Result of resolving a proxy target for a given host.
+enum ResolveResult {
+    /// Daemon is running and ready — forward to this port.
+    /// Covers both already-running daemons and freshly auto-started ones.
+    Ready(u16),
+    /// Daemon is currently starting (auto-start in progress or just triggered).
+    Starting { slug: String },
+    /// No matching slug or daemon found.
+    NotFound,
+    /// Routing refused with a descriptive reason.
+    Error(String),
 }
 
 /// Shared proxy state passed to each request handler.
@@ -975,9 +1001,12 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     }
 
     // Resolve the target port from the host
-    let target_port = match resolve_target_port(&host, &state.tld).await {
-        Ok(Some(port)) => port,
-        Ok(None) => {
+    let target_port = match resolve_target(&host, &state.tld).await {
+        ResolveResult::Ready(port) => port,
+        ResolveResult::Starting { slug } => {
+            return starting_html_response(&slug, &raw_host);
+        }
+        ResolveResult::NotFound => {
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 &format!(
@@ -988,8 +1017,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 ),
             );
         }
-        Err(conflict_msg) => {
-            return error_response(StatusCode::BAD_GATEWAY, &conflict_msg);
+        ResolveResult::Error(msg) => {
+            return error_response(StatusCode::BAD_GATEWAY, &msg);
         }
     };
 
@@ -1147,35 +1176,33 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     }
 }
 
-/// Resolve the target port for a given hostname.
+/// Resolve the target for a given hostname.
 ///
 /// Slug-based routing using the global config's `[slugs]` section:
 /// 1. Strip TLD to get subdomain (the slug)
 /// 2. Look up slug in global config → find project dir + daemon name
 /// 3. Check state file for a running daemon with that name → get its port
-///
-/// Returns the `active_port` of a running daemon.  Stopped daemons are not routable
-/// even if they still have a `resolved_port` in the state file (that port may have
-/// been reclaimed by another process).
+/// 4. If `proxy.auto_start` is enabled and the daemon is not running,
+///    trigger an automatic start and wait for it to become ready.
 ///
 /// # Returns
-/// - `Ok(Some(port))` — daemon found via slug, forward to this port
-/// - `Ok(None)`       — no daemon matched (generic 502)
-/// - `Err(msg)`       — routing refused with a descriptive reason
+/// - `ResolveResult::Ready(port)`       — daemon running (or just auto-started), forward to this port
+/// - `ResolveResult::Starting { slug }` — daemon start in progress (show waiting page)
+/// - `ResolveResult::NotFound`          — no daemon matched
+/// - `ResolveResult::Error(msg)`        — routing refused with a descriptive reason
 ///
 /// # Locking
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
-async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, String> {
+async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
     // Strip the TLD suffix to get the subdomain part.
     let Some(subdomain) = strip_tld(host, tld) else {
-        return Ok(None);
+        return ResolveResult::NotFound;
     };
 
     // Look up the slug via the in-memory cache (refreshed every SLUG_CACHE_TTL).
-    // This avoids per-request disk I/O for read_global_slugs() and namespace_for_dir().
     let Some(cached) = cached_slug_lookup(&subdomain).await else {
-        return Ok(None); // no slug match
+        return ResolveResult::NotFound;
     };
 
     let daemon_name = &cached.daemon_name;
@@ -1196,23 +1223,217 @@ async fn resolve_target_port(host: &str, tld: &str) -> Result<Option<u16>, Strin
                 && d.status.is_running()
                 && match expected_namespace {
                     Some(ns) => id.namespace() == ns,
-                    None => true, // no namespace resolved — fall back to name-only match
+                    None => true,
                 }
         })
         .collect();
 
-    let daemon = match running_matches.as_slice() {
-        [] => return Ok(None), // daemon not running
-        [(_, d)] => *d,
+    match running_matches.as_slice() {
+        [] => {
+            // Daemon not running — try auto-start if enabled.
+            try_auto_start(&subdomain, &cached).await
+        }
+        [(_, d)] => {
+            if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
+                ResolveResult::Ready(port)
+            } else {
+                ResolveResult::NotFound
+            }
+        }
         _ => {
-            // Multiple running daemons still match — pick the first one
-            running_matches[0].1
+            let d = running_matches[0].1;
+            if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
+                ResolveResult::Ready(port)
+            } else {
+                ResolveResult::NotFound
+            }
+        }
+    }
+}
+
+/// RAII guard that removes a `DaemonId` from `AUTO_START_IN_PROGRESS` on drop.
+///
+/// This ensures the in-progress flag is cleared even if the auto-start future
+/// panics (e.g. an unexpected `unwrap` inside a dependency).  Without this,
+/// the daemon ID would stay in the set permanently and every subsequent proxy
+/// request would return "Starting …" forever.
+struct AutoStartGuard {
+    daemon_id: DaemonId,
+}
+
+impl Drop for AutoStartGuard {
+    fn drop(&mut self) {
+        let daemon_id = self.daemon_id.clone();
+        // Spawn a cleanup task because `Drop` is synchronous and the mutex is
+        // async.  If the runtime is shutting down this may not execute, but in
+        // that case the entire set is being dropped anyway.
+        tokio::spawn(async move {
+            AUTO_START_IN_PROGRESS.lock().await.remove(&daemon_id);
+        });
+    }
+}
+
+/// Attempt to auto-start a daemon for the given slug.
+///
+/// If `proxy.auto_start` is disabled, returns `NotFound`.
+/// Uses a dedup set to prevent concurrent starts for the same daemon.
+/// Calls `SUPERVISOR.run()` with `wait_ready = true` so the daemon goes
+/// through the same readiness lifecycle as `pf start`, then polls for the
+/// active port.
+///
+/// The entire operation — including `SUPERVISOR.run()` and the port-polling
+/// loop — is bounded by `proxy_auto_start_timeout`.
+async fn try_auto_start(slug: &str, cached: &CachedSlugEntry) -> ResolveResult {
+    let s = settings();
+    if !s.proxy.auto_start {
+        return ResolveResult::NotFound;
+    }
+
+    // Resolve the daemon ID from the slug's project directory.
+    // Fall back to "global" when no namespace is resolved so that global
+    // daemons can also benefit from auto-start (matching the name-only
+    // routing fallback in `resolve_target`).
+    let ns = cached
+        .namespace
+        .clone()
+        .unwrap_or_else(|| "global".to_string());
+    let daemon_id = match DaemonId::try_new(&ns, &cached.daemon_name) {
+        Ok(id) => id,
+        Err(_) => return ResolveResult::NotFound,
+    };
+
+    // Atomically check-and-mark the daemon as in-progress so that concurrent
+    // requests for the same stopped daemon don't trigger multiple starts.
+    {
+        let mut in_progress = AUTO_START_IN_PROGRESS.lock().await;
+        if !in_progress.insert(daemon_id.clone()) {
+            return ResolveResult::Starting {
+                slug: slug.to_string(),
+            };
+        }
+    }
+
+    // RAII guard: ensures the in-progress flag is cleared even on panic.
+    let _guard = AutoStartGuard {
+        daemon_id: daemon_id.clone(),
+    };
+
+    // Apply proxy_auto_start_timeout to the *entire* auto-start operation,
+    // including SUPERVISOR.run() (which waits for the daemon's readiness
+    // signal) and the subsequent port-detection polling loop.
+    let timeout = s.proxy_auto_start_timeout();
+
+    match tokio::time::timeout(timeout, try_auto_start_inner(slug, cached, &daemon_id)).await {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            log::warn!("Auto-start: total timeout ({timeout:?}) exceeded for daemon {daemon_id}");
+            ResolveResult::Error(format!(
+                "Auto-start for '{daemon_id}' timed out after {timeout:?}.\n\
+                 The daemon did not become ready and bind a port within the configured \
+                 proxy_auto_start_timeout.\n\
+                 Increase the timeout or check the daemon's logs for slow startup."
+            ))
+        }
+    }
+}
+
+/// Inner implementation of [`try_auto_start`] extracted so that the caller can
+/// wrap it with `tokio::time::timeout` and unconditionally clean up
+/// `AUTO_START_IN_PROGRESS` regardless of the outcome.
+async fn try_auto_start_inner(
+    slug: &str,
+    cached: &CachedSlugEntry,
+    daemon_id: &DaemonId,
+) -> ResolveResult {
+    // Load config from the slug's project directory to find the daemon definition.
+    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(&cached.dir) {
+        Ok(pt) => pt,
+        Err(e) => {
+            log::warn!(
+                "Auto-start: failed to load config from {}: {e}",
+                cached.dir.display()
+            );
+            return ResolveResult::NotFound;
         }
     };
 
-    Ok(daemon
-        .active_port
-        .or_else(|| daemon.resolved_port.first().copied()))
+    let daemon_config = match pt.daemons.get(daemon_id) {
+        Some(cfg) => cfg,
+        None => {
+            log::debug!(
+                "Auto-start: daemon {daemon_id} not found in config at {}",
+                cached.dir.display()
+            );
+            return ResolveResult::NotFound;
+        }
+    };
+
+    // Build run options — keep wait_ready=true (set by build_run_options) so
+    // SUPERVISOR.run() waits for the daemon's readiness signal before returning,
+    // matching the same lifecycle as `pf start` via IPC.
+    let opts = crate::ipc::batch::StartOptions::default();
+    let mut run_opts = match crate::ipc::batch::build_run_options(daemon_id, daemon_config, &opts) {
+        Ok(o) => o,
+        Err(e) => {
+            log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");
+            return ResolveResult::Error(format!("Failed to build run options: {e}"));
+        }
+    };
+
+    if run_opts.dir.as_os_str().is_empty() {
+        run_opts.dir = cached.dir.clone();
+    }
+
+    log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
+
+    // Trigger the start and wait for daemon readiness.
+    // This call is bounded by the tokio::time::timeout in try_auto_start().
+    let run_result = SUPERVISOR.run(run_opts).await;
+
+    if let Err(e) = run_result {
+        log::warn!("Auto-start: failed to start daemon {daemon_id}: {e}");
+        return ResolveResult::Error(format!("Failed to start daemon: {e}"));
+    }
+
+    // Daemon is ready. Poll briefly for the active_port to be detected
+    // (detect_and_store_active_port runs asynchronously after readiness).
+    // No per-loop timeout needed — the outer tokio::time::timeout covers this.
+    let poll_interval = std::time::Duration::from_millis(250);
+
+    loop {
+        let daemons = {
+            let sf = SUPERVISOR.state_file.lock().await;
+            sf.daemons.clone()
+        };
+
+        if let Some(d) = daemons.get(daemon_id) {
+            if d.status.is_running() {
+                if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
+                    log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
+                    return ResolveResult::Ready(port);
+                }
+            } else {
+                log::warn!(
+                    "Auto-start: daemon {daemon_id} is no longer running (status: {})",
+                    d.status
+                );
+                return ResolveResult::Error(format!(
+                    "Daemon '{daemon_id}' started but exited unexpectedly.\n\
+                     Check its logs for errors."
+                ));
+            }
+        } else {
+            // Daemon not found in state file after a successful run() —
+            // it was likely cleaned up immediately.  Don't spin until timeout.
+            log::warn!("Auto-start: daemon {daemon_id} not found in state file after start");
+            return ResolveResult::Error(format!(
+                "Daemon '{daemon_id}' started but disappeared from the state file.\n\
+                 Check its logs for errors."
+            ));
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
@@ -1241,6 +1462,100 @@ fn bind_error_message(port: u16, err: &std::io::Error) -> String {
              Hint: another process may already be using this port."
         )
     }
+}
+
+/// Build an HTML "Starting…" response that auto-refreshes every 2 seconds.
+///
+/// Displayed when a proxy request triggers an auto-start for a stopped daemon.
+/// Once the daemon is ready, the next refresh will proxy normally to the backend.
+fn starting_html_response(slug: &str, raw_host: &str) -> Response {
+    let escaped_slug = slug
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;");
+    let escaped_host = raw_host
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;");
+
+    let html = format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="2">
+    <title>Starting {escaped_slug}… — pitchfork</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0f1117;
+            color: #e1e4e8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }}
+        .container {{
+            text-align: center;
+            max-width: 480px;
+            padding: 2rem;
+        }}
+        .spinner {{
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top-color: #58a6ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1.5rem;
+        }}
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
+        }}
+        h1 {{
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }}
+        .slug {{
+            color: #58a6ff;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        }}
+        .host {{
+            color: #8b949e;
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }}
+        .hint {{
+            color: #8b949e;
+            font-size: 0.8rem;
+            margin-top: 1.5rem;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner"></div>
+        <h1>Starting <span class="slug">{escaped_slug}</span>…</h1>
+        <p class="host">{escaped_host}</p>
+        <p class="hint">This page will refresh automatically when the daemon is ready.</p>
+    </div>
+</body>
+</html>"##
+    );
+
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header("content-type", "text/html; charset=utf-8")
+        .header("retry-after", "2")
+        .body(Body::from(html))
+        .unwrap_or_else(|_| (StatusCode::SERVICE_UNAVAILABLE, "Starting…").into_response())
 }
 
 /// Build a plain-text error response.
