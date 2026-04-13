@@ -270,6 +270,7 @@ mod tests {
                 .map(|s| DaemonId::new("global", s))
                 .collect(),
             watch: vec![],
+            watch_mode: crate::pitchfork_toml::WatchMode::default(),
             dir: None,
             env: None,
             hooks: None,

@@ -420,13 +420,33 @@ type = "Duration"
 env = "PITCHFORK_WATCH_INTERVAL"
 deprecated_env = "PITCHFORK_WATCH_INTERVAL_MS"
 default = "10s"
-description = "File watcher poll/refresh interval"
+description = "File watcher config refresh interval"
 docs = """
-How often the file watcher checks for filesystem changes when using `watch` patterns.
+How often the supervisor refreshes file watch configuration when using `watch` patterns.
+
+This controls how quickly newly started/stopped daemons with watch patterns are reflected
+in the active watcher set.
+
+For polling watcher cadence, use `supervisor.watch_poll_interval`.
+
+Lower values react faster to configuration/runtime changes but use more CPU.
+The default `"10s"` is appropriate for most environments.
+"""
+
+[supervisor.watch_poll_interval]
+type = "Duration"
+env = "PITCHFORK_WATCH_POLL_INTERVAL"
+default = "500ms"
+description = "Polling watcher filesystem scan interval"
+docs = """
+How often polling-based file watchers scan for changes.
+
+This applies when daemon `watch_mode` is `poll`, or when `watch_mode = "auto"`
+falls back to polling because native watchers are unavailable.
 
 Lower values detect changes faster but use more CPU and I/O.
-A value of `"100ms"` is useful for tests or highly interactive workflows;
-the default `"10s"` is appropriate for production.
+`"100ms"` is useful for highly interactive workflows;
+`"500ms"` is a practical default for remote/networked filesystems.
 """
 
 [supervisor.http_client_timeout]

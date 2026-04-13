@@ -1,5 +1,5 @@
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::{PitchforkToml, WatchMode};
 use crate::state_file::StateFile;
 use crate::ui::style::edim;
 use crate::watch_files::WatchFiles;
@@ -1066,7 +1066,11 @@ fn get_log_file_infos(names: &[DaemonId]) -> Result<BTreeMap<DaemonId, LogFile>>
 
 pub async fn tail_logs(names: &[DaemonId]) -> Result<()> {
     let mut log_files = get_log_file_infos(names)?;
-    let mut wf = WatchFiles::new(Duration::from_millis(10))?;
+    let mut wf = WatchFiles::new(
+        Duration::from_millis(10),
+        WatchMode::Native,
+        Duration::from_millis(500),
+    )?;
 
     for lf in log_files.values() {
         wf.watch(&lf.path, RecursiveMode::NonRecursive)?;

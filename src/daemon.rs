@@ -1,6 +1,6 @@
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
-use crate::pitchfork_toml::{CpuLimit, CronRetrigger, MemoryLimit};
+use crate::pitchfork_toml::{CpuLimit, CronRetrigger, MemoryLimit, WatchMode};
 use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -115,6 +115,8 @@ pub struct Daemon {
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
+    #[serde(default)]
+    pub watch_mode: WatchMode,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub watch_base_dir: Option<PathBuf>,
     /// Whether to use mise for this daemon (None = inherit global general.mise setting).
@@ -163,6 +165,8 @@ pub struct RunOptions {
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
+    #[serde(default)]
+    pub watch_mode: WatchMode,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub watch_base_dir: Option<PathBuf>,
     /// Whether to use mise for this daemon (None = inherit global general.mise setting).
@@ -217,6 +221,7 @@ impl Default for Daemon {
             depends: Vec::new(),
             env: None,
             watch: Vec::new(),
+            watch_mode: WatchMode::default(),
             watch_base_dir: None,
             mise: None,
             memory_limit: None,
@@ -254,6 +259,7 @@ impl Daemon {
             depends: self.depends.clone(),
             env: self.env.clone(),
             watch: self.watch.clone(),
+            watch_mode: self.watch_mode,
             watch_base_dir: self.watch_base_dir.clone(),
             mise: self.mise,
             slug: self.slug.clone(),
@@ -289,6 +295,7 @@ impl Default for RunOptions {
             depends: Vec::new(),
             env: None,
             watch: Vec::new(),
+            watch_mode: WatchMode::default(),
             watch_base_dir: None,
             mise: None,
             slug: None,

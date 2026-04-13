@@ -1,8 +1,9 @@
 use crate::Result;
+use crate::pitchfork_toml::WatchMode;
 use glob::glob;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode};
+use notify::{Config, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap, new_debouncer_opt};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -10,16 +11,20 @@ use std::time::Duration;
 
 pub struct WatchFiles {
     pub rx: tokio::sync::mpsc::Receiver<Vec<PathBuf>>,
-    debouncer: Debouncer<RecommendedWatcher, FileIdMap>,
+    backend: WatchFilesBackend,
+}
+
+enum WatchFilesBackend {
+    Native(Debouncer<RecommendedWatcher, FileIdMap>),
+    Poll(Debouncer<PollWatcher, FileIdMap>),
 }
 
 impl WatchFiles {
-    pub fn new(duration: Duration) -> Result<Self> {
+    pub fn new(duration: Duration, mode: WatchMode, poll_interval: Duration) -> Result<Self> {
         let h = tokio::runtime::Handle::current();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let debouncer = new_debouncer_opt(
-            duration,
-            None,
+        let make_callback = |tx: tokio::sync::mpsc::Sender<Vec<PathBuf>>,
+                             h: tokio::runtime::Handle| {
             move |res: DebounceEventResult| {
                 let tx = tx.clone();
                 h.spawn(async move {
@@ -43,21 +48,57 @@ impl WatchFiles {
                         }
                     }
                 });
-            },
-            FileIdMap::new(),
-            Config::default(),
-        )
-        .into_diagnostic()?;
+            }
+        };
 
-        Ok(Self { debouncer, rx })
+        let backend = match mode {
+            WatchMode::Native => WatchFilesBackend::Native(
+                new_debouncer_opt(
+                    duration,
+                    None,
+                    make_callback(tx.clone(), h.clone()),
+                    FileIdMap::new(),
+                    Config::default(),
+                )
+                .into_diagnostic()?,
+            ),
+            WatchMode::Poll => WatchFilesBackend::Poll(
+                new_debouncer_opt(
+                    duration,
+                    None,
+                    make_callback(tx.clone(), h.clone()),
+                    FileIdMap::new(),
+                    Config::default().with_poll_interval(poll_interval),
+                )
+                .into_diagnostic()?,
+            ),
+            WatchMode::Auto => {
+                return Err(miette::miette!(
+                    "WatchMode::Auto must not be passed directly to WatchFiles::new; \
+                     the caller must resolve auto to native or poll"
+                ));
+            }
+        };
+
+        Ok(Self { backend, rx })
     }
 
     pub fn watch(&mut self, path: &Path, recursive_mode: RecursiveMode) -> Result<()> {
-        self.debouncer.watch(path, recursive_mode).into_diagnostic()
+        match &mut self.backend {
+            WatchFilesBackend::Native(debouncer) => {
+                debouncer.watch(path, recursive_mode).into_diagnostic()
+            }
+            WatchFilesBackend::Poll(debouncer) => {
+                debouncer.watch(path, recursive_mode).into_diagnostic()
+            }
+        }
     }
 
     pub fn unwatch(&mut self, path: &Path) -> Result<()> {
-        self.debouncer.unwatch(path).into_diagnostic()
+        match &mut self.backend {
+            WatchFilesBackend::Native(debouncer) => debouncer.unwatch(path).into_diagnostic(),
+            WatchFilesBackend::Poll(debouncer) => debouncer.unwatch(path).into_diagnostic(),
+        }
     }
 }
 

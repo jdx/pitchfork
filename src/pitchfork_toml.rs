@@ -159,6 +159,8 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub watch: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub watch_mode: Option<WatchMode>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub dir: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub env: Option<IndexMap<String, String>>,
@@ -870,6 +872,7 @@ impl PitchforkToml {
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
+                watch_mode: raw_daemon.watch_mode.unwrap_or_default(),
                 dir: raw_daemon.dir,
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
@@ -981,6 +984,10 @@ impl PitchforkToml {
                         })
                         .collect(),
                     watch: daemon.watch.clone(),
+                    watch_mode: match daemon.watch_mode {
+                        WatchMode::Native => None,
+                        mode => Some(mode),
+                    },
                     dir: daemon.dir.clone(),
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
@@ -1178,6 +1185,13 @@ pub struct PitchforkTomlDaemon {
     /// File patterns to watch for changes
     #[schemars(default)]
     pub watch: Vec<String>,
+    /// File watching backend mode.
+    ///
+    /// - `native`: use platform-native notifications (default)
+    /// - `poll`: use polling-based watcher
+    /// - `auto`: prefer native, fall back to polling if native watch fails
+    #[schemars(default)]
+    pub watch_mode: WatchMode,
     /// Working directory for the daemon. Relative paths are resolved from the pitchfork.toml location.
     pub dir: Option<String>,
     /// Environment variables to set for the daemon process
@@ -1215,6 +1229,7 @@ impl Default for PitchforkTomlDaemon {
             boot_start: None,
             depends: Vec::new(),
             watch: Vec::new(),
+            watch_mode: WatchMode::default(),
             dir: None,
             env: None,
             hooks: None,
@@ -1263,6 +1278,7 @@ impl PitchforkTomlDaemon {
             depends: self.depends.clone(),
             env: self.env.clone(),
             watch: self.watch.clone(),
+            watch_mode: self.watch_mode,
             watch_base_dir: Some(crate::ipc::batch::resolve_config_base_dir(
                 self.path.as_deref(),
             )),
@@ -1283,6 +1299,21 @@ fn default_port_bump_attempts() -> u32 {
     // deserialization, which could cause a OnceLock re-entrancy deadlock.
     // The runtime value from settings is applied later at each call site.
     10
+}
+
+/// File watch backend mode for daemon `watch` patterns.
+#[derive(
+    Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchMode {
+    /// Use platform-native watcher backend (inotify/FSEvents/ReadDirectoryChangesW).
+    #[default]
+    Native,
+    /// Use polling backend; more compatible on networked filesystems.
+    Poll,
+    /// Prefer native backend, fall back to polling when native watch setup fails.
+    Auto,
 }
 
 /// Cron scheduling configuration

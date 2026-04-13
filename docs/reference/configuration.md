@@ -289,6 +289,26 @@ watch = ["src/**/*.ts", "package.json"]
 
 See [File Watching guide](/guides/file-watching) for more details.
 
+### `watch_mode`
+
+Select which file watcher backend to use for this daemon. Default: `"native"`
+
+```toml
+[daemons.api]
+run = "npm run dev"
+watch = ["src/**/*.ts", "package.json"]
+watch_mode = "auto"
+```
+
+**Allowed values:**
+- `"native"` - OS-native filesystem notifications (default)
+- `"poll"` - Polling-based watcher (better compatibility on some NFS/remote mounts)
+- `"auto"` - Prefer native, automatically fall back to polling if native watcher setup fails
+
+**Related settings:**
+- `settings.supervisor.watch_poll_interval` controls polling scan cadence
+- `settings.supervisor.watch_interval` controls how often supervisor refreshes watch config state
+
 ### `expected_port`
 
 TCP ports the daemon is expected to bind to. Used for port conflict detection before starting a daemon.

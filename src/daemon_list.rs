@@ -114,6 +114,7 @@ fn build_daemon_list(
             depends: vec![],
             env: None,
             watch: vec![],
+            watch_mode: daemon_config.watch_mode,
             watch_base_dir: None,
             mise: daemon_config.mise,
             active_port: None,
