@@ -7,6 +7,8 @@ use crate::Result;
 use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 impl Supervisor {
     /// Main IPC connection watch loop - reads and dispatches requests
     pub(crate) async fn conn_watch(&self, mut ipc: IpcServer) -> ! {
@@ -39,8 +41,22 @@ impl Supervisor {
                 return Ok(IpcResponse::Error(format!("Invalid request: {error}")));
             }
             IpcRequest::Connect => {
-                debug!("received connect message");
+                debug!("received connect message (legacy, no version info)");
                 IpcResponse::Ok
+            }
+            IpcRequest::ConnectV2 {
+                version: client_version,
+            } => {
+                debug!("received connect message (client version: {client_version})");
+                if client_version != VERSION {
+                    warn!(
+                        "Client version {client_version} differs from supervisor version {VERSION}. \
+                            Restart the supervisor with: pitchfork supervisor start --force"
+                    );
+                }
+                IpcResponse::ConnectOk {
+                    version: VERSION.to_string(),
+                }
             }
             IpcRequest::Stop { id } => {
                 // id is already DaemonId, no validation needed
