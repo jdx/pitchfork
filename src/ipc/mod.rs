@@ -28,6 +28,12 @@ pub(crate) mod server;
 #[allow(clippy::large_enum_variant)]
 pub enum IpcRequest {
     Connect,
+    /// Versioned connect handshake (v2): client sends its version so the supervisor can
+    /// detect mismatches. Kept as a separate variant so the wire format of `Connect`
+    /// (unit variant) stays unchanged for backward compatibility with older supervisors.
+    ConnectV2 {
+        version: String,
+    },
     Clean,
     Stop {
         id: DaemonId,
@@ -56,6 +62,10 @@ pub enum IpcRequest {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
 pub enum IpcResponse {
     Ok,
+    /// Successful connect handshake, includes supervisor version for mismatch detection
+    ConnectOk {
+        version: String,
+    },
     Yes,
     No,
     Error(String),

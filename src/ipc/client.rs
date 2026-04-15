@@ -29,13 +29,50 @@ impl IpcClient {
         let id = Uuid::new_v4().to_string();
         let client = Self::connect_(&id, "main").await?;
         trace!("Connected to IPC socket");
-        let rsp = client.request(IpcRequest::Connect).await?;
-        if !rsp.is_ok() {
-            return Err(IpcError::UnexpectedResponse {
-                expected: "Ok".to_string(),
-                actual: format!("{rsp:?}"),
+        let client_version = env!("CARGO_PKG_VERSION").to_string();
+
+        // Try ConnectV2 first (supervisor that knows about it will return ConnectOk with its version).
+        // If the supervisor is older and doesn't recognize ConnectV2, it will return Error,
+        // and we fall back to the legacy Connect handshake.
+        let rsp = client
+            .request(IpcRequest::ConnectV2 {
+                version: client_version.clone(),
+            })
+            .await?;
+        match rsp {
+            IpcResponse::ConnectOk {
+                version: supervisor_version,
+            } => {
+                if supervisor_version != client_version {
+                    warn!(
+                        "CLI version {client_version} differs from supervisor version {supervisor_version}. \
+                         Restart the supervisor with: pitchfork supervisor start --force"
+                    );
+                }
             }
-            .into());
+            IpcResponse::Error(_) => {
+                // Old supervisor doesn't recognize ConnectV2 — fall back to legacy Connect
+                debug!("Supervisor did not recognize ConnectV2, falling back to legacy Connect");
+                let rsp = client.request(IpcRequest::Connect).await?;
+                if !rsp.is_ok() {
+                    return Err(IpcError::UnexpectedResponse {
+                        expected: "Ok".to_string(),
+                        actual: format!("{rsp:?}"),
+                    }
+                    .into());
+                }
+                warn!(
+                    "Supervisor is running an older version. \
+                     Restart the supervisor with: pitchfork supervisor start --force"
+                );
+            }
+            _ => {
+                return Err(IpcError::UnexpectedResponse {
+                    expected: "ConnectOk or Error".to_string(),
+                    actual: format!("{rsp:?}"),
+                }
+                .into());
+            }
         }
         debug!("Connected to IPC main");
         Ok(client)
