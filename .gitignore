@@ -1,3 +1,4 @@
 /target
+.aube/
 node_modules
 /docs/.vitepress/dist
