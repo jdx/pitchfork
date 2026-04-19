@@ -18,6 +18,7 @@ url_api = "https://api.github.com/repos/endevco/aube/releases/assets/399980524"
 checksum = "sha256:70606c2d09d06538eb07de888bf7db5727e80de3c2e8997e08d8ac4bd06fa5ea"
 url = "https://github.com/endevco/aube/releases/download/v1.0.0-beta.5/aube-v1.0.0-beta.5-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/endevco/aube/releases/assets/399980361"
+provenance = "github-attestations"
 
 [tools.aube."platforms.linux-x64-baseline"]
 checksum = "sha256:70606c2d09d06538eb07de888bf7db5727e80de3c2e8997e08d8ac4bd06fa5ea"
@@ -167,6 +168,7 @@ url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980531
 checksum = "sha256:bca0dcb9588d6fc186641c8135efc660f6f2d45c56c28568279538fd04a7e757"
 url = "https://github.com/jdx/communique/releases/download/v0.1.8/communique-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/jdx/communique/releases/assets/357980500"
+provenance = "github-attestations"
 
 [tools.communique."platforms.linux-x64-baseline"]
 checksum = "sha256:bca0dcb9588d6fc186641c8135efc660f6f2d45c56c28568279538fd04a7e757"
