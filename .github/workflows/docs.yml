@@ -38,8 +38,8 @@ jobs:
       - name: Build with VitePress
         run: |
           cd docs
-          bun i
-          bun run docs:build
+          aube install
+          aube run docs:build
           touch .vitepress/dist/.nojekyll
       - name: Upload artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5

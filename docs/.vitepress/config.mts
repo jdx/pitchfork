@@ -32,6 +32,7 @@ export default defineConfig({
       { text: "Quick Start", link: "/quickstart" },
       { text: "Guides", link: "/guides/shell-hook" },
       { text: "CLI Reference", link: "/cli" },
+      { text: "Releases", link: "https://github.com/jdx/pitchfork/releases" },
     ],
 
     sidebar: [
