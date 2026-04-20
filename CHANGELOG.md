@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0](https://github.com/jdx/pitchfork/compare/v2.6.0...v2.7.0) - 2026-04-20
+
+### Added
+
+- version check in IPC ([#354](https://github.com/jdx/pitchfork/pull/354))
+
+### Other
+
+- *(deps)* lock file maintenance ([#371](https://github.com/jdx/pitchfork/pull/371))
+- *(deps)* update rust crate xx to v2.5.4 ([#363](https://github.com/jdx/pitchfork/pull/363))
+- *(deps)* update rust crate hyper-rustls to v0.27.9 ([#359](https://github.com/jdx/pitchfork/pull/359))
+- *(deps)* update rust crate rmcp to v1.5.0 ([#364](https://github.com/jdx/pitchfork/pull/364))
+- *(deps)* update rust crate libc to v0.2.185 ([#360](https://github.com/jdx/pitchfork/pull/360))
+- *(deps)* update rust crate tokio to v1.52.1 ([#365](https://github.com/jdx/pitchfork/pull/365))
+- *(deps)* update rust crate uuid to v1.23.1 ([#362](https://github.com/jdx/pitchfork/pull/362))
+- *(deps)* update rust crate rustls to v0.23.38 ([#361](https://github.com/jdx/pitchfork/pull/361))
+- *(deps)* update rust crate clap to v4.6.1 ([#358](https://github.com/jdx/pitchfork/pull/358))
+- *(deps)* update rust crate axum to v0.8.9 ([#357](https://github.com/jdx/pitchfork/pull/357))
+
 ## [2.6.0](https://github.com/jdx/pitchfork/compare/v2.5.0...v2.6.0) - 2026-04-12
 
 ### Added
