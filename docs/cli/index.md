@@ -3,41 +3,29 @@
 
 **Usage**: `pitchfork <SUBCOMMAND>`
 
-**Version**: 2.6.0
+**Version**: 0.1.5
 
 - **Usage**: `pitchfork <SUBCOMMAND>`
 
 ## Subcommands
 
 - [`pitchfork activate <SHELL>`](/cli/activate.md)
-- [`pitchfork boot <SUBCOMMAND>`](/cli/boot.md)
-- [`pitchfork boot enable`](/cli/boot/enable.md)
-- [`pitchfork boot disable`](/cli/boot/disable.md)
-- [`pitchfork boot status`](/cli/boot/status.md)
 - [`pitchfork clean`](/cli/clean.md)
 - [`pitchfork config <SUBCOMMAND>`](/cli/config.md)
-- [`pitchfork config add [FLAGS] <ID> [ARGS]…`](/cli/config/add.md)
+- [`pitchfork config add [--autostart] [--autostop] <ID> [ARGS]…`](/cli/config/add.md)
 - [`pitchfork config remove <ID>`](/cli/config/remove.md)
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork disable <ID>`](/cli/disable.md)
 - [`pitchfork enable <ID>`](/cli/enable.md)
 - [`pitchfork list [--hide-header]`](/cli/list.md)
 - [`pitchfork logs [FLAGS] [ID]…`](/cli/logs.md)
-- [`pitchfork mcp`](/cli/mcp.md)
-- [`pitchfork proxy <SUBCOMMAND>`](/cli/proxy.md)
-- [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
-- [`pitchfork proxy status`](/cli/proxy/status.md)
-- [`pitchfork proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>`](/cli/proxy/add.md)
-- [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
-- [`pitchfork restart [FLAGS] [ID]…`](/cli/restart.md)
-- [`pitchfork run [FLAGS] <ID> [-- RUN]…`](/cli/run.md)
-- [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
+- [`pitchfork run [-f --force] <ID> [-- RUN]…`](/cli/run.md)
+- [`pitchfork start [-a --all] [-f --force] [ID]…`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)
-- [`pitchfork stop [-a --all] [ID]…`](/cli/stop.md)
+- [`pitchfork stop [ID]…`](/cli/stop.md)
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
-- [`pitchfork supervisor run [FLAGS]`](/cli/supervisor/run.md)
+- [`pitchfork supervisor run [-f --force]`](/cli/supervisor/run.md)
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
 - [`pitchfork supervisor status`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
-- [`pitchfork tui`](/cli/tui.md)
 - [`pitchfork wait <ID>`](/cli/wait.md)
