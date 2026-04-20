@@ -15,8 +15,8 @@
           {
             "name": "SHELL",
             "usage": "<SHELL>",
-            "help": "The shell to generate source for",
-            "help_first_line": "The shell to generate source for",
+            "help": "Shell to activate (bash, zsh, fish)",
+            "help_first_line": "Shell to activate (bash, zsh, fish)",
             "required": true,
             "double_dash": "Optional",
             "hide": false
@@ -26,8 +26,81 @@
         "mounts": [],
         "hide": false,
         "help": "Activate pitchfork in your shell session",
-        "help_long": "Activate pitchfork in your shell session\n\nNecessary for autostart/stop when entering/exiting projects with pitchfork.toml files",
+        "help_long": "Activate pitchfork in your shell session\n\nGenerates shell code that enables automatic daemon management when changing\ndirectories. Required for auto-start/stop features in pitchfork.toml.\n\nSupported shells: bash, zsh, fish\n\nAdd to your shell config:\n  bash (~/.bashrc):\n    eval \"$(pitchfork activate bash)\"\n\n  zsh (~/.zshrc):\n    eval \"$(pitchfork activate zsh)\"\n\n  fish (~/.config/fish/config.fish):\n    pitchfork activate fish | source",
         "name": "activate",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "boot": {
+        "full_cmd": [
+          "boot"
+        ],
+        "usage": "boot <SUBCOMMAND>",
+        "subcommands": {
+          "enable": {
+            "full_cmd": [
+              "boot",
+              "enable"
+            ],
+            "usage": "boot enable",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Enable boot start for pitchfork supervisor",
+            "help_long": "Enable boot start for pitchfork supervisor\n\nRegisters pitchfork to start automatically when the system boots.\nOn macOS, creates a LaunchAgent. On Linux, creates a systemd user service.",
+            "name": "enable",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "disable": {
+            "full_cmd": [
+              "boot",
+              "disable"
+            ],
+            "usage": "boot disable",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Disable boot start for pitchfork supervisor",
+            "help_long": "Disable boot start for pitchfork supervisor\n\nRemoves the boot start registration. Pitchfork will no longer start\nautomatically on system boot.",
+            "name": "disable",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "status": {
+            "full_cmd": [
+              "boot",
+              "status"
+            ],
+            "usage": "boot status",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Check boot start status",
+            "help_long": "Check boot start status\n\nReports whether pitchfork is configured to start on system boot.",
+            "name": "status",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "help": "Enable or disable boot start",
+        "help_long": "Enable or disable boot start\n\nManages whether pitchfork supervisor starts automatically when the system\nboots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).\n\nSubcommands:\n  enable    Register pitchfork to start on boot\n  disable   Remove pitchfork from boot startup\n  status    Check if boot start is currently enabled\n\nExamples:\n  pitchfork boot enable           Start pitchfork on system boot\n  pitchfork boot disable          Don't start pitchfork on boot\n  pitchfork boot status           Check boot start status",
+        "name": "boot",
         "aliases": [],
         "hidden_aliases": [],
         "examples": []
@@ -77,6 +150,7 @@
         "mounts": [],
         "hide": false,
         "help": "Removes stopped/failed daemons from `pitchfork list`",
+        "help_long": "Removes stopped/failed daemons from `pitchfork list`\n\nCleans up the daemon list by removing entries for daemons that are no\nlonger running. Does not affect running daemons or their configurations.\n\nUse this to clear out old entries after stopping daemons manually or\nafter daemons have failed.\n\nExamples:\n  pitchfork clean                 Remove all stopped/failed entries\n  pitchfork c                     Alias for 'clean'",
         "name": "clean",
         "aliases": [
           "c"
@@ -95,14 +169,14 @@
               "config",
               "add"
             ],
-            "usage": "config add [--autostart] [--autostop] <ID> [ARGS]…",
+            "usage": "config add [FLAGS] <ID> [ARGS]…",
             "subcommands": {},
             "args": [
               {
                 "name": "ID",
                 "usage": "<ID>",
-                "help": "ID of the daemon to add",
-                "help_first_line": "ID of the daemon to add",
+                "help": "ID of the daemon to add (e.g., \"api\" or \"namespace/api\")",
+                "help_first_line": "ID of the daemon to add (e.g., \"api\" or \"namespace/api\")",
                 "required": true,
                 "double_dash": "Optional",
                 "hide": false
@@ -110,8 +184,8 @@
               {
                 "name": "ARGS",
                 "usage": "[ARGS]…",
-                "help": "Arguments to pass to the daemon",
-                "help_first_line": "Arguments to pass to the daemon",
+                "help": "Arguments to pass to the daemon (alternative to --run)",
+                "help_first_line": "Arguments to pass to the daemon (alternative to --run)",
                 "required": false,
                 "double_dash": "Automatic",
                 "var": true,
@@ -119,6 +193,262 @@
               }
             ],
             "flags": [
+              {
+                "name": "run",
+                "usage": "--run <RUN>",
+                "help": "Command to run (can also use positional args)",
+                "help_first_line": "Command to run (can also use positional args)",
+                "short": [],
+                "long": [
+                  "run"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "RUN",
+                  "usage": "<RUN>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "retry",
+                "usage": "--retry <RETRY>",
+                "help": "Number of retry attempts on failure (use \\\"true\\\" for infinite)",
+                "help_first_line": "Number of retry attempts on failure (use \\\"true\\\" for infinite)",
+                "short": [],
+                "long": [
+                  "retry"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "RETRY",
+                  "usage": "<RETRY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "watch",
+                "usage": "--watch… <WATCH>",
+                "help": "Glob patterns to watch for changes (can be specified multiple times)",
+                "help_first_line": "Glob patterns to watch for changes (can be specified multiple times)",
+                "short": [],
+                "long": [
+                  "watch"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "WATCH",
+                  "usage": "<WATCH>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "dir",
+                "usage": "--dir <DIR>",
+                "help": "Working directory for the daemon",
+                "help_first_line": "Working directory for the daemon",
+                "short": [],
+                "long": [
+                  "dir"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIR",
+                  "usage": "<DIR>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "env",
+                "usage": "--env… <ENV>",
+                "help": "Environment variables in KEY=value format (can be specified multiple times)",
+                "help_first_line": "Environment variables in KEY=value format (can be specified multiple times)",
+                "short": [],
+                "long": [
+                  "env"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ENV",
+                  "usage": "<ENV>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-delay",
+                "usage": "--ready-delay <READY_DELAY>",
+                "help": "Delay in seconds before considering daemon ready",
+                "help_first_line": "Delay in seconds before considering daemon ready",
+                "short": [],
+                "long": [
+                  "ready-delay"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_DELAY",
+                  "usage": "<READY_DELAY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-output",
+                "usage": "--ready-output <READY_OUTPUT>",
+                "help": "Regex pattern to match in output for readiness",
+                "help_first_line": "Regex pattern to match in output for readiness",
+                "short": [],
+                "long": [
+                  "ready-output"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_OUTPUT",
+                  "usage": "<READY_OUTPUT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-http",
+                "usage": "--ready-http <READY_HTTP>",
+                "help": "HTTP endpoint URL to poll for readiness",
+                "help_first_line": "HTTP endpoint URL to poll for readiness",
+                "short": [],
+                "long": [
+                  "ready-http"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_HTTP",
+                  "usage": "<READY_HTTP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-port",
+                "usage": "--ready-port <READY_PORT>",
+                "help": "TCP port to check for readiness",
+                "help_first_line": "TCP port to check for readiness",
+                "short": [],
+                "long": [
+                  "ready-port"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_PORT",
+                  "usage": "<READY_PORT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "ready-cmd",
+                "usage": "--ready-cmd <READY_CMD>",
+                "help": "Shell command to poll for readiness",
+                "help_first_line": "Shell command to poll for readiness",
+                "short": [],
+                "long": [
+                  "ready-cmd"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_CMD",
+                  "usage": "<READY_CMD>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "expected-port",
+                "usage": "--expected-port… <EXPECTED_PORT>",
+                "help": "Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)",
+                "help_first_line": "Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)",
+                "short": [],
+                "long": [
+                  "expected-port"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "EXPECTED_PORT",
+                  "usage": "<EXPECTED_PORT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "auto-bump-port",
+                "usage": "--auto-bump-port",
+                "help": "Automatically find an available port if the expected port is in use",
+                "help_first_line": "Automatically find an available port if the expected port is in use",
+                "short": [],
+                "long": [
+                  "auto-bump-port"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "depends",
+                "usage": "--depends… <DEPENDS>",
+                "help": "Daemon dependencies that must start first (can be specified multiple times)",
+                "help_first_line": "Daemon dependencies that must start first (can be specified multiple times)",
+                "short": [],
+                "long": [
+                  "depends"
+                ],
+                "var": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DEPENDS",
+                  "usage": "<DEPENDS>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "boot-start",
+                "usage": "--boot-start",
+                "help": "Start this daemon automatically on system boot",
+                "help_first_line": "Start this daemon automatically on system boot",
+                "short": [],
+                "long": [
+                  "boot-start"
+                ],
+                "hide": false,
+                "global": false
+              },
               {
                 "name": "autostart",
                 "usage": "--autostart",
@@ -142,11 +472,145 @@
                 ],
                 "hide": false,
                 "global": false
+              },
+              {
+                "name": "on-ready",
+                "usage": "--on-ready <ON_READY>",
+                "help": "Command to run when daemon becomes ready",
+                "help_first_line": "Command to run when daemon becomes ready",
+                "short": [],
+                "long": [
+                  "on-ready"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_READY",
+                  "usage": "<ON_READY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-fail",
+                "usage": "--on-fail <ON_FAIL>",
+                "help": "Command to run when daemon fails",
+                "help_first_line": "Command to run when daemon fails",
+                "short": [],
+                "long": [
+                  "on-fail"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_FAIL",
+                  "usage": "<ON_FAIL>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-retry",
+                "usage": "--on-retry <ON_RETRY>",
+                "help": "Command to run before each retry attempt",
+                "help_first_line": "Command to run before each retry attempt",
+                "short": [],
+                "long": [
+                  "on-retry"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_RETRY",
+                  "usage": "<ON_RETRY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-stop",
+                "usage": "--on-stop <ON_STOP>",
+                "help": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "help_first_line": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "short": [],
+                "long": [
+                  "on-stop"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_STOP",
+                  "usage": "<ON_STOP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-exit",
+                "usage": "--on-exit <ON_EXIT>",
+                "help": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "help_first_line": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "short": [],
+                "long": [
+                  "on-exit"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_EXIT",
+                  "usage": "<ON_EXIT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "cron-schedule",
+                "usage": "--cron-schedule <CRON_SCHEDULE>",
+                "help": "Cron schedule expression (6 fields: second minute hour day month weekday)",
+                "help_first_line": "Cron schedule expression (6 fields: second minute hour day month weekday)",
+                "short": [],
+                "long": [
+                  "cron-schedule"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CRON_SCHEDULE",
+                  "usage": "<CRON_SCHEDULE>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "cron-retrigger",
+                "usage": "--cron-retrigger <CRON_RETRIGGER>",
+                "help": "Cron retrigger behavior: finish, always, success, fail",
+                "help_first_line": "Cron retrigger behavior: finish, always, success, fail",
+                "short": [],
+                "long": [
+                  "cron-retrigger"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CRON_RETRIGGER",
+                  "usage": "<CRON_RETRIGGER>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
               }
             ],
             "mounts": [],
             "hide": false,
             "help": "Add a new daemon to ./pitchfork.toml",
+            "help_long": "Add a new daemon to ./pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork config add api bun run server\n                                Add daemon using positional args\n  pitchfork config add api --run 'npm start'\n                                Add daemon with explicit run command\n  pitchfork config add api -- bun run server\n                                Add daemon with explicit args after --\n  pitchfork config add api --run 'npm start' --retry 3\n                                Add with retry policy\n  pitchfork config add api --run 'npm start' --watch 'src/**/*.ts'\n                                Add with file watching\n  pitchfork config add api --run 'npm start' --autostart --autostop\n                                Add with auto start/stop hooks\n  pitchfork config add worker --run './worker' --depends api\n                                Add with daemon dependency\n",
             "name": "add",
             "aliases": [
               "a"
@@ -165,8 +629,8 @@
               {
                 "name": "ID",
                 "usage": "<ID>",
-                "help": "The ID of the daemon to remove",
-                "help_first_line": "The ID of the daemon to remove",
+                "help": "The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")",
+                "help_first_line": "The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")",
                 "required": true,
                 "double_dash": "Optional",
                 "hide": false
@@ -207,8 +671,8 @@
           {
             "name": "SHELL",
             "usage": "<SHELL>",
-            "help": "The shell to generate completion for",
-            "help_first_line": "The shell to generate completion for",
+            "help": "Shell to generate completions for (bash, zsh, fish)",
+            "help_first_line": "Shell to generate completions for (bash, zsh, fish)",
             "required": true,
             "double_dash": "Optional",
             "hide": false
@@ -218,6 +682,7 @@
         "mounts": [],
         "hide": false,
         "help": "Generates shell completion scripts",
+        "help_long": "Generates shell completion scripts\n\nCreates tab-completion scripts for your shell. Requires the 'usage' CLI tool.\n\nSupported shells: bash, zsh, fish\n\nInstallation:\n  bash:\n    pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork\n\n  zsh:\n    pitchfork completion zsh > ~/.zfunc/_pitchfork\n\n  fish:\n    pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish",
         "name": "completion",
         "aliases": [],
         "hidden_aliases": [],
@@ -244,6 +709,7 @@
         "mounts": [],
         "hide": false,
         "help": "Prevent a daemon from restarting",
+        "help_long": "Prevent a daemon from restarting\n\nDisables a daemon to prevent it from being started automatically or manually.\nThe daemon will remain disabled until 'pitchfork enable' is called.\nUseful for temporarily stopping a service without removing it from config.\n\nExamples:\n  pitchfork disable api           Prevent daemon from starting\n  pitchfork d api                 Alias for 'disable'\n  pitchfork list                  Shows 'disabled' status in output",
         "name": "disable",
         "aliases": [
           "d"
@@ -272,6 +738,7 @@
         "mounts": [],
         "hide": false,
         "help": "Allow a daemon to start",
+        "help_long": "Allow a daemon to start\n\nRe-enables a previously disabled daemon, allowing it to be started manually\nor automatically. Use this after 'pitchfork disable' to restore normal operation.\n\nExamples:\n  pitchfork enable api            Enable a disabled daemon\n  pitchfork e api                 Alias for 'enable'",
         "name": "enable",
         "aliases": [
           "e"
@@ -290,8 +757,8 @@
           {
             "name": "hide-header",
             "usage": "--hide-header",
-            "help": "Show header",
-            "help_first_line": "Show header",
+            "help": "Hide the table header row",
+            "help_first_line": "Hide the table header row",
             "short": [],
             "long": [
               "hide-header"
@@ -303,6 +770,7 @@
         "mounts": [],
         "hide": false,
         "help": "List all daemons",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status     Error\n  api     12345  running\n  worker         available\n  db             errored    exit code 127",
         "name": "list",
         "aliases": [
           "ls"
@@ -346,9 +814,9 @@
           {
             "name": "n",
             "usage": "-n <N>",
-            "help": "Show N lines of logs",
-            "help_long": "Show N lines of logs\n\nSet to 0 to show all logs",
-            "help_first_line": "Show N lines of logs",
+            "help": "Show last N lines of logs",
+            "help_long": "Show last N lines of logs\n\nOnly applies when --since/--until is not used. Without this option, all logs are shown.",
+            "help_first_line": "Show last N lines of logs",
             "short": [
               "n"
             ],
@@ -372,7 +840,76 @@
               "t"
             ],
             "long": [
-              "tail"
+              "tail",
+              "follow"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "since",
+            "usage": "-s --since <SINCE>",
+            "help": "Show logs from this time",
+            "help_long": "Show logs from this time\n\nSupports multiple formats: - Full datetime: \"YYYY-MM-DD HH:MM:SS\" or \"YYYY-MM-DD HH:MM\" - Time only: \"HH:MM:SS\" or \"HH:MM\" (uses today's date) - Relative time: \"5min\", \"2h\", \"1d\" (e.g., last 5 minutes)",
+            "help_first_line": "Show logs from this time",
+            "short": [
+              "s"
+            ],
+            "long": [
+              "since"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "SINCE",
+              "usage": "<SINCE>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "until",
+            "usage": "-u --until <UNTIL>",
+            "help": "Show logs until this time",
+            "help_long": "Show logs until this time\n\nSupports multiple formats: - Full datetime: \"YYYY-MM-DD HH:MM:SS\" or \"YYYY-MM-DD HH:MM\" - Time only: \"HH:MM:SS\" or \"HH:MM\" (uses today's date)",
+            "help_first_line": "Show logs until this time",
+            "short": [
+              "u"
+            ],
+            "long": [
+              "until"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "UNTIL",
+              "usage": "<UNTIL>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "no-pager",
+            "usage": "--no-pager",
+            "help": "Disable pager even in interactive terminal",
+            "help_first_line": "Disable pager even in interactive terminal",
+            "short": [],
+            "long": [
+              "no-pager"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "raw",
+            "usage": "--raw",
+            "help": "Output raw log lines without color or formatting",
+            "help_first_line": "Output raw log lines without color or formatting",
+            "short": [],
+            "long": [
+              "raw"
             ],
             "hide": false,
             "global": false
@@ -381,6 +918,7 @@
         "mounts": [],
         "hide": false,
         "help": "Displays logs for daemon(s)",
+        "help_long": "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show all logs for 'api' (paged if needed)\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api --follow     Follow logs in real-time\n  pitchfork logs api --since '2024-01-15 10:00:00'\n                                  Show logs since a specific time (forward)\n  pitchfork logs api --since '10:30:00'\n                                  Show logs since 10:30:00 today\n  pitchfork logs api --since '10:30' --until '12:00'\n                                  Show logs since 10:30:00 until 12:00:00 today\n  pitchfork logs api --since 5min Show logs from last 5 minutes\n  pitchfork logs api --raw        Output raw log lines without formatting\n  pitchfork logs api --raw -n 100 Output last 100 raw log lines\n  pitchfork logs api --clear      Delete logs for 'api'\n  pitchfork logs --clear          Delete logs for all daemons",
         "name": "logs",
         "aliases": [
           "l"
@@ -388,11 +926,353 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "mcp": {
+        "full_cmd": [
+          "mcp"
+        ],
+        "usage": "mcp",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Runs a Model Context Protocol (MCP) server over stdin/stdout",
+        "help_long": "Runs a Model Context Protocol (MCP) server over stdin/stdout\n\nThis command starts an MCP server that exposes pitchfork daemon management\nto AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.\n\nTypically used as a subprocess by an MCP-aware AI agent.\n\nExamples:\n  # In claude_desktop_config.json or similar:\n  {\n    \"mcpServers\": {\n      \"pitchfork\": {\n        \"command\": \"pitchfork\",\n        \"args\": [\"mcp\"]\n      }\n    }\n  }\n\nTools provided:\n  pitchfork_status    List all daemons and their state\n  pitchfork_start     Start a named daemon\n  pitchfork_stop      Stop a named daemon\n  pitchfork_restart   Restart a named daemon\n  pitchfork_logs      Return recent log output for a daemon",
+        "name": "mcp",
+        "aliases": [],
+        "hidden_aliases": [],
+        "after_help_long": "Examples:\n\n  # Start the MCP server (used by AI assistant tools)\n  $ pitchfork mcp\n\n  # Claude Desktop configuration (claude_desktop_config.json):\n  {\n    \"mcpServers\": {\n      \"pitchfork\": {\n        \"command\": \"pitchfork\",\n        \"args\": [\"mcp\"]\n      }\n    }\n  }\n\n  # Interactive testing with JSON-RPC:\n  $ echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}' | pitchfork mcp\n\n  # Available tools:\n  - pitchfork_status  - List all daemons and their state\n  - pitchfork_start   - Start daemon(s) by name\n  - pitchfork_stop    - Stop daemon(s) by name\n  - pitchfork_restart - Restart daemon(s) by name\n  - pitchfork_logs    - Return recent log output for daemon(s)\n",
+        "examples": []
+      },
+      "proxy": {
+        "full_cmd": [
+          "proxy"
+        ],
+        "usage": "proxy <SUBCOMMAND>",
+        "subcommands": {
+          "trust": {
+            "full_cmd": [
+              "proxy",
+              "trust"
+            ],
+            "usage": "proxy trust [--cert <CERT>]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "cert",
+                "usage": "--cert <CERT>",
+                "help": "Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)",
+                "help_first_line": "Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)",
+                "short": [],
+                "long": [
+                  "cert"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CERT",
+                  "usage": "<CERT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Install the proxy's self-signed TLS certificate into the system trust store",
+            "help_long": "Install the proxy's self-signed TLS certificate into the system trust store\n\nThis command installs pitchfork's auto-generated TLS certificate into your\nsystem's trust store so that browsers and tools trust HTTPS proxy URLs\nwithout certificate warnings.\n\nOn macOS, this installs the certificate into the current user's login\nkeychain. No `sudo` required.\n\nOn Linux, the appropriate CA certificate directory and update command are\ndetected automatically based on the running distribution:\n  - Debian/Ubuntu: /usr/local/share/ca-certificates/ + update-ca-certificates\n  - RHEL/Fedora/CentOS: /etc/pki/ca-trust/source/anchors/ + update-ca-trust\n  - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat\n  - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates\n\nThis DOES require sudo on Linux.\n\nExample:\n  pitchfork proxy trust\n  sudo pitchfork proxy trust    # Linux only",
+            "name": "trust",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "status": {
+            "full_cmd": [
+              "proxy",
+              "status"
+            ],
+            "usage": "proxy status",
+            "subcommands": {},
+            "args": [],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Show all registered slugs and their current state",
+            "help_long": "Show all registered slugs and their current state\n\nDisplays the proxy configuration and lists all slugs from the global config\nwith their project directory, daemon name, and current status (running/stopped, port).",
+            "name": "status",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "add": {
+            "full_cmd": [
+              "proxy",
+              "add"
+            ],
+            "usage": "proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "SLUG",
+                "usage": "<SLUG>",
+                "help": "The slug name (used in proxy URLs, e.g. api → api.localhost)",
+                "help_first_line": "The slug name (used in proxy URLs, e.g. api → api.localhost)",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [
+              {
+                "name": "dir",
+                "usage": "--dir <DIR>",
+                "help": "Project directory (defaults to current directory)",
+                "help_first_line": "Project directory (defaults to current directory)",
+                "short": [],
+                "long": [
+                  "dir"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIR",
+                  "usage": "<DIR>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "daemon",
+                "usage": "--daemon <DAEMON>",
+                "help": "Daemon name within the project (defaults to slug name)",
+                "help_first_line": "Daemon name within the project (defaults to slug name)",
+                "short": [],
+                "long": [
+                  "daemon"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DAEMON",
+                  "usage": "<DAEMON>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Add a slug mapping to the global config",
+            "help_long": "Add a slug mapping to the global config\n\nRegisters a slug in ~/.config/pitchfork/config.toml that maps to a project\ndirectory and daemon name. The proxy uses this to route requests.\n\nIf --dir is not specified, uses the current directory.\nIf --daemon is not specified, defaults to the slug name.\n\nExample:\n  pitchfork proxy add api\n  pitchfork proxy add api --daemon server\n  pitchfork proxy add api --dir /home/user/my-api --daemon server",
+            "name": "add",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "remove": {
+            "full_cmd": [
+              "proxy",
+              "remove"
+            ],
+            "usage": "proxy remove <SLUG>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "SLUG",
+                "usage": "<SLUG>",
+                "help": "The slug name to remove",
+                "help_first_line": "The slug name to remove",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Remove a slug mapping from the global config",
+            "help_long": "Remove a slug mapping from the global config\n\nExample:\n  pitchfork proxy remove api",
+            "name": "remove",
+            "aliases": [
+              "rm"
+            ],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "help": "Manage the pitchfork reverse proxy",
+        "help_long": "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable slug-based URLs like:\n  https://myapp.localhost\n\nto the daemon's actual listening port (e.g. localhost:3000).\n\nSlugs are defined in the global config (~/.config/pitchfork/config.toml)\nunder [slugs]. Each slug maps to a project directory and daemon name.\n\nEnable the proxy in your pitchfork.toml or settings:\n  [settings.proxy]\n  enable = true\n\nSubcommands:\n  trust     Install the proxy's TLS certificate into the system trust store\n  add       Add a slug mapping to the global config\n  remove    Remove a slug mapping from the global config\n  status    Show all registered slugs and their current state",
+        "name": "proxy",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "restart": {
+        "full_cmd": [
+          "restart"
+        ],
+        "usage": "restart [FLAGS] [ID]…",
+        "subcommands": {},
+        "args": [
+          {
+            "name": "ID",
+            "usage": "[ID]…",
+            "help": "ID of the daemon(s) to restart",
+            "help_first_line": "ID of the daemon(s) to restart",
+            "required": false,
+            "double_dash": "Optional",
+            "var": true,
+            "hide": false
+          }
+        ],
+        "flags": [
+          {
+            "name": "all",
+            "usage": "-a --all",
+            "help": "Restart all running daemons",
+            "help_first_line": "Restart all running daemons",
+            "short": [
+              "a"
+            ],
+            "long": [
+              "all"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "delay",
+            "usage": "--delay <DELAY>",
+            "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "help_first_line": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "short": [],
+            "long": [
+              "delay"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DELAY",
+              "usage": "<DELAY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output",
+            "usage": "--output <OUTPUT>",
+            "help": "Wait until output matches this regex pattern before considering daemon ready",
+            "help_first_line": "Wait until output matches this regex pattern before considering daemon ready",
+            "short": [],
+            "long": [
+              "output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT",
+              "usage": "<OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "http",
+            "usage": "--http <HTTP>",
+            "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "help_first_line": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "short": [],
+            "long": [
+              "http"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "HTTP",
+              "usage": "<HTTP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "port",
+            "usage": "--port <PORT>",
+            "help": "Wait until TCP port is listening before considering daemon ready",
+            "help_first_line": "Wait until TCP port is listening before considering daemon ready",
+            "short": [],
+            "long": [
+              "port"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "PORT",
+              "usage": "<PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "cmd",
+            "usage": "--cmd <CMD>",
+            "help": "Shell command to poll for readiness (exit code 0 = ready)",
+            "help_first_line": "Shell command to poll for readiness (exit code 0 = ready)",
+            "short": [],
+            "long": [
+              "cmd"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "CMD",
+              "usage": "<CMD>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
+            "long": [
+              "quiet"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
+        "mounts": [],
+        "hide": false,
+        "help": "Restarts a daemon (stops then starts it)",
+        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
+        "name": "restart",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "run": {
         "full_cmd": [
           "run"
         ],
-        "usage": "run [-f --force] <ID> [-- RUN]…",
+        "usage": "run [FLAGS] <ID> [-- RUN]…",
         "subcommands": {},
         "args": [
           {
@@ -407,6 +1287,8 @@
           {
             "name": "RUN",
             "usage": "[-- RUN]…",
+            "help": "Command and arguments to run (after --)",
+            "help_first_line": "Command and arguments to run (after --)",
             "required": false,
             "double_dash": "Required",
             "var": true,
@@ -417,6 +1299,8 @@
           {
             "name": "force",
             "usage": "-f --force",
+            "help": "Stop the daemon if it is already running",
+            "help_first_line": "Stop the daemon if it is already running",
             "short": [
               "f"
             ],
@@ -425,11 +1309,179 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "retry",
+            "usage": "--retry <RETRY>",
+            "help": "Number of times to retry on error exit",
+            "help_first_line": "Number of times to retry on error exit",
+            "short": [],
+            "long": [
+              "retry"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "RETRY",
+              "usage": "<RETRY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "0"
+            ]
+          },
+          {
+            "name": "delay",
+            "usage": "-d --delay <DELAY>",
+            "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "help_first_line": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "short": [
+              "d"
+            ],
+            "long": [
+              "delay"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DELAY",
+              "usage": "<DELAY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output",
+            "usage": "-o --output <OUTPUT>",
+            "help": "Wait until output matches this regex pattern before considering daemon ready",
+            "help_first_line": "Wait until output matches this regex pattern before considering daemon ready",
+            "short": [
+              "o"
+            ],
+            "long": [
+              "output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT",
+              "usage": "<OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "http",
+            "usage": "--http <HTTP>",
+            "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "help_first_line": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "short": [],
+            "long": [
+              "http"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "HTTP",
+              "usage": "<HTTP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "port",
+            "usage": "--port <PORT>",
+            "help": "Wait until TCP port is listening before considering daemon ready",
+            "help_first_line": "Wait until TCP port is listening before considering daemon ready",
+            "short": [],
+            "long": [
+              "port"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "PORT",
+              "usage": "<PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "expected-port",
+            "usage": "--expected-port… <EXPECTED_PORT>",
+            "help": "Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)",
+            "help_first_line": "Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)",
+            "short": [],
+            "long": [
+              "expected-port"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "EXPECTED_PORT",
+              "usage": "<EXPECTED_PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "auto-bump-port",
+            "usage": "--auto-bump-port",
+            "help": "Automatically find an available port if the expected port is in use",
+            "help_first_line": "Automatically find an available port if the expected port is in use",
+            "short": [],
+            "long": [
+              "auto-bump-port"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "cmd",
+            "usage": "--cmd <CMD>",
+            "help": "Shell command to poll for readiness (exit code 0 = ready)",
+            "help_first_line": "Shell command to poll for readiness (exit code 0 = ready)",
+            "short": [],
+            "long": [
+              "cmd"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "CMD",
+              "usage": "<CMD>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
+            "long": [
+              "quiet"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Runs a one-off daemon",
+        "help_long": "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork run api --port 8080 -- ./server\n                                Wait for TCP port to be listening",
         "name": "run",
         "aliases": [
           "r"
@@ -437,11 +1489,27 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "schema": {
+        "full_cmd": [
+          "schema"
+        ],
+        "usage": "schema",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": true,
+        "help": "Generate JSON Schema for pitchfork.toml configuration",
+        "name": "schema",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "start": {
         "full_cmd": [
           "start"
         ],
-        "usage": "start [-a --all] [-f --force] [ID]…",
+        "usage": "start [FLAGS] [ID]…",
         "subcommands": {},
         "args": [
           {
@@ -457,10 +1525,40 @@
         ],
         "flags": [
           {
+            "name": "local",
+            "usage": "-l --local",
+            "help": "Start all local daemons in pitchfork.toml",
+            "help_first_line": "Start all local daemons in pitchfork.toml",
+            "short": [
+              "l"
+            ],
+            "long": [
+              "local",
+              "all-local"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "global",
+            "usage": "-g --global",
+            "help": "Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "help_first_line": "Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "short": [
+              "g"
+            ],
+            "long": [
+              "global",
+              "all-global"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
             "name": "all",
             "usage": "-a --all",
-            "help": "Start all daemons in all pitchfork.tomls",
-            "help_first_line": "Start all daemons in all pitchfork.tomls",
+            "help": "Start all daemons (both local and global)",
+            "help_first_line": "Start all daemons (both local and global)",
             "short": [
               "a"
             ],
@@ -500,11 +1598,153 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "delay",
+            "usage": "--delay <DELAY>",
+            "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "help_first_line": "Delay in seconds before considering daemon ready (default: 3 seconds)",
+            "short": [],
+            "long": [
+              "delay"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DELAY",
+              "usage": "<DELAY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output",
+            "usage": "--output <OUTPUT>",
+            "help": "Wait until output matches this regex pattern before considering daemon ready",
+            "help_first_line": "Wait until output matches this regex pattern before considering daemon ready",
+            "short": [],
+            "long": [
+              "output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT",
+              "usage": "<OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "http",
+            "usage": "--http <HTTP>",
+            "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "help_first_line": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
+            "short": [],
+            "long": [
+              "http"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "HTTP",
+              "usage": "<HTTP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "port",
+            "usage": "--port <PORT>",
+            "help": "Wait until TCP port is listening before considering daemon ready",
+            "help_first_line": "Wait until TCP port is listening before considering daemon ready",
+            "short": [],
+            "long": [
+              "port"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "PORT",
+              "usage": "<PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "cmd",
+            "usage": "--cmd <CMD>",
+            "help": "Shell command to poll for readiness (exit code 0 = ready)",
+            "help_first_line": "Shell command to poll for readiness (exit code 0 = ready)",
+            "short": [],
+            "long": [
+              "cmd"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "CMD",
+              "usage": "<CMD>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "expected-port",
+            "usage": "--expected-port… <EXPECTED_PORT>",
+            "help": "Ports the daemon is expected to bind to (can be specified multiple times)",
+            "help_first_line": "Ports the daemon is expected to bind to (can be specified multiple times)",
+            "short": [],
+            "long": [
+              "expected-port"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "EXPECTED_PORT",
+              "usage": "<EXPECTED_PORT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "auto-bump-port",
+            "usage": "--auto-bump-port",
+            "help": "Automatically find an available port if the expected port is in use",
+            "help_first_line": "Automatically find an available port if the expected port is in use",
+            "short": [],
+            "long": [
+              "auto-bump-port"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "quiet",
+            "usage": "-q --quiet",
+            "help": "Suppress startup log output",
+            "help_first_line": "Suppress startup log output",
+            "short": [
+              "q"
+            ],
+            "long": [
+              "quiet"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Starts a daemon from a pitchfork.toml file",
+        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start -l            Start all local daemons in pitchfork.toml\n  pitchfork start -g            Start all global daemons in config.toml\n  pitchfork start -a            Start all daemons (local and global)\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening",
         "name": "start",
         "aliases": [
           "s"
@@ -522,6 +1762,8 @@
           {
             "name": "ID",
             "usage": "<ID>",
+            "help": "Name of the daemon to check",
+            "help_first_line": "Name of the daemon to check",
             "required": true,
             "double_dash": "Optional",
             "hide": false
@@ -531,6 +1773,7 @@
         "mounts": [],
         "hide": false,
         "help": "Display the status of a daemon",
+        "help_long": "Display the status of a daemon\n\nShows detailed information about a single daemon including its PID and\ncurrent status (running, stopped, failed, etc.).\n\nExample:\n  pitchfork status api\n\nOutput:\n  Name: api\n  PID: 12345\n  Status: running",
         "name": "status",
         "aliases": [
           "stat"
@@ -542,24 +1785,40 @@
         "full_cmd": [
           "stop"
         ],
-        "usage": "stop [ID]…",
+        "usage": "stop [-a --all] [ID]…",
         "subcommands": {},
         "args": [
           {
             "name": "ID",
             "usage": "[ID]…",
-            "help": "The name of the daemon to stop",
-            "help_first_line": "The name of the daemon to stop",
+            "help": "The name of the daemon(s) to stop",
+            "help_first_line": "The name of the daemon(s) to stop",
             "required": false,
             "double_dash": "Optional",
             "var": true,
             "hide": false
           }
         ],
-        "flags": [],
+        "flags": [
+          {
+            "name": "all",
+            "usage": "-a --all",
+            "help": "Stop all running daemons (in reverse dependency order)",
+            "help_first_line": "Stop all running daemons (in reverse dependency order)",
+            "short": [
+              "a"
+            ],
+            "long": [
+              "all"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "Sends a stop signal to a daemon",
+        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork kill api           Same as 'stop' (alias)",
         "name": "stop",
         "aliases": [
           "kill"
@@ -578,7 +1837,7 @@
               "supervisor",
               "run"
             ],
-            "usage": "supervisor run [-f --force]",
+            "usage": "supervisor run [FLAGS]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -595,6 +1854,68 @@
                 ],
                 "hide": false,
                 "global": false
+              },
+              {
+                "name": "boot",
+                "usage": "--boot",
+                "help": "run as boot start (auto-start boot_start daemons)",
+                "help_first_line": "run as boot start (auto-start boot_start daemons)",
+                "short": [],
+                "long": [
+                  "boot"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "container",
+                "usage": "--container",
+                "help": "Enable container/PID1 mode (reap zombies, forward signals)",
+                "help_first_line": "Enable container/PID1 mode (reap zombies, forward signals)",
+                "short": [],
+                "long": [
+                  "container"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "web-port",
+                "usage": "--web-port <WEB_PORT>",
+                "help": "Enable web UI on specified port (tries up to 10 ports if in use)",
+                "help_first_line": "Enable web UI on specified port (tries up to 10 ports if in use)",
+                "short": [],
+                "long": [
+                  "web-port"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "WEB_PORT",
+                  "usage": "<WEB_PORT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "web-path",
+                "usage": "--web-path <WEB_PATH>",
+                "help": "Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)",
+                "help_first_line": "Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)",
+                "short": [],
+                "long": [
+                  "web-path"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "WEB_PATH",
+                  "usage": "<WEB_PATH>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
               }
             ],
             "mounts": [],
@@ -685,6 +2006,22 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "tui": {
+        "full_cmd": [
+          "tui"
+        ],
+        "usage": "tui",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Launch the interactive TUI dashboard",
+        "name": "tui",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "usage": {
         "full_cmd": [
           "usage"
@@ -723,7 +2060,7 @@
         "mounts": [],
         "hide": false,
         "help": "Wait for a daemon to stop, tailing the logs along the way",
-        "help_long": "Wait for a daemon to stop, tailing the logs along the way\n\nExits with the same status code as the daemon",
+        "help_long": "Wait for a daemon to stop, tailing the logs along the way\n\nBlocks until the specified daemon stops running, while displaying its\nlog output in real-time. Exits with the same status code as the daemon.\n\nUseful in scripts that need to wait for a daemon to complete.\n\nExamples:\n  pitchfork wait api              Wait for 'api' to stop\n  pitchfork w api                 Alias for 'wait'\n  pitchfork wait api && echo done Run command after daemon stops",
         "name": "wait",
         "aliases": [
           "w"
@@ -744,7 +2081,7 @@
   "config": {
     "props": {}
   },
-  "version": "0.1.5",
+  "version": "2.6.0",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
