@@ -56,6 +56,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Append en.dev sponsor blurb
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          TAG: ${{ needs.release-plz-release.outputs.tag }}
+        run: |
+          {
+            gh release view "$TAG" --json body --jq .body
+            cat <<'EOF'
+
+          ## 💚 Sponsor pitchfork
+
+          pitchfork is built by [@jdx](https://github.com/jdx) at [**en.dev**](https://en.dev) — an independent studio shipping developer tools like [mise](https://mise.jdx.dev/), [aube](https://aube.en.dev/), hk, pitchfork, and more. Development is sustained by sponsorships.
+
+          If pitchfork has a place in your dev workflow, please consider [sponsoring at en.dev](https://en.dev). Individual and company sponsorships are what keep the project healthy and moving forward.
+          EOF
+          } > /tmp/release-notes.md
+          gh release edit "$TAG" --notes-file /tmp/release-notes.md
 
   release-plz-pr:
     name: Release PR
