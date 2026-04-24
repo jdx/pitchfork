@@ -285,10 +285,12 @@ ready_port = {}
     fs::write(lib_dir.join("helper.ts"), "export const x = 1;").unwrap();
 
     // Poll for daemon restart after lib file change (up to 10 seconds)
+    // Wait for PID to change AND daemon to be running again (not mid-restart)
     let mut pid_after_first_change = original_pid;
     for _ in 0..20 {
-        pid_after_first_change = env.get_daemon_pid("glob_watch_test");
-        if pid_after_first_change != original_pid {
+        let current_pid = env.get_daemon_pid("glob_watch_test");
+        if current_pid != original_pid && current_pid.is_some() {
+            pid_after_first_change = current_pid;
             break;
         }
         env.sleep(Duration::from_millis(500));
@@ -310,11 +312,13 @@ ready_port = {}
     // Modify config file
     fs::write(config_dir.join("app.json"), r#"{"port": 9090}"#).unwrap();
 
-    // Poll for daemon restart after config change (up to 5 seconds)
+    // Poll for daemon restart after config change (up to 10 seconds)
+    // Wait for PID to change AND daemon to be running again (not mid-restart)
     let mut pid_after_second_change = pid_after_first_change;
-    for _ in 0..10 {
-        pid_after_second_change = env.get_daemon_pid("glob_watch_test");
-        if pid_after_second_change != pid_after_first_change {
+    for _ in 0..20 {
+        let current_pid = env.get_daemon_pid("glob_watch_test");
+        if current_pid != pid_after_first_change && current_pid.is_some() {
+            pid_after_second_change = current_pid;
             break;
         }
         env.sleep(Duration::from_millis(500));
@@ -387,10 +391,12 @@ ready_port = {}
     fs::write(&watched_file, "modified").unwrap();
 
     // Poll for daemon restart by checking PID change (up to 10 seconds)
+    // Wait for PID to change AND daemon to be running again (not mid-restart)
     let mut new_pid = original_pid;
     for _ in 0..20 {
-        new_pid = env.get_daemon_pid("relative_watch_test");
-        if new_pid != original_pid {
+        let current_pid = env.get_daemon_pid("relative_watch_test");
+        if current_pid != original_pid && current_pid.is_some() {
+            new_pid = current_pid;
             break;
         }
         env.sleep(Duration::from_millis(500));
