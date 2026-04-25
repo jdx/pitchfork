@@ -128,6 +128,9 @@ pub struct Daemon {
     ///   Any daemon that relied on the global setting would silently stop using mise after a downgrade.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// Unix user to run this daemon as.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
@@ -177,6 +180,9 @@ pub struct RunOptions {
     /// Whether to proxy this daemon (None = inherit global proxy.enable setting).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy: Option<bool>,
+    /// Unix user to run this daemon as.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
@@ -219,6 +225,7 @@ impl Default for Daemon {
             watch: Vec::new(),
             watch_base_dir: None,
             mise: None,
+            user: None,
             memory_limit: None,
             cpu_limit: None,
         }
@@ -258,6 +265,7 @@ impl Daemon {
             mise: self.mise,
             slug: self.slug.clone(),
             proxy: self.proxy,
+            user: self.user.clone(),
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
         }
@@ -293,6 +301,7 @@ impl Default for RunOptions {
             mise: None,
             slug: None,
             proxy: None,
+            user: None,
             memory_limit: None,
             cpu_limit: None,
         }

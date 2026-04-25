@@ -285,6 +285,7 @@ mod tests {
                 watch: vec![],
                 watch_base_dir: None,
                 mise: None,
+                user: Some("postgres".to_string()),
                 active_port: None,
                 slug: None,
                 proxy: None,
@@ -304,6 +305,11 @@ mod tests {
                 .daemons
                 .contains_key(&DaemonId::new("project", "test"))
         );
+        let daemon = parsed
+            .daemons
+            .get(&DaemonId::new("project", "test"))
+            .unwrap();
+        assert_eq!(daemon.user.as_deref(), Some("postgres"));
     }
 
     #[test]

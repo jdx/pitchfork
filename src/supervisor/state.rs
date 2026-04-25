@@ -56,6 +56,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub watch: Option<Vec<String>>,
     pub watch_base_dir: Option<PathBuf>,
     pub mise: Option<bool>,
+    /// Unix user to run this daemon as
+    pub user: Option<String>,
     /// Memory limit for the daemon process
     pub memory_limit: Option<MemoryLimit>,
     /// CPU usage limit as a percentage
@@ -112,6 +114,7 @@ impl UpsertDaemonOpts {
                 watch: None,
                 watch_base_dir: None,
                 mise: None,
+                user: None,
                 memory_limit: None,
                 cpu_limit: None,
             },
@@ -210,6 +213,7 @@ impl Supervisor {
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),
             mise: opts.mise.or(existing.and_then(|d| d.mise)),
+            user: opts.user.or(existing.and_then(|d| d.user.clone())),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
             // active_port is intentionally NOT inherited from the existing daemon.
             // When a daemon restarts, the new process has not yet bound a port, so

@@ -116,6 +116,7 @@ fn build_daemon_list(
             watch: vec![],
             watch_base_dir: None,
             mise: daemon_config.mise,
+            user: daemon_config.user.clone(),
             active_port: None,
             slug: None,
             proxy: None,

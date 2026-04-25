@@ -275,6 +275,7 @@ mod tests {
             hooks: None,
             path: None,
             mise: None,
+            user: None,
             memory_limit: None,
             cpu_limit: None,
         }

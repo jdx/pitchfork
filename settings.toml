@@ -473,6 +473,22 @@ where PID 1 must reap zombie processes to prevent process table exhaustion.
 Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`.
 """
 
+[supervisor.run_user]
+type = "String"
+env = "PITCHFORK_RUN_USER"
+default = ""
+description = "Default user to run daemon processes as"
+docs = """
+Default Unix user for daemon processes spawned by the supervisor.
+
+When set, all daemons run as this user unless an individual daemon sets
+`user = "..."`. The value may be a username (for example `"postgres"`) or
+a numeric UID (for example `"501"`).
+
+If unset and the supervisor is running as root via `sudo`, daemons default to
+the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
+"""
+
 [supervisor.cpu_violation_threshold]
 type = "Integer"
 env = "PITCHFORK_CPU_VIOLATION_THRESHOLD"
