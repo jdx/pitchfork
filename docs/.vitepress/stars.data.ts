@@ -1,4 +1,4 @@
-const fallbackStars = 312;
+const fallbackStars = 0;
 
 function formatStars(stars: number) {
   if (stars < 1000) return String(stars);
@@ -19,9 +19,13 @@ export default {
         };
         if (token) headers.Authorization = `Bearer ${token}`;
 
-        const response = await fetch("https://api.github.com/repos/jdx/pitchfork", {
-          headers,
-        });
+        const response = await fetch(
+          "https://api.github.com/repos/jdx/pitchfork",
+          {
+            headers,
+            signal: AbortSignal.timeout(10000),
+          },
+        );
         if (response.ok) {
           const data = (await response.json()) as { stargazers_count?: number };
           if (typeof data.stargazers_count === "number") {
@@ -34,7 +38,7 @@ export default {
     }
 
     return {
-      stars: formatStars(stars),
+      stars: stars > 0 ? formatStars(stars) : "",
     };
   },
 };

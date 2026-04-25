@@ -25,7 +25,12 @@ function getCommands(cmd: Cmd): string[][] {
 const commands = getCommands(spec.cmd);
 const configDir = dirname(fileURLToPath(import.meta.url));
 const cargoToml = readFileSync(resolve(configDir, "../../Cargo.toml"), "utf8");
-const versionMatch = cargoToml.match(/\[package\][\s\S]*?\nversion\s*=\s*"([^"]+)"/);
+const versionMatch = cargoToml.match(
+  /^\[package\][\s\S]*?^\s*version\s*=\s*"([^"]+)"/m,
+);
+if (!versionMatch) {
+  console.warn("Unable to find package version in Cargo.toml");
+}
 const latestVersion = versionMatch?.[1] ?? "0.0.0";
 
 // https://vitepress.dev/reference/site-config
@@ -39,7 +44,10 @@ export default defineConfig({
       { text: "Quick Start", link: "/quickstart" },
       { text: "Guides", link: "/guides/shell-hook" },
       { text: "CLI Reference", link: "/cli" },
-      { text: `v${latestVersion}`, link: "https://github.com/jdx/pitchfork/releases" },
+      {
+        text: `v${latestVersion}`,
+        link: "https://github.com/jdx/pitchfork/releases",
+      },
     ],
 
     sidebar: [
@@ -104,9 +112,7 @@ export default defineConfig({
       {
         text: "Resources",
         collapsed: true,
-        items: [
-          { text: "Troubleshooting", link: "/troubleshooting" },
-        ],
+        items: [{ text: "Troubleshooting", link: "/troubleshooting" }],
       },
     ],
 
@@ -119,13 +125,13 @@ export default defineConfig({
     logo: "/img/android-chrome-192x192.png",
 
     footer: {
-      message: 'Released under the MIT License.',
-      copyright: 'Forged in the fires below'
+      message: "Released under the MIT License.",
+      copyright: "Forged in the fires below",
     },
 
     editLink: {
-      pattern: 'https://github.com/jdx/pitchfork/edit/main/docs/:path',
-      text: 'Edit this page on GitHub'
+      pattern: "https://github.com/jdx/pitchfork/edit/main/docs/:path",
+      text: "Edit this page on GitHub",
     },
 
     search: {
@@ -137,16 +143,31 @@ export default defineConfig({
     ["meta", { name: "theme-color", content: "#dc2626" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "pitchfork" }],
-    ["meta", { property: "og:description", content: "A devilishly good process manager for developers" }],
+    [
+      "meta",
+      {
+        property: "og:description",
+        content: "A devilishly good process manager for developers",
+      },
+    ],
     ["meta", { property: "og:site_name", content: "pitchfork" }],
-    ["meta", { property: "og:image", content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png" }],
+    [
+      "meta",
+      {
+        property: "og:image",
+        content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png",
+      },
+    ],
     ["meta", { name: "twitter:card", content: "summary" }],
-    ["meta", { name: "twitter:image", content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png" }],
+    [
+      "meta",
+      {
+        name: "twitter:image",
+        content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png",
+      },
+    ],
   ],
-  
+
   // Ignore localhost URLs in CLI examples
-  ignoreDeadLinks: [
-    /^http:\/\/localhost/,
-    /^http:\/\/127\.0\.0\.1/,
-  ]
+  ignoreDeadLinks: [/^http:\/\/localhost/, /^http:\/\/127\.0\.0\.1/],
 });
