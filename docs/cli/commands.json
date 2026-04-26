@@ -1150,6 +1150,36 @@
             "global": false
           },
           {
+            "name": "local",
+            "usage": "-l --local",
+            "help": "Restart all local daemons in pitchfork.toml",
+            "help_first_line": "Restart all local daemons in pitchfork.toml",
+            "short": [
+              "l"
+            ],
+            "long": [
+              "local",
+              "all-local"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "global",
+            "usage": "-g --global",
+            "help": "Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "help_first_line": "Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "short": [
+              "g"
+            ],
+            "long": [
+              "global",
+              "all-global"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
             "name": "delay",
             "usage": "--delay <DELAY>",
             "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
@@ -1262,7 +1292,7 @@
         "mounts": [],
         "hide": false,
         "help": "Restarts a daemon (stops then starts it)",
-        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
+        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart -l            Restart all local daemons in pitchfork.toml\n  pitchfork restart -g            Restart all global daemons in config.toml\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
         "name": "restart",
         "aliases": [],
         "hidden_aliases": [],
@@ -1785,7 +1815,7 @@
         "full_cmd": [
           "stop"
         ],
-        "usage": "stop [-a --all] [ID]…",
+        "usage": "stop [FLAGS] [ID]…",
         "subcommands": {},
         "args": [
           {
@@ -1813,12 +1843,42 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "local",
+            "usage": "-l --local",
+            "help": "Stop all local daemons in pitchfork.toml",
+            "help_first_line": "Stop all local daemons in pitchfork.toml",
+            "short": [
+              "l"
+            ],
+            "long": [
+              "local",
+              "all-local"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "global",
+            "usage": "-g --global",
+            "help": "Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "help_first_line": "Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml",
+            "short": [
+              "g"
+            ],
+            "long": [
+              "global",
+              "all-global"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "Sends a stop signal to a daemon",
-        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork kill api           Same as 'stop' (alias)",
+        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all/--local/--global, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork stop -l            Stop all local daemons in pitchfork.toml\n  pitchfork stop -g            Stop all global daemons in config.toml\n  pitchfork kill api           Same as 'stop' (alias)",
         "name": "stop",
         "aliases": [
           "kill"

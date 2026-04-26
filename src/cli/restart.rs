@@ -23,14 +23,39 @@ Examples:
   pitchfork restart api           Restart a single daemon
   pitchfork restart api worker    Restart multiple daemons
   pitchfork restart --all         Restart all running daemons
+  pitchfork restart -l            Restart all local daemons in pitchfork.toml
+  pitchfork restart -g            Restart all global daemons in config.toml
   pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
 )]
 pub struct Restart {
     /// ID of the daemon(s) to restart
+    #[clap(
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
     id: Vec<String>,
     /// Restart all running daemons
-    #[clap(long, short)]
+    #[clap(long, short, conflicts_with = "local", conflicts_with = "global")]
     all: bool,
+    /// Restart all local daemons in pitchfork.toml
+    #[clap(
+        long,
+        short = 'l',
+        visible_alias = "all-local",
+        conflicts_with = "all",
+        conflicts_with = "global"
+    )]
+    local: bool,
+    /// Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
+    #[clap(
+        long,
+        short = 'g',
+        visible_alias = "all-global",
+        conflicts_with = "local",
+        conflicts_with = "all"
+    )]
+    global: bool,
     /// Delay in seconds before considering daemon ready (default: 3 seconds)
     #[clap(long)]
     delay: Option<u64>,
@@ -54,21 +79,22 @@ pub struct Restart {
 impl Restart {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.all || !self.id.is_empty(),
-            "You must provide at least one daemon to restart, or use --all"
+            self.local || self.global || self.all || !self.id.is_empty(),
+            "At least one daemon ID or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
-        // Compute daemon IDs to restart
         let ids: Vec<DaemonId> = if self.all {
             ipc.get_running_daemons().await?
+        } else if self.global || self.local {
+            ipc.get_running_configured_daemons(self.global).await?
         } else {
             PitchforkToml::resolve_ids(&self.id)?
         };
 
         if ids.is_empty() {
-            info!("No daemons to restart");
+            warn!("No daemons to restart");
             return Ok(());
         }
 

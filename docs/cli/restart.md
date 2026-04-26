@@ -12,6 +12,8 @@ Examples:
   pitchfork restart api           Restart a single daemon
   pitchfork restart api worker    Restart multiple daemons
   pitchfork restart --all         Restart all running daemons
+  pitchfork restart -l            Restart all local daemons in pitchfork.toml
+  pitchfork restart -g            Restart all global daemons in config.toml
   pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready
 
 ## Arguments
@@ -25,6 +27,14 @@ ID of the daemon(s) to restart
 ### `-a --all`
 
 Restart all running daemons
+
+### `-l --local`
+
+Restart all local daemons in pitchfork.toml
+
+### `-g --global`
+
+Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
 
 ### `--delay <DELAY>`
 

@@ -175,8 +175,10 @@ cmd proxy subcommand_required=#true help="Manage the pitchfork reverse proxy" {
     }
 }
 cmd restart help="Restarts a daemon (stops then starts it)" {
-    long_help "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
+    long_help "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart -l            Restart all local daemons in pitchfork.toml\n  pitchfork restart -g            Restart all global daemons in config.toml\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
     flag "-a --all" help="Restart all running daemons"
+    flag "-l --local --all-local" help="Restart all local daemons in pitchfork.toml"
+    flag "-g --global --all-global" help="Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml"
     flag --delay help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
         arg <DELAY>
     }
@@ -265,8 +267,10 @@ cmd status help="Display the status of a daemon" {
 }
 cmd stop help="Sends a stop signal to a daemon" {
     alias kill
-    long_help "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork kill api           Same as 'stop' (alias)"
+    long_help "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all/--local/--global, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork stop -l            Stop all local daemons in pitchfork.toml\n  pitchfork stop -g            Stop all global daemons in config.toml\n  pitchfork kill api           Same as 'stop' (alias)"
     flag "-a --all" help="Stop all running daemons (in reverse dependency order)"
+    flag "-l --local --all-local" help="Stop all local daemons in pitchfork.toml"
+    flag "-g --global --all-global" help="Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml"
     arg "[ID]…" help="The name of the daemon(s) to stop" required=#false var=#true
 }
 cmd supervisor subcommand_required=#true help="Start, stop, and check the status of the pitchfork supervisor daemon" {

@@ -169,6 +169,25 @@ impl IpcClient {
             .collect())
     }
 
+    /// Get IDs of currently running daemons that are configured
+    /// for stop / restart with --local or --global
+    pub async fn get_running_configured_daemons(&self, global: bool) -> Result<Vec<DaemonId>> {
+        let configured: HashSet<DaemonId> = if global {
+            Self::get_global_configured_daemons()?
+        } else {
+            Self::get_local_configured_daemons()?
+        }
+        .into_iter()
+        .collect();
+
+        Ok(self
+            .get_running_daemons()
+            .await?
+            .into_iter()
+            .filter(|id| configured.contains(id))
+            .collect())
+    }
+
     // =========================================================================
     // High-level batch operations (for CLI, TUI, Web UI)
     // =========================================================================

@@ -33,7 +33,7 @@
 - [`pitchfork run [FLAGS] <ID> [-- RUN]…`](/cli/run.md)
 - [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)
-- [`pitchfork stop [-a --all] [ID]…`](/cli/stop.md)
+- [`pitchfork stop [FLAGS] [ID]…`](/cli/stop.md)
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
 - [`pitchfork supervisor run [FLAGS]`](/cli/supervisor/run.md)
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
