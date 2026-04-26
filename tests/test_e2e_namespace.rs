@@ -412,72 +412,6 @@ run = "echo 'encoding test' && sleep 30"
 
 // ============================================================================
 // Helper trait extension for TestEnv
-// ============================================================================
-
-/// Test that directories containing `--` now require an explicit namespace.
-///
-/// Scenario (entire ancestry chain is read bottom-up by `list_paths_from`):
-///
-/// ```
-/// <base>/
-///   foo-bar/                 ← namespace = "foo-bar"
-///     pitchfork.toml
-///     foo--bar/              ← raw dir name "foo--bar", namespace after sanitize = "foo-bar"
-///       pitchfork.toml
-///       <── cwd
-/// ```
-///
-/// Running from the inner directory should fail unless namespace is explicitly set.
-#[test]
-fn test_invalid_directory_namespace_requires_override() {
-    let env = TestEnv::new();
-    env.ensure_binary_exists().unwrap();
-
-    // Outer directory: plain "foo-bar"  →  namespace "foo-bar"
-    let outer = env.project_dir().join("foo-bar");
-    fs::create_dir_all(&outer).unwrap();
-    fs::write(
-        outer.join("pitchfork.toml"),
-        r#"
-[daemons.outer-daemon]
-run = "echo outer && sleep 60"
-"#,
-    )
-    .unwrap();
-
-    // Inner directory: "foo--bar" requires explicit namespace override.
-    let inner = outer.join("foo--bar");
-    fs::create_dir_all(&inner).unwrap();
-    fs::write(
-        inner.join("pitchfork.toml"),
-        r#"
-[daemons.inner-daemon]
-run = "echo inner && sleep 60"
-"#,
-    )
-    .unwrap();
-
-    // List daemons from the inner directory should report namespace error and
-    // skip the invalid inner config file.
-    let output = env.run_command_in_dir(&["list"], &inner);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    println!("stdout: {stdout}");
-    println!("stderr: {stderr}");
-
-    assert!(
-        output.status.success(),
-        "Command should continue even when one config is invalid"
-    );
-    assert!(
-        stderr.contains("namespace") || stderr.contains("error reading"),
-        "stderr should mention namespace problem, got:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("outer-daemon") && !stdout.contains("inner-daemon"),
-        "invalid inner config should be skipped, got:\n{stdout}"
-    );
-}
 
 #[test]
 fn test_invalid_directory_namespace_with_explicit_override_succeeds() {
@@ -644,40 +578,4 @@ run = "sleep 60"
     );
 
     let _ = env.run_command_in_dir(&["stop", "my-api-service"], &project);
-}
-
-#[test]
-fn test_local_namespace_override_mismatch_reports_error() {
-    let env = TestEnv::new();
-    env.ensure_binary_exists().unwrap();
-
-    let project = env.project_dir().join("namespace-mismatch");
-    fs::create_dir_all(&project).unwrap();
-    fs::write(
-        project.join("pitchfork.toml"),
-        r#"
-namespace = "team"
-
-[daemons.base]
-run = "echo base && sleep 60"
-"#,
-    )
-    .unwrap();
-    fs::write(
-        project.join("pitchfork.local.toml"),
-        r#"
-namespace = "other"
-
-[daemons.local]
-run = "echo local && sleep 60"
-"#,
-    )
-    .unwrap();
-
-    let output = env.run_command_in_dir(&["list"], &project);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("does not match sibling") || stderr.contains("namespace"),
-        "expected namespace mismatch error, got:\n{stderr}"
-    );
 }

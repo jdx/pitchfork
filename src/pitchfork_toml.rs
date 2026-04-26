@@ -709,7 +709,7 @@ impl PitchforkToml {
     /// This prevents ID conflicts when multiple projects define daemons with the same name.
     ///
     /// # Errors
-    /// Prints (but does not abort) if a config file cannot be read. Aborts with an error
+    /// Returns an error if any config file fails to parse. Aborts with an error
     /// if two *different* project config files produce the same namespace (e.g. two
     /// `pitchfork.toml` files in separate directories that share the same directory name).
     pub fn all_merged_from(cwd: &Path) -> Result<PitchforkToml> {
@@ -750,7 +750,7 @@ impl PitchforkToml {
 
                     pt.merge(pt2)
                 }
-                Err(e) => eprintln!("error reading {}: {}", p.display(), e),
+                Err(e) => return Err(e.wrap_err(format!("error reading {}", p.display()))),
             }
         }
         Ok(pt)
