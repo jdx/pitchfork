@@ -1017,10 +1017,10 @@ impl Supervisor {
 
 #[cfg(unix)]
 fn resolve_effective_run_identity(daemon_user: Option<&str>) -> Result<RunIdentity> {
-    let settings_run_user = settings().supervisor.run_user.trim();
+    let settings_user = settings().supervisor.user.trim();
     let daemon_user = daemon_user.map(str::trim).filter(|user| !user.is_empty());
-    let settings_run_user = (!settings_run_user.is_empty()).then_some(settings_run_user);
-    let configured = daemon_user.or(settings_run_user);
+    let settings_user = (!settings_user.is_empty()).then_some(settings_user);
+    let configured = daemon_user.or(settings_user);
     let current_uid = nix::unistd::Uid::effective().as_raw();
     let current_gid = nix::unistd::Gid::effective().as_raw();
     resolve_run_identity(
@@ -1043,7 +1043,7 @@ fn resolve_run_identity(
     let current_uid = nix::unistd::Uid::from_raw(current_uid);
     let current_gid = nix::unistd::Gid::from_raw(current_gid);
     if let Some(user) = configured {
-        let identity = resolve_configured_run_user(user)?;
+        let identity = resolve_configured_user(user)?;
         ensure_can_use_identity(user, &identity, current_uid, current_gid)?;
         if identity.matches(current_uid, current_gid) {
             return Ok(RunIdentity::Inherit);
@@ -1061,7 +1061,7 @@ fn resolve_run_identity(
 }
 
 #[cfg(unix)]
-fn resolve_configured_run_user(user: &str) -> Result<RunIdentity> {
+fn resolve_configured_user(user: &str) -> Result<RunIdentity> {
     if user.chars().all(|c| c.is_ascii_digit()) {
         let uid = user
             .parse::<u32>()
@@ -1488,8 +1488,8 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_configured_run_user_root_name() {
-        let identity = resolve_configured_run_user("root").unwrap();
+    fn test_resolve_configured_user_root_name() {
+        let identity = resolve_configured_user("root").unwrap();
         let RunIdentity::Switch { uid, username, .. } = identity else {
             panic!("expected identity switch");
         };
@@ -1501,8 +1501,8 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_configured_run_user_root_uid() {
-        let identity = resolve_configured_run_user("0").unwrap();
+    fn test_resolve_configured_user_root_uid() {
+        let identity = resolve_configured_user("0").unwrap();
         let RunIdentity::Switch { uid, username, .. } = identity else {
             panic!("expected identity switch");
         };
@@ -1514,8 +1514,8 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_configured_run_user_missing_user_fails() {
-        let err = resolve_configured_run_user("pitchfork-user-that-should-not-exist")
+    fn test_resolve_configured_user_missing_user_fails() {
+        let err = resolve_configured_user("pitchfork-user-that-should-not-exist")
             .unwrap_err()
             .to_string();
         assert!(err.contains("does not exist"));

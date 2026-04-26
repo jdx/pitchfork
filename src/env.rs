@@ -49,6 +49,12 @@ pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
     if let Some(p) = var_path("PITCHFORK_STATE_DIR") {
         return p;
     }
+    #[cfg(unix)]
+    if nix::unistd::Uid::effective().is_root()
+        && let Some(home) = configured_supervisor_user_home_dir()
+    {
+        return home.join(".local").join("state").join("pitchfork");
+    }
     // Under sudo, dirs::state_dir() would resolve against root's HOME,
     // bypassing our SUDO_USER correction. Use HOME_DIR directly instead.
     #[cfg(unix)]
@@ -108,4 +114,22 @@ fn home_dir_for_user(username: &str) -> Option<PathBuf> {
         .ok()
         .flatten()
         .map(|u| u.dir)
+}
+
+#[cfg(unix)]
+fn configured_supervisor_user_home_dir() -> Option<PathBuf> {
+    let user = crate::settings::settings().supervisor.user.trim();
+    if user.is_empty() {
+        return None;
+    }
+
+    if user.chars().all(|c| c.is_ascii_digit()) {
+        let uid = user.parse::<u32>().ok()?;
+        return nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .map(|u| u.dir);
+    }
+
+    home_dir_for_user(user)
 }

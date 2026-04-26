@@ -108,6 +108,8 @@ pub fn start_in_background() -> Result<()> {
         .append(true)
         .open(log_file)
         .into_diagnostic()?;
+    #[cfg(unix)]
+    fix_state_dir_permissions();
     cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
         .stdout_null()
         .stderr_file(stderr_file)
@@ -162,6 +164,8 @@ impl Supervisor {
                 .build(),
         )
         .await?;
+        #[cfg(unix)]
+        fix_state_dir_permissions();
 
         // If this is a boot start, automatically start boot_start daemons
         if is_boot {
@@ -581,7 +585,7 @@ impl Supervisor {
 /// Fix ownership on the state directory so non-root users can access files
 /// created by a `sudo`-started supervisor.
 ///
-/// When `[settings.supervisor] run_user` or `SUDO_UID`/`SUDO_GID` are set, we
+/// When `[settings.supervisor] user` or `SUDO_UID`/`SUDO_GID` are set, we
 /// `chown` the state directory and safe subdirectories back to that non-root
 /// runtime user. This is strictly better than `chmod 0o666` because it does not
 /// widen the permission bits — the files stay owner-only (0o600/0o700) but the
@@ -592,17 +596,23 @@ impl Supervisor {
 /// generated it. Changing its ownership or permissions would expose the CA
 /// private key to other local users.
 ///
-/// If neither `run_user` nor `SUDO_UID`/`SUDO_GID` are available (e.g. direct
+/// If neither `user` nor `SUDO_UID`/`SUDO_GID` are available (e.g. direct
 /// root login), we fall back to relaxing permissions on only the `sock/` and
 /// `logs/` subdirectories (plus `state.toml`) so CLI clients can still function.
 #[cfg(unix)]
 fn fix_state_dir_permissions() {
     let state_dir = &*env::PITCHFORK_STATE_DIR;
-    if !state_dir.exists() {
-        return;
-    }
-
     if let Some((uid, gid)) = state_owner_ids() {
+        if !state_dir.exists()
+            && let Err(err) = fs::create_dir_all(state_dir)
+        {
+            warn!(
+                "failed to create state directory for ownership fix at {}: {err}",
+                state_dir.display()
+            );
+            return;
+        }
+
         // Best path: chown back to the runtime user. Permissions stay tight.
         chown_recursive(state_dir, uid, gid, true);
         debug!(
@@ -610,6 +620,10 @@ fn fix_state_dir_permissions() {
             state_dir.display()
         );
     } else {
+        if !state_dir.exists() {
+            return;
+        }
+
         // Fallback: relax permissions on safe subdirectories only.
         // proxy/ is never touched.
         chmod_safe_subtrees(state_dir);
@@ -626,11 +640,11 @@ pub(crate) fn state_owner_ids() -> Option<(u32, u32)> {
         return None;
     }
 
-    let run_user = settings().supervisor.run_user.trim();
-    if !run_user.is_empty() {
-        return resolve_run_user_ids(run_user).or_else(|| {
+    let user = settings().supervisor.user.trim();
+    if !user.is_empty() {
+        return resolve_supervisor_user_ids(user).or_else(|| {
             warn!(
-                "failed to resolve supervisor.run_user '{run_user}' for state ownership; falling back to SUDO_UID/SUDO_GID"
+                "failed to resolve supervisor.user '{user}' for state ownership; falling back to SUDO_UID/SUDO_GID"
             );
             parse_sudo_ids()
         });
@@ -640,7 +654,7 @@ pub(crate) fn state_owner_ids() -> Option<(u32, u32)> {
 }
 
 #[cfg(unix)]
-fn resolve_run_user_ids(user: &str) -> Option<(u32, u32)> {
+fn resolve_supervisor_user_ids(user: &str) -> Option<(u32, u32)> {
     let user_record = if user.chars().all(|c| c.is_ascii_digit()) {
         let uid = user.parse::<u32>().ok()?;
         nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))

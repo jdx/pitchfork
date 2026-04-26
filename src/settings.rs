@@ -134,7 +134,7 @@ mod tests {
         // Test supervisor settings
         assert_eq!(settings.supervisor.ready_check_interval, "500ms");
         assert_eq!(settings.supervisor.file_watch_debounce, "1s");
-        assert_eq!(settings.supervisor.run_user, "");
+        assert_eq!(settings.supervisor.user, "");
     }
 
     #[test]
@@ -512,7 +512,7 @@ auto_start = true
 bind_port = 8080
 
 [settings.supervisor]
-run_user = "postgres"
+user = "postgres"
 "#;
 
         // Parse the [settings] section as SettingsPartial
@@ -528,7 +528,7 @@ run_user = "postgres"
         assert_eq!(settings.general.log_level, "debug");
         assert!(settings.web.auto_start);
         assert_eq!(settings.web.bind_port, 8080);
-        assert_eq!(settings.supervisor.run_user, "postgres");
+        assert_eq!(settings.supervisor.user, "postgres");
         assert_eq!(settings.general.interval, "10s");
         assert_eq!(settings.ipc.connect_attempts, 5);
 

@@ -1192,7 +1192,7 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
-    /// Unix user to run this daemon as. Overrides `settings.supervisor.run_user` when set.
+    /// Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.
     pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
     /// The supervisor periodically monitors RSS and kills the process if it exceeds the limit.

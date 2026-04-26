@@ -138,11 +138,11 @@ LOG_LEVEL = "debug"
 
 ### `user`
 
-Unix user to run the daemon process as. This overrides `[settings.supervisor] run_user` for this daemon. Values may be usernames or numeric UIDs.
+Unix user to run the daemon process as. This overrides `[settings.supervisor] user` for this daemon. Values may be usernames or numeric UIDs.
 
 ```toml
 [settings.supervisor]
-run_user = "conner"
+user = "app"
 
 [daemons.api]
 run = "npm run server"
@@ -162,7 +162,8 @@ user = "501"
 
 **Behavior:**
 - If `user` is set, the daemon runs as that user.
-- Otherwise, if `[settings.supervisor] run_user` is set, the daemon runs as that user.
+- Otherwise, if `[settings.supervisor] user` is set, the daemon runs as that user.
+- When the supervisor is running as root and `[settings.supervisor] user` is set, the default state directory, logs, and IPC sockets are stored under that user's state directory unless `PITCHFORK_STATE_DIR` overrides it. Pitchfork also chowns those state files to the configured user so non-root clients can read and write them.
 - Otherwise, if the supervisor was started as root via `sudo`, daemons run as the sudo-calling user from `SUDO_UID`/`SUDO_GID`.
 - If no run user can be derived, the daemon runs as the supervisor's current user.
 - Switching to another user requires the supervisor to have root privileges; otherwise startup fails.

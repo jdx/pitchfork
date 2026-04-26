@@ -97,7 +97,7 @@ impl IpcServer {
         // are owned by root with restrictive permissions (0600/0700). Non-root CLI
         // clients and configured daemon users need to connect to this socket.
         //
-        // Prefer `[settings.supervisor] run_user`, then SUDO_UID/SUDO_GID, so
+        // Prefer `[settings.supervisor] user`, then SUDO_UID/SUDO_GID, so
         // permissions stay tight (0700/0600) while the intended runtime user
         // owns the socket.
         #[cfg(unix)]
