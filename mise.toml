@@ -5,6 +5,7 @@ _.path = "target/debug"
 depends = ["lint", "build", "docs:build"]
 run = [
   "cargo nextest run",
+  "git submodule update --init --recursive",
   "test/bats/bin/bats test",
 ]
 

@@ -282,6 +282,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "watch_mode": {
+          "description": "File watching backend mode.\n\n- `native`: use platform-native notifications (default)\n- `poll`: use polling-based watcher\n- `auto`: prefer native, fall back to polling if native watch fails",
+          "$ref": "#/$defs/WatchMode",
+          "default": "native"
         }
       },
       "required": [
@@ -605,7 +610,14 @@
           ]
         },
         "watch_interval": {
-          "description": "File watcher poll/refresh interval",
+          "description": "File watcher config refresh interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "watch_poll_interval": {
+          "description": "Polling watcher filesystem scan interval",
           "type": [
             "string",
             "null"
@@ -703,6 +715,26 @@
           ]
         }
       }
+    },
+    "WatchMode": {
+      "description": "File watch backend mode for daemon `watch` patterns.",
+      "oneOf": [
+        {
+          "description": "Use platform-native watcher backend (inotify/FSEvents/ReadDirectoryChangesW).",
+          "type": "string",
+          "const": "native"
+        },
+        {
+          "description": "Use polling backend; more compatible on networked filesystems.",
+          "type": "string",
+          "const": "poll"
+        },
+        {
+          "description": "Prefer native backend, fall back to polling when native watch setup fails.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
     }
   }
 }

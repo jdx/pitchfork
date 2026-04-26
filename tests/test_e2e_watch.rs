@@ -419,3 +419,139 @@ ready_port = {}
     // Clean up
     env.run_command(&["stop", "relative_watch_test"]);
 }
+
+/// Test polling watch backend restarts daemon on file changes.
+#[test]
+fn test_watch_mode_poll_triggers_restart() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let port = 19194;
+    #[cfg(unix)]
+    env.kill_port(port);
+
+    let watch_script = get_script_path("http_server.ts");
+    let toml_content = format!(
+        r#"
+[daemons.poll_watch_test]
+run = "bun run {} 0 {}"
+watch = ["poll_watch_marker.txt"]
+watch_mode = "poll"
+ready_port = {}
+"#,
+        watch_script.display(),
+        port,
+        port
+    );
+    env.create_toml(&toml_content);
+
+    let watched_file = env.project_dir().join("poll_watch_marker.txt");
+    fs::write(&watched_file, "initial").unwrap();
+
+    let output = env.run_command(&["start", "poll_watch_test"]);
+    assert!(
+        output.status.success(),
+        "Start command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env.wait_for_status("poll_watch_test", "running");
+
+    let state_contents = fs::read_to_string(env.state_file_path()).unwrap();
+    assert!(
+        state_contents.contains("watch_mode = \"poll\""),
+        "State should persist polling watch mode"
+    );
+
+    env.sleep(Duration::from_millis(500));
+    let original_pid = env.get_daemon_pid("poll_watch_test");
+    assert!(original_pid.is_some(), "Daemon should have a PID");
+
+    fs::write(&watched_file, "changed").unwrap();
+
+    let mut new_pid = original_pid;
+    for _ in 0..30 {
+        new_pid = env.get_daemon_pid("poll_watch_test");
+        if new_pid != original_pid && new_pid.is_some() {
+            break;
+        }
+        env.sleep(Duration::from_millis(300));
+    }
+
+    assert_ne!(
+        new_pid, original_pid,
+        "Daemon should restart when poll watcher sees a file change"
+    );
+
+    let status = env.get_daemon_status("poll_watch_test");
+    assert_eq!(status, Some("running".to_string()));
+
+    env.run_command(&["stop", "poll_watch_test"]);
+}
+
+/// Test auto watch backend is accepted and triggers restart on file changes.
+#[test]
+fn test_watch_mode_auto_triggers_restart() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let port = 19195;
+    #[cfg(unix)]
+    env.kill_port(port);
+
+    let watch_script = get_script_path("http_server.ts");
+    let toml_content = format!(
+        r#"
+[daemons.auto_watch_test]
+run = "bun run {} 0 {}"
+watch = ["auto_watch_marker.txt"]
+watch_mode = "auto"
+ready_port = {}
+"#,
+        watch_script.display(),
+        port,
+        port
+    );
+    env.create_toml(&toml_content);
+
+    let watched_file = env.project_dir().join("auto_watch_marker.txt");
+    fs::write(&watched_file, "initial").unwrap();
+
+    let output = env.run_command(&["start", "auto_watch_test"]);
+    assert!(
+        output.status.success(),
+        "Start command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env.wait_for_status("auto_watch_test", "running");
+
+    let state_contents = fs::read_to_string(env.state_file_path()).unwrap();
+    assert!(
+        state_contents.contains("watch_mode = \"auto\""),
+        "State should persist auto watch mode"
+    );
+
+    env.sleep(Duration::from_millis(500));
+    let original_pid = env.get_daemon_pid("auto_watch_test");
+    assert!(original_pid.is_some(), "Daemon should have a PID");
+
+    fs::write(&watched_file, "changed").unwrap();
+
+    let mut new_pid = original_pid;
+    for _ in 0..30 {
+        new_pid = env.get_daemon_pid("auto_watch_test");
+        if new_pid != original_pid && new_pid.is_some() {
+            break;
+        }
+        env.sleep(Duration::from_millis(300));
+    }
+
+    assert_ne!(
+        new_pid, original_pid,
+        "Daemon should restart when auto watch mode observes file changes"
+    );
+
+    let status = env.get_daemon_status("auto_watch_test");
+    assert_eq!(status, Some("running".to_string()));
+
+    env.run_command(&["stop", "auto_watch_test"]);
+}

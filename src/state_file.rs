@@ -283,6 +283,7 @@ mod tests {
                 depends: vec![],
                 env: None,
                 watch: vec![],
+                watch_mode: crate::pitchfork_toml::WatchMode::default(),
                 watch_base_dir: None,
                 mise: None,
                 active_port: None,

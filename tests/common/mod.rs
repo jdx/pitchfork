@@ -88,8 +88,9 @@ impl TestEnv {
             .current_dir(self.project_dir())
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
-            // Set fast watch interval for tests
+            // Set fast watcher refresh/poll intervals for tests
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
+            .env("PITCHFORK_WATCH_POLL_INTERVAL", "100ms")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -108,8 +109,9 @@ impl TestEnv {
             .current_dir(self.project_dir())
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
-            // Set fast watch interval for tests
+            // Set fast watcher refresh/poll intervals for tests
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
+            .env("PITCHFORK_WATCH_POLL_INTERVAL", "100ms")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -203,8 +205,9 @@ impl TestEnv {
             .current_dir(dir)
             .env("HOME", &self.home_dir)
             .env("PITCHFORK_LOG", "debug")
-            // Set fast watch interval for tests
+            // Set fast watcher refresh/poll intervals for tests
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
+            .env("PITCHFORK_WATCH_POLL_INTERVAL", "100ms")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

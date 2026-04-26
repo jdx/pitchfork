@@ -11,6 +11,7 @@ use crate::pitchfork_toml::CpuLimit;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::MemoryLimit;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::pitchfork_toml::WatchMode;
 use crate::procs::PROCS;
 use crate::settings::settings;
 use indexmap::IndexMap;
@@ -54,6 +55,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub depends: Option<Vec<DaemonId>>,
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
+    pub watch_mode: Option<WatchMode>,
     pub watch_base_dir: Option<PathBuf>,
     pub mise: Option<bool>,
     /// Memory limit for the daemon process
@@ -110,6 +112,7 @@ impl UpsertDaemonOpts {
                 depends: None,
                 env: None,
                 watch: None,
+                watch_mode: None,
                 watch_base_dir: None,
                 mise: None,
                 memory_limit: None,
@@ -206,6 +209,9 @@ impl Supervisor {
             watch: opts
                 .watch
                 .unwrap_or_else(|| existing.map(|d| d.watch.clone()).unwrap_or_default()),
+            watch_mode: opts
+                .watch_mode
+                .unwrap_or_else(|| existing.map(|d| d.watch_mode).unwrap_or_default()),
             watch_base_dir: opts
                 .watch_base_dir
                 .or(existing.and_then(|d| d.watch_base_dir.clone())),

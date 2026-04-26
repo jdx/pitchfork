@@ -14,6 +14,19 @@ watch = ["src/**/*.ts", "package.json"]
 
 When any `.ts` file in `src/` or `package.json` changes, the daemon will automatically restart.
 
+You can also select the watcher backend per daemon:
+
+```toml
+[daemons.api]
+run = "npm run dev"
+watch = ["src/**/*.ts", "package.json"]
+watch_mode = "auto" # native | poll | auto
+```
+
+- `native` (default): use OS-native notifications (inotify/FSEvents/etc.)
+- `poll`: use polling file scans (works better on some NFS/remote mounts)
+- `auto`: prefer native, automatically fall back to polling when native watch setup fails
+
 ## How It Works
 
 1. **On supervisor start**: Pitchfork scans all daemons for `watch` patterns
@@ -21,6 +34,8 @@ When any `.ts` file in `src/` or `package.json` changes, the daemon will automat
 3. **File change detection**: The `notify` crate detects file changes with debouncing (1 second)
 4. **Pattern matching**: Changed files are matched against glob patterns
 5. **Auto-restart**: Running daemons with matching patterns are automatically restarted
+
+When `watch_mode = "poll"` (or `"auto"` falls back), polling interval is controlled by `settings.supervisor.watch_poll_interval`.
 
 ::: tip
 Only running daemons are restarted. If a daemon is stopped, file changes won't start it.
@@ -130,6 +145,21 @@ retry = 3  # Retry up to 3 times if restart fails
 - **Directory watching**: Only unique parent directories are watched, not individual files
 - **Recursive watching**: Subdirectories are watched automatically for `**` patterns
 - **Running daemons only**: Stopped daemons ignore file changes
+
+### Polling Tuning
+
+Use settings to tune watcher behavior globally:
+
+```toml
+[settings.supervisor]
+watch_poll_interval = "500ms"
+watch_interval = "10s"
+```
+
+- `watch_poll_interval`: polling scan cadence for `watch_mode = "poll"` (and auto fallback)
+- `watch_interval`: supervisor refresh cadence for watch config updates (new/removed watched daemons)
+
+For remote development or network filesystems, values like `watch_poll_interval = "100ms"` to `"1s"` are common depending on CPU/IO budget.
 
 ## Troubleshooting
 

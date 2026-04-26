@@ -342,6 +342,7 @@ impl Supervisor {
                         o.depends = Some(opts.depends.clone());
                         o.env = opts.env.clone();
                         o.watch = Some(opts.watch.clone());
+                        o.watch_mode = Some(opts.watch_mode);
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = opts.mise;
                         o.memory_limit = opts.memory_limit;
