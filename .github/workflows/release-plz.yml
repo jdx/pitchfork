@@ -8,12 +8,18 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to finish releasing (e.g. v2.7.0). Skips release-plz, runs upload-assets + enhance-release."
+        required: true
+        type: string
 
 jobs:
   release-plz-release:
     name: Release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'endevco' }}
+    if: ${{ github.event_name == 'push' && github.repository_owner == 'endevco' }}
     outputs:
       tag: ${{ steps.release-plz.outputs.releases && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
     steps:
@@ -34,30 +40,33 @@ jobs:
   upload-assets:
     name: Upload assets
     needs: release-plz-release
-    if: ${{ needs.release-plz-release.outputs.tag != '' }}
+    if: >-
+      ${{ always() && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
     uses: ./.github/workflows/release.yml
     with:
-      tag: ${{ needs.release-plz-release.outputs.tag }}
+      tag: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
     secrets: inherit
 
   enhance-release:
     name: Enhance release notes
     needs: [release-plz-release, upload-assets]
-    if: ${{ needs.release-plz-release.outputs.tag != '' }}
+    if: >-
+      ${{ always() && needs.upload-assets.result == 'success' && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
-      - run: communique generate "${{ needs.release-plz-release.outputs.tag }}" --github-release
+      - run: communique generate "$TAG" --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Append en.dev sponsor blurb
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-          TAG: ${{ needs.release-plz-release.outputs.tag }}
         run: |
           {
             gh release view "$TAG" --json body --jq .body
@@ -75,7 +84,7 @@ jobs:
   release-plz-pr:
     name: Release PR
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'endevco' }}
+    if: ${{ github.event_name == 'push' && github.repository_owner == 'endevco' }}
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
