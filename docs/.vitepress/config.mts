@@ -155,7 +155,7 @@ export default defineConfig({
       "meta",
       {
         property: "og:image",
-        content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png",
+        content: "https://pitchfork.en.dev/img/android-chrome-512x512.png",
       },
     ],
     ["meta", { name: "twitter:card", content: "summary" }],
@@ -163,7 +163,7 @@ export default defineConfig({
       "meta",
       {
         name: "twitter:image",
-        content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png",
+        content: "https://pitchfork.en.dev/img/android-chrome-512x512.png",
       },
     ],
   ],

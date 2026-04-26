@@ -17,7 +17,7 @@ pub enum DaemonIdError {
     #[error("daemon ID cannot be empty")]
     #[diagnostic(
         code(pitchfork::daemon::empty_id),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("provide a non-empty identifier for the daemon")
     )]
     Empty,
@@ -25,7 +25,7 @@ pub enum DaemonIdError {
     #[error("daemon ID {component} cannot be empty")]
     #[diagnostic(
         code(pitchfork::daemon::empty_component),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("both namespace and name must be non-empty")
     )]
     EmptyComponent { component: String },
@@ -33,7 +33,7 @@ pub enum DaemonIdError {
     #[error("daemon ID '{id}' contains path separator '{sep}'")]
     #[diagnostic(
         code(pitchfork::daemon::path_separator),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("daemon IDs cannot contain '/' or '\\' to prevent path traversal")
     )]
     PathSeparator { id: String, sep: char },
@@ -41,7 +41,7 @@ pub enum DaemonIdError {
     #[error("daemon ID '{id}' contains parent directory reference '..'")]
     #[diagnostic(
         code(pitchfork::daemon::parent_dir_ref),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("daemon IDs cannot contain '..' to prevent path traversal")
     )]
     ParentDirRef { id: String },
@@ -49,7 +49,7 @@ pub enum DaemonIdError {
     #[error("daemon ID '{id}' contains reserved sequence '--'")]
     #[diagnostic(
         code(pitchfork::daemon::reserved_sequence),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("'--' is reserved for internal path encoding; use single dashes instead")
     )]
     ReservedSequence { id: String },
@@ -57,7 +57,7 @@ pub enum DaemonIdError {
     #[error("daemon ID component '{id}' starts or ends with a dash '-'")]
     #[diagnostic(
         code(pitchfork::daemon::leading_trailing_dash),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help(
             "remove the leading or trailing dash (e.g. 'my-daemon' not '-my-daemon' or 'my-daemon-')"
         )
@@ -67,7 +67,7 @@ pub enum DaemonIdError {
     #[error("daemon ID '{id}' contains spaces")]
     #[diagnostic(
         code(pitchfork::daemon::contains_space),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("use hyphens or underscores instead of spaces (e.g., 'my-daemon' or 'my_daemon')")
     )]
     ContainsSpace { id: String },
@@ -75,7 +75,7 @@ pub enum DaemonIdError {
     #[error("daemon ID cannot be '.'")]
     #[diagnostic(
         code(pitchfork::daemon::current_dir),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("'.' refers to the current directory; use a descriptive name instead")
     )]
     CurrentDir,
@@ -83,7 +83,7 @@ pub enum DaemonIdError {
     #[error("daemon ID '{id}' contains non-printable or non-ASCII character")]
     #[diagnostic(
         code(pitchfork::daemon::invalid_chars),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help(
             "daemon IDs must contain only printable ASCII characters (letters, numbers, hyphens, underscores, dots)"
         )
@@ -93,7 +93,7 @@ pub enum DaemonIdError {
     #[error("daemon ID '{id}' is missing namespace (expected format: namespace/name)")]
     #[diagnostic(
         code(pitchfork::daemon::missing_namespace),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("use qualified format like 'global/myapp' or 'project-name/daemon'")
     )]
     MissingNamespace { id: String },
@@ -123,7 +123,7 @@ pub enum DependencyError {
     #[error("daemon '{name}' not found in configuration")]
     #[diagnostic(
         code(pitchfork::deps::not_found),
-        url("https://pitchfork.jdx.dev/configuration#depends")
+        url("https://pitchfork.en.dev/configuration#depends")
     )]
     DaemonNotFound {
         name: String,
@@ -134,7 +134,7 @@ pub enum DependencyError {
     #[error("daemon '{daemon}' depends on '{dependency}' which is not defined")]
     #[diagnostic(
         code(pitchfork::deps::missing_dependency),
-        url("https://pitchfork.jdx.dev/configuration#depends"),
+        url("https://pitchfork.en.dev/configuration#depends"),
         help("add the missing daemon to your pitchfork.toml or remove it from the depends list")
     )]
     MissingDependency { daemon: String, dependency: String },
@@ -142,7 +142,7 @@ pub enum DependencyError {
     #[error("circular dependency detected involving: {}", involved.join(", "))]
     #[diagnostic(
         code(pitchfork::deps::circular),
-        url("https://pitchfork.jdx.dev/configuration#depends"),
+        url("https://pitchfork.en.dev/configuration#depends"),
         help("break the cycle by removing one of the dependencies")
     )]
     CircularDependency {
@@ -157,7 +157,7 @@ pub enum PortError {
     #[error("port {port} is already in use by process '{process}' (PID: {pid})")]
     #[diagnostic(
         code(pitchfork::port::in_use),
-        url("https://pitchfork.jdx.dev/configuration#port"),
+        url("https://pitchfork.en.dev/configuration#port"),
         help(
             "choose a different port, stop the existing process, or enable auto_bump_port to automatically find an available port"
         )
@@ -173,7 +173,7 @@ pub enum PortError {
     )]
     #[diagnostic(
         code(pitchfork::port::no_available_port),
-        url("https://pitchfork.jdx.dev/configuration#port"),
+        url("https://pitchfork.en.dev/configuration#port"),
         help("manually specify an available port or reduce the number of concurrent services")
     )]
     NoAvailablePort { start_port: u16, attempts: u32 },
@@ -204,7 +204,7 @@ pub enum ConfigParseError {
     #[error("invalid daemon name '{name}' in {}", path.display())]
     #[diagnostic(
         code(pitchfork::config::invalid_daemon_name),
-        url("https://pitchfork.jdx.dev/configuration"),
+        url("https://pitchfork.en.dev/configuration"),
         help("daemon names must be valid identifiers without spaces, '--', or special characters")
     )]
     InvalidDaemonName {
@@ -219,7 +219,7 @@ pub enum ConfigParseError {
     )]
     #[diagnostic(
         code(pitchfork::config::invalid_dependency),
-        url("https://pitchfork.jdx.dev/configuration#depends"),
+        url("https://pitchfork.en.dev/configuration#depends"),
         help(
             "dependency IDs must be valid daemon IDs; use 'name' for same namespace or 'namespace/name' for cross-namespace"
         )
@@ -238,7 +238,7 @@ pub enum ConfigParseError {
     )]
     #[diagnostic(
         code(pitchfork::config::namespace_collision),
-        url("https://pitchfork.jdx.dev/concepts/namespaces"),
+        url("https://pitchfork.en.dev/concepts/namespaces"),
         help(
             "rename one of the directories so that no two project configs share the same namespace"
         )
@@ -255,7 +255,7 @@ pub enum ConfigParseError {
     )]
     #[diagnostic(
         code(pitchfork::config::invalid_namespace),
-        url("https://pitchfork.jdx.dev/concepts/namespaces"),
+        url("https://pitchfork.en.dev/concepts/namespaces"),
         help(
             "set a valid top-level namespace in your pitchfork.toml, e.g. namespace = \"my-project\""
         )
@@ -331,7 +331,7 @@ pub enum IpcError {
     #[error("failed to connect to supervisor after {attempts} attempts")]
     #[diagnostic(
         code(pitchfork::ipc::connection_failed),
-        url("https://pitchfork.jdx.dev/supervisor")
+        url("https://pitchfork.en.dev/supervisor")
     )]
     ConnectionFailed {
         attempts: u32,
@@ -344,7 +344,7 @@ pub enum IpcError {
     #[error("IPC request timed out after {seconds}s")]
     #[diagnostic(
         code(pitchfork::ipc::timeout),
-        url("https://pitchfork.jdx.dev/supervisor"),
+        url("https://pitchfork.en.dev/supervisor"),
         help(
             "the supervisor may be unresponsive or overloaded.\nCheck supervisor status: pitchfork supervisor status\nView logs: pitchfork logs"
         )
@@ -354,7 +354,7 @@ pub enum IpcError {
     #[error("IPC connection closed unexpectedly")]
     #[diagnostic(
         code(pitchfork::ipc::connection_closed),
-        url("https://pitchfork.jdx.dev/supervisor"),
+        url("https://pitchfork.en.dev/supervisor"),
         help(
             "the supervisor may have crashed or been stopped.\nRestart with: pitchfork supervisor start"
         )

@@ -5,9 +5,9 @@ license = "MIT"
 version = "2.6.0"
 edition = "2024"
 rust-version = "1.87"
-homepage = "https://pitchfork.jdx.dev"
+homepage = "https://pitchfork.en.dev"
 repository = "https://github.com/jdx/pitchfork"
-documentation = "https://pitchfork.jdx.dev"
+documentation = "https://pitchfork.en.dev"
 build = "build.rs"
 include = [
     "src/**/*.rs",

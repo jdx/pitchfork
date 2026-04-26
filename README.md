@@ -1,7 +1,7 @@
 <div align="center">
 
 <h1 align="center">
-  <a href="https://pitchfork.jdx.dev">
+  <a href="https://pitchfork.en.dev">
     <img src="docs/public/img/logo.png" alt="pitchfork" width="256" height="256" />
     <br>
     pitchfork
@@ -17,9 +17,9 @@
 <p><b>Daemons with DX</b></p>
 
 <p align="center">
-  <a href="https://pitchfork.jdx.dev/quickstart.html">Quick Start</a> •
-  <a href="https://pitchfork.jdx.dev">Documentation</a> •
-  <a href="https://pitchfork.jdx.dev/cli">CLI Reference</a>
+  <a href="https://pitchfork.en.dev/quickstart.html">Quick Start</a> •
+  <a href="https://pitchfork.en.dev">Documentation</a> •
+  <a href="https://pitchfork.en.dev/cli">CLI Reference</a>
 </p>
 
 <hr />
@@ -168,7 +168,7 @@ $ pitchfork start --all
 
 ## Full Documentation
 
-See [pitchfork.jdx.dev](https://pitchfork.jdx.dev)
+See [pitchfork.en.dev](https://pitchfork.en.dev)
 
 ## Contributors
 
