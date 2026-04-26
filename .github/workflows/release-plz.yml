@@ -13,7 +13,7 @@ jobs:
   release-plz-release:
     name: Release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'jdx' }}
+    if: ${{ github.repository_owner == 'endevco' }}
     outputs:
       tag: ${{ steps.release-plz.outputs.releases && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
     steps:
@@ -77,7 +77,7 @@ jobs:
   release-plz-pr:
     name: Release PR
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'jdx' }}
+    if: ${{ github.repository_owner == 'endevco' }}
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
