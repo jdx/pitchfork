@@ -168,6 +168,9 @@ struct PitchforkTomlDaemonRaw {
     pub hooks: Option<PitchforkTomlHooks>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
+    /// Unix user to run this daemon as.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub memory_limit: Option<MemoryLimit>,
@@ -877,6 +880,7 @@ impl PitchforkToml {
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
                 mise: raw_daemon.mise,
+                user: raw_daemon.user,
                 memory_limit: raw_daemon.memory_limit,
                 cpu_limit: raw_daemon.cpu_limit,
                 path: Some(path.to_path_buf()),
@@ -992,6 +996,7 @@ impl PitchforkToml {
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
                     mise: daemon.mise,
+                    user: daemon.user.clone(),
                     memory_limit: daemon.memory_limit,
                     cpu_limit: daemon.cpu_limit,
                 };
@@ -1201,6 +1206,8 @@ pub struct PitchforkTomlDaemon {
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
+    /// Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.
+    pub user: Option<String>,
     /// Memory limit for the daemon process (e.g. "50MB", "1GiB").
     /// The supervisor periodically monitors RSS and kills the process if it exceeds the limit.
     pub memory_limit: Option<MemoryLimit>,
@@ -1234,6 +1241,7 @@ impl Default for PitchforkTomlDaemon {
             env: None,
             hooks: None,
             mise: None,
+            user: None,
             memory_limit: None,
             cpu_limit: None,
             path: None,
@@ -1285,6 +1293,7 @@ impl PitchforkTomlDaemon {
             mise: self.mise,
             slug: None,
             proxy: None,
+            user: self.user.clone(),
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
         }
@@ -1461,5 +1470,59 @@ impl<'de> Deserialize<'de> for Retry {
         }
 
         deserializer.deserialize_any(RetryVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_daemon_user_parses_and_flows_to_run_options() {
+        let pt = PitchforkToml::parse_str(
+            r#"
+[daemons.api]
+run = "node server.js"
+user = "postgres"
+"#,
+            Path::new("/tmp/my-project/pitchfork.toml"),
+        )
+        .unwrap();
+
+        let id = DaemonId::new("my-project", "api");
+        let daemon = pt.daemons.get(&id).unwrap();
+        assert_eq!(daemon.user.as_deref(), Some("postgres"));
+
+        let opts = daemon.to_run_options(&id, vec!["node".to_string(), "server.js".to_string()]);
+        assert_eq!(opts.user.as_deref(), Some("postgres"));
+    }
+
+    #[test]
+    fn test_daemon_user_write_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        let mut pt = PitchforkToml::new(path.clone());
+        pt.namespace = Some("test-project".to_string());
+        pt.daemons.insert(
+            DaemonId::new("test-project", "api"),
+            PitchforkTomlDaemon {
+                run: "node server.js".to_string(),
+                user: Some("postgres".to_string()),
+                ..PitchforkTomlDaemon::default()
+            },
+        );
+
+        pt.write().unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("user = \"postgres\""));
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        let daemon = parsed
+            .daemons
+            .get(&DaemonId::new("test-project", "api"))
+            .unwrap();
+        assert_eq!(daemon.user.as_deref(), Some("postgres"));
     }
 }

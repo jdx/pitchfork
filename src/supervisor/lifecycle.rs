@@ -19,6 +19,8 @@ use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::ffi::CString;
 use std::iter::once;
 use std::sync::atomic;
 use std::time::Duration;
@@ -30,6 +32,17 @@ use tokio::time;
 /// Cache for compiled regex patterns to avoid recompilation on daemon restarts
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RunIdentity {
+    Inherit,
+    Switch {
+        uid: nix::unistd::Uid,
+        gid: nix::unistd::Gid,
+        username: Option<CString>,
+    },
+}
 
 /// Get or compile a regex pattern, caching the result for future use
 pub(crate) fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
@@ -258,6 +271,15 @@ impl Supervisor {
         if let Some(parent) = log_path.parent() {
             xx::file::mkdirp(parent)?;
         }
+        #[cfg(unix)]
+        let run_identity = match resolve_effective_run_identity(opts.user.as_deref()) {
+            Ok(identity) => identity,
+            Err(e) => {
+                return Ok(IpcResponse::DaemonFailed {
+                    error: e.to_string(),
+                });
+            }
+        };
         info!("run: spawning daemon {id} with args: {args:?}");
         let mut cmd = tokio::process::Command::new("sh");
         cmd.args(&args)
@@ -295,11 +317,11 @@ impl Supervisor {
 
         #[cfg(unix)]
         {
+            let run_identity = run_identity.clone();
             unsafe {
                 cmd.pre_exec(move || {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
+                    nix::unistd::setsid().map_err(nix_to_io_error)?;
+                    apply_run_identity(&run_identity)?;
                     Ok(())
                 });
             }
@@ -345,6 +367,7 @@ impl Supervisor {
                         o.watch_mode = Some(opts.watch_mode);
                         o.watch_base_dir = opts.watch_base_dir.clone();
                         o.mise = opts.mise;
+                        o.user = opts.user.clone();
                         o.memory_limit = opts.memory_limit;
                         o.cpu_limit = opts.cpu_limit;
                     })
@@ -993,6 +1016,198 @@ impl Supervisor {
     }
 }
 
+#[cfg(unix)]
+fn resolve_effective_run_identity(daemon_user: Option<&str>) -> Result<RunIdentity> {
+    let settings_user = settings().supervisor.user.trim();
+    let daemon_user = daemon_user.map(str::trim).filter(|user| !user.is_empty());
+    let settings_user = (!settings_user.is_empty()).then_some(settings_user);
+    let configured = daemon_user.or(settings_user);
+    let current_uid = nix::unistd::Uid::effective().as_raw();
+    let current_gid = nix::unistd::Gid::effective().as_raw();
+    resolve_run_identity(
+        configured,
+        current_uid,
+        current_gid,
+        std::env::var("SUDO_UID").ok().as_deref(),
+        std::env::var("SUDO_GID").ok().as_deref(),
+    )
+}
+
+#[cfg(unix)]
+fn resolve_run_identity(
+    configured: Option<&str>,
+    current_uid: u32,
+    current_gid: u32,
+    sudo_uid: Option<&str>,
+    sudo_gid: Option<&str>,
+) -> Result<RunIdentity> {
+    let current_uid = nix::unistd::Uid::from_raw(current_uid);
+    let current_gid = nix::unistd::Gid::from_raw(current_gid);
+    if let Some(user) = configured {
+        let identity = resolve_configured_user(user)?;
+        ensure_can_use_identity(user, &identity, current_uid, current_gid)?;
+        if identity.matches(current_uid, current_gid) {
+            return Ok(RunIdentity::Inherit);
+        }
+        return Ok(identity);
+    }
+
+    if current_uid.is_root()
+        && let Some(identity) = resolve_sudo_identity(sudo_uid, sudo_gid)
+    {
+        return Ok(identity);
+    }
+
+    Ok(RunIdentity::Inherit)
+}
+
+#[cfg(unix)]
+fn resolve_configured_user(user: &str) -> Result<RunIdentity> {
+    if user.chars().all(|c| c.is_ascii_digit()) {
+        let uid = user
+            .parse::<u32>()
+            .map_err(|e| miette::miette!("invalid run user UID '{}': {}", user, e))?;
+        let user_record = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+            .into_diagnostic()?
+            .ok_or_else(|| miette::miette!("run user UID '{}' does not exist", user))?;
+        return run_identity_from_user_record(user_record);
+    }
+
+    let user_record = nix::unistd::User::from_name(user)
+        .into_diagnostic()?
+        .ok_or_else(|| miette::miette!("run user '{}' does not exist", user))?;
+    run_identity_from_user_record(user_record)
+}
+
+#[cfg(unix)]
+fn run_identity_from_user_record(user: nix::unistd::User) -> Result<RunIdentity> {
+    let username = CString::new(user.name)
+        .map_err(|e| miette::miette!("run user name contains an interior nul byte: {}", e))?;
+    Ok(RunIdentity::Switch {
+        uid: user.uid,
+        gid: user.gid,
+        username: Some(username),
+    })
+}
+
+#[cfg(unix)]
+fn run_identity_from_raw_ids(uid: u32, gid: u32, username: Option<CString>) -> RunIdentity {
+    RunIdentity::Switch {
+        uid: nix::unistd::Uid::from_raw(uid),
+        gid: nix::unistd::Gid::from_raw(gid),
+        username,
+    }
+}
+
+#[cfg(unix)]
+fn resolve_sudo_identity(sudo_uid: Option<&str>, sudo_gid: Option<&str>) -> Option<RunIdentity> {
+    let uid = sudo_uid?.parse::<u32>().ok()?;
+    let gid = sudo_gid?.parse::<u32>().ok()?;
+    let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+        .ok()
+        .flatten()
+        .and_then(|u| CString::new(u.name).ok());
+    Some(run_identity_from_raw_ids(uid, gid, username))
+}
+
+#[cfg(unix)]
+fn ensure_can_use_identity(
+    configured_user: &str,
+    identity: &RunIdentity,
+    current_uid: nix::unistd::Uid,
+    current_gid: nix::unistd::Gid,
+) -> Result<()> {
+    let RunIdentity::Switch { uid, gid, .. } = identity else {
+        return Ok(());
+    };
+    if *uid == current_uid && *gid == current_gid {
+        return Ok(());
+    }
+    if current_uid.is_root() {
+        return Ok(());
+    }
+    Err(miette::miette!(
+        "daemon is configured to run as '{}', but the supervisor is running as uid={} gid={}. Restart the supervisor with sudo to switch to uid={} gid={}, or choose a user matching the supervisor.",
+        configured_user,
+        current_uid.as_raw(),
+        current_gid.as_raw(),
+        uid.as_raw(),
+        gid.as_raw()
+    ))
+}
+
+#[cfg(unix)]
+fn apply_run_identity(identity: &RunIdentity) -> std::io::Result<()> {
+    let RunIdentity::Switch { uid, gid, username } = identity else {
+        return Ok(());
+    };
+    if let Some(username) = username {
+        initgroups_for_user(username, *gid)?;
+    } else {
+        setgroups_to_primary(*gid)?;
+    }
+    nix::unistd::setgid(*gid).map_err(nix_to_io_error)?;
+    nix::unistd::setuid(*uid).map_err(nix_to_io_error)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+impl RunIdentity {
+    fn matches(&self, uid: nix::unistd::Uid, gid: nix::unistd::Gid) -> bool {
+        matches!(self, RunIdentity::Switch { uid: u, gid: g, .. } if *u == uid && *g == gid)
+    }
+}
+
+#[cfg(unix)]
+fn setgroups_to_primary(gid: nix::unistd::Gid) -> std::io::Result<()> {
+    let groups = [gid.as_raw() as libc::gid_t];
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let group_count = groups.len();
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let group_count = groups.len() as libc::c_int;
+    let rc = unsafe { libc::setgroups(group_count, groups.as_ptr()) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn initgroups_for_user(username: &CString, gid: nix::unistd::Gid) -> std::io::Result<()> {
+    let gid = gid.as_raw();
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos"
+    ))]
+    let base_gid = i32::try_from(gid)
+        .map_err(|_| std::io::Error::other(format!("gid {gid} is out of range")))?;
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos"
+    )))]
+    let base_gid = gid as libc::gid_t;
+
+    // SAFETY: `username` is a valid nul-terminated C string and `base_gid`
+    // is derived from a resolved system account or sudo-provided gid.
+    let rc = unsafe { libc::initgroups(username.as_ptr(), base_gid) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn nix_to_io_error(err: nix::errno::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(err as i32)
+}
+
 /// Check if multiple ports are available and optionally auto-bump to find available ports.
 ///
 /// All ports are bumped by the same offset to maintain relative port spacing.
@@ -1245,4 +1460,79 @@ fn is_daemon_slug_target(id: &DaemonId) -> bool {
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
         id.name() == daemon_name
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_run_identity_empty_without_sudo() {
+        let identity = resolve_run_identity(None, 501, 20, None, None).unwrap();
+        assert_eq!(identity, RunIdentity::Inherit);
+    }
+
+    #[test]
+    fn test_resolve_run_identity_sudo_fallback() {
+        let identity = resolve_run_identity(None, 0, 0, Some("501"), Some("20")).unwrap();
+        let RunIdentity::Switch { uid, gid, .. } = identity else {
+            panic!("expected identity switch");
+        };
+        assert_eq!(uid.as_raw(), 501);
+        assert_eq!(gid.as_raw(), 20);
+    }
+
+    #[test]
+    fn test_resolve_run_identity_ignores_stale_sudo_when_not_root() {
+        let identity = resolve_run_identity(None, 501, 20, Some("0"), Some("0")).unwrap();
+        assert_eq!(identity, RunIdentity::Inherit);
+    }
+
+    #[test]
+    fn test_resolve_configured_user_root_name() {
+        let identity = resolve_configured_user("root").unwrap();
+        let RunIdentity::Switch { uid, username, .. } = identity else {
+            panic!("expected identity switch");
+        };
+        assert_eq!(uid.as_raw(), 0);
+        assert_eq!(
+            username.as_deref().and_then(|s| s.to_str().ok()),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn test_resolve_configured_user_root_uid() {
+        let identity = resolve_configured_user("0").unwrap();
+        let RunIdentity::Switch { uid, username, .. } = identity else {
+            panic!("expected identity switch");
+        };
+        assert_eq!(uid.as_raw(), 0);
+        assert_eq!(
+            username.as_deref().and_then(|s| s.to_str().ok()),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn test_resolve_configured_user_missing_user_fails() {
+        let err = resolve_configured_user("pitchfork-user-that-should-not-exist")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_resolve_run_identity_requires_root_for_user_switch() {
+        let err = resolve_run_identity(Some("root"), 501, 20, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Restart the supervisor with sudo"));
+    }
+
+    #[test]
+    fn test_resolve_run_identity_same_user_is_noop() {
+        let identity = resolve_run_identity(Some("root"), 0, 0, Some("501"), Some("20")).unwrap();
+        assert_eq!(identity, RunIdentity::Inherit);
+    }
 }

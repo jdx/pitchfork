@@ -136,6 +136,38 @@ REDIS_URL = "redis://localhost:6379"
 LOG_LEVEL = "debug"
 ```
 
+### `user`
+
+Unix user to run the daemon process as. This overrides `[settings.supervisor] user` for this daemon. Values may be usernames or numeric UIDs.
+
+```toml
+[settings.supervisor]
+user = "app"
+
+[daemons.api]
+run = "npm run server"
+
+[daemons.postgres]
+run = "postgres -D /var/lib/postgres"
+user = "postgres"
+
+[daemons.low-port-web]
+run = "python -m http.server 80"
+user = "root"
+
+[daemons.worker]
+run = "./worker"
+user = "501"
+```
+
+**Behavior:**
+- If `user` is set, the daemon runs as that user.
+- Otherwise, if `[settings.supervisor] user` is set, the daemon runs as that user.
+- When the supervisor is running as root and `[settings.supervisor] user` is set, the default state directory, logs, and IPC sockets are stored under that user's state directory unless `PITCHFORK_STATE_DIR` overrides it. Pitchfork also chowns those state files to the configured user so non-root clients can read and write them.
+- Otherwise, if the supervisor was started as root via `sudo`, daemons run as the sudo-calling user from `SUDO_UID`/`SUDO_GID`.
+- If no run user can be derived, the daemon runs as the supervisor's current user.
+- Switching to another user requires the supervisor to have root privileges; otherwise startup fails.
+
 ### `retry`
 
 Number of retry attempts on failure, or `true` for infinite retries. Default: `0`

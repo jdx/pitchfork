@@ -275,6 +275,13 @@
             "exec node server.js"
           ]
         },
+        "user": {
+          "description": "Unix user to run this daemon as. Overrides `settings.supervisor.user` when set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "watch": {
           "description": "File patterns to watch for changes",
           "type": "array",
@@ -604,6 +611,13 @@
         },
         "stop_timeout": {
           "description": "Maximum time to wait for daemon to stop gracefully",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user": {
+          "description": "Default user to run daemon processes as",
           "type": [
             "string",
             "null"
