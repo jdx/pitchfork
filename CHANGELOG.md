@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0](https://github.com/jdx/pitchfork/compare/v2.6.0...v2.7.0) - 2026-04-26
+
+### Added
+
+- *(supervisor)* run daemons as a configured user ([#384](https://github.com/jdx/pitchfork/pull/384))
+- *(watch)* impl poll mode ([#353](https://github.com/jdx/pitchfork/pull/353))
+- *(cli)* stop / restart --all-global / --all-local ([#385](https://github.com/jdx/pitchfork/pull/385))
+- version check in IPC ([#354](https://github.com/jdx/pitchfork/pull/354))
+
+### Fixed
+
+- pass error when failed to parse toml ([#386](https://github.com/jdx/pitchfork/pull/386))
+
+### Other
+
+- *(deps)* update rust crate xx to v2.5.4 ([#378](https://github.com/jdx/pitchfork/pull/378))
+- *(deps)* lock file maintenance ([#371](https://github.com/jdx/pitchfork/pull/371))
+- *(deps)* update rust crate xx to v2.5.4 ([#363](https://github.com/jdx/pitchfork/pull/363))
+- *(deps)* update rust crate hyper-rustls to v0.27.9 ([#359](https://github.com/jdx/pitchfork/pull/359))
+- *(deps)* update rust crate rmcp to v1.5.0 ([#364](https://github.com/jdx/pitchfork/pull/364))
+- *(deps)* update rust crate libc to v0.2.185 ([#360](https://github.com/jdx/pitchfork/pull/360))
+- *(deps)* update rust crate tokio to v1.52.1 ([#365](https://github.com/jdx/pitchfork/pull/365))
+- *(deps)* update rust crate uuid to v1.23.1 ([#362](https://github.com/jdx/pitchfork/pull/362))
+- *(deps)* update rust crate rustls to v0.23.38 ([#361](https://github.com/jdx/pitchfork/pull/361))
+- *(deps)* update rust crate clap to v4.6.1 ([#358](https://github.com/jdx/pitchfork/pull/358))
+- *(deps)* update rust crate axum to v0.8.9 ([#357](https://github.com/jdx/pitchfork/pull/357))
+
 ## [2.6.0](https://github.com/jdx/pitchfork/compare/v2.5.0...v2.6.0) - 2026-04-12
 
 ### Added
