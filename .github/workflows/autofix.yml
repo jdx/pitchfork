@@ -19,8 +19,12 @@ env:
 
 jobs:
   autofix:
-    # Only run on pull requests, skip on push to avoid wasted CI time
-    if: github.event_name == 'pull_request' && github.actor != 'renovate[bot]' && github.actor != 'mend[bot]'
+    # Only run on pull requests, skip on push to avoid wasted CI time.
+    # Skip release-plz PRs — release-plz.yml's "Squash generated docs" step
+    # already runs `mise run render ::: lint-fix` and amends it into the
+    # release commit; running autofix here causes a race that breaks the
+    # squash step's force-with-lease push (stale info).
+    if: github.event_name == 'pull_request' && github.actor != 'renovate[bot]' && github.actor != 'mend[bot]' && !startsWith(github.head_ref, 'release-plz-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
