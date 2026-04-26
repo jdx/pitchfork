@@ -184,7 +184,7 @@ run = "sleep 60"
 /// This is the canonical "slug beats same-name" scenario:
 /// - proj-c has a daemon named "frontend" with slug "frontend-slug"
 /// - proj-d has a daemon named "frontend" (no slug)
-/// Querying "frontend-slug" must resolve to proj-c/frontend, not proj-d/frontend.
+///   Querying "frontend-slug" must resolve to proj-c/frontend, not proj-d/frontend.
 #[test]
 fn test_slug_priority_over_same_name() {
     let env = TestEnv::new();

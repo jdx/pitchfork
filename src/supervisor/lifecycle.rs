@@ -40,7 +40,7 @@ enum RunIdentity {
     Switch {
         uid: nix::unistd::Uid,
         gid: nix::unistd::Gid,
-        username: Option<String>,
+        username: Option<CString>,
     },
 }
 
@@ -1069,26 +1069,28 @@ fn resolve_configured_run_user(user: &str) -> Result<RunIdentity> {
         let user_record = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
             .into_diagnostic()?
             .ok_or_else(|| miette::miette!("run user UID '{}' does not exist", user))?;
-        return Ok(run_identity_from_user_record(user_record));
+        return run_identity_from_user_record(user_record);
     }
 
     let user_record = nix::unistd::User::from_name(user)
         .into_diagnostic()?
         .ok_or_else(|| miette::miette!("run user '{}' does not exist", user))?;
-    Ok(run_identity_from_user_record(user_record))
+    run_identity_from_user_record(user_record)
 }
 
 #[cfg(unix)]
-fn run_identity_from_user_record(user: nix::unistd::User) -> RunIdentity {
-    RunIdentity::Switch {
+fn run_identity_from_user_record(user: nix::unistd::User) -> Result<RunIdentity> {
+    let username = CString::new(user.name)
+        .map_err(|e| miette::miette!("run user name contains an interior nul byte: {}", e))?;
+    Ok(RunIdentity::Switch {
         uid: user.uid,
         gid: user.gid,
-        username: Some(user.name),
-    }
+        username: Some(username),
+    })
 }
 
 #[cfg(unix)]
-fn run_identity_from_raw_ids(uid: u32, gid: u32, username: Option<String>) -> RunIdentity {
+fn run_identity_from_raw_ids(uid: u32, gid: u32, username: Option<CString>) -> RunIdentity {
     RunIdentity::Switch {
         uid: nix::unistd::Uid::from_raw(uid),
         gid: nix::unistd::Gid::from_raw(gid),
@@ -1103,7 +1105,7 @@ fn resolve_sudo_identity(sudo_uid: Option<&str>, sudo_gid: Option<&str>) -> Opti
     let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
         .ok()
         .flatten()
-        .map(|u| u.name);
+        .and_then(|u| CString::new(u.name).ok());
     Some(run_identity_from_raw_ids(uid, gid, username))
 }
 
@@ -1139,8 +1141,9 @@ fn apply_run_identity(identity: &RunIdentity) -> std::io::Result<()> {
         return Ok(());
     };
     if let Some(username) = username {
-        let username = CString::new(username.as_str()).map_err(std::io::Error::other)?;
-        initgroups_for_user(&username, *gid)?;
+        initgroups_for_user(username, *gid)?;
+    } else {
+        setgroups_to_primary(*gid)?;
     }
     nix::unistd::setgid(*gid).map_err(nix_to_io_error)?;
     nix::unistd::setuid(*uid).map_err(nix_to_io_error)?;
@@ -1151,6 +1154,21 @@ fn apply_run_identity(identity: &RunIdentity) -> std::io::Result<()> {
 impl RunIdentity {
     fn matches(&self, uid: nix::unistd::Uid, gid: nix::unistd::Gid) -> bool {
         matches!(self, RunIdentity::Switch { uid: u, gid: g, .. } if *u == uid && *g == gid)
+    }
+}
+
+#[cfg(unix)]
+fn setgroups_to_primary(gid: nix::unistd::Gid) -> std::io::Result<()> {
+    let groups = [gid.as_raw() as libc::gid_t];
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let group_count = groups.len();
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let group_count = groups.len() as libc::c_int;
+    let rc = unsafe { libc::setgroups(group_count, groups.as_ptr()) };
+    if rc == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -1186,7 +1204,7 @@ fn initgroups_for_user(username: &CString, gid: nix::unistd::Gid) -> std::io::Re
 
 #[cfg(unix)]
 fn nix_to_io_error(err: nix::errno::Errno) -> std::io::Error {
-    std::io::Error::other(err.to_string())
+    std::io::Error::from_raw_os_error(err as i32)
 }
 
 /// Check if multiple ports are available and optionally auto-bump to find available ports.
@@ -1476,7 +1494,10 @@ mod tests {
             panic!("expected identity switch");
         };
         assert_eq!(uid.as_raw(), 0);
-        assert_eq!(username.as_deref(), Some("root"));
+        assert_eq!(
+            username.as_deref().and_then(|s| s.to_str().ok()),
+            Some("root")
+        );
     }
 
     #[test]
@@ -1486,7 +1507,10 @@ mod tests {
             panic!("expected identity switch");
         };
         assert_eq!(uid.as_raw(), 0);
-        assert_eq!(username.as_deref(), Some("root"));
+        assert_eq!(
+            username.as_deref().and_then(|s| s.to_str().ok()),
+            Some("root")
+        );
     }
 
     #[test]

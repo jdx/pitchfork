@@ -93,32 +93,19 @@ impl IpcServer {
 
         let listener = listener_result.into_diagnostic()?;
 
-        // When the supervisor is started with `sudo`, the socket file and directory
+        // When the supervisor is started as root, the socket file and directory
         // are owned by root with restrictive permissions (0600/0700). Non-root CLI
-        // clients need to connect to this socket.
+        // clients and configured daemon users need to connect to this socket.
         //
-        // If SUDO_UID/SUDO_GID are available, chown the socket back to the
-        // original user so permissions stay tight (0700/0600) but the real user
-        // owns the files.
-        //
-        // If not running via sudo, the socket is already owned by the current
-        // user with restrictive permissions (set by the umask above), so no
-        // permission change is needed.
-        //
-        // Guard: only act when euid==0 to avoid stale SUDO_UID/SUDO_GID values
-        // inherited into non-sudo environments.
+        // Prefer `[settings.supervisor] run_user`, then SUDO_UID/SUDO_GID, so
+        // permissions stay tight (0700/0600) while the intended runtime user
+        // owns the socket.
         #[cfg(unix)]
         {
-            if nix::unistd::Uid::effective().is_root() {
-                if let (Ok(uid_s), Ok(gid_s)) =
-                    (std::env::var("SUDO_UID"), std::env::var("SUDO_GID"))
-                {
-                    if let (Ok(uid), Ok(gid)) = (uid_s.parse::<u32>(), gid_s.parse::<u32>()) {
-                        let _ = chown_path(&env::IPC_SOCK_DIR, uid, gid);
-                        let _ = chown_path(&env::IPC_SOCK_MAIN, uid, gid);
-                        debug!("chowned IPC socket to uid={uid} gid={gid}");
-                    }
-                }
+            if let Some((uid, gid)) = crate::supervisor::state_owner_ids() {
+                let _ = chown_path(&env::IPC_SOCK_DIR, uid, gid);
+                let _ = chown_path(&env::IPC_SOCK_MAIN, uid, gid);
+                debug!("chowned IPC socket to uid={uid} gid={gid}");
             }
         }
 
