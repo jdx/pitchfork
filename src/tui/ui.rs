@@ -64,11 +64,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.view {
         View::Help => draw_help_overlay(f),
         View::Confirm => draw_confirm_overlay(f, app),
-        View::Loading => draw_loading_overlay(f, app),
         View::Details => draw_details_overlay(f, app),
         View::ConfigEditor => draw_config_editor_overlay(f, app),
         View::ConfigFileSelect => draw_file_select_overlay(f, app),
         _ => {}
+    }
+
+    // Draw loading indicator on top of everything (non-blocking)
+    if app.loading_text.is_some() {
+        draw_loading_overlay(f, app);
     }
 }
 
@@ -131,7 +135,6 @@ fn draw_main(f: &mut Frame, area: Rect, app: &mut App) {
     match app.view {
         View::Dashboard
         | View::Confirm
-        | View::Loading
         | View::Details
         | View::ConfigEditor
         | View::ConfigFileSelect => draw_daemon_table(f, area, app),
@@ -1293,7 +1296,6 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         View::Network => "/:search  q/Esc:back  j/k:nav  g/G:top/btm  r:refresh",
         View::Help => "q/Esc/?:close",
         View::Confirm => "y/Enter:confirm  n/Esc:cancel",
-        View::Loading => "Please wait...",
         View::Details => "q/Esc/i:close",
         View::ConfigEditor => "Tab/j/k:nav  Enter:edit  Ctrl+S:save  Esc:cancel  D:delete",
         View::ConfigFileSelect => "j/k:nav  Enter:select  Esc:cancel",
