@@ -166,6 +166,15 @@ export default defineConfig({
         content: "https://pitchfork.en.dev/img/android-chrome-512x512.png",
       },
     ],
+    [
+      "script",
+      {
+        defer: "",
+        "data-domain": "pa--1IDrOZtv0naZ-aGb1KMK",
+        "data-api": "https://shrill.en.dev/f5f1/event",
+        src: "https://shrill.en.dev/shrill/script.js",
+      },
+    ],
   ],
 
   // Ignore localhost URLs in CLI examples
