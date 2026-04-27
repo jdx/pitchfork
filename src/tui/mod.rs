@@ -61,7 +61,16 @@ enum TaskResult {
     BatchDisable {
         count: usize,
     },
-    Refresh(crate::Result<Vec<DaemonListEntry>>),
+    Refresh {
+        result: crate::Result<Vec<DaemonListEntry>>,
+        /// Whether this refresh completing should clear `in_flight`.
+        /// True only when the refresh was spawned as the final step of an IPC
+        /// operation (start/stop/etc.) or a manual refresh (Action::Refresh).
+        /// False for background auto-refresh and local-only actions (SaveConfig,
+        /// DeleteDaemon) so they cannot prematurely reset the flag while an IPC
+        /// operation is still in flight.
+        clears_in_flight: bool,
+    },
     RefreshNetwork(Vec<listeners::Listener>),
 }
 
@@ -147,7 +156,7 @@ async fn run_app(
                             app.set_message(format!("Failed to start {id}: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::Stop { id, result } => {
                     app.stop_loading();
@@ -157,7 +166,7 @@ async fn run_app(
                         Ok(false) => app.set_message(format!("Daemon {id} was not running")),
                         Err(e) => app.set_message(format!("Failed to stop {id}: {e}")),
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::Restart { id, result } => {
                     app.stop_loading();
@@ -173,7 +182,7 @@ async fn run_app(
                             app.set_message(format!("Failed to restart {id}: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::Enable { id, result } => {
                     app.stop_loading();
@@ -182,7 +191,7 @@ async fn run_app(
                         Ok(_) => app.set_message(format!("Enabled {id}")),
                         Err(e) => app.set_message(format!("Failed to enable {id}: {e}")),
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::Disable { id, result } => {
                     app.stop_loading();
@@ -191,7 +200,7 @@ async fn run_app(
                         Ok(_) => app.set_message(format!("Disabled {id}")),
                         Err(e) => app.set_message(format!("Failed to disable {id}: {e}")),
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::BatchStart { count, result } => {
                     app.stop_loading();
@@ -212,7 +221,7 @@ async fn run_app(
                             app.set_message(format!("Failed to start daemons: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::BatchStop { count, result } => {
                     app.stop_loading();
@@ -229,7 +238,7 @@ async fn run_app(
                             app.set_message(format!("Failed to stop daemons: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::BatchRestart { count, result } => {
                     app.stop_loading();
@@ -250,23 +259,30 @@ async fn run_app(
                             app.set_message(format!("Failed to restart daemons: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::BatchEnable { count } => {
                     app.stop_loading();
                     in_flight = false;
                     app.clear_selection();
                     app.set_message(format!("Enabled {count} daemons"));
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
                 TaskResult::BatchDisable { count } => {
                     app.stop_loading();
                     in_flight = false;
                     app.clear_selection();
                     app.set_message(format!("Disabled {count} daemons"));
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), false);
                 }
-                TaskResult::Refresh(result) => {
+                TaskResult::Refresh {
+                    result,
+                    clears_in_flight,
+                } => {
+                    if clears_in_flight {
+                        app.stop_loading();
+                        in_flight = false;
+                    }
                     match result {
                         Ok(entries) => app.apply_refresh(entries),
                         Err(e) => app.set_message(format!("Refresh failed: {e}")),
@@ -331,9 +347,10 @@ async fn run_app(
                         let _ = tx.send(TaskResult::BatchEnable { count });
                     });
                 }
-                event::Action::Refresh => {
+                event::Action::Refresh if !in_flight => {
+                    in_flight = true;
                     app.start_loading("Refreshing...");
-                    spawn_refresh(Arc::clone(client), tx.clone());
+                    spawn_refresh(Arc::clone(client), tx.clone(), true);
                 }
                 event::Action::OpenEditorNew => {
                     app.open_file_selector();
@@ -347,7 +364,7 @@ async fn run_app(
                         Ok(true) => {
                             app.stop_loading();
                             app.close_editor();
-                            spawn_refresh(Arc::clone(client), tx.clone());
+                            spawn_refresh(Arc::clone(client), tx.clone(), false);
                         }
                         Ok(false) => {
                             app.stop_loading();
@@ -457,7 +474,7 @@ async fn run_app(
                                         app.set_message(format!("Delete failed: {e}"));
                                     }
                                 }
-                                spawn_refresh(Arc::clone(client), tx.clone());
+                                spawn_refresh(Arc::clone(client), tx.clone(), false);
                             }
                             app::PendingAction::DiscardEditorChanges => {
                                 app.close_editor();
@@ -477,7 +494,10 @@ async fn run_app(
             let tx_ref = tx.clone();
             tokio::spawn(async move {
                 let entries = App::fetch_daemon_data(&client_ref).await;
-                let _ = tx_ref.send(TaskResult::Refresh(entries));
+                let _ = tx_ref.send(TaskResult::Refresh {
+                    result: entries,
+                    clears_in_flight: false,
+                });
                 if is_network {
                     let listeners = tokio::task::spawn_blocking(|| {
                         listeners::get_all()
@@ -497,9 +517,16 @@ async fn run_app(
     Ok(())
 }
 
-fn spawn_refresh(client: Arc<IpcClient>, tx: tokio::sync::mpsc::UnboundedSender<TaskResult>) {
+fn spawn_refresh(
+    client: Arc<IpcClient>,
+    tx: tokio::sync::mpsc::UnboundedSender<TaskResult>,
+    clears_in_flight: bool,
+) {
     tokio::spawn(async move {
         let entries = App::fetch_daemon_data(&client).await;
-        let _ = tx.send(TaskResult::Refresh(entries));
+        let _ = tx.send(TaskResult::Refresh {
+            result: entries,
+            clears_in_flight,
+        });
     });
 }
