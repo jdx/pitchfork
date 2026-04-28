@@ -99,11 +99,12 @@ impl BootEnable {
     async fn run(&self) -> Result<()> {
         let boot_manager = BootManager::new()?;
 
-        if boot_manager.is_enabled()? {
+        if boot_manager.is_current_level_enabled()? {
             println!("Boot start is already enabled");
             return Ok(());
         }
 
+        // enable() will error if the other privilege level is already registered.
         boot_manager.enable()?;
         info!("✓ Boot start enabled");
 
@@ -130,12 +131,17 @@ impl BootDisable {
 impl BootStatus {
     async fn run(&self) -> Result<()> {
         let boot_manager = BootManager::new()?;
-        let is_enabled = boot_manager.is_enabled()?;
+        let current_enabled = boot_manager.is_current_level_enabled()?;
+        let other_enabled = boot_manager.is_other_level_enabled()?;
 
-        if is_enabled {
-            info!("Boot start is enabled");
-        } else {
-            info!("Boot start is disabled");
+        match (current_enabled, other_enabled) {
+            (true, true) => info!("Boot start is enabled at both user and system level"),
+            (true, false) => info!("Boot start is enabled"),
+            (false, true) => warn!(
+                "Boot start is registered at the other privilege level only; \
+                run `pitchfork boot disable` (with appropriate privileges) to clean it up"
+            ),
+            (false, false) => info!("Boot start is disabled"),
         }
 
         Ok(())
