@@ -10,15 +10,27 @@ impl BootManager {
     pub fn new() -> Result<Self> {
         let app_name = "pitchfork";
         let app_path = env::PITCHFORK_BIN.to_string_lossy().to_string();
+        let is_root = nix::unistd::Uid::effective().is_root();
 
-        let auto_launcher = AutoLaunchBuilder::new()
-            .set_app_name(app_name)
-            .set_app_path(&app_path)
-            .set_macos_launch_mode(MacOSLaunchMode::LaunchAgent)
-            .set_linux_launch_mode(LinuxLaunchMode::Systemd)
-            .set_args(&["supervisor", "run", "--boot"])
-            .build()
-            .into_diagnostic()?;
+        let auto_launcher = if is_root {
+            AutoLaunchBuilder::new()
+                .set_app_name(app_name)
+                .set_app_path(&app_path)
+                .set_macos_launch_mode(MacOSLaunchMode::LaunchAgentSystem)
+                .set_linux_launch_mode(LinuxLaunchMode::SystemdSystem)
+                .set_args(&["supervisor", "run", "--boot"])
+                .build()
+                .into_diagnostic()?
+        } else {
+            AutoLaunchBuilder::new()
+                .set_app_name(app_name)
+                .set_app_path(&app_path)
+                .set_macos_launch_mode(MacOSLaunchMode::LaunchAgentUser)
+                .set_linux_launch_mode(LinuxLaunchMode::SystemdUser)
+                .set_args(&["supervisor", "run", "--boot"])
+                .build()
+                .into_diagnostic()?
+        };
 
         Ok(Self { auto_launcher })
     }

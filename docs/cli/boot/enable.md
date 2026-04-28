@@ -6,4 +6,15 @@
 Enable boot start for pitchfork supervisor
 
 Registers pitchfork to start automatically when the system boots.
-On macOS, creates a LaunchAgent. On Linux, creates a systemd user service.
+
+When run as root (or via sudo): creates a system-level entry
+  macOS: /Library/LaunchAgents/pitchfork.plist
+  Linux: /etc/systemd/system/pitchfork.service
+
+When run as a normal user: creates a user-level entry
+  macOS: ~/Library/LaunchAgents/pitchfork.plist
+  Linux: ~/.config/systemd/user/pitchfork.service
+
+If you want the supervisor to run as root but keep state files and IPC sockets
+under a specific user's home directory, configure `settings.supervisor.user`
+in your pitchfork configuration.

@@ -10,6 +10,12 @@ pitchfork boot enable
 
 This registers pitchfork to start automatically when you log in.
 
+To register a **system-level** entry (starts for all users, requires root):
+
+```bash
+sudo pitchfork boot enable
+```
+
 ## Disable Boot Start
 
 ```bash
@@ -21,6 +27,28 @@ pitchfork boot disable
 ```bash
 pitchfork boot status
 ```
+
+## User-level vs System-level
+
+The registration mode is determined automatically based on whether the command runs as root:
+
+| | User-level | System-level (`sudo`) |
+|---|---|---|
+| macOS | `~/Library/LaunchAgents/pitchfork.plist` | `/Library/LaunchAgents/pitchfork.plist` |
+| Linux | `~/.config/systemd/user/pitchfork.service` | `/etc/systemd/system/pitchfork.service` |
+
+## Running the Supervisor as Root
+
+If you need the supervisor to run as root (e.g. to manage system-level processes), use `sudo pitchfork boot enable`.
+
+However, if you still want state files, IPC sockets and daemon processes to belong to a specific user rather than root, set `supervisor.user` in your global config (`/etc/pitchfork/config.toml` or `~/.config/pitchfork/config.toml`):
+
+```toml
+[supervisor]
+user = "alice"
+```
+
+With this setting, the supervisor process runs as root but spawns daemons and writes state under the specified user's home directory.
 
 ## Configure Boot Daemons
 
@@ -42,13 +70,13 @@ boot_start = false  # Won't start at boot
 
 ## How It Works
 
-| Platform | Method |
-|----------|--------|
-| macOS | LaunchAgents |
-| Linux | systemd user services |
+| Platform | User-level method | System-level method |
+|----------|-------------------|---------------------|
+| macOS | LaunchAgents (user) | LaunchAgents (system) |
+| Linux | systemd user service | systemd system service |
 
 When boot start is enabled:
-1. System login triggers the pitchfork supervisor
+1. System login (user-level) or system startup (system-level) triggers the pitchfork supervisor
 2. Supervisor starts all daemons with `boot_start = true`
 3. Daemons run in the background
 
