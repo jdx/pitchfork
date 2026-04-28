@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0](https://github.com/endevco/pitchfork/compare/v2.7.0...v2.8.0) - 2026-04-28
+
+### Added
+
+- *(boot-start)* support system level register ([#397](https://github.com/endevco/pitchfork/pull/397))
+
+### Fixed
+
+- *(tui)* remove blocking loading ([#394](https://github.com/endevco/pitchfork/pull/394))
+
 ## [2.7.0](https://github.com/jdx/pitchfork/compare/v2.6.0...v2.7.0) - 2026-04-26
 
 ### Added
