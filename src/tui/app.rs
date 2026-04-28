@@ -1,6 +1,7 @@
 use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
+use crate::daemon_list::DaemonListEntry;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon, Retry,
@@ -84,7 +85,6 @@ pub enum View {
     Network,
     Help,
     Confirm,
-    Loading,
     Details,
     ConfigEditor,
     ConfigFileSelect,
@@ -922,14 +922,11 @@ impl App {
     }
 
     pub fn start_loading(&mut self, text: impl Into<String>) {
-        self.prev_view = self.view;
         self.loading_text = Some(text.into());
-        self.view = View::Loading;
     }
 
     pub fn stop_loading(&mut self) {
         self.loading_text = None;
-        self.view = self.prev_view;
     }
 
     // Search functionality
@@ -1172,86 +1169,68 @@ impl App {
         self.stats_history.get(daemon_id)
     }
 
-    pub async fn refresh(&mut self, client: &Arc<IpcClient>) -> Result<()> {
+    /// Fetch fresh daemon data from IPC. Called from a background task.
+    pub async fn fetch_daemon_data(client: &Arc<IpcClient>) -> Result<Vec<DaemonListEntry>> {
         use crate::daemon_list::get_all_daemons;
+        get_all_daemons(client).await
+    }
 
-        // Get all daemons using shared logic (includes both active and available)
-        let all_entries = get_all_daemons(client).await?;
-
+    /// Apply previously fetched daemon data to update app state.
+    pub fn apply_refresh(&mut self, all_entries: Vec<DaemonListEntry>) {
         // Clear current lists
         self.daemons.clear();
         self.disabled.clear();
         self.config_daemon_ids.clear();
 
-        // Populate daemons list based on show_available setting
         for entry in all_entries {
-            // entry.id is already a DaemonId (entry.daemon.id)
             let daemon_id = entry.daemon.id.clone();
 
-            // Track disabled daemons
             if entry.is_disabled {
                 self.disabled.push(daemon_id.clone());
             }
 
-            // Track config-only daemons
             if entry.is_available {
                 self.config_daemon_ids.insert(daemon_id.clone());
             }
 
-            // Add to daemons list if:
-            // - It's an active daemon (not available), OR
-            // - It's available and show_available is enabled
             if !entry.is_available || self.show_available {
                 self.daemons.push(entry.daemon);
             }
         }
 
-        // Refresh process stats (CPU, memory, uptime)
         self.refresh_process_stats();
-
-        // Clear stale messages
         self.clear_stale_message();
 
-        // Keep selection in bounds
         let total_count = self.total_daemon_count();
         if total_count > 0 && self.selected >= total_count {
             self.selected = total_count - 1;
         }
 
-        // Refresh logs if viewing
         if self.view == View::Logs
             && let Some(id) = self.log_daemon_id.clone()
         {
             self.load_logs(&id);
         }
+    }
 
+    pub async fn refresh(&mut self, client: &Arc<IpcClient>) -> Result<()> {
+        let entries = Self::fetch_daemon_data(client).await?;
+        self.apply_refresh(entries);
         Ok(())
     }
 
-    /// Refresh network listeners data (for Network view)
-    pub async fn refresh_network(&mut self) {
-        // Use spawn_blocking since listeners::get_all() is a blocking operation
-        let listeners: Vec<Listener> = tokio::task::spawn_blocking(|| {
-            listeners::get_all()
-                .map(|set| set.into_iter().collect::<Vec<_>>())
-                .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default();
-
+    /// Apply network listener data fetched by a background task.
+    pub fn apply_network_refresh(&mut self, listeners: Vec<Listener>) {
         self.network_listeners = listeners;
 
-        // Keep selection in bounds - first calculate the filtered count
         let filtered_count = self.filtered_network_listeners().len();
 
-        // Update selection index
         if filtered_count > 0 && self.network_selected >= filtered_count {
             self.network_selected = filtered_count - 1;
         } else if filtered_count == 0 {
             self.network_selected = 0;
         }
 
-        // Get a fresh filtered list and update the stored PID
         let selected_pid = self
             .filtered_network_listeners()
             .get(self.network_selected)

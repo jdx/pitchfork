@@ -40,7 +40,6 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
                 View::Help => handle_help_event(app, key.code),
                 View::Confirm => handle_confirm_event(app, key.code),
                 View::Details => handle_details_event(app, key.code),
-                View::Loading => Ok(None), // Ignore input during loading
                 View::ConfigEditor => handle_config_editor_event(app, key.code, key.modifiers),
                 View::ConfigFileSelect => handle_file_select_event(app, key.code),
             }
@@ -63,8 +62,7 @@ pub fn handle_event(app: &mut App) -> Result<Option<Action>> {
                     }
                     Ok(None)
                 }
-                View::Network => Ok(None),
-                View::Loading | View::ConfigEditor | View::ConfigFileSelect => Ok(None),
+                View::Network | View::ConfigEditor | View::ConfigFileSelect => Ok(None),
             }
         }
         _ => Ok(None),
