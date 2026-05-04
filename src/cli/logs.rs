@@ -1,7 +1,7 @@
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
-use crate::ui::style::{edim, ndim};
+use crate::ui::style::{edim, estyle, ndim};
 use crate::{Result, env};
 use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use console;
@@ -72,14 +72,20 @@ fn format_log_line(
     if single_daemon {
         format!("{} {}", ndim(date), msg)
     } else {
-        format!("{} {:id_width$}  {}", ndim(date), dimmed_id(id), msg)
+        let colors_on = !strip_ansi && console::colors_enabled();
+        let colored = dimmed_id(id, colors_on);
+        let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
+        format!("{}  {} {}", padded, ndim(date), msg)
     }
 }
 
 /// Return a dimmed, colorized daemon ID string for display.
 /// Each daemon gets a deterministic color via FNV-1a hash so that
 /// multiple daemons are visually distinguishable while remaining subtle.
-fn dimmed_id(id: &str) -> String {
+fn dimmed_id(id: &str, colors_enabled: bool) -> String {
+    if !colors_enabled {
+        return id.to_string();
+    }
     let colors = [
         (180, 120, 120), // dim red
         (180, 160, 100), // dim yellow
@@ -381,7 +387,7 @@ impl Logs {
         let single_daemon = resolved_ids.len() == 1;
         self.print_existing_logs(&resolved_ids, from, to, single_daemon)?;
         if self.tail {
-            tail_logs(&resolved_ids, single_daemon).await?;
+            tail_logs(&resolved_ids, single_daemon, true).await?;
         }
 
         Ok(())
@@ -1137,7 +1143,11 @@ fn get_all_daemon_ids() -> Result<Vec<DaemonId>> {
         .collect())
 }
 
-pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
+pub async fn tail_logs(
+    names: &[DaemonId],
+    single_daemon: bool,
+    start_from_end: bool,
+) -> Result<()> {
     // Poll each log file in a loop instead of using file-system event watchers.
     //
     // Why polling:
@@ -1147,6 +1157,10 @@ pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
     //   user watching output; the polling stops when the process exits.
     // - Cross-platform reliable: avoids edge cases in notify/FSEvents where events
     //   can be missed when the writer uses buffered I/O.
+    //
+    // `start_from_end`: when true, skip content already output by a prior
+    // print_existing_logs call (used by `logs --tail`). When false, start from
+    // the beginning so no content is missed (used by `wait`).
     let id_width = names
         .iter()
         .map(|id| id.qualified().len())
@@ -1160,13 +1174,16 @@ pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
             if !path.exists() {
                 return None;
             }
-            Some((id.clone(), path, 0u64))
+            let pos = if start_from_end {
+                fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            };
+            Some((id.clone(), path, pos))
         })
         .collect();
 
-    if states.is_empty() {
-        return Ok(());
-    }
+    let strip_ansi = !console::colors_enabled();
 
     let interval = tokio::time::interval(Duration::from_millis(200));
     tokio::pin!(interval);
@@ -1174,25 +1191,58 @@ pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
     loop {
         interval.tick().await;
 
+        // Discover log files that appeared since last iteration.
+        // Always start from position 0 — content written between ticks
+        // must not be silently dropped.
+        for id in names {
+            let path = id.log_path();
+            if !path.exists() || states.iter().any(|(s, _, _)| s == id) {
+                continue;
+            }
+            states.push((id.clone(), path, 0));
+        }
+
         let mut out = vec![];
         for (id, path, pos) in &mut states {
-            // Reopen the file each iteration so log rotation (new inode) is detected.
             let mut file = match fs::File::open(path) {
                 Ok(f) => f,
                 Err(_) => continue,
             };
-
-            // If the file shrank (truncated/rotated), reset to beginning.
             let file_size = match file.metadata() {
                 Ok(m) => m.len(),
                 Err(_) => continue,
             };
-            let cur = if *pos > file_size { 0 } else { *pos };
-            file.seek(SeekFrom::Start(cur)).into_diagnostic()?;
+            let start = if *pos > file_size { 0 } else { *pos };
+            file.seek(SeekFrom::Start(start)).into_diagnostic()?;
 
-            let reader = BufReader::new(&file);
-            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
-            *pos = file.stream_position().into_diagnostic()?;
+            // Track bytes consumed rather than using stream_position(),
+            // which includes BufReader's read-ahead buffer and would skip
+            // content written concurrently.
+            let mut reader = BufReader::new(&file);
+            let mut bytes_read: u64 = 0;
+            let mut lines = vec![];
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).into_diagnostic()?;
+                if n == 0 {
+                    break;
+                }
+                // Only advance position for complete lines (ending with \n).
+                // Partial lines at the end of file may still be written to;
+                // leave them for the next tick.
+                if line.ends_with('\n') {
+                    bytes_read += n as u64;
+                    line.pop();
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+                    lines.push(line);
+                } else {
+                    // Partial line — don't advance, will retry next tick.
+                    break;
+                }
+            }
+            *pos = start + bytes_read;
             out.extend(merge_log_lines(&id.qualified(), lines, false));
         }
 
@@ -1204,7 +1254,7 @@ pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
             for (date, name, msg) in out {
                 println!(
                     "{}",
-                    format_log_line(&date, &name, &msg, single_daemon, id_width, false)
+                    format_log_line(&date, &name, &msg, single_daemon, id_width, strip_ansi)
                 );
             }
         }
@@ -1333,7 +1383,14 @@ pub fn print_logs_for_time_range(
     Ok(())
 }
 
-pub fn print_startup_logs(daemon_id: &DaemonId, from: DateTime<Local>) -> Result<()> {
+/// Collects startup log lines for a single daemon (does not print).
+///
+/// Returns a list of `(time, daemon_id_qualified, message)` tuples for log
+/// entries written after `from`.
+pub fn collect_startup_logs(
+    daemon_id: &DaemonId,
+    from: DateTime<Local>,
+) -> Result<Vec<(String, String, String)>> {
     let from = from
         .with_nanosecond(0)
         .expect("0 is always valid for nanoseconds");
@@ -1351,13 +1408,161 @@ pub fn print_startup_logs(daemon_id: &DaemonId, from: DateTime<Local>) -> Result
         vec![]
     };
 
-    if !log_lines.is_empty() {
-        eprintln!("\n{} {} {}", edim("==="), edim("Startup logs"), edim("==="));
-        for (date, _id, msg) in log_lines {
-            eprintln!("{} {}", edim(&date), msg);
-        }
-        eprintln!("{} {} {}\n", edim("==="), edim("End of logs"), edim("==="));
+    Ok(log_lines)
+}
+
+/// Prints collected startup log lines for all daemons in a unified block.
+///
+/// When only one daemon ID appears in the log lines, omits the ID column since
+/// it would be redundant.  When multiple daemons are present, aligns the ID column.
+///
+/// Format (single daemon):
+/// ```text
+///   STARTUP LOGS
+///   17:12:14 v24.14.0
+/// ```
+///
+/// Format (multiple daemons):
+/// ```text
+///   STARTUP LOGS
+///   api     17:12:14 v3.1.0 ready
+///   web     17:12:14 listening on 0.0.0.0:8080
+/// ```
+pub fn print_startup_logs_block(log_lines: &[(String, String, String)]) {
+    if log_lines.is_empty() {
+        return;
     }
 
-    Ok(())
+    // Sort by timestamp so logs from multiple daemons are interleaved
+    // rather than grouped per-daemon.
+    let log_lines = log_lines
+        .iter()
+        .sorted_by_cached_key(|(ts, _, _)| ts.clone())
+        .collect_vec();
+
+    // Unique daemon IDs to decide whether to show the ID column.
+    // We decide based on what's actually in the logs, not how many daemons
+    // were started — if multiple daemons started but only one emitted logs,
+    // the user still needs to know which daemon the logs belong to.
+    let unique_ids: BTreeSet<&str> = log_lines.iter().map(|(_, id, _)| id.as_str()).collect();
+    let show_id = unique_ids.len() > 1;
+
+    // Filter PTY control sequences from log messages, keeping SGR (color) codes.
+    // Non-tty: also strip all remaining ANSI color codes.
+    let is_tty = std::io::stderr().is_terminal();
+    let format_msg = |msg: &str| -> String {
+        let stripped = strip_pty_controls(msg);
+        if is_tty {
+            stripped
+        } else {
+            console::strip_ansi_codes(&stripped).to_string()
+        }
+    };
+
+    // Tag with dim background style, always on its own line
+    let tag = estyle(" STARTUP LOGS ").black().on_color256(8); // dark gray bg
+    eprintln!("\n{tag}");
+
+    if show_id {
+        let id_width = log_lines
+            .iter()
+            .map(|(_, id, _)| console::measure_text_width(id))
+            .max()
+            .unwrap_or(0);
+        for (date, id, msg) in log_lines {
+            let time = date.split(' ').nth(1).unwrap_or(date);
+            let colored = dimmed_id(id, is_tty && console::colors_enabled_stderr());
+            let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
+            eprintln!("{}  {} {}", padded, edim(time), format_msg(msg));
+        }
+    } else {
+        for (date, _, msg) in log_lines {
+            let time = date.split(' ').nth(1).unwrap_or(date);
+            eprintln!("{} {}", edim(time), format_msg(msg));
+        }
+    }
+}
+
+/// Strips PTY control sequences from a string while preserving SGR (color/style) codes.
+///
+/// Removes CSI sequences that control cursor movement, screen clearing, erasing, etc.,
+/// but keeps `\x1b[...m` (SGR) sequences so colors are retained.
+fn strip_pty_controls(s: &str) -> String {
+    struct Stripper {
+        result: String,
+    }
+
+    impl vte::Perform for Stripper {
+        fn print(&mut self, c: char) {
+            self.result.push(c);
+        }
+
+        fn execute(&mut self, byte: u8) {
+            // Keep \n and \t; drop other control characters (BEL, BS, CR, etc.)
+            if byte == b'\n' || byte == b'\t' {
+                self.result.push(byte as char);
+            }
+        }
+
+        fn csi_dispatch(
+            &mut self,
+            params: &vte::Params,
+            _intermediates: &[u8],
+            _ignore: bool,
+            action: char,
+        ) {
+            // Keep SGR sequences (final byte 'm')
+            if action == 'm' {
+                self.result.push_str("\x1b[");
+                let mut first = true;
+                for sub in params.iter() {
+                    if !first {
+                        self.result.push(';');
+                    }
+                    first = false;
+                    for (i, &p) in sub.iter().enumerate() {
+                        if i > 0 {
+                            self.result.push(':');
+                        }
+                        self.result.push_str(&p.to_string());
+                    }
+                }
+                self.result.push('m');
+            }
+            // All other CSI sequences (cursor move, clear, erase, etc.) are dropped
+        }
+
+        fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {
+            // Drop OSC sequences (e.g. window title)
+        }
+
+        fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {
+            // Drop ESC sequences (e.g. ESC c = reset terminal)
+        }
+
+        fn hook(
+            &mut self,
+            _params: &vte::Params,
+            _intermediates: &[u8],
+            _ignore: bool,
+            _action: char,
+        ) {
+            // Drop DCS hooks
+        }
+
+        fn put(&mut self, _byte: u8) {
+            // Drop DCS data
+        }
+
+        fn unhook(&mut self) {
+            // Drop DCS unhook
+        }
+    }
+
+    let mut parser = vte::Parser::new();
+    let mut stripper = Stripper {
+        result: String::with_capacity(s.len()),
+    };
+    parser.advance(&mut stripper, s.as_bytes());
+    stripper.result
 }

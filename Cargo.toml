@@ -103,6 +103,7 @@ humanbyte = { version = "0.2", features = ["serde", "derive"] }
 humantime = "2"
 listeners = "0.5"
 derive_more = { version = "2.1.1", features = ["into", "display", "from", "deref", "as_ref"] }
+vte = { version = "0.15.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 exec = "0.3"

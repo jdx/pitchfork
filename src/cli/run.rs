@@ -1,4 +1,4 @@
-use crate::cli::logs::print_startup_logs;
+use crate::cli::logs::{collect_startup_logs, print_startup_logs_block};
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
@@ -109,11 +109,11 @@ impl Run {
         }
 
         // Show startup logs on success (unless --quiet)
-        if !self.quiet
-            && result.started
-            && let Err(e) = print_startup_logs(&daemon_id, result.start_time)
-        {
-            debug!("Failed to print startup logs: {e}");
+        if !self.quiet && result.started {
+            match collect_startup_logs(&daemon_id, result.start_time) {
+                Ok(lines) => print_startup_logs_block(&lines),
+                Err(e) => debug!("Failed to collect startup logs for {daemon_id}: {e}"),
+            }
         }
 
         Ok(())

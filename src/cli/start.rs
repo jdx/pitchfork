@@ -1,12 +1,12 @@
 use crate::Result;
 use crate::cli::list::build_proxy_url;
-use crate::cli::logs::print_startup_logs;
+use crate::cli::logs::{collect_startup_logs, print_startup_logs_block};
 use crate::daemon_id::DaemonId;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
-use crate::ui::style::{nbold, ncyan, ndim, nstyle};
+use crate::ui::style::{ncyan, ndim, nstyle};
 use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
@@ -145,10 +145,14 @@ impl Start {
 
         // Show startup logs for successful daemons (unless --quiet)
         if !self.quiet {
+            let all_ids: Vec<&DaemonId> = result.started.iter().map(|(id, _, _)| id).collect();
+            let mut all_log_lines = vec![];
             for (id, start_time, resolved_ports) in &result.started {
-                if let Err(e) = print_startup_logs(id, *start_time) {
-                    debug!("Failed to print startup logs for {id}: {e}");
+                match collect_startup_logs(id, *start_time) {
+                    Ok(lines) => all_log_lines.extend(lines),
+                    Err(e) => debug!("Failed to collect startup logs for {id}: {e}"),
                 }
+                let display_name = id.styled_display_name(Some(all_ids.iter().copied()));
                 if !resolved_ports.is_empty() {
                     let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
                     let port_label = if resolved_ports.len() == 1 {
@@ -157,14 +161,14 @@ impl Start {
                         "ports"
                     };
                     println!(
-                        "  {} {} started on {} {}",
+                        "{} {} started on {} {}",
                         nstyle("✔").green(),
-                        nbold(id),
+                        display_name,
                         port_label,
                         ncyan(&port_str),
                     );
                 } else {
-                    println!("  {} {} started", nstyle("✔").green(), nbold(id));
+                    println!("{} {} started", nstyle("✔").green(), display_name);
                 }
                 // Show proxy URL when the proxy is enabled and the daemon has a port.
                 let s = settings();
@@ -172,10 +176,11 @@ impl Start {
                     let slug_name =
                         PitchforkToml::find_slug_for_daemon_in_registry(id, &global_slugs);
                     if let Some(proxy_url) = build_proxy_url(slug_name.as_deref(), s) {
-                        println!("    {} {}", ndim("↳"), ncyan(&proxy_url).underlined(),);
+                        println!("  {} {}", ndim("↳"), ncyan(&proxy_url).underlined(),);
                     }
                 }
             }
+            print_startup_logs_block(&all_log_lines);
         }
 
         // Surface any pending supervisor notifications (e.g. proxy bind failure)

@@ -4,7 +4,7 @@ auto = ["start", "stop"]
 retry = 0
 ready_output = "http://localhost:"
 port = { expect = [5173], bump = 10 }
-
+pty = true
 
 [settings.proxy]
 enable = true

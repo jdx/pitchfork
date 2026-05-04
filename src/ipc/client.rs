@@ -271,7 +271,7 @@ impl IpcClient {
 
         match rsp {
             IpcResponse::DaemonStart { daemon } => {
-                info!("Started {}", daemon.id);
+                debug!("Started {}", daemon.id);
                 Ok(RunResult {
                     started: true,
                     exit_code: None,
@@ -280,7 +280,7 @@ impl IpcClient {
                 })
             }
             IpcResponse::DaemonReady { daemon } => {
-                info!("Started {}", daemon.id);
+                debug!("Started {}", daemon.id);
                 Ok(RunResult {
                     started: true,
                     exit_code: None,

@@ -23,6 +23,9 @@
         "current",
         "glibc"
       ]
+    },
+    "allowBuilds": {
+      "esbuild": true
     }
   }
 }
