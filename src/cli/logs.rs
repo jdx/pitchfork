@@ -10,7 +10,7 @@ use itertools::Itertools;
 use miette::IntoDiagnostic;
 use notify::RecursiveMode;
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -1126,8 +1126,15 @@ pub async fn tail_logs(names: &[DaemonId]) -> Result<()> {
         Duration::from_millis(500),
     )?;
 
+    // Watch parent directories instead of files directly.
+    // FSEvents on macOS handles directory watches more reliably than single-file
+    // watches, which can miss modification events in practice.
+    let mut watched = HashSet::new();
     for lf in log_files.values() {
-        wf.watch(&lf.path, RecursiveMode::NonRecursive)?;
+        let dir = lf.path.parent().unwrap_or(&lf.path);
+        if watched.insert(dir.to_path_buf()) {
+            wf.watch(dir, RecursiveMode::NonRecursive)?;
+        }
     }
 
     let files_to_name: HashMap<PathBuf, DaemonId> = log_files
