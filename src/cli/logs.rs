@@ -357,9 +357,10 @@ impl Logs {
             None
         };
 
-        self.print_existing_logs(&resolved_ids, from, to)?;
+        let single_daemon = resolved_ids.len() == 1;
+        self.print_existing_logs(&resolved_ids, from, to, single_daemon)?;
         if self.tail {
-            tail_logs(&resolved_ids).await?;
+            tail_logs(&resolved_ids, single_daemon).await?;
         }
 
         Ok(())
@@ -370,10 +371,10 @@ impl Logs {
         resolved_ids: &[DaemonId],
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
+        single_daemon: bool,
     ) -> Result<()> {
         let log_files = get_log_file_infos(resolved_ids)?;
         trace!("log files for: {}", log_files.keys().join(", "));
-        let single_daemon = resolved_ids.len() == 1;
         let has_time_filter = from.is_some() || to.is_some();
 
         if has_time_filter {
@@ -1118,7 +1119,7 @@ fn get_log_file_infos(names: &[DaemonId]) -> Result<BTreeMap<DaemonId, LogFile>>
     Ok(out)
 }
 
-pub async fn tail_logs(names: &[DaemonId]) -> Result<()> {
+pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
     let mut log_files = get_log_file_infos(names)?;
     let mut wf = WatchFiles::new(
         Duration::from_millis(10),
@@ -1166,7 +1167,7 @@ pub async fn tail_logs(names: &[DaemonId]) -> Result<()> {
             .sorted_by_cached_key(|l| l.0.to_string())
             .collect_vec();
         for (date, name, msg) in out {
-            println!("{} {} {}", edim(&date), name, msg);
+            println!("{}", format_log_line(&date, &name, &msg, single_daemon, false));
         }
     }
     Ok(())
