@@ -129,8 +129,41 @@ impl BootManager {
 
     /// Whether a registration at the *other* privilege level exists.
     /// Used to warn the user about cross-level mismatches.
+    /// On macOS, includes legacy entries for non-root callers (they are at a
+    /// different privilege level) but not for root callers (legacy is same level).
     pub fn is_other_level_enabled(&self) -> Result<bool> {
-        self.other.is_enabled().into_diagnostic()
+        #[cfg(target_os = "macos")]
+        return Ok(self.other.is_enabled().into_diagnostic()?
+            || (!nix::unistd::Uid::effective().is_root()
+                && self.legacy.is_enabled().into_diagnostic()?));
+
+        #[cfg(not(target_os = "macos"))]
+        Ok(self.other.is_enabled().into_diagnostic()?)
+    }
+
+    /// Remove legacy macOS LaunchAgentSystem entry if present and caller is root.
+    /// Idempotent — safe to call on every enable path, including retries after
+    /// partial migration (new entry written but legacy removal failed).
+    ///
+    /// `migrated`: true when called after writing a new LaunchDaemonSystem entry
+    /// (full migration); false when just removing a stale leftover.
+    #[cfg(target_os = "macos")]
+    pub fn cleanup_legacy(&self, migrated: bool) -> Result<()> {
+        if nix::unistd::Uid::effective().is_root()
+            && self.legacy.is_enabled().into_diagnostic()?
+        {
+            self.legacy.disable().into_diagnostic()?;
+            if migrated {
+                info!(
+                    "migrated legacy system-level launch entry from /Library/LaunchAgents/ to /Library/LaunchDaemons/"
+                );
+            } else {
+                info!(
+                    "removed legacy system-level launch entry from /Library/LaunchAgents/"
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Register at the current privilege level.
@@ -141,7 +174,19 @@ impl BootManager {
     /// On macOS, migrates any legacy LaunchAgentSystem entry (from pre-1.0.3)
     /// to the correct LaunchDaemonSystem entry.
     pub fn enable(&self) -> Result<()> {
-        if self.other.is_enabled().into_diagnostic()? {
+        // For root, legacy will be migrated so only check non-legacy other level.
+        // For non-root, legacy cannot be migrated and is also a conflict.
+        #[cfg(target_os = "macos")]
+        let other_conflict = if nix::unistd::Uid::effective().is_root() {
+            self.other.is_enabled().into_diagnostic()?
+        } else {
+            self.is_other_level_enabled()?
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let other_conflict = self.other.is_enabled().into_diagnostic()?;
+
+        if other_conflict {
             miette::bail!(
                 "boot start is already registered at the other privilege level; \
                 run `pitchfork boot disable` (with appropriate privileges) to remove \
@@ -149,31 +194,20 @@ impl BootManager {
             );
         }
 
-        // Migrate legacy macOS LaunchAgentSystem entry to LaunchDaemonSystem.
-        // Only root can modify /Library/LaunchAgents/, so skip migration otherwise.
-        // Write the new entry first so at least one valid entry always exists
-        // if the new entry fails to register.
-        #[cfg(target_os = "macos")]
-        let migrated_legacy = nix::unistd::Uid::effective().is_root()
-            && self.legacy.is_enabled().into_diagnostic()?;
-
         self.current.enable().into_diagnostic()?;
 
         #[cfg(target_os = "macos")]
-        if migrated_legacy {
-            self.legacy.disable().into_diagnostic()?;
-            info!(
-                "migrated legacy system-level launch entry from /Library/LaunchAgents/ to /Library/LaunchDaemons/"
-            );
-        }
+        self.cleanup_legacy(true)?;
 
         Ok(())
     }
 
     /// Remove registrations at *both* levels so cross-level leftovers are also
-    /// cleaned up. Also removes legacy macOS LaunchAgentSystem entries.
+    /// cleaned up. Also removes legacy macOS LaunchAgentSystem entries when
+    /// running as root. Returns Ok even if some entries could not be removed
+    /// due to insufficient privileges — callers should check is_enabled()
+    /// afterwards to detect incomplete cleanup.
     pub fn disable(&self) -> Result<()> {
-        // Only disable if registered; propagate real errors (e.g. permission denied).
         if self.current.is_enabled().into_diagnostic()? {
             self.current.disable().into_diagnostic()?;
         }

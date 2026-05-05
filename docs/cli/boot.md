@@ -10,7 +10,7 @@ boots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).
 
 When run as root (or via sudo), registers a system-level entry that starts
 pitchfork for all users:
-  macOS: /Library/LaunchAgents/pitchfork.plist
+  macOS: /Library/LaunchDaemons/pitchfork.plist
   Linux: /etc/systemd/system/pitchfork.service
 
 When run as a normal user, registers a user-level entry:
