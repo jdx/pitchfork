@@ -122,3 +122,9 @@ tempfile = "3"
 
 [profile.dev]
 debug = 1
+
+[profile.serious]
+inherits = "release"
+lto = true
+strip = true
+codegen-units = 1

@@ -64,6 +64,7 @@ jobs:
           target: ${{ matrix.target }}
           ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          profile: serious
           codesign: "Developer ID Application: Jeffrey Dickey (4993Y37DX6)"
           codesign_prefix: dev.jdx.
       - name: Upload binary (Linux, via cross)
@@ -74,6 +75,7 @@ jobs:
           target: ${{ matrix.target }}
           ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          profile: serious
           build-tool: cross
       - name: Upload binary (Windows)
         if: startsWith(matrix.os, 'windows')
@@ -83,6 +85,7 @@ jobs:
           target: ${{ matrix.target }}
           ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          profile: serious
 
   publish-release:
     needs: [upload-assets]
