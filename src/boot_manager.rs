@@ -138,7 +138,7 @@ impl BootManager {
                 && self.legacy.is_enabled().into_diagnostic()?));
 
         #[cfg(not(target_os = "macos"))]
-        Ok(self.other.is_enabled().into_diagnostic()?)
+        self.other.is_enabled().into_diagnostic()
     }
 
     /// Remove legacy macOS LaunchAgentSystem entry if present and caller is root.
@@ -149,18 +149,14 @@ impl BootManager {
     /// (full migration); false when just removing a stale leftover.
     #[cfg(target_os = "macos")]
     pub fn cleanup_legacy(&self, migrated: bool) -> Result<()> {
-        if nix::unistd::Uid::effective().is_root()
-            && self.legacy.is_enabled().into_diagnostic()?
-        {
+        if nix::unistd::Uid::effective().is_root() && self.legacy.is_enabled().into_diagnostic()? {
             self.legacy.disable().into_diagnostic()?;
             if migrated {
                 info!(
                     "migrated legacy system-level launch entry from /Library/LaunchAgents/ to /Library/LaunchDaemons/"
                 );
             } else {
-                info!(
-                    "removed legacy system-level launch entry from /Library/LaunchAgents/"
-                );
+                info!("removed legacy system-level launch entry from /Library/LaunchAgents/");
             }
         }
         Ok(())
@@ -215,9 +211,7 @@ impl BootManager {
             self.other.disable().into_diagnostic()?;
         }
         #[cfg(target_os = "macos")]
-        if nix::unistd::Uid::effective().is_root()
-            && self.legacy.is_enabled().into_diagnostic()?
-        {
+        if nix::unistd::Uid::effective().is_root() && self.legacy.is_enabled().into_diagnostic()? {
             self.legacy.disable().into_diagnostic()?;
         }
         Ok(())
