@@ -32,6 +32,10 @@ pub struct BootManager {
     current: AutoLaunch,
     /// The other level's launcher (used to detect cross-level registrations).
     other: AutoLaunch,
+    /// Legacy macOS LaunchAgentSystem entry (pre-1.0.3 used /Library/LaunchAgents/
+    /// instead of /Library/LaunchDaemons/ for root). Kept only for migration/cleanup.
+    #[cfg(target_os = "macos")]
+    legacy: AutoLaunch,
 }
 
 impl BootManager {
@@ -39,22 +43,23 @@ impl BootManager {
         let app_path = env::PITCHFORK_BIN.to_string_lossy().to_string();
 
         #[cfg(target_os = "macos")]
-        let (current, other) = {
+        let (current, other, legacy) = {
             let is_root = nix::unistd::Uid::effective().is_root();
             let (current_mode, other_mode) = if is_root {
                 (
-                    MacOSLaunchMode::LaunchAgentSystem,
+                    MacOSLaunchMode::LaunchDaemonSystem,
                     MacOSLaunchMode::LaunchAgentUser,
                 )
             } else {
                 (
                     MacOSLaunchMode::LaunchAgentUser,
-                    MacOSLaunchMode::LaunchAgentSystem,
+                    MacOSLaunchMode::LaunchDaemonSystem,
                 )
             };
             (
                 build_launcher(&app_path, current_mode)?,
                 build_launcher(&app_path, other_mode)?,
+                build_launcher(&app_path, MacOSLaunchMode::LaunchAgentSystem)?,
             )
         };
 
@@ -94,11 +99,25 @@ impl BootManager {
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         compile_error!("pitchfork boot management is only supported on macOS, Linux, and Windows");
 
+        #[cfg(target_os = "macos")]
+        return Ok(Self {
+            current,
+            other,
+            legacy,
+        });
+
+        #[cfg(not(target_os = "macos"))]
         Ok(Self { current, other })
     }
 
     /// Whether any registration (user- or system-level) exists.
     pub fn is_enabled(&self) -> Result<bool> {
+        #[cfg(target_os = "macos")]
+        return Ok(self.current.is_enabled().into_diagnostic()?
+            || self.other.is_enabled().into_diagnostic()?
+            || self.legacy.is_enabled().into_diagnostic()?);
+
+        #[cfg(not(target_os = "macos"))]
         Ok(self.current.is_enabled().into_diagnostic()?
             || self.other.is_enabled().into_diagnostic()?)
     }
@@ -118,6 +137,9 @@ impl BootManager {
     ///
     /// Returns an error if a registration at the other privilege level already
     /// exists, preventing user-level and system-level entries from coexisting.
+    ///
+    /// On macOS, migrates any legacy LaunchAgentSystem entry (from pre-1.0.3)
+    /// to the correct LaunchDaemonSystem entry.
     pub fn enable(&self) -> Result<()> {
         if self.other.is_enabled().into_diagnostic()? {
             miette::bail!(
@@ -126,11 +148,30 @@ impl BootManager {
                 it first"
             );
         }
-        self.current.enable().into_diagnostic()
+
+        // Migrate legacy macOS LaunchAgentSystem entry to LaunchDaemonSystem.
+        // Only root can modify /Library/LaunchAgents/, so skip migration otherwise.
+        // Write the new entry first so at least one valid entry always exists
+        // if the new entry fails to register.
+        #[cfg(target_os = "macos")]
+        let migrated_legacy = nix::unistd::Uid::effective().is_root()
+            && self.legacy.is_enabled().into_diagnostic()?;
+
+        self.current.enable().into_diagnostic()?;
+
+        #[cfg(target_os = "macos")]
+        if migrated_legacy {
+            self.legacy.disable().into_diagnostic()?;
+            info!(
+                "migrated legacy system-level launch entry from /Library/LaunchAgents/ to /Library/LaunchDaemons/"
+            );
+        }
+
+        Ok(())
     }
 
     /// Remove registrations at *both* levels so cross-level leftovers are also
-    /// cleaned up.
+    /// cleaned up. Also removes legacy macOS LaunchAgentSystem entries.
     pub fn disable(&self) -> Result<()> {
         // Only disable if registered; propagate real errors (e.g. permission denied).
         if self.current.is_enabled().into_diagnostic()? {
@@ -138,6 +179,12 @@ impl BootManager {
         }
         if self.other.is_enabled().into_diagnostic()? {
             self.other.disable().into_diagnostic()?;
+        }
+        #[cfg(target_os = "macos")]
+        if nix::unistd::Uid::effective().is_root()
+            && self.legacy.is_enabled().into_diagnostic()?
+        {
+            self.legacy.disable().into_diagnostic()?;
         }
         Ok(())
     }
