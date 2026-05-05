@@ -3,10 +3,7 @@ run = "mise run -q docs"
 auto = ["start", "stop"]
 retry = 0
 ready_output = "http://localhost:"
-
-[daemons.docs.port]
-expect = [5173]
-bump = 10
+port = { expect = [5173], bump = 10 }
 
 
 [settings.proxy]

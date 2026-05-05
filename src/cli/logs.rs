@@ -1,16 +1,14 @@
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::{PitchforkToml, WatchMode};
+use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
-use crate::ui::style::edim;
-use crate::watch_files::WatchFiles;
+use crate::ui::style::{edim, ndim};
 use crate::{Result, env};
 use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeZone, Timelike};
 use console;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use notify::RecursiveMode;
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeSet, BinaryHeap};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -55,12 +53,15 @@ impl PagerConfig {
 
 /// Format a single log line for output.
 /// When `single_daemon` is true, omits the daemon ID from the output.
+/// `id_width` is the display width used to pad the daemon name column
+/// so messages line up vertically across different daemon names.
 /// When `strip_ansi` is true, strips ANSI escape codes from the message.
 fn format_log_line(
     date: &str,
     id: &str,
     msg: &str,
     single_daemon: bool,
+    id_width: usize,
     strip_ansi: bool,
 ) -> String {
     let msg = if strip_ansi {
@@ -69,10 +70,30 @@ fn format_log_line(
         msg.to_string()
     };
     if single_daemon {
-        format!("{} {}", edim(date), msg)
+        format!("{} {}", ndim(date), msg)
     } else {
-        format!("{} {} {}", edim(date), id, msg)
+        format!("{} {:id_width$}  {}", ndim(date), dimmed_id(id), msg)
     }
+}
+
+/// Return a dimmed, colorized daemon ID string for display.
+/// Each daemon gets a deterministic color via FNV-1a hash so that
+/// multiple daemons are visually distinguishable while remaining subtle.
+fn dimmed_id(id: &str) -> String {
+    let colors = [
+        (180, 120, 120), // dim red
+        (180, 160, 100), // dim yellow
+        (120, 180, 120), // dim green
+        (120, 180, 180), // dim cyan
+        (180, 120, 180), // dim magenta
+        (120, 160, 180), // dim blue
+    ];
+    let mut h: usize = 0x811C_9DC5; // FNV offset basis
+    for b in id.bytes() {
+        h = h.wrapping_mul(0x0100_0193).wrapping_add(b as usize);
+    }
+    let (r, g, b) = colors[h % colors.len()];
+    format!("\x1b[2;38;2;{};{};{}m{}\x1b[0m", r, g, b, id)
 }
 
 /// A parsed log entry with timestamp, daemon name, and message
@@ -373,12 +394,24 @@ impl Logs {
         to: Option<DateTime<Local>>,
         single_daemon: bool,
     ) -> Result<()> {
-        let log_files = get_log_file_infos(resolved_ids)?;
-        trace!("log files for: {}", log_files.keys().join(", "));
+        let valid_ids: Vec<DaemonId> = resolved_ids
+            .iter()
+            .filter(|id| id.log_path().exists())
+            .cloned()
+            .collect();
+        let id_width = valid_ids
+            .iter()
+            .map(|id| id.qualified().len())
+            .max()
+            .unwrap_or(0);
+        trace!(
+            "log files for: {}",
+            valid_ids.iter().map(|id| id.qualified()).join(", ")
+        );
         let has_time_filter = from.is_some() || to.is_some();
 
         if has_time_filter {
-            let mut log_lines = self.collect_log_lines_forward(&log_files, from, to)?;
+            let mut log_lines = self.collect_log_lines_forward(&valid_ids, from, to)?;
 
             if let Some(n) = self.n {
                 let len = log_lines.len();
@@ -387,12 +420,24 @@ impl Logs {
                 }
             }
 
-            self.output_logs(log_lines, single_daemon, has_time_filter, self.raw)?;
+            self.output_logs(
+                log_lines,
+                single_daemon,
+                id_width,
+                has_time_filter,
+                self.raw,
+            )?;
         } else if let Some(n) = self.n {
-            let log_lines = self.collect_log_lines_reverse(&log_files, Some(n))?;
-            self.output_logs(log_lines, single_daemon, has_time_filter, self.raw)?;
+            let log_lines = self.collect_log_lines_reverse(&valid_ids, Some(n))?;
+            self.output_logs(
+                log_lines,
+                single_daemon,
+                id_width,
+                has_time_filter,
+                self.raw,
+            )?;
         } else {
-            self.stream_logs_to_pager(&log_files, single_daemon, self.raw)?;
+            self.stream_logs_to_pager(&valid_ids, single_daemon, id_width, self.raw)?;
         }
 
         Ok(())
@@ -400,21 +445,22 @@ impl Logs {
 
     fn collect_log_lines_forward(
         &self,
-        log_files: &BTreeMap<DaemonId, LogFile>,
+        ids: &[DaemonId],
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
     ) -> Result<Vec<(String, String, String)>> {
-        let log_lines: Vec<(String, String, String)> = log_files
+        let log_lines: Vec<(String, String, String)> = ids
             .iter()
-            .flat_map(
-                |(name, lf)| match read_lines_in_time_range(&lf.path, from, to) {
-                    Ok(lines) => merge_log_lines(&name.qualified(), lines, false),
+            .flat_map(|id| {
+                let path = id.log_path();
+                match read_lines_in_time_range(&path, from, to) {
+                    Ok(lines) => merge_log_lines(&id.qualified(), lines, false),
                     Err(e) => {
-                        error!("{}: {}", lf.path.display(), e);
+                        error!("{}: {}", path.display(), e);
                         vec![]
                     }
-                },
-            )
+                }
+            })
             .sorted_by_cached_key(|l| l.0.to_string())
             .collect_vec();
 
@@ -423,16 +469,17 @@ impl Logs {
 
     fn collect_log_lines_reverse(
         &self,
-        log_files: &BTreeMap<DaemonId, LogFile>,
+        ids: &[DaemonId],
         limit: Option<usize>,
     ) -> Result<Vec<(String, String, String)>> {
-        let log_lines: Vec<(String, String, String)> = log_files
+        let log_lines: Vec<(String, String, String)> = ids
             .iter()
-            .flat_map(|(daemon_id, lf)| {
-                let rev = match xx::file::open(&lf.path) {
+            .flat_map(|id| {
+                let path = id.log_path();
+                let rev = match xx::file::open(&path) {
                     Ok(f) => rev_lines::RevLines::new(f),
                     Err(e) => {
-                        error!("{}: {}", lf.path.display(), e);
+                        error!("{}: {}", path.display(), e);
                         return vec![];
                     }
                 };
@@ -441,7 +488,7 @@ impl Logs {
                     Some(n) => lines.take(n).collect_vec(),
                     None => lines.collect_vec(),
                 };
-                merge_log_lines(&daemon_id.qualified(), lines, true)
+                merge_log_lines(&id.qualified(), lines, true)
             })
             .sorted_by_cached_key(|l| l.0.to_string())
             .collect_vec();
@@ -465,6 +512,7 @@ impl Logs {
         &self,
         log_lines: Vec<(String, String, String)>,
         single_daemon: bool,
+        id_width: usize,
         has_time_filter: bool,
         raw: bool,
     ) -> Result<()> {
@@ -477,16 +525,8 @@ impl Logs {
         // Raw mode: output without formatting and without pager
         if raw {
             for (date, id, msg) in log_lines {
-                let msg = if strip_ansi {
-                    console::strip_ansi_codes(&msg).to_string()
-                } else {
-                    msg
-                };
-                if single_daemon {
-                    println!("{date} {msg}");
-                } else {
-                    println!("{date} {id} {msg}");
-                }
+                let line = format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi);
+                println!("{line}");
             }
             return Ok(());
         }
@@ -494,12 +534,18 @@ impl Logs {
         let use_pager = !self.no_pager && should_use_pager(log_lines.len());
 
         if use_pager {
-            self.output_with_pager(log_lines, single_daemon, has_time_filter, strip_ansi)?;
+            self.output_with_pager(
+                log_lines,
+                single_daemon,
+                id_width,
+                has_time_filter,
+                strip_ansi,
+            )?;
         } else {
             for (date, id, msg) in log_lines {
                 println!(
                     "{}",
-                    format_log_line(&date, &id, &msg, single_daemon, strip_ansi)
+                    format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
                 );
             }
         }
@@ -511,6 +557,7 @@ impl Logs {
         &self,
         log_lines: Vec<(String, String, String)>,
         single_daemon: bool,
+        id_width: usize,
         has_time_filter: bool,
         strip_ansi: bool,
     ) -> Result<()> {
@@ -523,7 +570,7 @@ impl Logs {
                     for (date, id, msg) in log_lines {
                         let line = format!(
                             "{}\n",
-                            format_log_line(&date, &id, &msg, single_daemon, strip_ansi)
+                            format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
                         );
                         if stdin.write_all(line.as_bytes()).is_err() {
                             break;
@@ -535,7 +582,7 @@ impl Logs {
                     for (date, id, msg) in log_lines {
                         println!(
                             "{}",
-                            format_log_line(&date, &id, &msg, single_daemon, strip_ansi)
+                            format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
                         );
                     }
                 }
@@ -545,7 +592,7 @@ impl Logs {
                 for (date, id, msg) in log_lines {
                     println!(
                         "{}",
-                        format_log_line(&date, &id, &msg, single_daemon, strip_ansi)
+                        format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
                     );
                 }
             }
@@ -556,14 +603,15 @@ impl Logs {
 
     fn stream_logs_to_pager(
         &self,
-        log_files: &BTreeMap<DaemonId, LogFile>,
+        ids: &[DaemonId],
         single_daemon: bool,
+        id_width: usize,
         raw: bool,
     ) -> Result<()> {
         let strip_ansi = raw || !console::colors_enabled();
 
         if !io::stdout().is_terminal() || self.no_pager || self.tail || raw {
-            return self.stream_logs_direct(log_files, single_daemon, raw, strip_ansi);
+            return self.stream_logs_direct(ids, single_daemon, id_width, raw, strip_ansi);
         }
 
         let pager_config = PagerConfig::new(true); // start_at_end = true
@@ -572,20 +620,21 @@ impl Logs {
             Ok(mut child) => {
                 if let Some(stdin) = child.stdin.take() {
                     // Collect file info for the streaming thread
-                    let log_files_clone: Vec<_> = log_files
+                    let file_infos: Vec<_> = ids
                         .iter()
-                        .map(|(daemon_id, lf)| (daemon_id.qualified(), lf.path.clone()))
+                        .map(|id| (id.qualified(), id.log_path()))
                         .collect();
                     let single_daemon_clone = single_daemon;
                     let strip_ansi_clone = strip_ansi;
+                    let id_width_clone = id_width;
 
                     // Stream logs using a background thread to avoid blocking
                     std::thread::spawn(move || {
                         let mut writer = BufWriter::new(stdin);
 
                         // Single file: stream directly without merge overhead
-                        if log_files_clone.len() == 1 {
-                            let (name, path) = &log_files_clone[0];
+                        if file_infos.len() == 1 {
+                            let (name, path) = &file_infos[0];
                             let file = match File::open(path) {
                                 Ok(f) => f,
                                 Err(_) => return,
@@ -599,6 +648,7 @@ impl Logs {
                                         name,
                                         &message,
                                         single_daemon_clone,
+                                        id_width_clone,
                                         strip_ansi_clone
                                     )
                                 );
@@ -614,7 +664,7 @@ impl Logs {
                         let mut merger: StreamingMerger<StreamingLogParser> =
                             StreamingMerger::new();
 
-                        for (name, path) in log_files_clone {
+                        for (name, path) in file_infos {
                             let file = match File::open(&path) {
                                 Ok(f) => f,
                                 Err(_) => continue,
@@ -635,6 +685,7 @@ impl Logs {
                                     &daemon,
                                     &message,
                                     single_daemon_clone,
+                                    id_width_clone,
                                     strip_ansi_clone
                                 )
                             );
@@ -649,12 +700,12 @@ impl Logs {
                     let _ = child.wait();
                 } else {
                     debug!("Failed to get pager stdin, falling back to direct output");
-                    return self.stream_logs_direct(log_files, single_daemon, raw, strip_ansi);
+                    return self.stream_logs_direct(ids, single_daemon, id_width, raw, strip_ansi);
                 }
             }
             Err(e) => {
                 debug!("Failed to spawn pager: {e}, falling back to direct output");
-                return self.stream_logs_direct(log_files, single_daemon, raw, strip_ansi);
+                return self.stream_logs_direct(ids, single_daemon, id_width, raw, strip_ansi);
             }
         }
 
@@ -663,19 +714,21 @@ impl Logs {
 
     fn stream_logs_direct(
         &self,
-        log_files: &BTreeMap<DaemonId, LogFile>,
+        ids: &[DaemonId],
         single_daemon: bool,
+        id_width: usize,
         raw: bool,
         strip_ansi: bool,
     ) -> Result<()> {
         // Fast path for single daemon: directly output file content without parsing
         // This avoids expensive regex parsing for each line in large log files
-        if log_files.len() == 1 {
-            let (daemon_id, lf) = log_files.iter().next().unwrap();
-            let file = match File::open(&lf.path) {
+        if ids.len() == 1 {
+            let daemon_id = &ids[0];
+            let path = daemon_id.log_path();
+            let file = match File::open(&path) {
                 Ok(f) => f,
                 Err(e) => {
-                    error!("{}: {}", lf.path.display(), e);
+                    error!("{}: {}", path.display(), e);
                     return Ok(());
                 }
             };
@@ -701,7 +754,7 @@ impl Logs {
                 }
             } else {
                 // Formatted mode: parse and format each line
-                let parser = StreamingLogParser::new(File::open(&lf.path).into_diagnostic()?);
+                let parser = StreamingLogParser::new(File::open(&path).into_diagnostic()?);
                 for (timestamp, message) in parser {
                     let output = format!(
                         "{}\n",
@@ -710,6 +763,7 @@ impl Logs {
                             &daemon_id.qualified(),
                             &message,
                             single_daemon,
+                            id_width,
                             strip_ansi
                         )
                     );
@@ -724,16 +778,17 @@ impl Logs {
         // Multiple daemons: use streaming merger for sorted output
         let mut merger: StreamingMerger<StreamingLogParser> = StreamingMerger::new();
 
-        for (daemon_id, lf) in log_files {
-            let file = match File::open(&lf.path) {
+        for id in ids {
+            let path = id.log_path();
+            let file = match File::open(&path) {
                 Ok(f) => f,
                 Err(e) => {
-                    error!("{}: {}", lf.path.display(), e);
+                    error!("{}: {}", path.display(), e);
                     continue;
                 }
             };
             let parser = StreamingLogParser::new(file);
-            merger.add_source(daemon_id.qualified(), parser);
+            merger.add_source(id.qualified(), parser);
         }
 
         // Initialize the heap with first entry from each source
@@ -741,23 +796,17 @@ impl Logs {
 
         // Stream merged entries to stdout
         for (timestamp, daemon, message) in merger {
-            let output = if raw {
-                let message = if strip_ansi {
-                    console::strip_ansi_codes(&message).to_string()
-                } else {
-                    message
-                };
-                if single_daemon {
-                    format!("{timestamp} {message}\n")
-                } else {
-                    format!("{timestamp} {daemon} {message}\n")
-                }
-            } else {
-                format!(
-                    "{}\n",
-                    format_log_line(&timestamp, &daemon, &message, single_daemon, strip_ansi)
+            let output = format!(
+                "{}\n",
+                format_log_line(
+                    &timestamp,
+                    &daemon,
+                    &message,
+                    single_daemon,
+                    id_width,
+                    strip_ansi
                 )
-            };
+            );
             if io::stdout().write_all(output.as_bytes()).is_err() {
                 return Ok(());
             }
@@ -1088,96 +1137,78 @@ fn get_all_daemon_ids() -> Result<Vec<DaemonId>> {
         .collect())
 }
 
-fn get_log_file_infos(names: &[DaemonId]) -> Result<BTreeMap<DaemonId, LogFile>> {
-    let mut out = BTreeMap::new();
-
-    for daemon_id in names {
-        let path = daemon_id.log_path();
-
-        // Directory may exist before the first log line is written.
-        if !path.exists() {
-            continue;
-        }
-
-        let mut file = xx::file::open(&path)?;
-        // Seek to end and get position atomically to avoid race condition
-        // where content is written between metadata check and file open
-        file.seek(SeekFrom::End(0)).into_diagnostic()?;
-        let cur = file.stream_position().into_diagnostic()?;
-
-        out.insert(
-            daemon_id.clone(),
-            LogFile {
-                _name: daemon_id.clone(),
-                file,
-                cur,
-                path,
-            },
-        );
-    }
-
-    Ok(out)
-}
-
 pub async fn tail_logs(names: &[DaemonId], single_daemon: bool) -> Result<()> {
-    let mut log_files = get_log_file_infos(names)?;
-    let mut wf = WatchFiles::new(
-        Duration::from_millis(10),
-        WatchMode::Native,
-        Duration::from_millis(500),
-    )?;
-
-    // Watch parent directories instead of files directly.
-    // FSEvents on macOS handles directory watches more reliably than single-file
-    // watches, which can miss modification events in practice.
-    let mut watched = HashSet::new();
-    for lf in log_files.values() {
-        let dir = lf.path.parent().unwrap_or(&lf.path);
-        if watched.insert(dir.to_path_buf()) {
-            wf.watch(dir, RecursiveMode::NonRecursive)?;
-        }
-    }
-
-    let files_to_name: HashMap<PathBuf, DaemonId> = log_files
+    // Poll each log file in a loop instead of using file-system event watchers.
+    //
+    // Why polling:
+    // - Real-time enough: 200ms interval is imperceptible for human consumption,
+    //   and comparable to what `tail -f` provides.
+    // - No long-running overhead: `logs --tail` runs in the foreground with the
+    //   user watching output; the polling stops when the process exits.
+    // - Cross-platform reliable: avoids edge cases in notify/FSEvents where events
+    //   can be missed when the writer uses buffered I/O.
+    let id_width = names
         .iter()
-        .map(|(n, f)| (f.path.clone(), n.clone()))
+        .map(|id| id.qualified().len())
+        .max()
+        .unwrap_or(0);
+
+    let mut states: Vec<(DaemonId, PathBuf, u64)> = names
+        .iter()
+        .filter_map(|id| {
+            let path = id.log_path();
+            if !path.exists() {
+                return None;
+            }
+            Some((id.clone(), path, 0u64))
+        })
         .collect();
 
-    while let Some(paths) = wf.rx.recv().await {
+    if states.is_empty() {
+        return Ok(());
+    }
+
+    let interval = tokio::time::interval(Duration::from_millis(200));
+    tokio::pin!(interval);
+
+    loop {
+        interval.tick().await;
+
         let mut out = vec![];
-        for path in paths {
-            let Some(name) = files_to_name.get(&path) else {
-                warn!("Unknown log file changed: {}", path.display());
-                continue;
+        for (id, path, pos) in &mut states {
+            // Reopen the file each iteration so log rotation (new inode) is detected.
+            let mut file = match fs::File::open(path) {
+                Ok(f) => f,
+                Err(_) => continue,
             };
-            let Some(info) = log_files.get_mut(name) else {
-                warn!("No log info for: {name}");
-                continue;
+
+            // If the file shrank (truncated/rotated), reset to beginning.
+            let file_size = match file.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
             };
-            info.file
-                .seek(SeekFrom::Start(info.cur))
-                .into_diagnostic()?;
-            let reader = BufReader::new(&info.file);
-            let lines = reader.lines().map_while(Result::ok).collect_vec();
-            info.cur = info.file.stream_position().into_diagnostic()?;
-            out.extend(merge_log_lines(&name.qualified(), lines, false));
+            let cur = if *pos > file_size { 0 } else { *pos };
+            file.seek(SeekFrom::Start(cur)).into_diagnostic()?;
+
+            let reader = BufReader::new(&file);
+            let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+            *pos = file.stream_position().into_diagnostic()?;
+            out.extend(merge_log_lines(&id.qualified(), lines, false));
         }
-        let out = out
-            .into_iter()
-            .sorted_by_cached_key(|l| l.0.to_string())
-            .collect_vec();
-        for (date, name, msg) in out {
-            println!("{}", format_log_line(&date, &name, &msg, single_daemon, false));
+
+        if !out.is_empty() {
+            let out = out
+                .into_iter()
+                .sorted_by_cached_key(|l| l.0.to_string())
+                .collect_vec();
+            for (date, name, msg) in out {
+                println!(
+                    "{}",
+                    format_log_line(&date, &name, &msg, single_daemon, id_width, false)
+                );
+            }
         }
     }
-    Ok(())
-}
-
-struct LogFile {
-    _name: DaemonId,
-    path: PathBuf,
-    file: fs::File,
-    cur: u64,
 }
 
 fn parse_datetime(s: &str) -> Result<DateTime<Local>> {
@@ -1268,9 +1299,6 @@ pub fn print_logs_for_time_range(
     from: DateTime<Local>,
     to: Option<DateTime<Local>>,
 ) -> Result<()> {
-    let daemon_ids = vec![daemon_id.clone()];
-    let log_files = get_log_file_infos(&daemon_ids)?;
-
     let from = from
         .with_nanosecond(0)
         .expect("0 is always valid for nanoseconds");
@@ -1279,19 +1307,18 @@ pub fn print_logs_for_time_range(
             .expect("0 is always valid for nanoseconds")
     });
 
-    let log_lines = log_files
-        .iter()
-        .flat_map(
-            |(daemon_id, lf)| match read_lines_in_time_range(&lf.path, Some(from), to) {
-                Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
-                Err(e) => {
-                    error!("{}: {}", lf.path.display(), e);
-                    vec![]
-                }
-            },
-        )
-        .sorted_by_cached_key(|l| l.0.to_string())
-        .collect_vec();
+    let path = daemon_id.log_path();
+    let log_lines = if path.exists() {
+        match read_lines_in_time_range(&path, Some(from), to) {
+            Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
+            Err(e) => {
+                error!("{}: {}", path.display(), e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
 
     if log_lines.is_empty() {
         eprintln!("No logs found for daemon '{daemon_id}' in the specified time range");
@@ -1307,26 +1334,22 @@ pub fn print_logs_for_time_range(
 }
 
 pub fn print_startup_logs(daemon_id: &DaemonId, from: DateTime<Local>) -> Result<()> {
-    let daemon_ids = vec![daemon_id.clone()];
-    let log_files = get_log_file_infos(&daemon_ids)?;
-
     let from = from
         .with_nanosecond(0)
         .expect("0 is always valid for nanoseconds");
 
-    let log_lines = log_files
-        .iter()
-        .flat_map(
-            |(daemon_id, lf)| match read_lines_in_time_range(&lf.path, Some(from), None) {
-                Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
-                Err(e) => {
-                    error!("{}: {}", lf.path.display(), e);
-                    vec![]
-                }
-            },
-        )
-        .sorted_by_cached_key(|l| l.0.to_string())
-        .collect_vec();
+    let path = daemon_id.log_path();
+    let log_lines = if path.exists() {
+        match read_lines_in_time_range(&path, Some(from), None) {
+            Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
+            Err(e) => {
+                error!("{}: {}", path.display(), e);
+                vec![]
+            }
+        }
+    } else {
+        vec![]
+    };
 
     if !log_lines.is_empty() {
         eprintln!("\n{} {} {}", edim("==="), edim("Startup logs"), edim("==="));
