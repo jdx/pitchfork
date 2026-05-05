@@ -1,6 +1,6 @@
 name pitchfork
 bin pitchfork
-version "2.9.1"
+version "2.10.0"
 about "Daemons with DX"
 usage "Usage: pitchfork <COMMAND>"
 cmd activate help="Activate pitchfork in your shell session" {

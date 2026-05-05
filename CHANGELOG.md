@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0](https://github.com/endevco/pitchfork/compare/v2.9.1...v2.10.0) - 2026-05-05
+
+### Added
+
+- refine startup / tailing logs display ([#420](https://github.com/endevco/pitchfork/pull/420))
+- *(proxy)* sync slug hosts ([#418](https://github.com/endevco/pitchfork/pull/418))
+- inject daemon running info to tera template ([#419](https://github.com/endevco/pitchfork/pull/419))
+
+### Fixed
+
+- *(boot-start)* use LaunchDaemon on MacOS ([#423](https://github.com/endevco/pitchfork/pull/423))
+
+### Other
+
+- *(build)* use serious profile to eliminate binary size ([#424](https://github.com/endevco/pitchfork/pull/424))
+- set dev profile debug to 1 ([#415](https://github.com/endevco/pitchfork/pull/415))
+
 ## [2.9.1](https://github.com/endevco/pitchfork/compare/v2.9.0...v2.9.1) - 2026-05-03
 
 ### Fixed
