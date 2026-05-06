@@ -63,6 +63,8 @@ const SLUG_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 /// Cached slug entry: pre-resolved namespace + daemon name for a slug.
 #[derive(Clone, Debug)]
 struct CachedSlugEntry {
+    /// The slug key as registered in config (needed for display in auto-start pages).
+    slug: String,
     /// Expected namespace derived from `entry.dir` (None if derivation failed).
     namespace: Option<String>,
     /// Daemon short name (defaults to slug name when not explicitly set).
@@ -96,6 +98,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
         entries.insert(
             slug.clone(),
             CachedSlugEntry {
+                slug: slug.clone(),
                 namespace: ns,
                 daemon_name,
                 dir: entry.dir.clone(),
@@ -132,10 +135,37 @@ async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugE
     new_entries
 }
 
-/// Look up a single slug in the cached table.
+/// Try to match a subdomain against a slug table, with optional wildcard fallback.
+///
+/// When `wildcard` is true and no exact match is found, progressively strips
+/// subdomain prefixes from the left until a match is found or no dots remain.
+/// For example, with slug "myapp" registered, `tenant.myapp` matches "myapp".
+fn wildcard_slug_lookup<'a>(
+    subdomain: &str,
+    entries: &'a std::collections::HashMap<String, CachedSlugEntry>,
+    wildcard: bool,
+) -> Option<&'a CachedSlugEntry> {
+    entries.get(subdomain).or_else(|| {
+        if !wildcard {
+            return None;
+        }
+        // "a.b.myapp" has dots at 1,3 → "b.myapp", "myapp"
+        subdomain
+            .match_indices('.')
+            .map(|(i, _)| &subdomain[i + 1..])
+            .find_map(|candidate| entries.get(candidate))
+    })
+}
+
+/// Look up a slug in the cached table.
+///
+/// With wildcard enabled (default), falls back to progressively shorter
+/// subdomain suffixes when an exact match is not found.  For example,
+/// `tenant.myapp` will match slug `myapp` if no slug named `tenant.myapp`
+/// exists.
 async fn cached_slug_lookup(subdomain: &str) -> Option<CachedSlugEntry> {
     let entries = get_cached_slugs().await;
-    entries.get(subdomain).cloned()
+    wildcard_slug_lookup(subdomain, &entries, settings().proxy.wildcard).cloned()
 }
 
 // ─── Auto-start deduplication ───────────────────────────────────────────────
@@ -1276,7 +1306,9 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
     match running_matches.as_slice() {
         [] => {
             // Daemon not running — try auto-start if enabled.
-            try_auto_start(&subdomain, &cached).await
+            // Use cached.slug (not subdomain) so wildcard matches show the
+            // actual slug name in the "Starting…" page, not the full subdomain.
+            try_auto_start(&cached.slug, &cached).await
         }
         [(_, d)] => {
             if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
@@ -1693,6 +1725,78 @@ mod tests {
             Some("api.myproject".to_string())
         );
         assert_eq!(strip_tld("other.com", "localhost"), None);
+    }
+
+    fn make_entry(name: &str) -> CachedSlugEntry {
+        CachedSlugEntry {
+            slug: name.to_string(),
+            namespace: None,
+            daemon_name: name.to_string(),
+            dir: std::path::PathBuf::from(format!("/tmp/{name}")),
+        }
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_exact_match() {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("myapp".to_string(), make_entry("myapp"));
+        // Exact match takes priority.
+        let result = wildcard_slug_lookup("myapp", &entries, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().daemon_name, "myapp");
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_subdomain_fallback() {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("myapp".to_string(), make_entry("myapp"));
+        // "tenant.myapp" falls back to "myapp".
+        let result = wildcard_slug_lookup("tenant.myapp", &entries, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().daemon_name, "myapp");
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_nested_fallback() {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("myapp".to_string(), make_entry("myapp"));
+        // "a.b.myapp" falls back to "myapp" through "b.myapp" → "myapp".
+        let result = wildcard_slug_lookup("a.b.myapp", &entries, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().daemon_name, "myapp");
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_no_match() {
+        let entries = std::collections::HashMap::new();
+        // Empty entries → no match.
+        let result = wildcard_slug_lookup("tenant.myapp", &entries, true);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_disabled() {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("myapp".to_string(), make_entry("myapp"));
+        // With wildcard disabled, "tenant.myapp" does NOT match "myapp".
+        let result = wildcard_slug_lookup("tenant.myapp", &entries, false);
+        assert!(result.is_none());
+        // But exact match still works.
+        let result = wildcard_slug_lookup("myapp", &entries, false);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_exact_beats_wildcard() {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("myapp".to_string(), make_entry("myapp"));
+        let mut tenant_entry = make_entry("tenant-daemon");
+        tenant_entry.slug = "tenant.myapp".to_string();
+        entries.insert("tenant.myapp".to_string(), tenant_entry);
+        // "tenant.myapp" should match the exact slug, not fall back to "myapp".
+        let result = wildcard_slug_lookup("tenant.myapp", &entries, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().daemon_name, "tenant-daemon");
     }
 
     #[cfg(feature = "proxy-tls")]

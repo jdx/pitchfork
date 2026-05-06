@@ -690,3 +690,23 @@ the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.
 Set to `false` to disable automatic hosts file management. You will need to
 configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS).
 """
+
+[proxy.wildcard]
+type = "Bool"
+env = "PITCHFORK_PROXY_WILDCARD"
+default = "true"
+description = "Enable wildcard subdomain matching for proxy routes"
+docs = """
+When enabled (default), requests for subdomains of a registered slug
+will fall back to the parent slug's daemon.
+
+For example, with slug "myapp":
+- `myapp.localhost` → exact match (always works)
+- `tenant.myapp.localhost` → wildcard fallback to "myapp"
+
+This is useful for multi-tenant apps where each tenant gets a unique
+subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but
+all share the same backend server.
+
+Set to `false` to require exact hostname matches only.
+"""

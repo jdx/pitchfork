@@ -652,6 +652,13 @@
             "string",
             "null"
           ]
+        },
+        "wildcard": {
+          "description": "Enable wildcard subdomain matching for proxy routes",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },

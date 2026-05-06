@@ -288,6 +288,42 @@ resolution yourself, for example with `dnsmasq` or platform-specific resolver
 configuration.
 
 
+## Wildcard Subdomain Matching
+
+When `proxy.wildcard = true` (the default), the proxy matches not only exact
+slug hostnames but also their subdomains. For example, with slug `myapp`
+registered, both `myapp.localhost` and `tenant.myapp.localhost` route to the
+same daemon.
+
+However, whether the subdomain actually resolves depends on the TLD:
+
+| TLD | Exact slug (`myapp.localhost`) | Wildcard subdomain (`tenant.myapp.localhost`) |
+|-----|------|------|
+| `.localhost` (default) | Browser auto-resolves; /etc/hosts optional | Browser auto-resolves; wildcard routing works |
+| Custom (`.test` etc.) | /etc/hosts entry makes it resolvable | /etc/hosts cannot cover; needs dnsmasq |
+
+With the default `.localhost` TLD, wildcard subdomains work out of the box in
+Chrome and Firefox (which auto-resolve `.localhost` per RFC 2606). Safari
+does not auto-resolve `.localhost` subdomains, so wildcard subdomains will not
+resolve unless you configure a local DNS resolver such as `dnsmasq`.
+
+To set up wildcard DNS resolution for a custom TLD, install `dnsmasq` and add
+a wildcard entry:
+
+```text
+# /etc/dnsmasq.d/pitchfork (or equivalent)
+address=/test/127.0.0.1
+```
+
+Then point your system resolver at the local dnsmasq instance. On macOS, you
+can create `/etc/resolver/test`:
+
+```text
+nameserver 127.0.0.1
+port 53
+```
+
+
 ## Proxy Commands
 
 ```bash
