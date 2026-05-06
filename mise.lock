@@ -22,7 +22,19 @@ url = "https://github.com/endevco/aube/releases/download/v1.8.0/aube-v1.8.0-x86_
 url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411329171"
 provenance = "github-attestations"
 
+[tools.aube."platforms.linux-x64-baseline"]
+checksum = "sha256:298ff8f1a1820a68a369d03c3dfa46aca8ccbceb1a4facd97329b10a03322abb"
+url = "https://github.com/endevco/aube/releases/download/v1.8.0/aube-v1.8.0-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411329171"
+provenance = "github-attestations"
+
 [tools.aube."platforms.linux-x64-musl"]
+checksum = "sha256:332379d6b167c83b7ab7d5a393e55f9dcea5185d3819ee5211739a6d81dba328"
+url = "https://github.com/endevco/aube/releases/download/v1.8.0/aube-v1.8.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411310212"
+provenance = "github-attestations"
+
+[tools.aube."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:332379d6b167c83b7ab7d5a393e55f9dcea5185d3819ee5211739a6d81dba328"
 url = "https://github.com/endevco/aube/releases/download/v1.8.0/aube-v1.8.0-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411310212"
@@ -35,6 +47,12 @@ url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411311071"
 provenance = "github-attestations"
 
 [tools.aube."platforms.windows-x64"]
+checksum = "sha256:9d49bec5dbd480980fa835ad6abdb5d02c561dabc1424b80e71e69411bbb7bef"
+url = "https://github.com/endevco/aube/releases/download/v1.8.0/aube-v1.8.0-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411318019"
+provenance = "github-attestations"
+
+[tools.aube."platforms.windows-x64-baseline"]
 checksum = "sha256:9d49bec5dbd480980fa835ad6abdb5d02c561dabc1424b80e71e69411bbb7bef"
 url = "https://github.com/endevco/aube/releases/download/v1.8.0/aube-v1.8.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/endevco/aube/releases/assets/411318019"
@@ -104,7 +122,15 @@ url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/ca
 checksum = "sha256:f926d96e9f0822ded35c4ac2071ce190bd1311565695c49c45e295de0d685aaa"
 url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-unknown-linux-musl.tgz"
 
+[tools.cargo-binstall."platforms.linux-x64-baseline"]
+checksum = "sha256:f926d96e9f0822ded35c4ac2071ce190bd1311565695c49c45e295de0d685aaa"
+url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-unknown-linux-musl.tgz"
+
 [tools.cargo-binstall."platforms.linux-x64-musl"]
+checksum = "sha256:f926d96e9f0822ded35c4ac2071ce190bd1311565695c49c45e295de0d685aaa"
+url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-unknown-linux-musl.tgz"
+
+[tools.cargo-binstall."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:f926d96e9f0822ded35c4ac2071ce190bd1311565695c49c45e295de0d685aaa"
 url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-unknown-linux-musl.tgz"
 
@@ -116,7 +142,15 @@ url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/ca
 checksum = "sha256:cd07fd79e2848b13b994e3f83fa5377b631625b847f0734219f2706feb518258"
 url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-apple-darwin.zip"
 
+[tools.cargo-binstall."platforms.macos-x64-baseline"]
+checksum = "sha256:cd07fd79e2848b13b994e3f83fa5377b631625b847f0734219f2706feb518258"
+url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-apple-darwin.zip"
+
 [tools.cargo-binstall."platforms.windows-x64"]
+checksum = "sha256:5fcbddde2d415704d2432bbe606a5767ddaf1ef4ee2c16b7828f8be2ed1e5a5c"
+url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-pc-windows-msvc.zip"
+
+[tools.cargo-binstall."platforms.windows-x64-baseline"]
 checksum = "sha256:5fcbddde2d415704d2432bbe606a5767ddaf1ef4ee2c16b7828f8be2ed1e5a5c"
 url = "https://github.com/cargo-bins/cargo-binstall/releases/download/v1.17.6/cargo-binstall-x86_64-pc-windows-msvc.zip"
 
@@ -142,8 +176,19 @@ url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405964743
 checksum = "sha256:5e74ead7037f42940c7dba4f6aa4ed968920cbb55a047aa0d291b0c675c65676"
 url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-x86_64-unknown-linux-gnu.tar.gz"
 url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405963914"
+provenance = "github-attestations"
+
+[tools.communique."platforms.linux-x64-baseline"]
+checksum = "sha256:5e74ead7037f42940c7dba4f6aa4ed968920cbb55a047aa0d291b0c675c65676"
+url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405963914"
 
 [tools.communique."platforms.linux-x64-musl"]
+checksum = "sha256:01a6a8b49e635a5a209fdaf6c7b2e976374debc2db1c846c033f567fdba0d86c"
+url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405964691"
+
+[tools.communique."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:01a6a8b49e635a5a209fdaf6c7b2e976374debc2db1c846c033f567fdba0d86c"
 url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405964691"
@@ -154,6 +199,11 @@ url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-aar
 url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405964098"
 
 [tools.communique."platforms.windows-x64"]
+checksum = "sha256:3cc0e880ac2168aed3163223627bbd1eee62e07a9901cb85cb507c6c8927bc93"
+url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405964430"
+
+[tools.communique."platforms.windows-x64-baseline"]
 checksum = "sha256:3cc0e880ac2168aed3163223627bbd1eee62e07a9901cb85cb507c6c8927bc93"
 url = "https://github.com/jdx/communique/releases/download/v1.1.2/communique-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/jdx/communique/releases/assets/405964430"
@@ -174,7 +224,15 @@ url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-aarch64-unknown-li
 checksum = "sha256:8ff22722b831acae2ac61eddbe349497f9538ac7ac28f4b1a2e3dd7c0e43ee8c"
 url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-x86_64-unknown-linux-gnu.tar.gz"
 
+[tools.hk."platforms.linux-x64-baseline"]
+checksum = "sha256:8ff22722b831acae2ac61eddbe349497f9538ac7ac28f4b1a2e3dd7c0e43ee8c"
+url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-x86_64-unknown-linux-gnu.tar.gz"
+
 [tools.hk."platforms.linux-x64-musl"]
+checksum = "sha256:41b0fbe9ddec1bf0879b56d05abb9177a8a2fb98a2a6fa3d279576fbc4da5eac"
+url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-x86_64-unknown-linux-musl.tar.gz"
+
+[tools.hk."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:41b0fbe9ddec1bf0879b56d05abb9177a8a2fb98a2a6fa3d279576fbc4da5eac"
 url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-x86_64-unknown-linux-musl.tar.gz"
 
@@ -183,6 +241,10 @@ checksum = "sha256:e9000438928e7c66fd7790f0b47ca9b1c0b971c834238c1fa5faffae7fd92
 url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-aarch64-apple-darwin.tar.gz"
 
 [tools.hk."platforms.windows-x64"]
+checksum = "sha256:c59c6bf1c45157903ce58a5572257a959ca5e3895b6b9cbfb808a744d4858fb9"
+url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-x86_64-pc-windows-msvc.zip"
+
+[tools.hk."platforms.windows-x64-baseline"]
 checksum = "sha256:c59c6bf1c45157903ce58a5572257a959ca5e3895b6b9cbfb808a744d4858fb9"
 url = "https://github.com/jdx/hk/releases/download/v1.44.3/hk-x86_64-pc-windows-msvc.zip"
 
@@ -202,7 +264,15 @@ url = "https://unofficial-builds.nodejs.org/download/release/v24.14.0/node-v24.1
 checksum = "sha256:dbf5b8665dec15e59e6359a517fefb47b23fdb9152d8def975b9bca3dfc6d355"
 url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.gz"
 
+[tools.node."platforms.linux-x64-baseline"]
+checksum = "sha256:dbf5b8665dec15e59e6359a517fefb47b23fdb9152d8def975b9bca3dfc6d355"
+url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-linux-x64.tar.gz"
+
 [tools.node."platforms.linux-x64-musl"]
+checksum = "sha256:bae0f2320448d5c744bcd4878081b483194d8b0f0eaab2b37d7f81df739c5a95"
+url = "https://unofficial-builds.nodejs.org/download/release/v24.14.0/node-v24.14.0-linux-x64-musl.tar.gz"
+
+[tools.node."platforms.linux-x64-musl-baseline"]
 checksum = "sha256:bae0f2320448d5c744bcd4878081b483194d8b0f0eaab2b37d7f81df739c5a95"
 url = "https://unofficial-builds.nodejs.org/download/release/v24.14.0/node-v24.14.0-linux-x64-musl.tar.gz"
 
@@ -214,7 +284,15 @@ url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-darwin-arm64.tar.gz"
 checksum = "sha256:f2879eb810e25993a0578e5d878930266fd2eafcffe9f2839b3d8db354d4879e"
 url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-darwin-x64.tar.gz"
 
+[tools.node."platforms.macos-x64-baseline"]
+checksum = "sha256:f2879eb810e25993a0578e5d878930266fd2eafcffe9f2839b3d8db354d4879e"
+url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-darwin-x64.tar.gz"
+
 [tools.node."platforms.windows-x64"]
+checksum = "sha256:313fa40c0d7b18575821de8cb17483031fe07d95de5994f6f435f3b345f85c66"
+url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip"
+
+[tools.node."platforms.windows-x64-baseline"]
 checksum = "sha256:313fa40c0d7b18575821de8cb17483031fe07d95de5994f6f435f3b345f85c66"
 url = "https://nodejs.org/dist/v24.14.0/node-v24.14.0-win-x64.zip"
 
