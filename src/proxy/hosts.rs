@@ -49,10 +49,29 @@ pub fn sync_hosts_file(bind_ip: &str, tld: &str) {
 /// Refresh `/etc/hosts` from the current settings if sync is enabled.
 ///
 /// Used when slug registrations change while the proxy is already running.
+/// In LAN mode, entries are mapped to the detected LAN IP instead of 127.0.0.1.
 pub fn sync_hosts_from_settings() {
     let s = settings();
     if s.proxy.enable && s.proxy.sync_hosts {
-        sync_hosts_file(&s.proxy.host, &s.proxy.tld);
+        let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+        let tld = if lan_enabled { "local" } else { &s.proxy.tld };
+        // In LAN mode, map to the LAN IP (or configured lan_ip) so that
+        // /etc/hosts entries work for mDNS-resolved hostnames on the LAN.
+        let ip = if lan_enabled {
+            // Try the configured lan_ip first, otherwise fall back to the proxy.host.
+            if !s.proxy.lan_ip.is_empty() {
+                s.proxy.lan_ip.clone()
+            } else {
+                // Auto-detected LAN IP is async and not available here.
+                // Fall back to proxy.host (which defaults to 127.0.0.1
+                // but may be overridden by the user).  The mDNS records
+                // handle the actual resolution on the LAN.
+                s.proxy.host.clone()
+            }
+        } else {
+            s.proxy.host.clone()
+        };
+        sync_hosts_file(&ip, tld);
     }
 }
 

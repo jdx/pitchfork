@@ -293,12 +293,21 @@ impl ProxyStatus {
             return Ok(());
         };
         let scheme = if s.proxy.https { "https" } else { "http" };
-        let tld = &s.proxy.tld;
+        let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+        let tld = if lan_enabled { "local" } else { &s.proxy.tld };
 
         println!("Proxy: enabled");
         println!("  Scheme:  {scheme}");
         println!("  TLD:     {tld}");
         println!("  Port:    {effective_port}");
+        if lan_enabled {
+            let lan_ip = if !s.proxy.lan_ip.is_empty() {
+                s.proxy.lan_ip.clone()
+            } else {
+                "auto-detect".to_string()
+            };
+            println!("  LAN:     enabled (IP: {lan_ip})");
+        }
         if s.proxy.https {
             let cert = if s.proxy.tls_cert.is_empty() {
                 format!(
@@ -452,6 +461,11 @@ impl Add {
 
         PitchforkToml::add_slug(slug, &dir, stored_daemon)?;
 
+        // Notify the supervisor so it can update mDNS records.
+        if let Ok(client) = crate::ipc::client::IpcClient::connect(false).await {
+            let _ = client.sync_mdns().await;
+        }
+
         let global_path = &*crate::env::PITCHFORK_GLOBAL_CONFIG_USER;
         let daemon_display = daemon.unwrap_or(slug);
         println!(
@@ -463,7 +477,8 @@ impl Add {
         let s = crate::settings::settings();
         if s.proxy.enable {
             let scheme = if s.proxy.https { "https" } else { "http" };
-            let tld = &s.proxy.tld;
+            let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+            let tld = if lan_enabled { "local" } else { &s.proxy.tld };
             let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
             if let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) {
                 let url = if effective_port == standard_port {
@@ -498,6 +513,11 @@ impl Remove {
 
         if PitchforkToml::remove_slug(&self.slug)? {
             println!("Removed slug '{}'", self.slug);
+
+            // Notify the supervisor so it can update mDNS records.
+            if let Ok(client) = crate::ipc::client::IpcClient::connect(false).await {
+                let _ = client.sync_mdns().await;
+            }
         } else {
             println!("Slug '{}' was not registered.", self.slug);
         }

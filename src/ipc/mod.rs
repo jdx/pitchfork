@@ -52,6 +52,9 @@ pub enum IpcRequest {
         dir: PathBuf,
     },
     GetNotifications,
+    /// Notify the supervisor that the slug registry has changed (e.g. `proxy add/remove`).
+    /// The supervisor should re-read slugs and update mDNS records accordingly.
+    SyncMdns,
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -98,6 +101,8 @@ pub enum IpcResponse {
     },
     /// Process was not running but had a PID record (unexpected exit)
     DaemonWasNotRunning,
+    /// mDNS sync completed (or was a no-op if LAN mode is disabled)
+    MdnsSynced,
     /// Failed to kill the process (still running)
     DaemonStopFailed {
         error: String,

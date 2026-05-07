@@ -710,3 +710,33 @@ all share the same backend server.
 
 Set to `false` to require exact hostname matches only.
 """
+
+[proxy.lan]
+type = "Bool"
+env = "PITCHFORK_PROXY_LAN"
+default = "false"
+description = "Enable LAN mode for the reverse proxy"
+docs = """
+When enabled, the proxy switches to the `.local` TLD and publishes slug
+hostnames via mDNS so that other devices on the same network can reach
+your daemons (e.g. `myapp.local` from a phone or another computer).
+
+LAN mode:
+- Forces `proxy.tld` to `local` (mDNS requirement)
+- Publishes each slug as an mDNS address record (`<slug>.local → <LAN-IP>`)
+- Binds the proxy to `0.0.0.0` instead of `127.0.0.1` (overridable via `proxy.host`)
+- Auto-detects your LAN IP and re-publishes mDNS records if it changes
+
+Other devices must trust the pitchfork CA certificate to use HTTPS.
+Run `pitchfork proxy trust` on each device, or use `proxy.https = false`.
+"""
+
+[proxy.lan_ip]
+type = "String"
+env = "PITCHFORK_PROXY_LAN_IP"
+default = ""
+description = "Pin a specific LAN IP address instead of auto-detecting"
+docs = """
+When set, skips auto-detection and uses this IP for mDNS publishing.
+Implies `proxy.lan = true` if a non-empty value is provided.
+"""

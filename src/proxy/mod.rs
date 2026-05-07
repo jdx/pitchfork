@@ -11,4 +11,6 @@
 //! ```
 
 pub mod hosts;
+pub mod lan_ip;
+pub mod mdns;
 pub mod server;

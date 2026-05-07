@@ -83,6 +83,12 @@ pub struct Supervisor {
     pub(crate) proxy_cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
     /// Join handle for the proxy task so shutdown can wait for cleanup.
     pub(crate) proxy_task: Mutex<Option<JoinHandle<()>>>,
+    /// mDNS publisher for LAN mode (None if LAN mode is disabled).
+    /// Shared with the LAN IP monitor task so it can re-publish on IP change.
+    pub(crate) mdns_publisher:
+        Mutex<Option<std::sync::Arc<tokio::sync::Mutex<crate::proxy::mdns::MdnsPublisher>>>>,
+    /// Join handle for the LAN IP monitor task.
+    pub(crate) lan_monitor_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -140,6 +146,8 @@ impl Supervisor {
             monitor_done: Notify::new(),
             proxy_cancel: Mutex::new(None),
             proxy_task: Mutex::new(None),
+            mdns_publisher: Mutex::new(None),
+            lan_monitor_task: Mutex::new(None),
         })
     }
 
@@ -266,7 +274,8 @@ impl Supervisor {
             *self.proxy_task.lock().await = Some(proxy_task);
             match bind_rx.await {
                 Ok(Ok(())) => {
-                    // Proxy bound successfully — nothing to do.
+                    // Proxy bound successfully — start mDNS if LAN mode is enabled.
+                    self.start_mdns().await;
                 }
                 Ok(Err(msg)) => {
                     error!("{msg}");
@@ -283,6 +292,139 @@ impl Supervisor {
         let (ipc, ipc_handle) = IpcServer::new()?;
         *self.ipc_shutdown.lock().await = Some(ipc_handle);
         self.conn_watch(ipc).await
+    }
+
+    /// Start mDNS publishing for LAN mode (called after the proxy binds successfully).
+    async fn start_mdns(&self) {
+        let s = crate::settings::settings();
+        let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+        if !s.proxy.enable || !lan_enabled {
+            return;
+        }
+
+        let lan_ip = if !s.proxy.lan_ip.is_empty() {
+            match s.proxy.lan_ip.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => Some(ip),
+                Err(e) => {
+                    error!(
+                        "proxy.lan_ip {:?} is not a valid IPv4 address: {e}",
+                        s.proxy.lan_ip
+                    );
+                    return;
+                }
+            }
+        } else {
+            match crate::proxy::lan_ip::detect_lan_ip().await {
+                Some(ip) => Some(ip),
+                None => {
+                    error!(
+                        "LAN mode is enabled but no LAN IP address could be detected. \
+                         Set proxy.lan_ip to a specific address, or ensure you are connected to a network."
+                    );
+                    return;
+                }
+            }
+        };
+
+        let Some(lan_ip) = lan_ip else { return };
+        let port = u16::try_from(s.proxy.port).unwrap_or(443);
+
+        let Some(mut publisher) = crate::proxy::mdns::MdnsPublisher::new(lan_ip) else {
+            error!("Failed to start mDNS publisher. Is Avahi (Linux) or Bonjour (macOS) running?");
+            return;
+        };
+
+        // Publish all registered slugs.
+        let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        for slug in slugs.keys() {
+            let hostname = format!("{slug}.local");
+            publisher.publish(&hostname, port);
+        }
+
+        log::info!(
+            "LAN mode: mDNS publishing on {lan_ip}, {} slug(s) registered",
+            slugs.len()
+        );
+
+        let publisher = std::sync::Arc::new(tokio::sync::Mutex::new(publisher));
+
+        // Start the IP monitor (only when IP is auto-detected, not pinned).
+        let ip_pinned = !s.proxy.lan_ip.is_empty();
+        if !ip_pinned {
+            let monitor_cancel = self.proxy_cancel.lock().await.clone();
+            let publisher_clone = publisher.clone();
+            let task = tokio::spawn(async move {
+                let mut last_ip = lan_ip;
+                let interval = std::time::Duration::from_secs(5);
+                let mut ticker = tokio::time::interval(interval);
+                ticker.tick().await; // first tick is immediate
+                loop {
+                    ticker.tick().await;
+                    if let Some(cancel) = monitor_cancel.as_ref() {
+                        if cancel.is_cancelled() {
+                            break;
+                        }
+                    }
+                    if let Some(new_ip) =
+                        crate::proxy::lan_ip::detect_lan_ip_if_changed(last_ip).await
+                    {
+                        log::info!("LAN IP changed: {last_ip} → {new_ip}");
+                        last_ip = new_ip;
+                        let mut pub_guard = publisher_clone.lock().await;
+                        pub_guard.republish_all(new_ip, port);
+                    }
+                }
+            });
+            *self.lan_monitor_task.lock().await = Some(task);
+        }
+
+        *self.mdns_publisher.lock().await = Some(publisher);
+    }
+
+    /// Re-read slugs from config and update mDNS records.
+    ///
+    /// Publishes new slugs and unpublishes removed ones. Called via IPC when
+    /// `proxy add` or `proxy remove` modifies the slug registry.
+    async fn sync_mdns(&self) {
+        // Clone the Arc and release the outer lock immediately so we don't
+        // block close() from taking the publisher during shutdown.
+        let publisher = {
+            let guard = self.mdns_publisher.lock().await;
+            match guard.as_ref() {
+                Some(p) => p.clone(),
+                None => {
+                    debug!("sync_mdns: mDNS publisher not active, skipping");
+                    return;
+                }
+            }
+        };
+
+        let s = crate::settings::settings();
+        let port = u16::try_from(s.proxy.port).unwrap_or(443);
+
+        let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        let mut pub_guard = publisher.lock().await;
+
+        // Unpublish slugs that no longer exist in config.
+        let current_keys: Vec<&String> = slugs.keys().collect();
+        let registered: Vec<String> = pub_guard.registered_hostnames();
+        for hostname in &registered {
+            // hostname is "slug.local" — extract slug part.
+            let slug = hostname.strip_suffix(".local").unwrap_or(hostname);
+            if !current_keys.iter().any(|k| k.as_str() == slug) {
+                log::info!("mDNS: unpublishing removed slug {slug}");
+                pub_guard.unpublish(hostname);
+            }
+        }
+
+        // Publish new slugs that aren't yet registered.
+        for slug in slugs.keys() {
+            let hostname = format!("{slug}.local");
+            if !pub_guard.is_published(&hostname) {
+                log::info!("mDNS: publishing new slug {slug}");
+                pub_guard.publish(&hostname, port);
+            }
+        }
     }
 
     pub(crate) async fn refresh(&self) -> Result<()> {
@@ -525,6 +667,16 @@ impl Supervisor {
         // proxy has time to finish forwarding active requests.
         if let Some(cancel) = self.proxy_cancel.lock().await.take() {
             cancel.cancel();
+        }
+
+        // Stop the LAN IP monitor task.
+        if let Some(monitor_task) = self.lan_monitor_task.lock().await.take() {
+            monitor_task.abort();
+        }
+
+        // Shutdown the mDNS publisher (sends goodbye packets).
+        if let Some(publisher) = self.mdns_publisher.lock().await.take() {
+            publisher.lock().await.shutdown();
         }
 
         if let Some(proxy_task) = self.proxy_task.lock().await.take() {

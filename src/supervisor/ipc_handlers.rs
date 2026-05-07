@@ -109,6 +109,10 @@ impl Supervisor {
                 let disabled = self.state_file.lock().await.disabled.clone();
                 IpcResponse::DisabledDaemons(disabled.into_iter().collect())
             }
+            IpcRequest::SyncMdns => {
+                self.sync_mdns().await;
+                IpcResponse::MdnsSynced
+            }
         };
         Ok(rsp)
     }

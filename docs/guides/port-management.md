@@ -324,6 +324,70 @@ port 53
 ```
 
 
+## LAN Mode
+
+LAN mode lets other devices on your local network (phones, tablets, other
+computers) access your daemons through the proxy. Instead of using
+`.localhost` (which only resolves on the host machine), LAN mode switches to
+the `.local` TLD and publishes slug hostnames via mDNS.
+
+### Quick start
+
+1. Enable LAN mode in `pitchfork.toml`:
+
+```toml
+[settings.proxy]
+enable = true
+lan = true
+```
+
+2. Start the supervisor:
+
+```bash
+sudo pitchfork supervisor start --force
+```
+
+3. Open the proxy URL from another device on the same network:
+
+```
+https://myapp.local
+```
+
+### How it works
+
+When LAN mode is enabled:
+
+- The TLD is forced to `.local` (mDNS requirement)
+- The proxy binds to `0.0.0.0` instead of `127.0.0.1` (overridable via `proxy.host`)
+- Each registered slug is published as an mDNS address record (`myapp.local → 192.168.1.42`)
+- Your LAN IP is auto-detected; if it changes, mDNS records are re-published
+
+### Pinning the LAN IP
+
+By default, pitchfork auto-detects your LAN IP. To pin a specific address:
+
+```toml
+[settings.proxy]
+enable = true
+lan_ip = "192.168.1.42"
+```
+
+Setting `lan_ip` implies `lan = true`, so you can omit the `lan` flag.
+
+### HTTPS on LAN
+
+Other devices need to trust the pitchfork CA certificate to use HTTPS. Run
+`pitchfork proxy trust` on each device, or disable HTTPS for simplicity:
+
+```toml
+[settings.proxy]
+enable = true
+lan = true
+https = false
+port = 80
+```
+
+
 ## Proxy Commands
 
 ```bash

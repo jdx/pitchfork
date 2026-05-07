@@ -617,6 +617,20 @@
             "null"
           ]
         },
+        "lan": {
+          "description": "Enable LAN mode for the reverse proxy",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "lan_ip": {
+          "description": "Pin a specific LAN IP address instead of auto-detecting",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "port": {
           "description": "Port the reverse proxy server listens on",
           "type": [

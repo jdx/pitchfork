@@ -412,6 +412,24 @@ impl IpcClient {
         }
     }
 
+    /// Notify the supervisor that the slug registry has changed.
+    ///
+    /// The supervisor will re-read slugs and update mDNS records.  This is a
+    /// best-effort notification — if the supervisor is not running, the call
+    /// silently succeeds (mDNS is not needed without a running supervisor).
+    pub async fn sync_mdns(&self) -> Result<()> {
+        let rsp = self.request(IpcRequest::SyncMdns).await?;
+        match rsp {
+            IpcResponse::MdnsSynced => Ok(()),
+            IpcResponse::Error(e) => {
+                // Old supervisor doesn't recognize SyncMdns — not an error.
+                info!("mDNS sync skipped: {e}");
+                Ok(())
+            }
+            rsp => Err(Self::unexpected_response("MdnsSynced", &rsp).into()),
+        }
+    }
+
     /// Stop a single daemon (low-level operation)
     pub async fn stop(&self, id: DaemonId) -> Result<bool> {
         let id_str = id.qualified();

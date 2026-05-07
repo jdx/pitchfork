@@ -219,6 +219,14 @@ pub async fn serve(
     cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
     let s = settings();
+    let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+
+    let effective_tld = if lan_enabled {
+        "local".to_string()
+    } else {
+        s.proxy.tld.clone()
+    };
+
     let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
         let msg = format!(
             "proxy.port {} is out of valid port range (1-65535), proxy server cannot start",
@@ -242,23 +250,29 @@ pub async fn serve(
 
     let state = ProxyState {
         client: Arc::new(client),
-        tld: s.proxy.tld.clone(),
+        tld: effective_tld.clone(),
         is_tls: s.proxy.https,
         on_error: None,
     };
 
     let app = Router::new().fallback(proxy_handler).with_state(state);
 
-    // Resolve bind address from settings (default: 127.0.0.1 for local-only access).
-    let bind_ip: std::net::IpAddr = match s.proxy.host.parse() {
-        Ok(ip) => ip,
-        Err(_) => {
-            log::warn!(
-                "proxy.host {:?} is not a valid IP address — falling back to 127.0.0.1. \
-                 The proxy will only be reachable on the loopback interface.",
-                s.proxy.host
-            );
-            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    // Resolve bind address from settings.
+    // In LAN mode, default to 0.0.0.0 so the proxy is reachable from other
+    // devices on the network.  Users can still override with proxy.host.
+    let bind_ip: std::net::IpAddr = if lan_enabled && s.proxy.host == "127.0.0.1" {
+        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
+    } else {
+        match s.proxy.host.parse() {
+            Ok(ip) => ip,
+            Err(_) => {
+                log::warn!(
+                    "proxy.host {:?} is not a valid IP address — falling back to 127.0.0.1. \
+                     The proxy will only be reachable on the loopback interface.",
+                    s.proxy.host
+                );
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+            }
         }
     };
     let addr = SocketAddr::from((bind_ip, effective_port));

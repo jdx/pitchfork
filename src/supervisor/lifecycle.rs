@@ -1720,15 +1720,18 @@ mod tests {
 /// Inject proxy-related environment variables into a daemon's command.
 ///
 /// Adds:
-/// - `HOST` — the address the daemon should bind to (`127.0.0.1`)
+/// - `HOST` — the address the daemon should bind to (`127.0.0.1`, omitted in LAN mode)
 /// - `PITCHFORK_URL` — the public proxy URL for this daemon (if it has a slug)
 /// - `NODE_EXTRA_CA_CERTS` — path to the pitchfork CA cert (if HTTPS enabled)
 /// - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` — `.<tld>` for Vite host allowlisting
+/// - `PITCHFORK_LAN` — set to `"1"` when LAN mode is active
 fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
     let s = crate::settings::settings();
+    let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
 
-    if should_force_loopback_host(slug) {
+    if should_force_loopback_host(slug) && !lan_enabled {
         // Only force loopback binding for daemons that are actually routed via a slug.
+        // In LAN mode, daemons need to bind to 0.0.0.0 to be reachable from the network.
         cmd.env("HOST", "127.0.0.1");
     }
 
@@ -1751,10 +1754,13 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
 
     // __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: Vite host allowlisting
     if s.proxy.enable {
-        cmd.env(
-            "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS",
-            format!(".{}", s.proxy.tld),
-        );
+        let tld = if lan_enabled { "local" } else { &s.proxy.tld };
+        cmd.env("__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS", format!(".{tld}"));
+    }
+
+    // PITCHFORK_LAN: signal to daemons that LAN mode is active
+    if lan_enabled {
+        cmd.env("PITCHFORK_LAN", "1");
     }
 }
 
@@ -1787,8 +1793,7 @@ fn build_pitchfork_url(slug: &Option<String>, s: &crate::settings::Settings) -> 
     } else {
         format!(":{port}")
     };
-    Some(format!(
-        "{scheme}://{slug}.{tld}{port_suffix}",
-        tld = s.proxy.tld
-    ))
+    let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+    let tld = if lan_enabled { "local" } else { &s.proxy.tld };
+    Some(format!("{scheme}://{slug}.{tld}{port_suffix}",))
 }
