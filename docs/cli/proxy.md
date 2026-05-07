@@ -19,6 +19,7 @@ Enable the proxy in your pitchfork.toml or settings:
 
 Subcommands:
   trust     Install the proxy's TLS certificate into the system trust store
+  untrust   Remove the proxy's TLS certificate from the system trust store
   add       Add a slug mapping to the global config
   remove    Remove a slug mapping from the global config
   status    Show all registered slugs and their current state
@@ -29,3 +30,4 @@ Subcommands:
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
 - [`pitchfork proxy status`](/cli/proxy/status.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
+- [`pitchfork proxy untrust [--cert <CERT>]`](/cli/proxy/untrust.md)

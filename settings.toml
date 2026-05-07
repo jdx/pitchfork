@@ -637,6 +637,28 @@ If left empty and `proxy.https = true`, pitchfork will auto-generate a
 self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
 """
 
+[proxy.auto_trust]
+type = "Bool"
+env = "PITCHFORK_PROXY_AUTO_TRUST"
+default = "true"
+description = "Automatically install the proxy TLS certificate into the system trust store"
+docs = """
+When enabled (default), pitchfork automatically installs the proxy's
+self-signed CA certificate into the system trust store during supervisor
+startup, so that browsers and tools trust HTTPS proxy URLs without
+certificate warnings.
+
+On macOS, this triggers a system authorization dialog (Touch ID or password).
+On Linux, this requires write access to the system CA directory (typically
+needs `sudo`).
+
+If auto-trust fails (e.g. due to permissions), it is silently skipped and
+a warning is logged. You can manually install the certificate with:
+  pitchfork proxy trust
+
+Set to `false` to disable auto-trust entirely.
+"""
+
 [proxy.auto_start]
 type = "Bool"
 env = "PITCHFORK_PROXY_AUTO_START"

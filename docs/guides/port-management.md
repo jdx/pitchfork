@@ -107,10 +107,12 @@ pitchfork start api
 open https://api.localhost
 ```
 
-If this is your first time using the auto-generated HTTPS certificate, trust it once:
+The CA certificate is automatically installed into your system trust store
+on first start. If auto-trust failed (e.g. on Linux without `sudo`),
+you can manually install it:
 
 ```bash
-pitchfork proxy trust         # On Linux, run the trust step with `sudo`
+pitchfork proxy trust         # On Linux, run with `sudo`
 ```
 
 ### Slugs
@@ -205,9 +207,31 @@ enable = true
 
 The certificate is stored in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
 
-### Trusting the Certificate
+### Auto-Trust
 
-Install the auto-generated certificate into your system trust store:
+When the proxy starts with HTTPS enabled, pitchfork automatically attempts to
+install the CA certificate into your system trust store (`proxy.auto_trust = true`
+by default). This means you typically don't need to run any extra commands â€”
+browsers will trust the proxy URLs right away.
+
+On **macOS**, auto-trust triggers a system authorization dialog (Touch ID or
+password) the first time. Subsequent starts skip the prompt because the
+certificate is already trusted.
+
+On **Linux**, auto-trust requires write access to the system CA directory, which
+typically means the supervisor must be started with `sudo`. If auto-trust fails
+(e.g. due to permissions), it is silently skipped and a warning is logged.
+
+To disable auto-trust:
+
+```toml
+[settings.proxy]
+auto_trust = false
+```
+
+### Manual Trust
+
+If auto-trust is disabled or failed, you can manually install the certificate:
 
 ```bash
 pitchfork proxy trust
@@ -218,6 +242,19 @@ On **macOS**, this installs the certificate into your **user login keychain** â€
 On **Linux**, this requires `sudo`:
 ```bash
 sudo pitchfork proxy trust
+```
+
+### Removing the Certificate
+
+To remove the pitchfork CA from the system trust store:
+
+```bash
+pitchfork proxy untrust
+```
+
+On **Linux**, this requires `sudo`:
+```bash
+sudo pitchfork proxy untrust
 ```
 
 ### Custom Certificate
@@ -308,6 +345,9 @@ pitchfork proxy trust
 
 # Install a custom certificate
 pitchfork proxy trust --cert /path/to/cert.pem
+
+# Remove TLS certificate from system trust store
+pitchfork proxy untrust
 ```
 
 ---

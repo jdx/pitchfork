@@ -243,10 +243,26 @@ impl Supervisor {
                                 "Generated local CA certificate at {}",
                                 ca_cert_path.display()
                             );
-                            info!("To trust the CA in your browser, run: pitchfork proxy trust");
                         }
                         Err(e) => {
                             error!("Failed to generate CA certificate: {e}");
+                        }
+                    }
+                }
+
+                // Auto-trust: attempt to install the CA certificate into the
+                // system trust store. May fail silently due to permissions;
+                // user can run `pitchfork proxy trust` manually.
+                if s.proxy.auto_trust && ca_cert_path.exists() {
+                    use crate::proxy::trust::{AutoTrustResult, auto_trust};
+                    match auto_trust(&ca_cert_path) {
+                        AutoTrustResult::AlreadyTrusted => {}
+                        AutoTrustResult::Trusted => {
+                            info!("CA certificate auto-trusted in system store");
+                        }
+                        AutoTrustResult::NotTrusted { reason } => {
+                            warn!("Auto-trust skipped: {reason}");
+                            warn!("Run `pitchfork proxy trust` to install manually");
                         }
                     }
                 }

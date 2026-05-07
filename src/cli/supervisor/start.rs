@@ -57,9 +57,10 @@ impl Start {
             } else {
                 std::path::PathBuf::from(&s.proxy.tls_cert)
             };
-            if !cert_path.exists() {
+            if cert_path.exists() && !crate::proxy::trust::is_ca_trusted(&cert_path) {
                 warn!(
-                    "HTTPS proxy is enabled. To trust the self-signed certificate, run: pitchfork proxy trust"
+                    "HTTPS proxy is enabled but the CA is not trusted. \
+                     Run: pitchfork proxy trust"
                 );
             }
         }

@@ -995,6 +995,44 @@
             "hidden_aliases": [],
             "examples": []
           },
+          "untrust": {
+            "full_cmd": [
+              "proxy",
+              "untrust"
+            ],
+            "usage": "proxy untrust [--cert <CERT>]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "cert",
+                "usage": "--cert <CERT>",
+                "help": "Path to the certificate file (defaults to pitchfork's auto-generated cert)",
+                "help_first_line": "Path to the certificate file (defaults to pitchfork's auto-generated cert)",
+                "short": [],
+                "long": [
+                  "cert"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "CERT",
+                  "usage": "<CERT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Remove the proxy's TLS certificate from the system trust store",
+            "help_long": "Remove the proxy's TLS certificate from the system trust store\n\nRemoves the pitchfork CA certificate that was previously installed by\n`pitchfork proxy trust` or auto-trust.\n\nOn macOS, removes the certificate from the login keychain and system keychain.\nOn Linux, removes the certificate from the distro-specific CA directory\nand runs the appropriate update command.\n\nExample:\n  pitchfork proxy untrust\n  sudo pitchfork proxy untrust    # Linux only",
+            "name": "untrust",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
           "status": {
             "full_cmd": [
               "proxy",
@@ -1117,7 +1155,7 @@
         "hide": false,
         "subcommand_required": true,
         "help": "Manage the pitchfork reverse proxy",
-        "help_long": "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable slug-based URLs like:\n  https://myapp.localhost\n\nto the daemon's actual listening port (e.g. localhost:3000).\n\nSlugs are defined in the global config (~/.config/pitchfork/config.toml)\nunder [slugs]. Each slug maps to a project directory and daemon name.\n\nEnable the proxy in your pitchfork.toml or settings:\n  [settings.proxy]\n  enable = true\n\nSubcommands:\n  trust     Install the proxy's TLS certificate into the system trust store\n  add       Add a slug mapping to the global config\n  remove    Remove a slug mapping from the global config\n  status    Show all registered slugs and their current state",
+        "help_long": "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable slug-based URLs like:\n  https://myapp.localhost\n\nto the daemon's actual listening port (e.g. localhost:3000).\n\nSlugs are defined in the global config (~/.config/pitchfork/config.toml)\nunder [slugs]. Each slug maps to a project directory and daemon name.\n\nEnable the proxy in your pitchfork.toml or settings:\n  [settings.proxy]\n  enable = true\n\nSubcommands:\n  trust     Install the proxy's TLS certificate into the system trust store\n  untrust   Remove the proxy's TLS certificate from the system trust store\n  add       Add a slug mapping to the global config\n  remove    Remove a slug mapping from the global config\n  status    Show all registered slugs and their current state",
         "name": "proxy",
         "aliases": [],
         "hidden_aliases": [],

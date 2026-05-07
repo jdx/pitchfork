@@ -26,6 +26,7 @@
 - [`pitchfork mcp`](/cli/mcp.md)
 - [`pitchfork proxy <SUBCOMMAND>`](/cli/proxy.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
+- [`pitchfork proxy untrust [--cert <CERT>]`](/cli/proxy/untrust.md)
 - [`pitchfork proxy status`](/cli/proxy/status.md)
 - [`pitchfork proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>`](/cli/proxy/add.md)
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)

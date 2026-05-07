@@ -21,6 +21,7 @@ Enable the proxy in your pitchfork.toml or settings:
 
 Subcommands:
   trust     Install the proxy's TLS certificate into the system trust store
+  untrust   Remove the proxy's TLS certificate from the system trust store
   add       Add a slug mapping to the global config
   remove    Remove a slug mapping from the global config
   status    Show all registered slugs and their current state"
@@ -33,6 +34,7 @@ pub struct Proxy {
 #[derive(Debug, clap::Subcommand)]
 enum ProxyCommands {
     Trust(Trust),
+    Untrust(Untrust),
     Status(ProxyStatus),
     Add(Add),
     Remove(Remove),
@@ -42,6 +44,7 @@ impl Proxy {
     pub async fn run(&self) -> Result<()> {
         match &self.command {
             ProxyCommands::Trust(trust) => trust.run().await,
+            ProxyCommands::Untrust(untrust) => untrust.run().await,
             ProxyCommands::Status(status) => status.run().await,
             ProxyCommands::Add(add) => add.run().await,
             ProxyCommands::Remove(remove) => remove.run().await,
@@ -87,23 +90,15 @@ impl Trust {
             crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem")
         });
 
-        if !cert_path.exists() {
-            miette::bail!(
-                "CA certificate not found at {}\n\
-                 \n\
-                 The proxy CA certificate is generated automatically when the proxy\n\
-                 starts with `proxy.https = true`. Start the supervisor first:\n\
-                 \n\
-                 pitchfork supervisor start\n\
-                 \n\
-                 Or specify a custom certificate path with --cert.",
-                cert_path.display()
-            );
+        // Check if already trusted to avoid duplicates (especially on macOS keychain)
+        if crate::proxy::trust::is_ca_trusted(&cert_path) {
+            println!("CA certificate is already trusted.");
+            return Ok(());
         }
 
-        install_cert(&cert_path)?;
+        crate::proxy::trust::install_cert(&cert_path)?;
         println!(
-            "✓ CA certificate installed: {}\n\
+            "CA certificate installed: {}\n\
              \n\
              Browsers and tools will now trust HTTPS proxy URLs like:\n\
              https://docs.pf.localhost:7777",
@@ -113,150 +108,39 @@ impl Trust {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn install_cert(cert_path: &std::path::Path) -> Result<()> {
-    use std::process::Command;
+// ─── proxy untrust ───────────────────────────────────────────────────────────
 
-    // Resolve the login keychain path for the current user.
-    let home = &*crate::env::HOME_DIR;
-    let keychain = format!("{}/Library/Keychains/login.keychain-db", home.display());
-
-    // Install into the current user's login keychain — no sudo required.
-    // Must specify -k explicitly; without it macOS targets the admin domain
-    // and silently succeeds without actually writing to the user keychain.
-    let status = Command::new("security")
-        .args([
-            "add-trusted-cert",
-            "-r",
-            "trustRoot",
-            "-k",
-            &keychain,
-            &cert_path.to_string_lossy(),
-        ])
-        .status()
-        .map_err(|e| miette::miette!("Failed to run `security` command: {e}"))?;
-
-    if !status.success() {
-        miette::bail!(
-            "Failed to install certificate (exit code: {}).\n\
-             \n\
-             Try running the command again.",
-            status.code().unwrap_or(-1)
-        );
-    }
-    Ok(())
+/// Remove the proxy's TLS certificate from the system trust store
+///
+/// Removes the pitchfork CA certificate that was previously installed by
+/// `pitchfork proxy trust` or auto-trust.
+///
+/// On macOS, removes the certificate from the login keychain and system keychain.
+/// On Linux, removes the certificate from the distro-specific CA directory
+/// and runs the appropriate update command.
+///
+/// Example:
+///   pitchfork proxy untrust
+///   sudo pitchfork proxy untrust    # Linux only
+#[derive(Debug, clap::Args)]
+#[clap(verbatim_doc_comment)]
+struct Untrust {
+    /// Path to the certificate file (defaults to pitchfork's auto-generated cert)
+    #[clap(long)]
+    cert: Option<std::path::PathBuf>,
 }
 
-#[cfg(target_os = "linux")]
-fn install_cert(cert_path: &std::path::Path) -> Result<()> {
-    use std::process::Command;
+impl Untrust {
+    async fn run(&self) -> Result<()> {
+        let cert_path = self
+            .cert
+            .clone()
+            .unwrap_or_else(|| crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem"));
 
-    // Detect the distro family by probing well-known CA anchor directories.
-    // Each entry is (anchor_dir, dest_filename, update_command).
-    // Priority order: check which directories actually exist on this system.
-    let candidates: &[(&str, &str, &[&str])] = &[
-        // Debian / Ubuntu
-        (
-            "/usr/local/share/ca-certificates",
-            "pitchfork-proxy.crt",
-            &["update-ca-certificates"],
-        ),
-        // RHEL / Fedora / CentOS / Rocky / AlmaLinux
-        (
-            "/etc/pki/ca-trust/source/anchors",
-            "pitchfork-proxy.crt",
-            &["update-ca-trust"],
-        ),
-        // Arch Linux (p11-kit / ca-certificates-utils)
-        (
-            "/etc/ca-certificates/trust-source/anchors",
-            "pitchfork-proxy.crt",
-            &["trust", "extract-compat"],
-        ),
-        // openSUSE / SLES
-        (
-            "/etc/pki/trust/anchors",
-            "pitchfork-proxy.crt",
-            &["update-ca-certificates"],
-        ),
-    ];
-
-    let (anchor_dir, dest_name, update_cmd) = candidates
-        .iter()
-        .find(|(dir, _, _)| std::path::Path::new(dir).exists())
-        .copied()
-        .ok_or_else(|| {
-            miette::miette!(
-                "Could not detect a supported CA certificate directory on this system.\n\
-                 \n\
-                 Supported distributions: Debian/Ubuntu, RHEL/Fedora/CentOS, Arch Linux, openSUSE.\n\
-                 \n\
-                 Please install the certificate manually:\n\
-                 1. Copy {} to your distro's CA anchor directory.\n\
-                 2. Run the appropriate update command (e.g. update-ca-certificates).",
-                cert_path.display()
-            )
-        })?;
-
-    let dest = std::path::Path::new(anchor_dir).join(dest_name);
-
-    // Check write access using libc::access(W_OK) which correctly reflects
-    // effective UID/GID permissions, unlike Permissions::readonly() which only
-    // inspects the owner-write bit and always returns false for directories.
-    let has_write_access = {
-        use std::ffi::CString;
-        let path_cstr =
-            CString::new(anchor_dir.as_bytes()).unwrap_or_else(|_| CString::new("/").unwrap());
-        // SAFETY: path_cstr is a valid NUL-terminated C string.
-        unsafe { libc::access(path_cstr.as_ptr(), libc::W_OK) == 0 }
-    };
-
-    if !has_write_access {
-        miette::bail!(
-            "Installing certificates on Linux requires elevated privileges.\n\
-             \n\
-             Run with sudo:\n\
-             sudo pitchfork proxy trust\n\
-             \n\
-             This copies the certificate to {anchor_dir}/\n\
-             and runs `{}`.",
-            update_cmd.join(" ")
-        );
+        crate::proxy::trust::uninstall_cert(&cert_path)?;
+        println!("CA certificate removed from system trust store.");
+        Ok(())
     }
-
-    std::fs::copy(cert_path, &dest)
-        .map_err(|e| miette::miette!("Failed to copy certificate to {}: {e}", dest.display()))?;
-
-    let status = Command::new(update_cmd[0])
-        .args(&update_cmd[1..])
-        .status()
-        .map_err(|e| miette::miette!("Failed to run `{}`: {e}", update_cmd.join(" ")))?;
-
-    if !status.success() {
-        miette::bail!(
-            "`{}` failed (exit code: {}).\n\
-             \n\
-             The certificate was copied to {} but the system trust store was NOT updated.\n\
-             To complete the installation manually, run:\n\
-             sudo {}",
-            update_cmd.join(" "),
-            status.code().unwrap_or(-1),
-            dest.display(),
-            update_cmd.join(" ")
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn install_cert(_cert_path: &std::path::Path) -> Result<()> {
-    miette::bail!(
-        "Automatic certificate installation is not supported on this platform.\n\
-         \n\
-         Please manually install the certificate from:\n\
-         {}",
-        _cert_path.display()
-    )
 }
 
 // ─── proxy status ─────────────────────────────────────────────────────────────
@@ -287,7 +171,7 @@ impl ProxyStatus {
         let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
             println!("Proxy: enabled");
             println!(
-                "  ⚠  proxy.port {} is out of valid port range (1-65535)",
+                "  proxy.port {} is out of valid port range (1-65535)",
                 s.proxy.port
             );
             return Ok(());
@@ -312,6 +196,22 @@ impl ProxyStatus {
                 s.proxy.tls_cert.clone()
             };
             println!("  TLS cert: {cert}");
+
+            // Show trust status
+            let cert_path = if s.proxy.tls_cert.is_empty() {
+                crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem")
+            } else {
+                std::path::PathBuf::from(&s.proxy.tls_cert)
+            };
+            let trusted = crate::proxy::trust::is_ca_trusted(&cert_path);
+            println!(
+                "  Trusted: {}",
+                if trusted {
+                    "yes"
+                } else {
+                    "no (run: pitchfork proxy trust)"
+                }
+            );
         }
         println!();
 

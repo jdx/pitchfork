@@ -596,6 +596,13 @@
             "null"
           ]
         },
+        "auto_trust": {
+          "description": "Automatically install the proxy TLS certificate into the system trust store",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "enable": {
           "description": "Enable the reverse proxy server for daemons",
           "type": [
