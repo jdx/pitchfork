@@ -27,6 +27,15 @@ jobs:
       - run: rm -rf .cargo
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: mise run ci
+      - run: mise run render
+      - name: assert render produces no diff
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::'mise run render' produced changes. Run it locally and commit."
+            git status
+            git diff
+            exit 1
+          fi
 
   windows-build:
     runs-on: windows-latest
