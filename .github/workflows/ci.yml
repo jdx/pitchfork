@@ -32,7 +32,8 @@ jobs:
         with:
           cache: false
       - run: rm -rf .cargo
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # save-if gates cache writes to main so PRs can only restore, not poison.
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run ci
@@ -47,7 +48,8 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # save-if gates cache writes to main so PRs can only restore, not poison.
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # `cargo check` (debug) catches the compile errors that otherwise only
