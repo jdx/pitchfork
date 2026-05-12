@@ -34,7 +34,7 @@ jobs:
       - run: rm -rf .cargo
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          lookup-only: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run ci
 
   windows-build:
@@ -49,7 +49,7 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          lookup-only: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # `cargo check` (debug) catches the compile errors that otherwise only
       # surface in the release pipeline, without paying for an optimized link.
       # Integration tests under tests/ are Unix-only (lsof, pkill, etc.) so
