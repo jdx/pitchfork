@@ -43,6 +43,8 @@ jobs:
     needs: release-plz-release
     if: >-
       ${{ always() && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
+    permissions:
+      contents: write
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
