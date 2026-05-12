@@ -1,8 +1,6 @@
 name: Release-plz
 
-permissions:
-  pull-requests: write
-  contents: write
+permissions: {}
 
 on:
   push:
@@ -20,6 +18,9 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'push' && github.repository_owner == 'endevco' }}
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       tag: ${{ steps.release-plz.outputs.releases && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
     steps:
@@ -45,7 +46,9 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
-    secrets: inherit
+    secrets:
+      CERTIFICATES_P12: ${{ secrets.CERTIFICATES_P12 }}
+      CERTIFICATES_P12_PASS: ${{ secrets.CERTIFICATES_P12_PASS }}
 
   enhance-release:
     name: Enhance release notes
@@ -53,12 +56,15 @@ jobs:
     if: >-
       ${{ always() && needs.upload-assets.result == 'success' && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       TAG: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
       - run: communique generate "$TAG" --github-release
         env:
@@ -90,6 +96,9 @@ jobs:
     name: Release PR
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'push' && github.repository_owner == 'endevco' }}
+    permissions:
+      contents: write
+      pull-requests: write
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
@@ -99,6 +108,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          persist-credentials: false
       - name: Run release-plz
         id: release-plz
         uses: release-plz/action@1528104d2ca23787631a1c1f022abb64b34c1e11 # v0.5
@@ -110,7 +120,7 @@ jobs:
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
       - name: Squash generated docs into release PR
         run: |
-          PR_BRANCH=$(echo '${{ steps.release-plz.outputs.pr }}' | jq -r '.head_branch // empty')
+          PR_BRANCH=$(echo '${STEPS_RELEASE_PLZ_OUTPUTS_PR}' | jq -r '.head_branch // empty')
           if [ -z "$PR_BRANCH" ]; then
             PR_BRANCH=$(gh pr list --state open --base main --json headRefName,updatedAt --jq 'sort_by(.updatedAt) | reverse | map(select(.headRefName | startswith("release-plz-")))[0].headRefName // empty' 2>/dev/null || true)
           fi
@@ -133,3 +143,4 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          STEPS_RELEASE_PLZ_OUTPUTS_PR: ${{ steps.release-plz.outputs.pr }}

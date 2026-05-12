@@ -9,6 +9,11 @@ on:
       tag:
         required: true
         type: string
+    secrets:
+      CERTIFICATES_P12:
+        required: true
+      CERTIFICATES_P12_PASS:
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,6 +39,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
       - name: Import codesign certs
         if: startsWith(matrix.os, 'macos')
         uses: apple-actions/import-codesign-certs@fe74d46e82474f87e1ba79832ad28a4013d0e33a # v6
@@ -93,7 +99,8 @@ jobs:
     steps:
       - name: Publish release
         run: |
-          echo "Publishing release ${{ inputs.tag }}..."
-          gh release edit "${{ inputs.tag }}" --repo "${{ github.repository }}" --draft=false
+          echo "Publishing release ${INPUTS_TAG}..."
+          gh release edit "${INPUTS_TAG}" --repo "${{ github.repository }}" --draft=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUTS_TAG: ${{ inputs.tag }}

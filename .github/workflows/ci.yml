@@ -11,6 +11,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: {}
+
 env:
   CARGO_TERM_COLOR: always
   MISE_EXPERIMENTAL: true
@@ -19,23 +21,35 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: true
+          persist-credentials: false
       - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
+        with:
+          cache: false
       - run: rm -rf .cargo
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          lookup-only: true
       - run: mise run ci
 
   windows-build:
     runs-on: windows-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: true
+          persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          lookup-only: true
       # `cargo check` (debug) catches the compile errors that otherwise only
       # surface in the release pipeline, without paying for an optimized link.
       # Integration tests under tests/ are Unix-only (lsof, pkill, etc.) so
@@ -51,6 +65,7 @@ jobs:
       - windows-build
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    permissions: {}
     # Run on success or upstream failure but skip when the workflow is cancelled
     # — `always()` would override `cancel-in-progress` and waste a runner.
     if: ${{ !cancelled() }}
