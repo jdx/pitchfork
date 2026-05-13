@@ -590,3 +590,66 @@ fn signal_name(sig: i32) -> &'static str {
         _ => "UNKNOWN",
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn get_stats_includes_descendant_rss() {
+        let parent = Command::new("sh")
+            .args(["-c", "sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn process tree");
+        let parent_pid = parent.id();
+        let _parent = ChildGuard(parent);
+
+        let procs = Procs::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut child_pids = Vec::new();
+        while Instant::now() < deadline {
+            procs.refresh_processes();
+            child_pids = procs.all_children(parent_pid);
+            if !child_pids.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !child_pids.is_empty(),
+            "test process tree did not appear under parent pid {parent_pid}"
+        );
+
+        procs.refresh_processes();
+        let stats = procs
+            .get_stats(parent_pid)
+            .expect("parent process should have direct stats");
+        let aggregate = procs
+            .get_batch_group_stats(&[parent_pid])
+            .into_iter()
+            .next()
+            .and_then(|(_, stats)| stats)
+            .expect("parent process should have aggregate stats");
+
+        assert_eq!(
+            stats.memory_bytes, aggregate.memory_bytes,
+            "get_stats should include descendant RSS for parent pid {parent_pid}; \
+             descendants: {child_pids:?}, direct RSS: {}, tree RSS: {}",
+            stats.memory_bytes, aggregate.memory_bytes
+        );
+    }
+}
