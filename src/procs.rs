@@ -397,36 +397,22 @@ impl Procs {
             .collect()
     }
 
-    /// Get process stats (cpu%, memory bytes, uptime secs, disk I/O) for a given PID
+    /// Get process-tree stats (cpu%, memory bytes, uptime secs, disk I/O) for a given root PID.
     pub fn get_stats(&self, pid: u32) -> Option<ProcessStats> {
-        let system = self.lock_system();
-        system.process(sysinfo::Pid::from_u32(pid)).map(|p| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let disk = p.disk_usage();
-            ProcessStats {
-                cpu_percent: p.cpu_usage(),
-                memory_bytes: p.memory(),
-                uptime_secs: now.saturating_sub(p.start_time()),
-                disk_read_bytes: disk.read_bytes,
-                disk_write_bytes: disk.written_bytes,
-            }
-        })
+        self.get_batch_group_stats(&[pid])
+            .into_iter()
+            .next()
+            .and_then(|(_, stats)| stats)
     }
 
     /// Get extended process information for a given PID
     pub fn get_extended_stats(&self, pid: u32) -> Option<ExtendedProcessStats> {
-        let system = self.lock_system();
-        system.process(sysinfo::Pid::from_u32(pid)).map(|p| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let disk = p.disk_usage();
+        let aggregate_stats = self.get_stats(pid)?;
 
-            ExtendedProcessStats {
+        let system = self.lock_system();
+        system
+            .process(sysinfo::Pid::from_u32(pid))
+            .map(|p| ExtendedProcessStats {
                 name: p.name().to_string_lossy().to_string(),
                 exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
                 cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
@@ -437,18 +423,17 @@ impl Procs {
                     .map(|s| s.to_string_lossy().to_string())
                     .collect(),
                 status: format!("{:?}", p.status()),
-                cpu_percent: p.cpu_usage(),
-                memory_bytes: p.memory(),
+                cpu_percent: aggregate_stats.cpu_percent,
+                memory_bytes: aggregate_stats.memory_bytes,
                 virtual_memory_bytes: p.virtual_memory(),
-                uptime_secs: now.saturating_sub(p.start_time()),
+                uptime_secs: aggregate_stats.uptime_secs,
                 start_time: p.start_time(),
-                disk_read_bytes: disk.read_bytes,
-                disk_write_bytes: disk.written_bytes,
+                disk_read_bytes: aggregate_stats.disk_read_bytes,
+                disk_write_bytes: aggregate_stats.disk_write_bytes,
                 parent_pid: p.parent().map(|pp| pp.as_u32()),
                 thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
                 user_id: p.user_id().map(|u| u.to_string()),
-            }
-        })
+            })
     }
 }
 

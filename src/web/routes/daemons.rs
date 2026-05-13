@@ -3,6 +3,7 @@ use axum::{
     response::Html,
 };
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use crate::daemon::is_valid_daemon_id;
 use crate::daemon_list::get_all_daemons_direct;
@@ -14,7 +15,7 @@ use crate::state_file::StateFile;
 use crate::supervisor::SUPERVISOR;
 use crate::web::bp;
 use crate::web::helpers::{
-    css_safe_id, daemon_row, format_daemon_id_html, html_escape, url_encode,
+    css_safe_id, daemon_row, daemon_row_with_stats, format_daemon_id_html, html_escape, url_encode,
 };
 
 /// Get daemon command from the stored cmd field
@@ -95,6 +96,15 @@ async fn list_content() -> String {
     let entries = get_all_daemons_direct(&SUPERVISOR)
         .await
         .unwrap_or_default();
+    let pids: Vec<u32> = entries
+        .iter()
+        .filter_map(|entry| entry.daemon.pid)
+        .collect();
+    let stats_by_pid: HashMap<_, _> = PROCS
+        .get_batch_group_stats(&pids)
+        .into_iter()
+        .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
+        .collect();
     let mut rows = String::new();
 
     for entry in entries {
@@ -119,7 +129,16 @@ async fn list_content() -> String {
             </tr>"##));
         } else {
             // Show active daemons from state file
-            rows.push_str(&daemon_row(&entry.id, &entry.daemon, entry.is_disabled));
+            let stats = entry
+                .daemon
+                .pid
+                .and_then(|pid| stats_by_pid.get(&pid).copied());
+            rows.push_str(&daemon_row_with_stats(
+                &entry.id,
+                &entry.daemon,
+                entry.is_disabled,
+                stats,
+            ));
         }
     }
 
@@ -164,6 +183,15 @@ pub async fn list_partial() -> Html<String> {
     let entries = get_all_daemons_direct(&SUPERVISOR)
         .await
         .unwrap_or_default();
+    let pids: Vec<u32> = entries
+        .iter()
+        .filter_map(|entry| entry.daemon.pid)
+        .collect();
+    let stats_by_pid: HashMap<_, _> = PROCS
+        .get_batch_group_stats(&pids)
+        .into_iter()
+        .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
+        .collect();
     let mut rows = String::new();
 
     for entry in entries {
@@ -188,7 +216,16 @@ pub async fn list_partial() -> Html<String> {
             </tr>"##));
         } else {
             // Show active daemons from state file
-            rows.push_str(&daemon_row(&entry.id, &entry.daemon, entry.is_disabled));
+            let stats = entry
+                .daemon
+                .pid
+                .and_then(|pid| stats_by_pid.get(&pid).copied());
+            rows.push_str(&daemon_row_with_stats(
+                &entry.id,
+                &entry.daemon,
+                entry.is_disabled,
+                stats,
+            ));
         }
     }
 
