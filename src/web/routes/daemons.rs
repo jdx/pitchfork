@@ -3,7 +3,6 @@ use axum::{
     response::Html,
 };
 use serde::Deserialize;
-use std::collections::HashMap;
 
 use crate::daemon::is_valid_daemon_id;
 use crate::daemon_list::get_all_daemons_direct;
@@ -100,11 +99,7 @@ async fn list_content() -> String {
         .iter()
         .filter_map(|entry| entry.daemon.pid)
         .collect();
-    let stats_by_pid: HashMap<_, _> = PROCS
-        .get_batch_group_stats(&pids)
-        .into_iter()
-        .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
-        .collect();
+    let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
     let mut rows = String::new();
 
     for entry in entries {
@@ -187,11 +182,7 @@ pub async fn list_partial() -> Html<String> {
         .iter()
         .filter_map(|entry| entry.daemon.pid)
         .collect();
-    let stats_by_pid: HashMap<_, _> = PROCS
-        .get_batch_group_stats(&pids)
-        .into_iter()
-        .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
-        .collect();
+    let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
     let mut rows = String::new();
 
     for entry in entries {

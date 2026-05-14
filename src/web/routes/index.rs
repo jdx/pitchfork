@@ -1,5 +1,5 @@
 use axum::response::Html;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::daemon_id::DaemonId;
 use crate::env;
@@ -121,12 +121,8 @@ pub async fn index() -> Html<String> {
     let total = all_ids.len();
 
     // Build daemon table rows
-    let pids: Vec<u32> = state.daemons.values().filter_map(|d| d.pid).collect();
-    let stats_by_pid: HashMap<_, _> = PROCS
-        .get_batch_group_stats(&pids)
-        .into_iter()
-        .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
-        .collect();
+    let pids: Vec<u32> = user_daemons.iter().filter_map(|(_, d)| d.pid).collect();
+    let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
 
     let mut rows = String::new();
     for (id, daemon) in &state.daemons {

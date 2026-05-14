@@ -3,6 +3,7 @@ use crate::Result;
 use crate::settings::settings;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
 
@@ -335,12 +336,16 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
     }
 
-    /// Get aggregated stats for multiple process groups in a single pass.
+    /// Get aggregated stats for multiple process trees in a single pass.
     ///
     /// Builds the parent→children map once (O(N)) and then BFS-es from each
     /// root PID (O(D_i) per daemon). Total cost is O(N + ΣD_i) instead of
-    /// O(D × N) when calling `get_group_stats` in a loop.
+    /// O(D × N) when collecting stats for each daemon separately.
     pub fn get_batch_group_stats(&self, pids: &[u32]) -> Vec<(u32, Option<ProcessStats>)> {
+        if pids.is_empty() {
+            return Vec::new();
+        }
+
         let system = self.lock_system();
         let processes = system.processes();
 
@@ -394,6 +399,14 @@ impl Procs {
 
                 (pid, Some(stats))
             })
+            .collect()
+    }
+
+    /// Get process-tree stats for multiple root PIDs, omitting roots that no longer exist.
+    pub fn get_batch_tree_stats_map(&self, pids: &[u32]) -> HashMap<u32, ProcessStats> {
+        self.get_batch_group_stats(pids)
+            .into_iter()
+            .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
             .collect()
     }
 
@@ -579,6 +592,7 @@ fn signal_name(sig: i32) -> &'static str {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
 
@@ -586,20 +600,31 @@ mod tests {
 
     impl Drop for ChildGuard {
         fn drop(&mut self) {
-            let _ = self.0.kill();
+            let pid = self.0.id() as i32;
+            // The test process is started in its own session, so PID == PGID.
+            let _ = unsafe { libc::killpg(pid, libc::SIGKILL) };
             let _ = self.0.wait();
         }
     }
 
     #[test]
     fn get_stats_includes_descendant_rss() {
-        let parent = Command::new("sh")
+        let mut command = Command::new("sh");
+        command
             .args(["-c", "sleep 30 & wait"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("failed to spawn process tree");
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let parent = command.spawn().expect("failed to spawn process tree");
         let parent_pid = parent.id();
         let _parent = ChildGuard(parent);
 
@@ -620,21 +645,38 @@ mod tests {
         );
 
         procs.refresh_processes();
+        let root_pid = sysinfo::Pid::from_u32(parent_pid);
+        let direct_memory = {
+            let system = procs.lock_system();
+            system
+                .process(root_pid)
+                .expect("parent process should exist")
+                .memory()
+        };
+        let descendant_memory = {
+            let system = procs.lock_system();
+            child_pids
+                .iter()
+                .filter_map(|pid| system.process(sysinfo::Pid::from_u32(*pid)))
+                .map(|process| process.memory())
+                .sum::<u64>()
+        };
+        assert!(
+            descendant_memory > 0,
+            "descendants {child_pids:?} should have nonzero RSS"
+        );
+
         let stats = procs
             .get_stats(parent_pid)
-            .expect("parent process should have direct stats");
-        let aggregate = procs
-            .get_batch_group_stats(&[parent_pid])
-            .into_iter()
-            .next()
-            .and_then(|(_, stats)| stats)
             .expect("parent process should have aggregate stats");
 
         assert_eq!(
-            stats.memory_bytes, aggregate.memory_bytes,
+            stats.memory_bytes,
+            direct_memory + descendant_memory,
             "get_stats should include descendant RSS for parent pid {parent_pid}; \
-             descendants: {child_pids:?}, direct RSS: {}, tree RSS: {}",
-            stats.memory_bytes, aggregate.memory_bytes
+             descendants: {child_pids:?}, direct RSS: {direct_memory}, \
+             descendant RSS: {descendant_memory}, reported RSS: {}",
+            stats.memory_bytes
         );
     }
 }

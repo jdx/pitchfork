@@ -1158,11 +1158,7 @@ impl App {
             .iter()
             .filter_map(|daemon| daemon.pid)
             .collect();
-        let stats_by_pid: HashMap<_, _> = PROCS
-            .get_batch_group_stats(&pids)
-            .into_iter()
-            .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
-            .collect();
+        let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
 
         for daemon in &self.daemons {
             if let Some(pid) = daemon.pid
