@@ -18,7 +18,13 @@ PITCHFORK_WEB_PORT=3120 pitchfork supervisor start --force
 
 ### Persistent via settings
 
-Add to your `pitchfork.toml` or `~/.config/pitchfork/config.toml`:
+Because the web UI is owned by the supervisor process, persistent web UI
+settings should live in global config (`~/.config/pitchfork/config.toml` or
+`/etc/pitchfork/config.toml`). Project-level `[settings.web]` values only apply
+when the supervisor is started from that project directory and do not
+reconfigure an already-running supervisor.
+
+Add to your global config:
 
 ```toml
 [settings.web]
@@ -53,7 +59,7 @@ pitchfork supervisor run --web-port 3120 --web-path ps
 # Web UI available at http://127.0.0.1:3120/ps/
 ```
 
-Or via settings:
+Or via global settings:
 
 ```toml
 [settings.web]

@@ -9,6 +9,13 @@ This page documents all configurable settings for pitchfork. Settings can be con
 
 Settings are merged in precedence order, with later sources overriding earlier ones.
 
+Settings for supervisor-owned services, such as `[settings.web]` and
+`[settings.proxy]`, are resolved when the supervisor process starts. Put
+persistent values for those services in global config or set them with
+environment variables/CLI flags for that supervisor invocation. Project-level
+values only apply when the supervisor is started from that project directory and
+do not reconfigure an already-running supervisor.
+
 ## Configuration in pitchfork.toml
 
 Add a `[settings]` section to any `pitchfork.toml` file:
@@ -22,11 +29,6 @@ run = "node server.js"
 [settings.general]
 autostop_delay = "5m"
 log_level = "debug"
-
-[settings.web]
-auto_start = true
-bind_address = "0.0.0.0"
-bind_port = 8080
 
 [settings.tui]
 refresh_rate = "1s"
