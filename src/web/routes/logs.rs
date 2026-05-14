@@ -32,6 +32,42 @@ fn base_html(title: &str, content: &str) -> String {
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <script src="https://unpkg.com/lucide@0.474.0"></script>
+    <script>
+        (function() {{
+            const logSources = new Set();
+
+            window.pitchforkLogEventSource = function(url) {{
+                const source = new EventSource(url, {{ withCredentials: true }});
+                logSources.add(source);
+                source.addEventListener('error', function() {{
+                    if (source.readyState === EventSource.CLOSED) {{
+                        logSources.delete(source);
+                    }}
+                }});
+                return source;
+            }};
+
+            if (window.htmx) {{
+                htmx.createEventSource = window.pitchforkLogEventSource;
+            }}
+
+            function closeLogSources() {{
+                logSources.forEach(function(source) {{
+                    source.close();
+                }});
+                logSources.clear();
+            }}
+
+            window.addEventListener('pagehide', closeLogSources);
+            window.addEventListener('beforeunload', closeLogSources);
+            document.addEventListener('click', function(evt) {{
+                const link = evt.target.closest && evt.target.closest('a[href]');
+                if (link && link.target !== '_blank') {{
+                    closeLogSources();
+                }}
+            }}, true);
+        }})();
+    </script>
     <link rel="stylesheet" href="{bp}/static/style.css">
 </head>
 <body>
@@ -224,7 +260,7 @@ pub async fn index() -> Html<String> {
                     let url_id = url_encode(id);
                     format!(
                         r#"
-                var clearSource_{idx} = new EventSource('{bp}/logs/{url_id}/stream');
+                var clearSource_{idx} = window.pitchforkLogEventSource('{bp}/logs/{url_id}/stream');
                 clearSource_{idx}.addEventListener('clear', function(e) {{
                     document.getElementById('log-output-' + '{js_id}').textContent = '';
                 }});
@@ -294,7 +330,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             // Auto-scroll to bottom on load
             document.getElementById('log-output').scrollTop = document.getElementById('log-output').scrollHeight;
             // Listen for clear event using native EventSource (htmx-ext-sse only handles 'message' events)
-            var clearSource = new EventSource('{bp}/logs/{url_id}/stream');
+            var clearSource = window.pitchforkLogEventSource('{bp}/logs/{url_id}/stream');
             clearSource.addEventListener('clear', function(e) {{
                 document.getElementById('log-output').textContent = '';
             }});
