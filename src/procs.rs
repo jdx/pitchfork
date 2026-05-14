@@ -420,33 +420,71 @@ impl Procs {
 
     /// Get extended process information for a given PID
     pub fn get_extended_stats(&self, pid: u32) -> Option<ExtendedProcessStats> {
-        let aggregate_stats = self.get_stats(pid)?;
-
         let system = self.lock_system();
-        system
-            .process(sysinfo::Pid::from_u32(pid))
-            .map(|p| ExtendedProcessStats {
-                name: p.name().to_string_lossy().to_string(),
-                exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
-                cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
-                environ: p
-                    .environ()
-                    .iter()
-                    .take(20)
-                    .map(|s| s.to_string_lossy().to_string())
-                    .collect(),
-                status: format!("{:?}", p.status()),
-                cpu_percent: aggregate_stats.cpu_percent,
-                memory_bytes: aggregate_stats.memory_bytes,
-                virtual_memory_bytes: p.virtual_memory(),
-                uptime_secs: aggregate_stats.uptime_secs,
-                start_time: p.start_time(),
-                disk_read_bytes: aggregate_stats.disk_read_bytes,
-                disk_write_bytes: aggregate_stats.disk_write_bytes,
-                parent_pid: p.parent().map(|pp| pp.as_u32()),
-                thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
-                user_id: p.user_id().map(|u| u.to_string()),
-            })
+        let processes = system.processes();
+        let root_pid = sysinfo::Pid::from_u32(pid);
+        let p = processes.get(&root_pid)?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let root_disk = p.disk_usage();
+        let mut aggregate_stats = ProcessStats {
+            cpu_percent: p.cpu_usage(),
+            memory_bytes: p.memory(),
+            uptime_secs: now.saturating_sub(p.start_time()),
+            disk_read_bytes: root_disk.read_bytes,
+            disk_write_bytes: root_disk.written_bytes,
+        };
+
+        let mut children_map: HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> = HashMap::new();
+        for (child_pid, child) in processes {
+            if let Some(ppid) = child.parent() {
+                children_map.entry(ppid).or_default().push(*child_pid);
+            }
+        }
+
+        let mut queue = std::collections::VecDeque::new();
+        if let Some(direct_children) = children_map.get(&root_pid) {
+            queue.extend(direct_children);
+        }
+        while let Some(child_pid) = queue.pop_front() {
+            if let Some(child) = processes.get(&child_pid) {
+                let disk = child.disk_usage();
+                aggregate_stats.cpu_percent += child.cpu_usage();
+                aggregate_stats.memory_bytes += child.memory();
+                aggregate_stats.disk_read_bytes += disk.read_bytes;
+                aggregate_stats.disk_write_bytes += disk.written_bytes;
+            }
+            if let Some(grandchildren) = children_map.get(&child_pid) {
+                queue.extend(grandchildren);
+            }
+        }
+
+        Some(ExtendedProcessStats {
+            name: p.name().to_string_lossy().to_string(),
+            exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
+            cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
+            environ: p
+                .environ()
+                .iter()
+                .take(20)
+                .map(|s| s.to_string_lossy().to_string())
+                .collect(),
+            status: format!("{:?}", p.status()),
+            cpu_percent: aggregate_stats.cpu_percent,
+            memory_bytes: aggregate_stats.memory_bytes,
+            virtual_memory_bytes: p.virtual_memory(),
+            uptime_secs: aggregate_stats.uptime_secs,
+            start_time: p.start_time(),
+            disk_read_bytes: aggregate_stats.disk_read_bytes,
+            disk_write_bytes: aggregate_stats.disk_write_bytes,
+            parent_pid: p.parent().map(|pp| pp.as_u32()),
+            thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
+            user_id: p.user_id().map(|u| u.to_string()),
+        })
     }
 }
 
@@ -645,6 +683,11 @@ mod tests {
         );
 
         procs.refresh_processes();
+        child_pids = procs.all_children(parent_pid);
+        assert!(
+            !child_pids.is_empty(),
+            "test process tree disappeared under parent pid {parent_pid}"
+        );
         let root_pid = sysinfo::Pid::from_u32(parent_pid);
         let direct_memory = {
             let system = procs.lock_system();
