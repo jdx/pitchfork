@@ -787,34 +787,38 @@ impl Supervisor {
 fn fix_state_dir_permissions() {
     let state_dir = &*env::PITCHFORK_STATE_DIR;
     if let Some((uid, gid)) = state_owner_ids() {
-        if !state_dir.exists()
-            && let Err(err) = fs::create_dir_all(state_dir)
-        {
+        if state_dir.exists() {
+            // Best path: chown back to the runtime user. Permissions stay tight.
+            chown_recursive(state_dir, uid, gid, true);
+            debug!(
+                "chowned state directory to uid={uid} gid={gid} at {}",
+                state_dir.display()
+            );
+        } else if let Err(err) = fs::create_dir_all(state_dir) {
             warn!(
                 "failed to create state directory for ownership fix at {}: {err}",
                 state_dir.display()
             );
-            return;
         }
 
-        // Best path: chown back to the runtime user. Permissions stay tight.
-        chown_recursive(state_dir, uid, gid, true);
-        debug!(
-            "chowned state directory to uid={uid} gid={gid} at {}",
-            state_dir.display()
-        );
+        // Also chown the fslock directory so non-root CLI clients can create
+        // lock files there. The `xx` crate stores lock files at
+        // `$TMPDIR/fslock/<hash>`, which is created by root when the
+        // supervisor runs as root.
+        fix_fslock_dir_permissions(uid, gid);
     } else {
-        if !state_dir.exists() {
-            return;
+        if state_dir.exists() {
+            // Fallback: relax permissions on safe subdirectories only.
+            // proxy/ is never touched.
+            chmod_safe_subtrees(state_dir);
+            debug!(
+                "relaxed permissions on safe subtrees at {}",
+                state_dir.display()
+            );
         }
 
-        // Fallback: relax permissions on safe subdirectories only.
-        // proxy/ is never touched.
-        chmod_safe_subtrees(state_dir);
-        debug!(
-            "relaxed permissions on safe subtrees at {}",
-            state_dir.display()
-        );
+        // Also fix the fslock directory permissions in the fallback path.
+        fix_fslock_dir_permissions_fallback();
     }
 }
 
@@ -948,4 +952,100 @@ fn chmod_recursive(dir: &std::path::Path) {
             let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o644));
         }
     }
+}
+
+/// Fix permissions on the fslock directory so non-root CLI clients can create
+/// lock files there. The `xx` crate stores lock files at
+/// `$TMPDIR/fslock/<hash>`, which is created by root when the supervisor runs
+/// as root. Without this fix, non-root CLI clients cannot create lock files
+/// there, causing `Permission denied` errors when reading/writing state.
+///
+/// **Important**: `/tmp/fslock/` is a shared directory used by all users and
+/// processes that depend on the `xx` crate. We only chown the directory itself
+/// and pitchfork's own lock files (derived from the state file path), not all
+/// files inside — chowning other users' lock files would break their processes.
+#[cfg(unix)]
+fn fix_fslock_dir_permissions(uid: u32, gid: u32) {
+    let fslock_dir = std::env::temp_dir().join("fslock");
+    if !fslock_dir.exists() {
+        return;
+    }
+    // Chown the directory itself so the non-root user can create lock files.
+    // We do NOT chown all contents — other users' lock files must not be
+    // touched. Instead, we chown only the lock files that correspond to
+    // pitchfork's state file and config file paths.
+    let _ = chown_path(&fslock_dir, uid, gid);
+    // Chown lock files for paths that pitchfork uses with fslock.
+    for path in fslock_paths() {
+        let lock_path = fslock_path_for(&path);
+        if lock_path.exists() {
+            let _ = chown_path(&lock_path, uid, gid);
+        }
+    }
+    debug!(
+        "chowned fslock directory to uid={uid} gid={gid} at {}",
+        fslock_dir.display()
+    );
+}
+
+/// Fallback: relax permissions on the fslock directory so non-root CLI clients
+/// can create lock files there. Used when neither `supervisor.user` nor
+/// `SUDO_UID`/`SUDO_GID` are available (e.g. direct root login).
+///
+/// Only the directory itself and pitchfork's own lock files are modified —
+/// other users' lock files are not touched.
+#[cfg(unix)]
+fn fix_fslock_dir_permissions_fallback() {
+    let fslock_dir = std::env::temp_dir().join("fslock");
+    if !fslock_dir.is_dir() {
+        return;
+    }
+    let _ = fs::set_permissions(&fslock_dir, fs::Permissions::from_mode(0o755));
+    // Only relax permissions on pitchfork's own lock files, not all files.
+    for path in fslock_paths() {
+        let lock_path = fslock_path_for(&path);
+        if lock_path.exists() {
+            let _ = fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644));
+        }
+    }
+    debug!(
+        "relaxed permissions on fslock directory at {}",
+        fslock_dir.display()
+    );
+}
+
+/// Returns the file paths that pitchfork uses with `xx::fslock`.
+/// These are the paths whose lock files need permission fixes.
+#[cfg(unix)]
+fn fslock_paths() -> Vec<std::path::PathBuf> {
+    vec![
+        env::PITCHFORK_STATE_FILE.clone(),
+        env::PITCHFORK_GLOBAL_CONFIG_USER.clone(),
+    ]
+}
+
+/// Computes the fslock path for a given file path, matching the `xx` crate's
+/// `FSLock::new()` logic: `$TMPDIR/fslock/<hash_of_normalized_path>`.
+///
+/// Uses the same normalization as `state_file::normalized_lock_path()`:
+/// tries `canonicalize()` first, then `canonicalize(parent) + file_name`,
+/// then `absolute()`, then the path as-is. This ensures the hash matches
+/// the lock file that `xx::fslock` actually creates.
+#[cfg(unix)]
+fn fslock_path_for(path: &std::path::Path) -> std::path::PathBuf {
+    let normalized = if let Ok(canonical) = path.canonicalize() {
+        canonical
+    } else if let Some(parent) = path.parent()
+        && let Ok(canonical_parent) = parent.canonicalize()
+        && let Some(file_name) = path.file_name()
+    {
+        canonical_parent.join(file_name)
+    } else if let Ok(absolute) = std::path::absolute(path) {
+        absolute
+    } else {
+        path.to_path_buf()
+    };
+    std::env::temp_dir()
+        .join("fslock")
+        .join(xx::hash::hash_to_str(&normalized))
 }
