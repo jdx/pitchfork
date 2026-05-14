@@ -1657,7 +1657,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         if let Some(http) = &cfg.ready_http {
             lines.push(Line::from(vec![
                 Span::styled("Ready HTTP: ", Style::default().fg(GRAY)),
-                Span::styled(http.clone(), Style::default().fg(Color::White)),
+                Span::styled(http.to_string(), Style::default().fg(Color::White)),
             ]));
         }
 

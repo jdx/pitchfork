@@ -8,7 +8,7 @@ use crate::daemon_id::DaemonId;
 use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
-    PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork, is_global_config,
+    PitchforkToml, PitchforkTomlDaemon, ReadyHttp, is_dot_config_pitchfork, is_global_config,
 };
 
 use chrono::{DateTime, Local};
@@ -101,7 +101,11 @@ pub fn build_run_options(
     run_opts.wait_ready = true;
     run_opts.ready_delay = opts.delay.or(run_opts.ready_delay).or(Some(3));
     run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
-    run_opts.ready_http = opts.http.clone().or(run_opts.ready_http);
+    run_opts.ready_http = opts
+        .http
+        .clone()
+        .map(ReadyHttp::new)
+        .or(run_opts.ready_http);
     run_opts.ready_port = opts.port.or(run_opts.ready_port);
     run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
     if let Some(ref expected) = opts.expected_port {
@@ -534,7 +538,7 @@ impl IpcClient {
         let force = opts.force && is_explicitly_requested;
         let delay = opts.delay;
         let output = opts.output.clone();
-        let http = opts.http.clone();
+        let http = opts.http.clone().map(ReadyHttp::new);
         let port = opts.port;
         let ready_cmd = opts.cmd.clone();
         let expected_port = opts.expected_port.clone();
@@ -713,7 +717,7 @@ impl IpcClient {
             retry: opts.retry.unwrap_or_default(),
             ready_delay: opts.delay.or(Some(3)),
             ready_output: opts.output,
-            ready_http: opts.http,
+            ready_http: opts.http.map(ReadyHttp::new),
             ready_port: opts.port,
             ready_cmd: opts.cmd.clone(),
             port: crate::config_types::PortConfig::from_parts(

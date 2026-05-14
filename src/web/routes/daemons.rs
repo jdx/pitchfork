@@ -361,7 +361,12 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                     .map(|d| format!("{d}s"))
                     .unwrap_or_else(|| "-".into()),
                 html_escape(cfg.ready_output.as_deref().unwrap_or("-")),
-                html_escape(cfg.ready_http.as_deref().unwrap_or("-")),
+                html_escape(
+                    &cfg.ready_http
+                        .as_ref()
+                        .map(|h| h.to_string())
+                        .unwrap_or_else(|| "-".into()),
+                ),
             )
         } else {
             String::new()

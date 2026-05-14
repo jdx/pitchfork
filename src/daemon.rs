@@ -1,7 +1,7 @@
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{
-    CpuLimit, CronRetrigger, Dir, MemoryLimit, PortConfig, Retry, StopConfig, WatchMode,
+    CpuLimit, CronRetrigger, Dir, MemoryLimit, PortConfig, ReadyHttp, Retry, StopConfig, WatchMode,
 };
 use indexmap::IndexMap;
 use std::fmt::Display;
@@ -86,7 +86,7 @@ pub struct Daemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_http: Option<String>,
+    pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -159,7 +159,7 @@ pub struct RunOptions {
     pub retry_count: u32,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
-    pub ready_http: Option<String>,
+    pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
     pub port: Option<PortConfig>,

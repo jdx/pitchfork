@@ -38,6 +38,7 @@ impl TestEnv {
         // Create state and logs directories
         let state_dir = home_dir.join(".local").join("state").join("pitchfork");
         fs::create_dir_all(&state_dir).unwrap();
+        fs::create_dir_all(home_dir.join(".config")).unwrap();
 
         Self {
             temp_dir,
@@ -87,6 +88,8 @@ impl TestEnv {
         cmd.args(args)
             .current_dir(self.project_dir())
             .env("HOME", &self.home_dir)
+            .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
+            .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
             .env("PITCHFORK_LOG", "debug")
             // Set fast watcher refresh/poll intervals for tests
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
@@ -108,6 +111,8 @@ impl TestEnv {
             .args(args)
             .current_dir(self.project_dir())
             .env("HOME", &self.home_dir)
+            .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
+            .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
             .env("PITCHFORK_LOG", "debug")
             // Set fast watcher refresh/poll intervals for tests
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
@@ -221,6 +226,8 @@ impl TestEnv {
         cmd.args(args)
             .current_dir(dir)
             .env("HOME", &self.home_dir)
+            .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
+            .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
             .env("PITCHFORK_LOG", "debug")
             // Set fast watcher refresh/poll intervals for tests
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
@@ -391,6 +398,8 @@ impl TestEnv {
             match Command::new(&self.pitchfork_bin)
                 .args(["supervisor", "stop"])
                 .env("HOME", &self.home_dir)
+                .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
+                .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .output()

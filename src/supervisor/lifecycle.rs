@@ -797,9 +797,9 @@ impl Supervisor {
                             std::future::pending::<()>().await;
                         }
                     }, if !ready_notified && ready_http.is_some() => {
-                        if let (Some(url), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(url).send().await {
-                                Ok(response) if response.status().is_success() => {
+                        if let (Some(http), Some(client)) = (&ready_http, &http_client) {
+                            match client.get(&http.url).send().await {
+                                Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
                                     let _ = log_appender.flush().await;

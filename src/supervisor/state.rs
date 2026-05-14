@@ -12,6 +12,7 @@ use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::MemoryLimit;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::pitchfork_toml::PortConfig;
+use crate::pitchfork_toml::ReadyHttp;
 use crate::pitchfork_toml::Retry;
 use crate::pitchfork_toml::StopConfig;
 use crate::pitchfork_toml::WatchMode;
@@ -39,7 +40,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub retry_count: Option<u32>,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
-    pub ready_http: Option<String>,
+    pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
     /// Port configuration
