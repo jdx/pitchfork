@@ -2,7 +2,7 @@
   const logSources = new Set();
 
   window.pitchforkLogEventSource = function (url) {
-    const source = new EventSource(url, { withCredentials: true });
+    const source = new EventSource(url);
     logSources.add(source);
     source.addEventListener("error", function () {
       if (source.readyState === EventSource.CLOSED) {
@@ -23,16 +23,9 @@
     logSources.clear();
   }
 
-  window.addEventListener("pagehide", closeLogSources);
-  window.addEventListener("beforeunload", closeLogSources);
-  document.addEventListener(
-    "click",
-    function (evt) {
-      const link = evt.target.closest && evt.target.closest("a[href]");
-      if (link && link.target !== "_blank") {
-        closeLogSources();
-      }
-    },
-    true,
-  );
+  window.addEventListener("pagehide", function (evt) {
+    if (!evt.persisted) {
+      closeLogSources();
+    }
+  });
 })();
