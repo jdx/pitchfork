@@ -1150,7 +1150,10 @@ impl App {
     }
 
     fn refresh_process_stats(&mut self) {
-        PROCS.refresh_processes();
+        let pids: Vec<u32> = self.daemons.iter().filter_map(|d| d.pid).collect();
+        if !pids.is_empty() {
+            PROCS.refresh_pids(&pids);
+        }
         self.process_stats.clear();
         for daemon in &self.daemons {
             if let Some(pid) = daemon.pid
