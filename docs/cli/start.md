@@ -12,6 +12,7 @@ The command waits for the daemon to be ready before returning.
 Examples:
   pitchfork start api           Start a single daemon
   pitchfork start api worker    Start multiple daemons
+  pitchfork start --group backend Start all daemons in the 'backend' group
   pitchfork start -l            Start all local daemons in pitchfork.toml
   pitchfork start -g            Start all global daemons in config.toml
   pitchfork start -a            Start all daemons (local and global)
@@ -31,6 +32,10 @@ Examples:
 ID of the daemon(s) in pitchfork.toml to start
 
 ## Flags
+
+### `--group <GROUP>`
+
+Start all daemons in the named group
 
 ### `-l --local`
 

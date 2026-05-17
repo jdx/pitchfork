@@ -25,6 +25,7 @@ The command waits for the daemon to be ready before returning.
 Examples:
   pitchfork start api           Start a single daemon
   pitchfork start api worker    Start multiple daemons
+  pitchfork start --group backend Start all daemons in the 'backend' group
   pitchfork start -l            Start all local daemons in pitchfork.toml
   pitchfork start -g            Start all global daemons in config.toml
   pitchfork start -a            Start all daemons (local and global)
@@ -45,6 +46,15 @@ pub struct Start {
         conflicts_with = "all"
     )]
     id: Vec<String>,
+    /// Start all daemons in the named group
+    #[clap(
+        long,
+        value_name = "GROUP",
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
+    group: Option<String>,
     /// Start all local daemons in pitchfork.toml
     #[clap(
         long,
@@ -100,8 +110,8 @@ pub struct Start {
 impl Start {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.local || self.global || self.all || !self.id.is_empty(),
-            "At least one daemon ID or one of --all / --local / --global must be provided"
+            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
+            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
@@ -114,8 +124,13 @@ impl Start {
         } else if self.local {
             IpcClient::get_local_configured_daemons()?
         } else {
-            PitchforkToml::resolve_ids(&self.id)?
+            PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
+
+        if ids.is_empty() {
+            warn!("No daemons to start");
+            return Ok(());
+        }
 
         let opts = StartOptions {
             force: self.force,

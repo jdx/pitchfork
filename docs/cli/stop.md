@@ -20,6 +20,7 @@ dependents are stopped before the daemons they depend on.
 Examples:
   pitchfork stop api           Stop a single daemon
   pitchfork stop api worker    Stop multiple daemons
+  pitchfork stop --group backend Stop all daemons in the 'backend' group
   pitchfork stop --all         Stop all running daemons in dependency order
   pitchfork stop -l            Stop all local daemons in pitchfork.toml
   pitchfork stop -g            Stop all global daemons in config.toml
@@ -32,6 +33,10 @@ Examples:
 The name of the daemon(s) to stop
 
 ## Flags
+
+### `--group <GROUP>`
+
+Stop all daemons in the named group
 
 ### `-a --all`
 

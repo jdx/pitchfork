@@ -27,6 +27,7 @@ dependents are stopped before the daemons they depend on.
 Examples:
   pitchfork stop api           Stop a single daemon
   pitchfork stop api worker    Stop multiple daemons
+  pitchfork stop --group backend Stop all daemons in the 'backend' group
   pitchfork stop --all         Stop all running daemons in dependency order
   pitchfork stop -l            Stop all local daemons in pitchfork.toml
   pitchfork stop -g            Stop all global daemons in config.toml
@@ -40,6 +41,15 @@ pub struct Stop {
         conflicts_with = "all"
     )]
     id: Vec<String>,
+    /// Stop all daemons in the named group
+    #[clap(
+        long,
+        value_name = "GROUP",
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
+    group: Option<String>,
     /// Stop all running daemons (in reverse dependency order)
     #[clap(long, short, conflicts_with = "local", conflicts_with = "global")]
     all: bool,
@@ -66,8 +76,8 @@ pub struct Stop {
 impl Stop {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.local || self.global || self.all || !self.id.is_empty(),
-            "At least one daemon ID or one of --all / --local / --global must be provided"
+            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
+            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(false).await?);
@@ -77,7 +87,7 @@ impl Stop {
         } else if self.global || self.local {
             ipc.get_running_configured_daemons(self.global).await?
         } else {
-            PitchforkToml::resolve_ids(&self.id)?
+            PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
 
         if ids.is_empty() {
