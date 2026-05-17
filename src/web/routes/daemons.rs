@@ -5,7 +5,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::daemon::is_valid_daemon_id;
-use crate::daemon_list::get_all_daemons_direct;
+use crate::daemon_list::{DaemonListEntry, get_all_daemons_direct};
 use crate::env;
 use crate::ipc::batch::{StartOptions, build_run_options};
 use crate::pitchfork_toml::PitchforkToml;
@@ -16,6 +16,14 @@ use crate::web::bp;
 use crate::web::helpers::{
     css_safe_id, daemon_row, format_daemon_id_html, html_escape, url_encode,
 };
+
+/// Refresh process info for accurate CPU/memory stats (only managed daemons).
+fn refresh_daemon_list_pids(entries: &[DaemonListEntry]) {
+    let pids: Vec<u32> = entries.iter().filter_map(|e| e.daemon.pid).collect();
+    if !pids.is_empty() {
+        PROCS.refresh_pids(&pids);
+    }
+}
 
 /// Get daemon command from the stored cmd field
 fn get_daemon_command(daemon: &crate::daemon::Daemon) -> String {
@@ -89,12 +97,12 @@ pub async fn list() -> Html<String> {
 
 async fn list_content() -> String {
     let bp = bp();
-    // Refresh process info for accurate CPU/memory stats
-    PROCS.refresh_processes();
 
     let entries = get_all_daemons_direct(&SUPERVISOR)
         .await
         .unwrap_or_default();
+
+    refresh_daemon_list_pids(&entries);
     let mut rows = String::new();
 
     for entry in entries {
@@ -158,12 +166,12 @@ async fn list_content() -> String {
 
 pub async fn list_partial() -> Html<String> {
     let bp = bp();
-    // Refresh process info for accurate CPU/memory stats
-    PROCS.refresh_processes();
 
     let entries = get_all_daemons_direct(&SUPERVISOR)
         .await
         .unwrap_or_default();
+
+    refresh_daemon_list_pids(&entries);
     let mut rows = String::new();
 
     for entry in entries {
@@ -218,13 +226,15 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         }
     };
 
-    // Refresh process info for accurate stats
-    PROCS.refresh_processes();
+    // Refresh process info for accurate stats (only this daemon's PID)
+    let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
+        .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
+    if let Some(pid) = state.daemons.get(&daemon_id).and_then(|d| d.pid) {
+        PROCS.refresh_pids(&[pid]);
+    }
 
     let safe_id = html_escape(&id);
     let display_html = format_daemon_id_html(&daemon_id);
-    let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
-        .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
     let pt = match PitchforkToml::all_merged() {
         Ok(pt) => pt,
         Err(e) => {

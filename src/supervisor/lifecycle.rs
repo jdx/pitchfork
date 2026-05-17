@@ -412,6 +412,7 @@ impl Supervisor {
             }
         };
         info!("started daemon {id} with pid {pid}");
+        PROCS.refresh_pids(&[pid]);
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::builder(id.clone())
@@ -1107,7 +1108,7 @@ impl Supervisor {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
                 trace!("killing pid: {pid}");
-                PROCS.refresh_processes();
+                PROCS.refresh_pids(&[pid]);
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(

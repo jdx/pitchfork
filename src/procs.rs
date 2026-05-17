@@ -20,11 +20,9 @@ impl Default for Procs {
 
 impl Procs {
     pub fn new() -> Self {
-        let procs = Self {
+        Self {
             system: Mutex::new(sysinfo::System::new()),
-        };
-        procs.refresh_processes();
-        procs
+        }
     }
 
     fn lock_system(&self) -> std::sync::MutexGuard<'_, sysinfo::System> {
@@ -69,6 +67,7 @@ impl Procs {
         children
     }
 
+    /// Async wrapper for `kill_process_group`. See its docs for details and precondition.
     pub async fn kill_process_group_async(
         &self,
         pid: u32,
@@ -90,6 +89,11 @@ impl Procs {
     /// so this atomically signals all descendant processes.
     ///
     /// Returns `Err` if the signal could not be sent (e.g. permission denied).
+    ///
+    /// **Precondition:** the caller must have called `refresh_pids` or `refresh_processes`
+    /// for `pid` before invoking this method. Without a prior refresh, the internal
+    /// process map is empty and this method will incorrectly conclude the process is
+    /// already dead (`Ok(false)`) without sending any signal.
     #[cfg(unix)]
     fn kill_process_group(
         &self,
@@ -176,6 +180,7 @@ impl Procs {
         self.kill(pid, 0, None)
     }
 
+    /// Async wrapper for `kill`. See its docs for details and precondition.
     pub async fn kill_async(
         &self,
         pid: u32,
@@ -196,6 +201,11 @@ impl Procs {
     ///
     /// Returns `Err` if the signal could not be sent (e.g. permission denied
     /// when targeting a process owned by another user/root).
+    ///
+    /// **Precondition:** the caller must have called `refresh_pids` or `refresh_processes`
+    /// for `pid` before invoking this method. Without a prior refresh, the internal
+    /// process map is empty and this method will incorrectly conclude the process is
+    /// already dead (`Ok(false)`) without sending any signal.
     fn kill(
         &self,
         pid: u32,
@@ -333,6 +343,16 @@ impl Procs {
             pids.iter().map(|p| sysinfo::Pid::from_u32(*p)).collect();
         self.lock_system()
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
+    }
+
+    /// Collect daemon PIDs from a StateFile and refresh only those.
+    /// Avoids the cost of refreshing all system processes when we only
+    /// need stats for managed daemons.
+    pub(crate) fn refresh_daemon_pids(&self, state: &crate::state_file::StateFile) {
+        let pids: Vec<u32> = state.daemons.values().filter_map(|d| d.pid).collect();
+        if !pids.is_empty() {
+            self.refresh_pids(&pids);
+        }
     }
 
     /// Get aggregated stats for multiple process groups in a single pass.
