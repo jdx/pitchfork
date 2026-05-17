@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0](https://github.com/endevco/pitchfork/compare/v2.10.0...v2.11.0) - 2026-05-17
+
+### Added
+
+- *(config)* support ready_http status codes ([#437](https://github.com/endevco/pitchfork/pull/437))
+- *(config)* impl daemon group ([#442](https://github.com/endevco/pitchfork/pull/442))
+- *(proxy)* auto trust if possible ([#431](https://github.com/endevco/pitchfork/pull/431))
+- *(proxy)* support LAN mode with mDNS ([#430](https://github.com/endevco/pitchfork/pull/430))
+- *(proxy)* support wildcard subdomain ([#426](https://github.com/endevco/pitchfork/pull/426))
+
+### Other
+
+- avoid refresh full pid tree when Procs::new() ([#441](https://github.com/endevco/pitchfork/pull/441))
+- *(build)* suit for non-Windows/MacOS/Linux build ([#429](https://github.com/endevco/pitchfork/pull/429))
+
 ## [2.10.0](https://github.com/endevco/pitchfork/compare/v2.9.1...v2.10.0) - 2026-05-05
 
 ### Added
