@@ -182,6 +182,142 @@ impl JsonSchema for CpuLimit {
 }
 
 // ---------------------------------------------------------------------------
+// ReadyHttp
+// ---------------------------------------------------------------------------
+
+/// HTTP readiness check configuration.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// ready_http = "http://localhost:3000/health"  # shorthand, any 2xx response
+/// ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadyHttp {
+    pub url: String,
+    /// Exact status codes that indicate readiness. Empty means any 2xx response.
+    pub status: Vec<u16>,
+}
+
+impl ReadyHttp {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            status: vec![],
+        }
+    }
+
+    pub fn accepts_status(&self, status: u16) -> bool {
+        if self.status.is_empty() {
+            (200..=299).contains(&status)
+        } else {
+            self.status.contains(&status)
+        }
+    }
+}
+
+impl std::fmt::Display for ReadyHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.status.is_empty() {
+            f.write_str(&self.url)
+        } else {
+            let status = self
+                .status
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            write!(f, "{} (status: {status})", self.url)
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct ReadyHttpRaw {
+    url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    status: Vec<u16>,
+}
+
+impl StringOrStruct for ReadyHttp {
+    type Short = String;
+    type Raw = ReadyHttpRaw;
+
+    fn from_short(url: String) -> Self {
+        Self::new(url)
+    }
+
+    fn from_raw(raw: ReadyHttpRaw) -> std::result::Result<Self, String> {
+        for status in &raw.status {
+            if !(100..=599).contains(status) {
+                return Err(format!(
+                    "ready_http status must be between 100 and 599: {status}"
+                ));
+            }
+        }
+        Ok(Self {
+            url: raw.url,
+            status: raw.status,
+        })
+    }
+
+    fn is_shorthand(&self) -> bool {
+        self.status.is_empty()
+    }
+
+    fn to_short(&self) -> String {
+        self.url.clone()
+    }
+
+    fn to_raw(&self) -> ReadyHttpRaw {
+        ReadyHttpRaw {
+            url: self.url.clone(),
+            status: self.status.clone(),
+        }
+    }
+}
+
+impl Serialize for ReadyHttp {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.string_or_struct_serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadyHttp {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::string_or_struct_deserialize(d)
+    }
+}
+
+impl JsonSchema for ReadyHttp {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ReadyHttp")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "HTTP readiness check: a URL string accepting any 2xx response, or { url, status } object with exact accepted status codes",
+            "oneOf": [
+                { "type": "string", "description": "HTTP URL to poll for readiness; any 2xx response is ready" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "HTTP URL to poll for readiness" },
+                        "status": {
+                            "type": "array",
+                            "description": "Exact HTTP status codes that indicate readiness. Omit to accept any 2xx response.",
+                            "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+                        }
+                    },
+                    "required": ["url"]
+                }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StopSignal
 // ---------------------------------------------------------------------------
 

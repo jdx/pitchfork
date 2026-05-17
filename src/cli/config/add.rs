@@ -3,7 +3,7 @@ use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    PitchforkTomlHooks, PortBump, PortConfig, Retry, namespace_from_path,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, namespace_from_path,
 };
 use crate::settings::settings;
 use indexmap::IndexMap;
@@ -246,7 +246,7 @@ impl Add {
                 retry,
                 ready_delay: self.ready_delay,
                 ready_output: self.ready_output.clone(),
-                ready_http: self.ready_http.clone(),
+                ready_http: self.ready_http.clone().map(ReadyHttp::new),
                 ready_port: self.ready_port,
                 ready_cmd: self.ready_cmd.clone(),
                 port: {

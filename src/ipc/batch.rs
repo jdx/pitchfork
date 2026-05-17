@@ -8,11 +8,10 @@ use crate::daemon_id::DaemonId;
 use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
-    PitchforkToml, PitchforkTomlDaemon, is_dot_config_pitchfork, is_global_config,
+    PitchforkToml, PitchforkTomlDaemon, ReadyHttp, is_dot_config_pitchfork, is_global_config,
 };
 
 use chrono::{DateTime, Local};
-use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -101,7 +100,7 @@ pub fn build_run_options(
     run_opts.wait_ready = true;
     run_opts.ready_delay = opts.delay.or(run_opts.ready_delay).or(Some(3));
     run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
-    run_opts.ready_http = opts.http.clone().or(run_opts.ready_http);
+    run_opts.ready_http = merge_ready_http_override(run_opts.ready_http, opts.http.clone());
     run_opts.ready_port = opts.port.or(run_opts.ready_port);
     run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
     if let Some(ref expected) = opts.expected_port {
@@ -111,6 +110,20 @@ pub fn build_run_options(
         run_opts.port.get_or_insert_with(Default::default).bump = bump;
     }
     Ok(run_opts)
+}
+
+fn merge_ready_http_override(
+    configured: Option<ReadyHttp>,
+    override_url: Option<String>,
+) -> Option<ReadyHttp> {
+    match (configured, override_url) {
+        (Some(mut ready_http), Some(url)) => {
+            ready_http.url = url;
+            Some(ready_http)
+        }
+        (None, Some(url)) => Some(ReadyHttp::new(url)),
+        (ready_http, None) => ready_http,
+    }
 }
 
 impl IpcClient {
@@ -406,14 +419,12 @@ impl IpcClient {
                 }
 
                 if let Some(adhoc_daemon) = adhoc_daemons.get(&id) {
-                    if let Some(ref cmd) = adhoc_daemon.cmd {
+                    if adhoc_daemon.cmd.is_some() {
                         let is_explicit = explicitly_requested.contains(&id);
                         let task = Self::spawn_adhoc_start_task(
                             self.clone(),
                             id,
-                            cmd.clone(),
-                            adhoc_daemon.dir.clone().unwrap_or_default(),
-                            adhoc_daemon.env.clone(),
+                            adhoc_daemon,
                             is_explicit,
                             &opts,
                         );
@@ -525,16 +536,21 @@ impl IpcClient {
     fn spawn_adhoc_start_task(
         ipc: Arc<Self>,
         id: DaemonId,
-        cmd: Vec<String>,
-        dir: PathBuf,
-        env: Option<IndexMap<String, String>>,
+        adhoc_daemon: &crate::daemon::Daemon,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<SpawnTaskResult> {
+        let cmd = adhoc_daemon
+            .cmd
+            .clone()
+            .expect("ad-hoc daemon start task requires a saved command");
+        let dir = adhoc_daemon.dir.clone().unwrap_or_default();
+        let env = adhoc_daemon.env.clone();
+        let ready_http = adhoc_daemon.ready_http.clone();
         let force = opts.force && is_explicitly_requested;
         let delay = opts.delay;
         let output = opts.output.clone();
-        let http = opts.http.clone();
+        let http = merge_ready_http_override(ready_http, opts.http.clone());
         let port = opts.port;
         let ready_cmd = opts.cmd.clone();
         let expected_port = opts.expected_port.clone();
@@ -713,7 +729,7 @@ impl IpcClient {
             retry: opts.retry.unwrap_or_default(),
             ready_delay: opts.delay.or(Some(3)),
             ready_output: opts.output,
-            ready_http: opts.http,
+            ready_http: merge_ready_http_override(None, opts.http),
             ready_port: opts.port,
             ready_cmd: opts.cmd.clone(),
             port: crate::config_types::PortConfig::from_parts(
@@ -768,6 +784,46 @@ mod tests {
     use crate::env;
 
     use super::*;
+
+    #[test]
+    fn http_override_preserves_configured_status_codes() {
+        let configured = Some(ReadyHttp {
+            url: "http://localhost:3000/original".to_string(),
+            status: vec![401],
+        });
+
+        let ready_http =
+            merge_ready_http_override(configured, Some("http://localhost:3000/health".to_string()))
+                .unwrap();
+
+        assert_eq!(ready_http.url, "http://localhost:3000/health");
+        assert_eq!(ready_http.status, vec![401]);
+        assert!(ready_http.accepts_status(401));
+        assert!(!ready_http.accepts_status(200));
+    }
+
+    #[test]
+    fn build_run_options_preserves_ready_http_status_for_cli_http_override() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ready_http: Some(ReadyHttp {
+                url: "http://localhost:3000/original".to_string(),
+                status: vec![401],
+            }),
+            ..PitchforkTomlDaemon::default()
+        };
+        let opts = StartOptions {
+            http: Some("http://localhost:3000/health".to_string()),
+            ..StartOptions::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, &opts).unwrap();
+        let ready_http = run_opts.ready_http.unwrap();
+
+        assert_eq!(ready_http.url, "http://localhost:3000/health");
+        assert_eq!(ready_http.status, vec![401]);
+    }
 
     #[test]
     fn test_resolve_daemon_dir_none() {

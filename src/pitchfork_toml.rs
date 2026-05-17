@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, Retry, StopConfig, StopSignal, WatchMode,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -94,7 +94,7 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_http: Option<String>,
+    pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1291,8 +1291,8 @@ pub struct PitchforkTomlDaemon {
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
     pub ready_output: Option<String>,
-    /// HTTP URL to poll for readiness (expects 2xx response)
-    pub ready_http: Option<String>,
+    /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
+    pub ready_http: Option<ReadyHttp>,
     /// TCP port to check for readiness (connection success = ready)
     #[schemars(range(min = 1, max = 65535))]
     pub ready_port: Option<u16>,
