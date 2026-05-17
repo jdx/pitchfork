@@ -11,6 +11,7 @@ from the pitchfork.toml configuration with dependency resolution.
 Examples:
   pitchfork restart api           Restart a single daemon
   pitchfork restart api worker    Restart multiple daemons
+  pitchfork restart --group backend Restart all daemons in the 'backend' group
   pitchfork restart --all         Restart all running daemons
   pitchfork restart -l            Restart all local daemons in pitchfork.toml
   pitchfork restart -g            Restart all global daemons in config.toml
@@ -23,6 +24,10 @@ Examples:
 ID of the daemon(s) to restart
 
 ## Flags
+
+### `--group <GROUP>`
+
+Restart all daemons in the named group
 
 ### `-a --all`
 

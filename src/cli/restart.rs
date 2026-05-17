@@ -22,6 +22,7 @@ from the pitchfork.toml configuration with dependency resolution.
 Examples:
   pitchfork restart api           Restart a single daemon
   pitchfork restart api worker    Restart multiple daemons
+  pitchfork restart --group backend Restart all daemons in the 'backend' group
   pitchfork restart --all         Restart all running daemons
   pitchfork restart -l            Restart all local daemons in pitchfork.toml
   pitchfork restart -g            Restart all global daemons in config.toml
@@ -35,6 +36,15 @@ pub struct Restart {
         conflicts_with = "all"
     )]
     id: Vec<String>,
+    /// Restart all daemons in the named group
+    #[clap(
+        long,
+        value_name = "GROUP",
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
+    group: Option<String>,
     /// Restart all running daemons
     #[clap(long, short, conflicts_with = "local", conflicts_with = "global")]
     all: bool,
@@ -79,8 +89,8 @@ pub struct Restart {
 impl Restart {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.local || self.global || self.all || !self.id.is_empty(),
-            "At least one daemon ID or one of --all / --local / --global must be provided"
+            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
+            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
@@ -90,7 +100,7 @@ impl Restart {
         } else if self.global || self.local {
             ipc.get_running_configured_daemons(self.global).await?
         } else {
-            PitchforkToml::resolve_ids(&self.id)?
+            PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
 
         if ids.is_empty() {

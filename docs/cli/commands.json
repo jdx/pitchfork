@@ -1143,6 +1143,25 @@
         ],
         "flags": [
           {
+            "name": "group",
+            "usage": "--group <GROUP>",
+            "help": "Restart all daemons in the named group",
+            "help_first_line": "Restart all daemons in the named group",
+            "short": [],
+            "long": [
+              "group"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "GROUP",
+              "usage": "<GROUP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "all",
             "usage": "-a --all",
             "help": "Restart all running daemons",
@@ -1299,7 +1318,7 @@
         "mounts": [],
         "hide": false,
         "help": "Restarts a daemon (stops then starts it)",
-        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart -l            Restart all local daemons in pitchfork.toml\n  pitchfork restart -g            Restart all global daemons in config.toml\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
+        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --group backend Restart all daemons in the 'backend' group\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart -l            Restart all local daemons in pitchfork.toml\n  pitchfork restart -g            Restart all global daemons in config.toml\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
         "name": "restart",
         "aliases": [],
         "hidden_aliases": [],
@@ -1569,6 +1588,25 @@
         ],
         "flags": [
           {
+            "name": "group",
+            "usage": "--group <GROUP>",
+            "help": "Start all daemons in the named group",
+            "help_first_line": "Start all daemons in the named group",
+            "short": [],
+            "long": [
+              "group"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "GROUP",
+              "usage": "<GROUP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "local",
             "usage": "-l --local",
             "help": "Start all local daemons in pitchfork.toml",
@@ -1795,7 +1833,7 @@
         "mounts": [],
         "hide": false,
         "help": "Starts a daemon from a pitchfork.toml file",
-        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start -l            Start all local daemons in pitchfork.toml\n  pitchfork start -g            Start all global daemons in config.toml\n  pitchfork start -a            Start all daemons (local and global)\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening",
+        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --group backend Start all daemons in the 'backend' group\n  pitchfork start -l            Start all local daemons in pitchfork.toml\n  pitchfork start -g            Start all global daemons in config.toml\n  pitchfork start -a            Start all daemons (local and global)\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening",
         "name": "start",
         "aliases": [
           "s"
@@ -1852,6 +1890,25 @@
         ],
         "flags": [
           {
+            "name": "group",
+            "usage": "--group <GROUP>",
+            "help": "Stop all daemons in the named group",
+            "help_first_line": "Stop all daemons in the named group",
+            "short": [],
+            "long": [
+              "group"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "GROUP",
+              "usage": "<GROUP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "all",
             "usage": "-a --all",
             "help": "Stop all running daemons (in reverse dependency order)",
@@ -1899,7 +1956,7 @@
         "mounts": [],
         "hide": false,
         "help": "Sends a stop signal to a daemon",
-        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all/--local/--global, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork stop -l            Stop all local daemons in pitchfork.toml\n  pitchfork stop -g            Stop all global daemons in config.toml\n  pitchfork kill api           Same as 'stop' (alias)",
+        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all/--local/--global, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n  pitchfork stop api           Stop a single daemon\n  pitchfork stop api worker    Stop multiple daemons\n  pitchfork stop --group backend Stop all daemons in the 'backend' group\n  pitchfork stop --all         Stop all running daemons in dependency order\n  pitchfork stop -l            Stop all local daemons in pitchfork.toml\n  pitchfork stop -g            Stop all global daemons in config.toml\n  pitchfork kill api           Same as 'stop' (alias)",
         "name": "stop",
         "aliases": [
           "kill"
