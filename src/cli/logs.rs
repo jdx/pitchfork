@@ -477,7 +477,7 @@ impl Logs {
             .flat_map(|id| {
                 let path = id.log_path();
                 match read_lines_in_time_range(&path, from, to) {
-                    Ok(lines) => merge_log_lines(&id.qualified(), lines, false),
+                    Ok((lines, _)) => merge_log_lines(&id.qualified(), lines, false),
                     Err(e) => {
                         error!("{}: {}", path.display(), e);
                         vec![]
@@ -862,12 +862,12 @@ fn read_lines_in_time_range(
     path: &Path,
     from: Option<DateTime<Local>>,
     to: Option<DateTime<Local>>,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, u64)> {
     let mut file = File::open(path).into_diagnostic()?;
     let file_size = file.metadata().into_diagnostic()?.len();
 
     if file_size == 0 {
-        return Ok(vec![]);
+        return Ok((vec![], 0));
     }
 
     let start_pos = if let Some(from_time) = from {
@@ -883,7 +883,7 @@ fn read_lines_in_time_range(
     };
 
     if start_pos >= end_pos {
-        return Ok(vec![]);
+        return Ok((vec![], end_pos));
     }
 
     file.seek(SeekFrom::Start(start_pos)).into_diagnostic()?;
@@ -913,7 +913,7 @@ fn read_lines_in_time_range(
         }
     }
 
-    Ok(lines)
+    Ok((lines, end_pos))
 }
 
 fn binary_search_log_position(
@@ -1493,7 +1493,7 @@ pub fn collect_startup_logs(
     let path = daemon_id.log_path();
     let log_lines = if path.exists() {
         match read_lines_in_time_range(&path, Some(from), None) {
-            Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
+            Ok((lines, _)) => merge_log_lines(&daemon_id.qualified(), lines, false),
             Err(e) => {
                 error!("{}: {}", path.display(), e);
                 vec![]
@@ -1576,8 +1576,11 @@ pub fn stream_startup_logs(
             return;
         }
 
-        // Print existing lines from `from` time
-        if let Ok(lines) = read_lines_in_time_range(&path, Some(from), None) {
+        // Print existing lines from `from` time, then capture the exact
+        // end-of-read offset so the subsequent polling loop continues from
+        // exactly where this left off (eliminates a tiny race window).
+        let mut offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if let Ok((lines, read_end)) = read_lines_in_time_range(&path, Some(from), None) {
             let merged = merge_log_lines(&id.qualified(), lines, false);
             for (date, _, msg) in &merged {
                 let time = date.split(' ').nth(1).unwrap_or(date);
@@ -1594,10 +1597,8 @@ pub fn stream_startup_logs(
                 };
                 job.println(&format!("{} {} {}", line_prefix, id_label, msg));
             }
+            offset = read_end;
         }
-
-        // Track file offset for incremental reads
-        let mut offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
 
         // Poll for new lines
