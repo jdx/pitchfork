@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0](https://github.com/endevco/pitchfork/compare/v2.11.0...v2.12.0) - 2026-05-18
+
+### Added
+
+- *(cli)* stream output on CLI command start ([#444](https://github.com/endevco/pitchfork/pull/444))
+
 ## [2.11.0](https://github.com/endevco/pitchfork/compare/v2.10.0...v2.11.0) - 2026-05-17
 
 ### Added
