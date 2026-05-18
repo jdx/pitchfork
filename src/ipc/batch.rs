@@ -225,7 +225,14 @@ pub fn update_job_with_result(
                     .exit_code
                     .map(|c| format!(" (exit code {c})"))
                     .unwrap_or_default();
-                job.set_body(format!("{prefix} {id_label} failed{exit_info}"));
+                let error_detail = run_result
+                    .error_message
+                    .as_ref()
+                    .map(|msg| format!(": {msg}"))
+                    .unwrap_or_default();
+                job.set_body(format!(
+                    "{prefix} {id_label} failed{exit_info}{error_detail}"
+                ));
                 job.set_status(ProgressStatus::Failed);
             }
             Err(_) => {

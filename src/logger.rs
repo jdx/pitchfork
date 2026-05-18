@@ -67,20 +67,9 @@ impl log::Log for Logger {
         if record.level() <= term_level {
             let out = self.render(record, term_level);
             if !out.is_empty() {
-                // When the progress display is active, skip terminal output
-                // for warnings and errors — the progress UI already shows
-                // job status (✗ / ✔), and interleaving log lines would be
-                // redundant and visually disruptive.  The log file still
-                // captures everything.
-                let progress_active = clx::progress::active_jobs() > 0;
-                let skip_terminal =
-                    progress_active && matches!(record.level(), Level::Error | Level::Warn);
-
-                if !skip_terminal {
-                    clx::progress::pause();
-                    eprintln!("{out}");
-                    clx::progress::resume();
-                }
+                clx::progress::pause();
+                eprintln!("{out}");
+                clx::progress::resume();
             }
         }
     }
