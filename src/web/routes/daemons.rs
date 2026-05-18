@@ -496,7 +496,10 @@ pub async fn start(Path(id): Path<String>, Query(query): Query<StartQuery>) -> H
 
     let start_error = if let Some(daemon_config) = pt.daemons.get(&daemon_id) {
         // Use shared helper to build RunOptions from config
-        let opts = StartOptions::default();
+        let opts = StartOptions {
+            quiet: true,
+            ..StartOptions::default()
+        };
         let mut run_opts = match build_run_options(&daemon_id, daemon_config, &opts) {
             Ok(opts) => opts,
             Err(e) => {

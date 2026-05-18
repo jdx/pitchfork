@@ -1462,7 +1462,10 @@ async fn try_auto_start_inner(
     // Build run options — keep wait_ready=true (set by build_run_options) so
     // SUPERVISOR.run() waits for the daemon's readiness signal before returning,
     // matching the same lifecycle as `pf start` via IPC.
-    let opts = crate::ipc::batch::StartOptions::default();
+    let opts = crate::ipc::batch::StartOptions {
+        quiet: true,
+        ..crate::ipc::batch::StartOptions::default()
+    };
     let mut run_opts = match crate::ipc::batch::build_run_options(daemon_id, daemon_config, &opts) {
         Ok(o) => o,
         Err(e) => {
