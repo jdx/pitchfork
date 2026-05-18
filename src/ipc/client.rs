@@ -277,6 +277,7 @@ impl IpcClient {
                     exit_code: None,
                     start_time,
                     resolved_ports: daemon.resolved_port.clone(),
+                    error_message: None,
                 })
             }
             IpcResponse::DaemonReady { daemon } => {
@@ -286,23 +287,20 @@ impl IpcClient {
                     exit_code: None,
                     start_time,
                     resolved_ports: daemon.resolved_port.clone(),
+                    error_message: None,
                 })
             }
             IpcResponse::DaemonFailedWithCode { exit_code } => {
                 let code = exit_code.unwrap_or(1);
-                error!("Daemon {} failed with exit code {}", opts.id, code);
-
-                // Print logs from the time we started this specific daemon
-                if let Err(e) =
-                    crate::cli::logs::print_logs_for_time_range(&opts.id, start_time, None)
-                {
-                    error!("Failed to print logs: {e}");
-                }
                 Ok(RunResult {
                     started: false,
                     exit_code: Some(code),
                     start_time,
                     resolved_ports: Vec::new(),
+                    error_message: Some(format!(
+                        "Daemon {} failed with exit code {}",
+                        opts.id, code
+                    )),
                 })
             }
             IpcResponse::DaemonAlreadyRunning => {
@@ -312,51 +310,39 @@ impl IpcClient {
                     exit_code: None,
                     start_time,
                     resolved_ports: Vec::new(),
+                    error_message: None,
                 })
             }
-            IpcResponse::DaemonFailed { error } => {
-                error!("Failed to start daemon {}: {}", opts.id, error);
-
-                // Print logs from the time we started this specific daemon
-                if let Err(e) =
-                    crate::cli::logs::print_logs_for_time_range(&opts.id, start_time, None)
-                {
-                    error!("Failed to print logs: {e}");
-                }
-                Ok(RunResult {
-                    started: false,
-                    exit_code: Some(1),
-                    start_time,
-                    resolved_ports: Vec::new(),
-                })
-            }
-            IpcResponse::PortConflict { port, process, pid } => {
-                error!(
+            IpcResponse::DaemonFailed { error } => Ok(RunResult {
+                started: false,
+                exit_code: Some(1),
+                start_time,
+                resolved_ports: Vec::new(),
+                error_message: Some(format!("Failed to start daemon {}: {}", opts.id, error)),
+            }),
+            IpcResponse::PortConflict { port, process, pid } => Ok(RunResult {
+                started: false,
+                exit_code: Some(1),
+                start_time,
+                resolved_ports: Vec::new(),
+                error_message: Some(format!(
                     "Failed to start daemon {}: port {} is already in use by process '{}' (PID: {})",
                     opts.id, port, process, pid
-                );
-                Ok(RunResult {
-                    started: false,
-                    exit_code: Some(1),
-                    start_time,
-                    resolved_ports: Vec::new(),
-                })
-            }
+                )),
+            }),
             IpcResponse::NoAvailablePort {
                 start_port,
                 attempts,
-            } => {
-                error!(
+            } => Ok(RunResult {
+                started: false,
+                exit_code: Some(1),
+                start_time,
+                resolved_ports: Vec::new(),
+                error_message: Some(format!(
                     "Failed to start daemon {}: could not find an available port after {} attempts starting from {}",
                     opts.id, attempts, start_port
-                );
-                Ok(RunResult {
-                    started: false,
-                    exit_code: Some(1),
-                    start_time,
-                    resolved_ports: Vec::new(),
-                })
-            }
+                )),
+            }),
             rsp => Err(Self::unexpected_response("DaemonStart or DaemonReady", &rsp).into()),
         }
     }

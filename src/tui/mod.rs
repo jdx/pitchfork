@@ -308,7 +308,13 @@ async fn run_app(
                     let tx = tx.clone();
                     tokio::spawn(async move {
                         let result = client
-                            .start_daemons(std::slice::from_ref(&id), StartOptions::default())
+                            .start_daemons(
+                                std::slice::from_ref(&id),
+                                StartOptions {
+                                    quiet: true,
+                                    ..StartOptions::default()
+                                },
+                            )
                             .await;
                         let _ = tx.send(TaskResult::Start { id, result });
                     });
@@ -330,7 +336,15 @@ async fn run_app(
                     let client = Arc::clone(client);
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        let result = client.start_daemons(&ids, StartOptions::default()).await;
+                        let result = client
+                            .start_daemons(
+                                &ids,
+                                StartOptions {
+                                    quiet: true,
+                                    ..StartOptions::default()
+                                },
+                            )
+                            .await;
                         let _ = tx.send(TaskResult::BatchStart { count, result });
                     });
                 }
@@ -399,6 +413,7 @@ async fn run_app(
                                 tokio::spawn(async move {
                                     let opts = StartOptions {
                                         force: true,
+                                        quiet: true,
                                         ..Default::default()
                                     };
                                     let result =
@@ -436,6 +451,7 @@ async fn run_app(
                                 tokio::spawn(async move {
                                     let opts = StartOptions {
                                         force: true,
+                                        quiet: true,
                                         ..Default::default()
                                     };
                                     let result = client.start_daemons(&ids, opts).await;

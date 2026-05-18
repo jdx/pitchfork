@@ -532,6 +532,13 @@
             "string",
             "null"
           ]
+        },
+        "startup_log_timestamps": {
+          "description": "Show timestamps in startup log output",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },

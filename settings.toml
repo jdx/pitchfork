@@ -111,6 +111,20 @@ By default, pitchfork searches well-known locations for the mise binary:
 Set this to an absolute path if mise is installed elsewhere.
 """
 
+[general.startup_log_timestamps]
+type = "Bool"
+env = "PITCHFORK_STARTUP_LOG_TIMESTAMPS"
+default = "false"
+description = "Show timestamps in startup log output"
+docs = """
+When enabled, pitchfork prefixes each startup log line and result line
+with a timestamp (e.g. `19:03:15`), making it easier to see how long
+each daemon took to start.
+
+When disabled (default), a dim bullet (`•`) is used instead to keep
+the output compact and aligned with the spinner / status icons.
+"""
+
 # =============================================================================
 # IPC (Inter-Process Communication) Settings
 # =============================================================================

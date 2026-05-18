@@ -67,7 +67,9 @@ impl log::Log for Logger {
         if record.level() <= term_level {
             let out = self.render(record, term_level);
             if !out.is_empty() {
+                clx::progress::pause();
                 eprintln!("{out}");
+                clx::progress::resume();
             }
         }
     }

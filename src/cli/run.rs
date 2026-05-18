@@ -1,5 +1,5 @@
-use crate::cli::logs::{collect_startup_logs, print_startup_logs_block};
-use crate::ipc::batch::StartOptions;
+use crate::cli::logs::{ReadyCheckType, create_ready_check_job, stream_startup_logs};
+use crate::ipc::batch::{StartOptions, update_job_with_result};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
@@ -96,23 +96,78 @@ impl Run {
                 Some(Some(n)) => Some(crate::config_types::PortBump(n)),
             },
             retry: Some(crate::config_types::Retry(self.retry)),
+            quiet: self.quiet,
         };
 
         // Resolve ID, allowing unconfigured short IDs as ad-hoc global daemons.
         let daemon_id = PitchforkToml::resolve_id_allow_adhoc(&self.id)?;
+
+        // Create progress job for ready check (unless --quiet)
+        let job = if !self.quiet {
+            let check_type = if let Some(ref pattern) = self.output {
+                ReadyCheckType::Output(pattern.clone())
+            } else if let Some(ref url) = self.http {
+                ReadyCheckType::Http(url.clone())
+            } else if let Some(port) = self.port {
+                ReadyCheckType::Port(port)
+            } else if let Some(ref cmd) = self.cmd {
+                ReadyCheckType::Cmd(cmd.clone())
+            } else if let Some(secs) = self.delay {
+                ReadyCheckType::Delay(secs)
+            } else {
+                ReadyCheckType::Default
+            };
+            Some(create_ready_check_job(&daemon_id, &check_type))
+        } else {
+            None
+        };
+
+        let start_time = chrono::Local::now();
+
+        // Start streaming logs for this daemon
+        let (log_stop_tx, log_handle) = if let Some(ref job) = job {
+            let (tx, handle) = stream_startup_logs(&daemon_id, start_time, job.clone());
+            (Some(tx), Some(handle))
+        } else {
+            (None, None)
+        };
+
         let result = ipc
             .run_adhoc(daemon_id.clone(), self.run.clone(), env::CWD.clone(), opts)
-            .await?;
+            .await;
 
-        if result.exit_code.is_some() {
-            std::process::exit(1);
-        }
+        match result {
+            Ok(result) => {
+                // Stop log streaming and wait for the task to fully exit
+                if let Some(tx) = &log_stop_tx {
+                    let _ = tx.send(true);
+                }
+                if let Some(handle) = log_handle {
+                    let _ = handle.await;
+                }
 
-        // Show startup logs on success (unless --quiet)
-        if !self.quiet && result.started {
-            match collect_startup_logs(&daemon_id, result.start_time) {
-                Ok(lines) => print_startup_logs_block(&lines),
-                Err(e) => debug!("Failed to collect startup logs for {daemon_id}: {e}"),
+                // Update progress job and stop display
+                update_job_with_result(job.as_deref(), &daemon_id, &Ok(result.clone()));
+                clx::progress::stop();
+                clx::progress::clear_jobs();
+
+                if result.exit_code.is_some() {
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                // Stop log streaming and wait for the task to fully exit
+                if let Some(tx) = &log_stop_tx {
+                    let _ = tx.send(true);
+                }
+                if let Some(handle) = log_handle {
+                    let _ = handle.await;
+                }
+
+                update_job_with_result(job.as_deref(), &daemon_id, &Err(e));
+                clx::progress::stop();
+                clx::progress::clear_jobs();
+                std::process::exit(1);
             }
         }
 

@@ -3,6 +3,7 @@
 //! This module provides batch operations that can be used by CLI, TUI, and Web UI.
 
 use crate::Result;
+use crate::cli::logs::{ReadyCheckType, create_ready_check_job, stream_startup_logs};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
@@ -10,9 +11,10 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     PitchforkToml, PitchforkTomlDaemon, ReadyHttp, is_dot_config_pitchfork, is_global_config,
 };
-
 use chrono::{DateTime, Local};
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,15 +25,19 @@ pub struct RunResult {
     pub exit_code: Option<i32>,
     pub start_time: DateTime<Local>,
     pub resolved_ports: Vec<u16>,
+    /// Error message if the daemon failed to start
+    pub error_message: Option<String>,
 }
 
 /// Result of batch start operation
-#[derive(Debug)]
 pub struct StartResult {
     /// Daemons that were successfully started (id, start_time, resolved_ports)
     pub started: Vec<(DaemonId, DateTime<Local>, Vec<u16>)>,
     /// Whether any daemon failed to start
     pub any_failed: bool,
+    /// Deferred job status updates — caller must apply these
+    /// after all tasks complete, before calling progress::stop()
+    pub pending_job_updates: Vec<PendingJobUpdate>,
 }
 
 /// Result of batch stop operation
@@ -41,17 +47,24 @@ pub struct StopResult {
     pub any_failed: bool,
 }
 
+/// A deferred progress job status update.
+///
+/// Created by spawn tasks, applied by the caller after all log streaming has stopped
+/// to prevent `println()` from resetting the progress frame tracker (LINES).
+pub struct PendingJobUpdate {
+    pub job: Option<Arc<clx::progress::ProgressJob>>,
+    pub id: DaemonId,
+    pub run_result: std::result::Result<RunResult, miette::Report>,
+}
+
 /// Result of spawning a start task
-#[derive(Debug)]
 pub struct SpawnTaskResult {
     /// Daemon ID
     pub id: DaemonId,
-    /// Start time if the daemon started successfully
-    pub start_time: Option<DateTime<Local>>,
-    /// Exit code if the daemon failed
-    pub exit_code: Option<i32>,
-    /// Resolved ports after auto-bump
-    pub resolved_ports: Vec<u16>,
+    /// Progress job for this daemon (None if --quiet)
+    pub job: Option<Arc<clx::progress::ProgressJob>>,
+    /// Raw IPC run result (used by caller to update job status after all tasks complete)
+    pub run_result: std::result::Result<RunResult, miette::Report>,
 }
 
 /// Options for starting daemons
@@ -77,6 +90,8 @@ pub struct StartOptions {
     pub auto_bump_port: Option<crate::config_types::PortBump>,
     /// Number of times to retry on failure (for ad-hoc daemons)
     pub retry: Option<crate::config_types::Retry>,
+    /// Suppress output (ready check hints, startup logs)
+    pub quiet: bool,
 }
 
 /// Build RunOptions from a daemon configuration and start options.
@@ -123,6 +138,119 @@ fn merge_ready_http_override(
         }
         (None, Some(url)) => Some(ReadyHttp::new(url)),
         (ready_http, None) => ready_http,
+    }
+}
+
+/// Determine the effective ready check type from merged RunOptions.
+fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
+    if let Some(ref pattern) = opts.ready_output {
+        ReadyCheckType::Output(pattern.clone())
+    } else if let Some(ref http) = opts.ready_http {
+        ReadyCheckType::Http(http.url.clone())
+    } else if let Some(port) = opts.ready_port {
+        ReadyCheckType::Port(port)
+    } else if let Some(ref cmd) = opts.ready_cmd {
+        ReadyCheckType::Cmd(cmd.clone())
+    } else if let Some(secs) = opts.ready_delay {
+        ReadyCheckType::Delay(secs)
+    } else {
+        ReadyCheckType::Default
+    }
+}
+
+/// Update a progress job's body and status based on the IPC run result.
+///
+/// Sets the body to a styled success or failure message and transitions
+/// the job status to Done/Failed. For quiet mode (job = None), logs errors
+/// to stderr instead.
+///
+/// Must be called after all log streaming has stopped to avoid `println()`
+/// resetting the progress frame tracker (LINES), which causes duplicate output.
+pub fn update_job_with_result(
+    job: Option<&clx::progress::ProgressJob>,
+    id: &DaemonId,
+    result: &std::result::Result<RunResult, miette::Report>,
+) {
+    use clx::progress::ProgressStatus;
+
+    let id_label = {
+        let is_tty = std::io::stderr().is_terminal();
+        let colors_enabled = is_tty && console::colors_enabled_stderr();
+        crate::cli::logs::colored_id_label(&id.qualified(), colors_enabled)
+    };
+
+    let show_ts = crate::settings::settings().general.startup_log_timestamps;
+    // When timestamps are off, the body uses {{spinner()}} which renders
+    // as ✔/✗/spinner -- naturally 1 char wide, matching the "•" prefix
+    // used by println.  When timestamps are on, we replace {{spinner()}}
+    // with a dim timestamp string.
+    let prefix = if show_ts {
+        let now = chrono::Local::now();
+        format!("{}", crate::ui::style::edim(now.format("%H:%M:%S")))
+    } else {
+        "{{spinner()}}".to_string()
+    };
+
+    if let Some(job) = job {
+        match result {
+            Ok(run_result) if run_result.started => {
+                let body = if run_result.resolved_ports.is_empty() {
+                    format!("{prefix} {id_label} started")
+                } else {
+                    let port_str = run_result
+                        .resolved_ports
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let port_label = if run_result.resolved_ports.len() == 1 {
+                        "port"
+                    } else {
+                        "ports"
+                    };
+                    format!(
+                        "{prefix} {id_label} started on {port_label} {}",
+                        crate::ui::style::ncyan(&port_str)
+                    )
+                };
+                job.set_body(body);
+                job.set_status(ProgressStatus::Done);
+            }
+            Ok(run_result) => {
+                if run_result.exit_code.is_none() && !run_result.started {
+                    job.remove();
+                    return;
+                }
+                let exit_info = run_result
+                    .exit_code
+                    .map(|c| format!(" (exit code {c})"))
+                    .unwrap_or_default();
+                let error_detail = run_result
+                    .error_message
+                    .as_ref()
+                    .map(|msg| format!(": {msg}"))
+                    .unwrap_or_default();
+                job.set_body(format!(
+                    "{prefix} {id_label} failed{exit_info}{error_detail}"
+                ));
+                job.set_status(ProgressStatus::Failed);
+            }
+            Err(e) => {
+                job.set_body(format!("{prefix} {id_label} failed: {e}"));
+                job.set_status(ProgressStatus::Failed);
+            }
+        }
+    } else if let Ok(run_result) = result {
+        if !run_result.started && run_result.exit_code.is_some() {
+            if let Some(ref msg) = run_result.error_message {
+                error!("{msg}");
+            }
+            if let Ok(lines) = crate::cli::logs::collect_startup_logs(id, run_result.start_time) {
+                crate::cli::logs::print_error_logs_block(&lines);
+            }
+        }
+    } else if let Err(e) = result {
+        error!("Failed to start daemon {id}: {e}");
     }
 }
 
@@ -246,6 +374,7 @@ impl IpcClient {
             return Ok(StartResult {
                 started: vec![],
                 any_failed: false,
+                pending_job_updates: vec![],
             });
         }
 
@@ -279,13 +408,16 @@ impl IpcClient {
         // Accumulated resolved ports from completed levels, available for template rendering
         let mut resolved_ports_map: std::collections::HashMap<DaemonId, Vec<u16>> =
             std::collections::HashMap::new();
+        // Collect all task results for deferred job status updates
+        let mut pending_job_updates: Vec<PendingJobUpdate> = Vec::new();
 
         // First, handle config-based daemons with dependency resolution
         if !config_ids.is_empty() {
             // Resolve dependencies to get start order (levels)
             let dep_order = resolve_dependencies(&config_ids, &pt.daemons)?;
 
-            for level in dep_order.levels {
+            for (level_idx, level) in dep_order.levels.iter().enumerate() {
+                let is_last_level = level_idx == dep_order.levels.len() - 1;
                 let mut successful_this_level: Vec<(DaemonId, Vec<u16>)> = Vec::new();
 
                 // Filter daemons to start in this level
@@ -319,7 +451,7 @@ impl IpcClient {
                     .cloned()
                     .collect();
 
-                for id in &level {
+                for id in level {
                     if let Some(ports) = running_ports_map.get(id) {
                         resolved_ports_map.insert(id.clone(), ports.clone());
                     }
@@ -369,18 +501,37 @@ impl IpcClient {
                 for task in tasks {
                     match task.await {
                         Ok(result) => {
-                            if result.exit_code.is_some() {
-                                any_failed = true;
-                                error!("Daemon {} failed to start", result.id);
-                            } else if let Some(start_time) = result.start_time {
-                                successful_this_level
-                                    .push((result.id.clone(), result.resolved_ports.clone()));
-                                successful_daemons.push((
-                                    result.id,
-                                    start_time,
-                                    result.resolved_ports,
-                                ));
+                            let SpawnTaskResult {
+                                id,
+                                job,
+                                run_result,
+                                ..
+                            } = result;
+                            match &run_result {
+                                Ok(rr) if rr.started => {
+                                    successful_this_level
+                                        .push((id.clone(), rr.resolved_ports.clone()));
+                                    successful_daemons.push((
+                                        id.clone(),
+                                        rr.start_time,
+                                        rr.resolved_ports.clone(),
+                                    ));
+                                }
+                                Ok(rr) => {
+                                    if rr.exit_code.is_some() {
+                                        any_failed = true;
+                                        error!("Daemon {} failed to start", id);
+                                    }
+                                }
+                                Err(_) => {
+                                    any_failed = true;
+                                }
                             }
+                            pending_job_updates.push(PendingJobUpdate {
+                                job: job.clone(),
+                                id: id.clone(),
+                                run_result,
+                            });
                         }
                         Err(e) => {
                             error!("Task panicked: {e}");
@@ -396,7 +547,9 @@ impl IpcClient {
                 }
                 // If any daemon in this level failed, abort starting dependents
                 if any_failed {
-                    error!("Dependency failed, aborting remaining starts");
+                    if !is_last_level {
+                        error!("Dependency failed, aborting remaining starts");
+                    }
                     break;
                 }
             }
@@ -419,12 +572,15 @@ impl IpcClient {
                 }
 
                 if let Some(adhoc_daemon) = adhoc_daemons.get(&id) {
-                    if adhoc_daemon.cmd.is_some() {
+                    if let Some(ref cmd) = adhoc_daemon.cmd {
                         let is_explicit = explicitly_requested.contains(&id);
                         let task = Self::spawn_adhoc_start_task(
                             self.clone(),
                             id,
-                            adhoc_daemon,
+                            cmd.clone(),
+                            adhoc_daemon.dir.clone().unwrap_or_default(),
+                            adhoc_daemon.env.clone(),
+                            adhoc_daemon.ready_http.clone(),
                             is_explicit,
                             &opts,
                         );
@@ -441,12 +597,34 @@ impl IpcClient {
             for task in tasks {
                 match task.await {
                     Ok(result) => {
-                        if result.exit_code.is_some() {
-                            any_failed = true;
-                            error!("Ad-hoc daemon {} failed to start", result.id);
-                        } else if let Some(start_time) = result.start_time {
-                            successful_daemons.push((result.id, start_time, result.resolved_ports));
+                        let SpawnTaskResult {
+                            id,
+                            job,
+                            run_result,
+                            ..
+                        } = result;
+                        match &run_result {
+                            Ok(rr) if rr.started => {
+                                successful_daemons.push((
+                                    id.clone(),
+                                    rr.start_time,
+                                    rr.resolved_ports.clone(),
+                                ));
+                            }
+                            Ok(rr) => {
+                                if rr.exit_code.is_some() {
+                                    any_failed = true;
+                                }
+                            }
+                            Err(_) => {
+                                any_failed = true;
+                            }
                         }
+                        pending_job_updates.push(PendingJobUpdate {
+                            job: job.clone(),
+                            id: id.clone(),
+                            run_result,
+                        });
                     }
                     Err(e) => {
                         error!("Task panicked: {e}");
@@ -459,6 +637,7 @@ impl IpcClient {
         Ok(StartResult {
             started: successful_daemons,
             any_failed,
+            pending_job_updates,
         })
     }
 
@@ -481,50 +660,53 @@ impl IpcClient {
         start_opts.force = opts.force && is_explicitly_requested;
 
         let run_opts = build_run_options(&id, daemon_config, &start_opts);
+        let quiet = opts.quiet;
 
         tokio::spawn(async move {
             let run_opts = match run_opts {
                 Ok(opts) => opts,
                 Err(e) => {
-                    error!("Failed to parse command for daemon {id}: {e}");
                     return SpawnTaskResult {
                         id,
-                        start_time: None,
-                        exit_code: Some(1),
-                        resolved_ports: Vec::new(),
+                        job: None,
+                        run_result: Err(miette::miette!("Failed to parse command: {e}")),
                     };
                 }
             };
 
+            let check_type = ready_check_type(&run_opts);
+
+            let job = if !quiet {
+                let job = create_ready_check_job(&id, &check_type);
+                Some(job)
+            } else {
+                None
+            };
+
+            let start_time = chrono::Local::now();
+
+            // Start streaming logs for this daemon
+            let (log_stop_tx, log_handle) = if let Some(ref job) = job {
+                let (tx, handle) = stream_startup_logs(&id, start_time, job.clone());
+                (Some(tx), Some(handle))
+            } else {
+                (None, None)
+            };
+
             let result = ipc.run(run_opts).await;
 
-            match result {
-                Ok(run_result) => {
-                    if run_result.started {
-                        SpawnTaskResult {
-                            id,
-                            start_time: Some(run_result.start_time),
-                            exit_code: run_result.exit_code,
-                            resolved_ports: run_result.resolved_ports,
-                        }
-                    } else {
-                        SpawnTaskResult {
-                            id,
-                            start_time: None,
-                            exit_code: run_result.exit_code,
-                            resolved_ports: run_result.resolved_ports,
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to start daemon {id}: {e}");
-                    SpawnTaskResult {
-                        id,
-                        start_time: None,
-                        exit_code: Some(1),
-                        resolved_ports: Vec::new(),
-                    }
-                }
+            // Stop log streaming and wait for the task to fully exit
+            if let Some(tx) = &log_stop_tx {
+                let _ = tx.send(true);
+            }
+            if let Some(handle) = log_handle {
+                let _ = handle.await;
+            }
+
+            SpawnTaskResult {
+                id,
+                job,
+                run_result: result,
             }
         })
     }
@@ -533,20 +715,17 @@ impl IpcClient {
     ///
     /// This handles restarting ad-hoc daemons that were originally started
     /// via `pitchfork run` command.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_adhoc_start_task(
         ipc: Arc<Self>,
         id: DaemonId,
-        adhoc_daemon: &crate::daemon::Daemon,
+        cmd: Vec<String>,
+        dir: PathBuf,
+        env: Option<IndexMap<String, String>>,
+        ready_http: Option<ReadyHttp>,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<SpawnTaskResult> {
-        let cmd = adhoc_daemon
-            .cmd
-            .clone()
-            .expect("ad-hoc daemon start task requires a saved command");
-        let dir = adhoc_daemon.dir.clone().unwrap_or_default();
-        let env = adhoc_daemon.env.clone();
-        let ready_http = adhoc_daemon.ready_http.clone();
         let force = opts.force && is_explicitly_requested;
         let delay = opts.delay;
         let output = opts.output.clone();
@@ -557,6 +736,7 @@ impl IpcClient {
         let auto_bump_port = opts.auto_bump_port;
         let retry = opts.retry.unwrap_or_default();
         let shell_pid = opts.shell_pid;
+        let quiet = opts.quiet;
 
         tokio::spawn(async move {
             let run_opts = RunOptions {
@@ -585,35 +765,39 @@ impl IpcClient {
                 ..RunOptions::default()
             };
 
+            let check_type = ready_check_type(&run_opts);
+
+            let job = if !quiet {
+                let job = create_ready_check_job(&id, &check_type);
+                Some(job)
+            } else {
+                None
+            };
+
+            let start_time = chrono::Local::now();
+
+            // Start streaming logs for this daemon
+            let (log_stop_tx, log_handle) = if let Some(ref job) = job {
+                let (tx, handle) = stream_startup_logs(&id, start_time, job.clone());
+                (Some(tx), Some(handle))
+            } else {
+                (None, None)
+            };
+
             let result = ipc.run(run_opts).await;
 
-            match result {
-                Ok(run_result) => {
-                    if run_result.started {
-                        SpawnTaskResult {
-                            id,
-                            start_time: Some(run_result.start_time),
-                            exit_code: run_result.exit_code,
-                            resolved_ports: run_result.resolved_ports,
-                        }
-                    } else {
-                        SpawnTaskResult {
-                            id,
-                            start_time: None,
-                            exit_code: run_result.exit_code,
-                            resolved_ports: run_result.resolved_ports,
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to start ad-hoc daemon {id}: {e}");
-                    SpawnTaskResult {
-                        id,
-                        start_time: None,
-                        exit_code: Some(1),
-                        resolved_ports: Vec::new(),
-                    }
-                }
+            // Stop log streaming and wait for the task to fully exit
+            if let Some(tx) = &log_stop_tx {
+                let _ = tx.send(true);
+            }
+            if let Some(handle) = log_handle {
+                let _ = handle.await;
+            }
+
+            SpawnTaskResult {
+                id,
+                job,
+                run_result: result,
             }
         })
     }
