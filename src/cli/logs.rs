@@ -1633,6 +1633,31 @@ pub fn stream_startup_logs(
                 }
             }
         }
+
+        // Final drain: pick up any lines written after the last timer tick
+        // but before the stop signal arrived. Since the caller awaits this
+        // task before touching the job state, this println() is safe.
+        if let Ok((new_lines, _new_offset)) = read_from_offset(&path, offset) {
+            for line in &new_lines {
+                if let Some(caps) = re.captures(line) {
+                    let time = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let time = time.split(' ').nth(1).unwrap_or(time);
+                    let msg = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                    let msg = strip_pty_controls(msg);
+                    let msg = if is_tty {
+                        msg
+                    } else {
+                        console::strip_ansi_codes(&msg).to_string()
+                    };
+                    let line_prefix = if show_ts {
+                        edim(time).to_string()
+                    } else {
+                        prefix.clone()
+                    };
+                    job.println(&format!("{} {} {}", line_prefix, id_label, msg));
+                }
+            }
+        }
     });
 
     (tx, handle)

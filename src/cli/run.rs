@@ -125,36 +125,50 @@ impl Run {
         let start_time = chrono::Local::now();
 
         // Start streaming logs for this daemon
-        let log_stop_tx = if let Some(ref job) = job {
-            let (tx, _handle) = stream_startup_logs(&daemon_id, start_time, job.clone());
-            Some(tx)
+        let (log_stop_tx, log_handle) = if let Some(ref job) = job {
+            let (tx, handle) = stream_startup_logs(&daemon_id, start_time, job.clone());
+            (Some(tx), Some(handle))
         } else {
-            None
+            (None, None)
         };
 
         let result = ipc
             .run_adhoc(daemon_id.clone(), self.run.clone(), env::CWD.clone(), opts)
-            .await
-            .inspect_err(|_| {
+            .await;
+
+        match result {
+            Ok(result) => {
+                // Stop log streaming and wait for the task to fully exit
                 if let Some(tx) = &log_stop_tx {
                     let _ = tx.send(true);
                 }
+                if let Some(handle) = log_handle {
+                    let _ = handle.await;
+                }
+
+                // Update progress job and stop display
+                update_job_with_result(job.as_deref(), &daemon_id, &Ok(result.clone()));
                 clx::progress::stop();
                 clx::progress::clear_jobs();
-            })?;
 
-        // Stop log streaming before updating job status
-        if let Some(tx) = &log_stop_tx {
-            let _ = tx.send(true);
-        }
+                if result.exit_code.is_some() {
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                // Stop log streaming and wait for the task to fully exit
+                if let Some(tx) = &log_stop_tx {
+                    let _ = tx.send(true);
+                }
+                if let Some(handle) = log_handle {
+                    let _ = handle.await;
+                }
 
-        // Update progress job and stop display
-        update_job_with_result(job.as_deref(), &daemon_id, &Ok(result.clone()));
-        clx::progress::stop();
-        clx::progress::clear_jobs();
-
-        if result.exit_code.is_some() {
-            std::process::exit(1);
+                update_job_with_result(job.as_deref(), &daemon_id, &Err(e));
+                clx::progress::stop();
+                clx::progress::clear_jobs();
+                std::process::exit(1);
+            }
         }
 
         Ok(())

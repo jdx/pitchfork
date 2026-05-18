@@ -235,8 +235,8 @@ pub fn update_job_with_result(
                 ));
                 job.set_status(ProgressStatus::Failed);
             }
-            Err(_) => {
-                job.set_body(format!("{prefix} {id_label} failed"));
+            Err(e) => {
+                job.set_body(format!("{prefix} {id_label} failed: {e}"));
                 job.set_status(ProgressStatus::Failed);
             }
         }
@@ -666,7 +666,6 @@ impl IpcClient {
             let run_opts = match run_opts {
                 Ok(opts) => opts,
                 Err(e) => {
-                    error!("Failed to parse command for daemon {id}: {e}");
                     return SpawnTaskResult {
                         id,
                         job: None,
@@ -687,18 +686,21 @@ impl IpcClient {
             let start_time = chrono::Local::now();
 
             // Start streaming logs for this daemon
-            let log_stop_tx = if let Some(ref job) = job {
-                let (tx, _handle) = stream_startup_logs(&id, start_time, job.clone());
-                Some(tx)
+            let (log_stop_tx, log_handle) = if let Some(ref job) = job {
+                let (tx, handle) = stream_startup_logs(&id, start_time, job.clone());
+                (Some(tx), Some(handle))
             } else {
-                None
+                (None, None)
             };
 
             let result = ipc.run(run_opts).await;
 
-            // Stop log streaming before returning
+            // Stop log streaming and wait for the task to fully exit
             if let Some(tx) = &log_stop_tx {
                 let _ = tx.send(true);
+            }
+            if let Some(handle) = log_handle {
+                let _ = handle.await;
             }
 
             SpawnTaskResult {
@@ -775,18 +777,21 @@ impl IpcClient {
             let start_time = chrono::Local::now();
 
             // Start streaming logs for this daemon
-            let log_stop_tx = if let Some(ref job) = job {
-                let (tx, _handle) = stream_startup_logs(&id, start_time, job.clone());
-                Some(tx)
+            let (log_stop_tx, log_handle) = if let Some(ref job) = job {
+                let (tx, handle) = stream_startup_logs(&id, start_time, job.clone());
+                (Some(tx), Some(handle))
             } else {
-                None
+                (None, None)
             };
 
             let result = ipc.run(run_opts).await;
 
-            // Stop log streaming before returning
+            // Stop log streaming and wait for the task to fully exit
             if let Some(tx) = &log_stop_tx {
                 let _ = tx.send(true);
+            }
+            if let Some(handle) = log_handle {
+                let _ = handle.await;
             }
 
             SpawnTaskResult {
