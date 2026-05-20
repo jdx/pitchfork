@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, Retry, StopConfig, StopSignal, WatchMode,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -40,6 +40,22 @@ pub struct SlugEntry {
     pub daemon: Option<String>,
 }
 
+/// Raw group entry as read from TOML.
+/// ```toml
+/// [groups.backend]
+/// daemons = ["api", "worker"]
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GroupEntryRaw {
+    pub daemons: Vec<String>,
+}
+
+/// Resolved group entry with qualified DaemonIds.
+#[derive(Debug, Clone)]
+pub struct GroupEntry {
+    pub daemons: Vec<DaemonId>,
+}
+
 /// Internal structure for reading config files (uses String keys for short daemon names)
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct PitchforkTomlRaw {
@@ -53,6 +69,9 @@ struct PitchforkTomlRaw {
     /// Maps slug names to their configuration (dir + optional daemon name).
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
     pub slugs: IndexMap<String, SlugEntryRaw>,
+    /// Named groups of daemons for batch operations.
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub groups: IndexMap<String, GroupEntryRaw>,
 }
 
 /// Internal daemon config for reading (uses String for depends).
@@ -75,7 +94,7 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_http: Option<String>,
+    pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -155,6 +174,9 @@ pub struct PitchforkToml {
     /// or `/etc/pitchfork/config.toml`).
     #[schemars(skip)]
     pub slugs: IndexMap<String, SlugEntry>,
+    /// Named groups of daemons for batch operations.
+    #[schemars(skip)]
+    pub groups: IndexMap<String, GroupEntry>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -605,6 +627,69 @@ impl PitchforkToml {
             .collect()
     }
 
+    /// Resolve explicit daemon IDs and/or a group name into a deduplicated list of DaemonIds.
+    ///
+    /// This is more efficient than calling `resolve_ids` and `resolve_group` separately
+    /// because it reads the merged config only once.
+    pub fn resolve_ids_and_group<S: AsRef<str>>(
+        user_ids: &[S],
+        group_name: Option<&str>,
+    ) -> Result<Vec<DaemonId>> {
+        let config = Self::all_merged()?;
+        let ns = Self::namespace_for_dir(&env::CWD)?;
+        let mut ids = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for id in user_ids {
+            let id_str = id.as_ref();
+            let daemon_id = if id_str.contains('/') {
+                DaemonId::parse(id_str)?
+            } else {
+                config.resolve_daemon_id_with_namespace(id_str, &ns)?
+            };
+            if seen.insert(daemon_id.clone()) {
+                ids.push(daemon_id);
+            }
+        }
+
+        if let Some(name) = group_name {
+            match config.groups.get(name) {
+                Some(group) => {
+                    let missing: Vec<String> = group
+                        .daemons
+                        .iter()
+                        .filter(|id| !config.daemons.contains_key(*id))
+                        .map(|id| id.qualified())
+                        .collect();
+                    if !missing.is_empty() {
+                        return Err(miette::miette!(
+                            "group '{}' references undefined daemon{}: {}",
+                            name,
+                            if missing.len() > 1 { "s" } else { "" },
+                            missing.join(", ")
+                        ));
+                    }
+                    for daemon_id in &group.daemons {
+                        if seen.insert(daemon_id.clone()) {
+                            ids.push(daemon_id.clone());
+                        }
+                    }
+                }
+                None => {
+                    let suggestion =
+                        find_similar_daemon(name, config.groups.keys().map(|s| s.as_str()));
+                    return Err(miette::miette!(
+                        "group '{}' not found in configuration{}",
+                        name,
+                        suggestion.map(|s| format!(", {s}")).unwrap_or_default()
+                    ));
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+
     /// List all configuration file paths from the current working directory.
     /// See `list_paths_from` for details on the search order.
     pub fn list_paths() -> Vec<PathBuf> {
@@ -715,6 +800,7 @@ impl PitchforkToml {
             namespace: None,
             settings: SettingsPartial::default(),
             slugs: IndexMap::new(),
+            groups: IndexMap::new(),
             path: Some(path),
         }
     }
@@ -880,6 +966,33 @@ impl PitchforkToml {
             );
         }
 
+        // Resolve group entries: convert short daemon names to qualified DaemonIds
+        for (group_name, raw_group) in raw_config.groups {
+            let mut daemons = Vec::new();
+            for daemon_name in &raw_group.daemons {
+                let id = if daemon_name.contains('/') {
+                    DaemonId::parse(daemon_name).map_err(|e| {
+                        ConfigParseError::InvalidDependency {
+                            daemon: group_name.clone(),
+                            dependency: daemon_name.clone(),
+                            path: path.to_path_buf(),
+                            reason: e.to_string(),
+                        }
+                    })?
+                } else {
+                    DaemonId::try_new(&namespace, daemon_name).map_err(|e| {
+                        ConfigParseError::InvalidDaemonName {
+                            name: daemon_name.clone(),
+                            path: path.to_path_buf(),
+                            reason: e.to_string(),
+                        }
+                    })?
+                };
+                daemons.push(id);
+            }
+            pt.groups.insert(group_name, GroupEntry { daemons });
+        }
+
         Ok(pt)
     }
 
@@ -997,6 +1110,27 @@ impl PitchforkToml {
                 );
             }
 
+            // Serialize groups back to raw format (preserve cross-namespace refs as qualified IDs)
+            for (name, group) in &self.groups {
+                let raw_daemons: Vec<String> = group
+                    .daemons
+                    .iter()
+                    .map(|id| {
+                        if id.namespace() == config_namespace {
+                            id.name().to_string()
+                        } else {
+                            id.qualified()
+                        }
+                    })
+                    .collect();
+                raw.groups.insert(
+                    name.clone(),
+                    GroupEntryRaw {
+                        daemons: raw_daemons,
+                    },
+                );
+            }
+
             let raw_str = toml::to_string(&raw).map_err(|e| FileError::SerializeError {
                 path: path.clone(),
                 source: e,
@@ -1022,6 +1156,10 @@ impl PitchforkToml {
         // Merge slugs - pt's values override self's values
         for (slug, entry) in pt.slugs {
             self.slugs.insert(slug, entry);
+        }
+        // Merge groups - pt's values override self's values
+        for (name, group) in pt.groups {
+            self.groups.insert(name, group);
         }
         // Merge settings - pt's values override self's values
         self.settings.merge_from(&pt.settings);
@@ -1153,8 +1291,8 @@ pub struct PitchforkTomlDaemon {
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
     pub ready_output: Option<String>,
-    /// HTTP URL to poll for readiness (expects 2xx response)
-    pub ready_http: Option<String>,
+    /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
+    pub ready_http: Option<ReadyHttp>,
     /// TCP port to check for readiness (connection success = ready)
     #[schemars(range(min = 1, max = 65535))]
     pub ready_port: Option<u16>,

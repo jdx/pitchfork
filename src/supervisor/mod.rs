@@ -102,9 +102,11 @@ pub fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
     if let Some(d) = sf.daemons.get(&DaemonId::pitchfork())
         && let Some(pid) = d.pid
-        && PROCS.is_running(pid)
     {
-        return Ok(());
+        PROCS.refresh_pids(&[pid]);
+        if PROCS.is_running(pid) {
+            return Ok(());
+        }
     }
     start_in_background()
 }
@@ -166,6 +168,8 @@ impl Supervisor {
         fix_state_dir_permissions();
 
         let pid = std::process::id();
+        // Ensure PROCS has data for the supervisor PID before upsert_daemon reads title()
+        PROCS.refresh_pids(&[pid]);
         // Determine container mode: CLI flag takes priority, then settings
         let container_mode = container || settings().supervisor.container;
         if container_mode {

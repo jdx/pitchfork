@@ -273,10 +273,14 @@
           "minimum": 0
         },
         "ready_http": {
-          "description": "HTTP URL to poll for readiness (expects 2xx response)",
-          "type": [
-            "string",
-            "null"
+          "description": "HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadyHttp"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "ready_output": {
@@ -442,6 +446,36 @@
         }
       ]
     },
+    "ReadyHttp": {
+      "description": "HTTP readiness check: a URL string accepting any 2xx response, or { url, status } object with exact accepted status codes",
+      "oneOf": [
+        {
+          "description": "HTTP URL to poll for readiness; any 2xx response is ready",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "description": "Exact HTTP status codes that indicate readiness. Omit to accept any 2xx response.",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "maximum": 599,
+                "minimum": 100
+              }
+            },
+            "url": {
+              "description": "HTTP URL to poll for readiness",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      ]
+    },
     "Retry": {
       "description": "Retry: true = indefinite, false/0 = none, number = count",
       "oneOf": [
@@ -496,6 +530,13 @@
           "description": "Explicit path to the mise binary",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "startup_log_timestamps": {
+          "description": "Show timestamps in startup log output",
+          "type": [
+            "boolean",
             "null"
           ]
         }

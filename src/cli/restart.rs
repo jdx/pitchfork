@@ -1,11 +1,8 @@
 use crate::Result;
-use crate::cli::logs::{collect_startup_logs, print_startup_logs_block};
 use crate::daemon_id::DaemonId;
-use crate::ipc::batch::StartOptions;
+use crate::ipc::batch::{StartOptions, update_job_with_result};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
-use crate::ui::style::{ncyan, nstyle};
-use itertools::Itertools;
 use miette::ensure;
 use std::sync::Arc;
 
@@ -22,6 +19,7 @@ from the pitchfork.toml configuration with dependency resolution.
 Examples:
   pitchfork restart api           Restart a single daemon
   pitchfork restart api worker    Restart multiple daemons
+  pitchfork restart --group backend Restart all daemons in the 'backend' group
   pitchfork restart --all         Restart all running daemons
   pitchfork restart -l            Restart all local daemons in pitchfork.toml
   pitchfork restart -g            Restart all global daemons in config.toml
@@ -35,6 +33,15 @@ pub struct Restart {
         conflicts_with = "all"
     )]
     id: Vec<String>,
+    /// Restart all daemons in the named group
+    #[clap(
+        long,
+        value_name = "GROUP",
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
+    group: Option<String>,
     /// Restart all running daemons
     #[clap(long, short, conflicts_with = "local", conflicts_with = "global")]
     all: bool,
@@ -79,8 +86,8 @@ pub struct Restart {
 impl Restart {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.local || self.global || self.all || !self.id.is_empty(),
-            "At least one daemon ID or one of --all / --local / --global must be provided"
+            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
+            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
@@ -90,7 +97,7 @@ impl Restart {
         } else if self.global || self.local {
             ipc.get_running_configured_daemons(self.global).await?
         } else {
-            PitchforkToml::resolve_ids(&self.id)?
+            PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
 
         if ids.is_empty() {
@@ -105,42 +112,23 @@ impl Restart {
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),
+            quiet: self.quiet,
             ..Default::default()
         };
 
         // Restart is just start --force with dependency resolution
         let result = ipc.start_daemons(&ids, opts).await?;
 
-        // Show startup logs for successful daemons (unless --quiet)
-        if !self.quiet {
-            let all_ids: Vec<&DaemonId> = result.started.iter().map(|(id, _, _)| id).collect();
-            let mut all_log_lines = vec![];
-            for (id, start_time, resolved_ports) in &result.started {
-                match collect_startup_logs(id, *start_time) {
-                    Ok(lines) => all_log_lines.extend(lines),
-                    Err(e) => debug!("Failed to collect startup logs for {id}: {e}"),
-                }
-                let display_name = id.styled_display_name(Some(all_ids.iter().copied()));
-                if !resolved_ports.is_empty() {
-                    let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
-                    let port_label = if resolved_ports.len() == 1 {
-                        "port"
-                    } else {
-                        "ports"
-                    };
-                    println!(
-                        "{} {} restarted on {} {}",
-                        nstyle("↻").green(),
-                        display_name,
-                        port_label,
-                        ncyan(&port_str),
-                    );
-                } else {
-                    println!("{} {} restarted", nstyle("↻").green(), display_name);
-                }
-            }
-            print_startup_logs_block(&all_log_lines);
+        // Apply all deferred job status updates.
+        // Log streaming was already stopped inside each spawn task,
+        // so println() won't race with the render thread here.
+        for update in &result.pending_job_updates {
+            update_job_with_result(update.job.as_deref(), &update.id, &update.run_result);
         }
+
+        // Stop progress display (renders final frame with all job statuses)
+        clx::progress::stop();
+        clx::progress::clear_jobs();
 
         if result.any_failed {
             std::process::exit(1);

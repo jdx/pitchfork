@@ -77,11 +77,11 @@ pub async fn stats_partial() -> Html<String> {
 pub async fn index() -> Html<String> {
     let bp = bp();
 
-    // Refresh process info for accurate CPU/memory stats
-    PROCS.refresh_processes();
-
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
+
+    // Refresh process info for accurate CPU/memory stats (only managed daemons)
+    PROCS.refresh_daemon_pids(&state);
     let pt = match PitchforkToml::all_merged() {
         Ok(pt) => pt,
         Err(e) => {

@@ -412,6 +412,7 @@ impl Supervisor {
             }
         };
         info!("started daemon {id} with pid {pid}");
+        PROCS.refresh_pids(&[pid]);
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::builder(id.clone())
@@ -797,9 +798,9 @@ impl Supervisor {
                             std::future::pending::<()>().await;
                         }
                     }, if !ready_notified && ready_http.is_some() => {
-                        if let (Some(url), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(url).send().await {
-                                Ok(response) if response.status().is_success() => {
+                        if let (Some(http), Some(client)) = (&ready_http, &http_client) {
+                            match client.get(&http.url).send().await {
+                                Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
                                     let _ = log_appender.flush().await;
@@ -1107,7 +1108,7 @@ impl Supervisor {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
                 trace!("killing pid: {pid}");
-                PROCS.refresh_processes();
+                PROCS.refresh_pids(&[pid]);
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(

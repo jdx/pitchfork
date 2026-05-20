@@ -823,6 +823,46 @@ ready_http = "http://localhost:18081/health"
 }
 
 #[test]
+fn test_ready_http_check_with_status() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    #[cfg(unix)]
+    env.kill_port(18084);
+
+    let script = get_script_path("http_server.ts");
+    let toml_content = format!(
+        r#"
+[daemons.http_status_test]
+run = "bun run {} 1 18084 401"
+ready_http = {{ url = "http://localhost:18084/health", status = [401] }}
+"#,
+        script.display()
+    );
+    env.create_toml(&toml_content);
+
+    let start_time = std::time::Instant::now();
+    let output = env.run_command(&["start", "http_status_test"]);
+    let elapsed = start_time.elapsed();
+
+    println!("Start took: {elapsed:?}");
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(output.status.success(), "Start command should succeed");
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "Should wait for HTTP server to be ready"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "Should not take too long to detect ready state"
+    );
+
+    env.run_command(&["stop", "http_status_test"]);
+}
+
+#[test]
 fn test_ready_port_check() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();

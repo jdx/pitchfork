@@ -1,13 +1,11 @@
 use crate::Result;
 use crate::cli::list::build_proxy_url;
-use crate::cli::logs::{collect_startup_logs, print_startup_logs_block};
 use crate::daemon_id::DaemonId;
-use crate::ipc::batch::StartOptions;
+use crate::ipc::batch::{StartOptions, update_job_with_result};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
-use crate::ui::style::{ncyan, ndim, nstyle};
-use itertools::Itertools;
+use crate::ui::style::{ncyan, ndim};
 use miette::ensure;
 use std::sync::Arc;
 
@@ -25,6 +23,7 @@ The command waits for the daemon to be ready before returning.
 Examples:
   pitchfork start api           Start a single daemon
   pitchfork start api worker    Start multiple daemons
+  pitchfork start --group backend Start all daemons in the 'backend' group
   pitchfork start -l            Start all local daemons in pitchfork.toml
   pitchfork start -g            Start all global daemons in config.toml
   pitchfork start -a            Start all daemons (local and global)
@@ -45,6 +44,15 @@ pub struct Start {
         conflicts_with = "all"
     )]
     id: Vec<String>,
+    /// Start all daemons in the named group
+    #[clap(
+        long,
+        value_name = "GROUP",
+        conflicts_with = "local",
+        conflicts_with = "global",
+        conflicts_with = "all"
+    )]
+    group: Option<String>,
     /// Start all local daemons in pitchfork.toml
     #[clap(
         long,
@@ -100,8 +108,8 @@ pub struct Start {
 impl Start {
     pub async fn run(&self) -> Result<()> {
         ensure!(
-            self.local || self.global || self.all || !self.id.is_empty(),
-            "At least one daemon ID or one of --all / --local / --global must be provided"
+            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
+            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
         );
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
@@ -114,8 +122,13 @@ impl Start {
         } else if self.local {
             IpcClient::get_local_configured_daemons()?
         } else {
-            PitchforkToml::resolve_ids(&self.id)?
+            PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
+
+        if ids.is_empty() {
+            warn!("No daemons to start");
+            return Ok(());
+        }
 
         let opts = StartOptions {
             force: self.force,
@@ -133,54 +146,47 @@ impl Start {
                 )),
                 Some(Some(n)) => Some(crate::config_types::PortBump(n)),
             },
+            quiet: self.quiet,
             ..Default::default()
         };
 
         let result = ipc.start_daemons(&ids, opts).await?;
-        let global_slugs = settings()
-            .proxy
-            .enable
-            .then(PitchforkToml::read_global_slugs)
-            .unwrap_or_default();
 
-        // Show startup logs for successful daemons (unless --quiet)
+        // Apply all deferred job status updates.
+        // Log streaming was already stopped inside each spawn task,
+        // so println() won't race with the render thread here.
+        for update in &result.pending_job_updates {
+            update_job_with_result(update.job.as_deref(), &update.id, &update.run_result);
+        }
+
+        // Stop progress display (renders final frame with all job statuses)
+        clx::progress::stop();
+        clx::progress::clear_jobs();
+
+        // Show proxy URLs for successful daemons (unless --quiet)
         if !self.quiet {
-            let all_ids: Vec<&DaemonId> = result.started.iter().map(|(id, _, _)| id).collect();
-            let mut all_log_lines = vec![];
-            for (id, start_time, resolved_ports) in &result.started {
-                match collect_startup_logs(id, *start_time) {
-                    Ok(lines) => all_log_lines.extend(lines),
-                    Err(e) => debug!("Failed to collect startup logs for {id}: {e}"),
-                }
-                let display_name = id.styled_display_name(Some(all_ids.iter().copied()));
-                if !resolved_ports.is_empty() {
-                    let port_str = resolved_ports.iter().map(ToString::to_string).join(", ");
-                    let port_label = if resolved_ports.len() == 1 {
-                        "port"
-                    } else {
-                        "ports"
-                    };
-                    println!(
-                        "{} {} started on {} {}",
-                        nstyle("✔").green(),
-                        display_name,
-                        port_label,
-                        ncyan(&port_str),
-                    );
-                } else {
-                    println!("{} {} started", nstyle("✔").green(), display_name);
-                }
-                // Show proxy URL when the proxy is enabled and the daemon has a port.
+            let global_slugs = settings()
+                .proxy
+                .enable
+                .then(PitchforkToml::read_global_slugs)
+                .unwrap_or_default();
+            for (id, _start_time, resolved_ports) in &result.started {
                 let s = settings();
                 if s.proxy.enable && !resolved_ports.is_empty() {
                     let slug_name =
                         PitchforkToml::find_slug_for_daemon_in_registry(id, &global_slugs);
                     if let Some(proxy_url) = build_proxy_url(slug_name.as_deref(), s) {
-                        println!("  {} {}", ndim("↳"), ncyan(&proxy_url).underlined(),);
+                        let display_name =
+                            id.styled_display_name(None::<std::iter::Empty<&DaemonId>>);
+                        println!(
+                            "  {} {} {}",
+                            ndim("↳"),
+                            display_name,
+                            ncyan(&proxy_url).underlined()
+                        );
                     }
                 }
             }
-            print_startup_logs_block(&all_log_lines);
         }
 
         // Surface any pending supervisor notifications (e.g. proxy bind failure)

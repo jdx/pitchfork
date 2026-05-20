@@ -1,9 +1,10 @@
 // Simple HTTP server that delays start by specified seconds
-// Usage: bun run http_server.ts <delay_seconds> <port>
+// Usage: bun run http_server.ts <delay_seconds> <port> [health_status]
 
 const args = process.argv.slice(2);
 const delaySeconds = parseInt(args[0] || "1", 10);
 const port = parseInt(args[1] || "18080", 10);
+const healthStatus = parseInt(args[2] || "200", 10);
 
 console.log(`Waiting ${delaySeconds}s before starting server...`);
 
@@ -15,7 +16,7 @@ setTimeout(async () => {
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/health") {
-        return new Response("OK", { status: 200 });
+        return new Response("OK", { status: healthStatus });
       }
       return new Response("Not Found", { status: 404 });
     },

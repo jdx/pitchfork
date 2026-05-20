@@ -336,6 +336,16 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
     }
 
+    /// Collect daemon PIDs from a StateFile and refresh only those.
+    /// Avoids the cost of refreshing all system processes when we only
+    /// need stats for managed daemons.
+    pub(crate) fn refresh_daemon_pids(&self, state: &crate::state_file::StateFile) {
+        let pids: Vec<u32> = state.daemons.values().filter_map(|d| d.pid).collect();
+        if !pids.is_empty() {
+            self.refresh_pids(&pids);
+        }
+    }
+
     /// Get aggregated stats for multiple process trees in a single pass.
     ///
     /// Builds the parent→children map once (O(N)) and then BFS-es from each

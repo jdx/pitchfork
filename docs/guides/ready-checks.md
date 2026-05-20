@@ -50,7 +50,8 @@ ready_output = "Serving HTTP on"
 
 ## HTTP Check
 
-Wait until an HTTP endpoint returns a 2xx status code.
+Wait until an HTTP endpoint returns a 2xx status code, or a configured exact
+status code.
 
 **CLI:**
 ```bash
@@ -67,12 +68,18 @@ ready_http = "http://localhost:8000/health"
 [daemons.webserver]
 run = "node server.js"
 ready_http = "http://localhost:3000/ready"
+
+[daemons.private_api]
+run = "node server.js"
+ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
 ```
 
 **Best for:** Web services with health check endpoints.
 
 ::: tip
-The HTTP check polls every 500ms with a 5 second timeout per request.
+The HTTP check polls every 500ms with a 5 second timeout per request. The string
+form accepts any 2xx response; the object form accepts the exact `status` codes
+you list.
 :::
 
 ## Port Check
@@ -135,7 +142,7 @@ The command check polls every 500ms. Use this when you need more complex readine
 |------------|-----------|
 | Delay | Daemon runs for N seconds without crashing |
 | Output | Pattern matches stdout/stderr |
-| HTTP | Endpoint returns 2xx status |
+| HTTP | Endpoint returns 2xx status, or a configured exact status |
 | Port | TCP connection to port succeeds |
 | Command | Shell command returns exit code 0 |
 

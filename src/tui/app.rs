@@ -4,8 +4,8 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_list::DaemonListEntry;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
-    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon, Retry,
-    namespace_from_path,
+    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
+    ReadyHttp, Retry, namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
 use crate::settings::settings;
@@ -330,6 +330,8 @@ pub struct EditorState {
     pub scroll_offset: usize,
     /// Preserved config field for ready_cmd (no form UI yet)
     preserved_ready_cmd: Option<String>,
+    /// Preserved ready_http statuses (no form UI yet)
+    preserved_ready_http_status: Option<Vec<u16>>,
 }
 
 impl EditorState {
@@ -346,6 +348,7 @@ impl EditorState {
             unsaved_changes: false,
             scroll_offset: 0,
             preserved_ready_cmd: None,
+            preserved_ready_http_status: None,
         }
     }
 
@@ -364,6 +367,10 @@ impl EditorState {
             unsaved_changes: false,
             scroll_offset: 0,
             preserved_ready_cmd: config.ready_cmd.clone(),
+            preserved_ready_http_status: config
+                .ready_http
+                .as_ref()
+                .and_then(|h| (!h.status.is_empty()).then(|| h.status.clone())),
         }
     }
 
@@ -467,7 +474,9 @@ impl EditorState {
                     field.value = FormFieldValue::OptionalText(config.ready_output.clone())
                 }
                 "ready_http" => {
-                    field.value = FormFieldValue::OptionalText(config.ready_http.clone())
+                    field.value = FormFieldValue::OptionalText(
+                        config.ready_http.as_ref().map(|h| h.url.clone()),
+                    )
                 }
                 "ready_port" => field.value = FormFieldValue::OptionalPort(config.ready_port),
                 "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
@@ -535,7 +544,12 @@ impl EditorState {
                 ("ready_output", FormFieldValue::OptionalText(s)) => {
                     config.ready_output = s.clone()
                 }
-                ("ready_http", FormFieldValue::OptionalText(s)) => config.ready_http = s.clone(),
+                ("ready_http", FormFieldValue::OptionalText(s)) => {
+                    config.ready_http = s.clone().map(|url| ReadyHttp {
+                        url,
+                        status: self.preserved_ready_http_status.clone().unwrap_or_default(),
+                    })
+                }
                 ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = *p,
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
                 ("depends", FormFieldValue::StringList(v)) => {
@@ -1150,7 +1164,10 @@ impl App {
     }
 
     fn refresh_process_stats(&mut self) {
-        PROCS.refresh_processes();
+        let pids: Vec<u32> = self.daemons.iter().filter_map(|d| d.pid).collect();
+        if !pids.is_empty() {
+            PROCS.refresh_pids(&pids);
+        }
         self.process_stats.clear();
 
         let pids: Vec<u32> = self

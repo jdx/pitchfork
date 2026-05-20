@@ -102,6 +102,23 @@ fn dimmed_id(id: &str, colors_enabled: bool) -> String {
     format!("\x1b[2;38;2;{};{};{}m{}\x1b[0m", r, g, b, id)
 }
 
+/// Return a colorized `[namespace/id]` label for display in progress jobs.
+/// Uses brighter colors than `dimmed_id` and includes the square brackets.
+pub fn colored_id_label(id: &str, colors_enabled: bool) -> String {
+    if !colors_enabled {
+        return format!("[{}]", id);
+    }
+    // Same palette as mise: Blue, Magenta, Cyan, Green
+    // Excludes Red/Yellow to avoid confusion with errors/warnings.
+    let colors: [u8; 4] = [34, 35, 36, 32]; // ANSI: Blue, Magenta, Cyan, Green
+    let mut h: usize = 0x811C_9DC5; // FNV offset basis
+    for b in id.bytes() {
+        h = h.wrapping_mul(0x0100_0193).wrapping_add(b as usize);
+    }
+    let color = colors[h % colors.len()];
+    format!("\x1b[{color}m[{id}]\x1b[0m")
+}
+
 /// A parsed log entry with timestamp, daemon name, and message
 #[derive(Debug)]
 struct LogEntry {
@@ -460,7 +477,7 @@ impl Logs {
             .flat_map(|id| {
                 let path = id.log_path();
                 match read_lines_in_time_range(&path, from, to) {
-                    Ok(lines) => merge_log_lines(&id.qualified(), lines, false),
+                    Ok((lines, _)) => merge_log_lines(&id.qualified(), lines, false),
                     Err(e) => {
                         error!("{}: {}", path.display(), e);
                         vec![]
@@ -845,12 +862,12 @@ fn read_lines_in_time_range(
     path: &Path,
     from: Option<DateTime<Local>>,
     to: Option<DateTime<Local>>,
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, u64)> {
     let mut file = File::open(path).into_diagnostic()?;
     let file_size = file.metadata().into_diagnostic()?.len();
 
     if file_size == 0 {
-        return Ok(vec![]);
+        return Ok((vec![], 0));
     }
 
     let start_pos = if let Some(from_time) = from {
@@ -866,7 +883,7 @@ fn read_lines_in_time_range(
     };
 
     if start_pos >= end_pos {
-        return Ok(vec![]);
+        return Ok((vec![], end_pos));
     }
 
     file.seek(SeekFrom::Start(start_pos)).into_diagnostic()?;
@@ -896,7 +913,7 @@ fn read_lines_in_time_range(
         }
     }
 
-    Ok(lines)
+    Ok((lines, end_pos))
 }
 
 fn binary_search_log_position(
@@ -1344,43 +1361,121 @@ fn parse_time_only(s: &str) -> Result<NaiveTime> {
     Err(miette::miette!("Invalid time format: '{}'", s))
 }
 
-pub fn print_logs_for_time_range(
-    daemon_id: &DaemonId,
-    from: DateTime<Local>,
-    to: Option<DateTime<Local>>,
-) -> Result<()> {
-    let from = from
-        .with_nanosecond(0)
-        .expect("0 is always valid for nanoseconds");
-    let to = to.map(|t| {
-        t.with_nanosecond(0)
-            .expect("0 is always valid for nanoseconds")
-    });
-
-    let path = daemon_id.log_path();
-    let log_lines = if path.exists() {
-        match read_lines_in_time_range(&path, Some(from), to) {
-            Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
-            Err(e) => {
-                error!("{}: {}", path.display(), e);
-                vec![]
-            }
-        }
-    } else {
-        vec![]
-    };
-
+/// Prints error log lines in a styled block matching the startup logs format.
+///
+/// Format:
+/// ```text
+///  ERROR LOGS
+///  12:00:00 error message
+/// ```
+///
+/// Timestamps use dimmed red. The tag uses white text on red background.
+pub fn print_error_logs_block(log_lines: &[(String, String, String)]) {
     if log_lines.is_empty() {
-        eprintln!("No logs found for daemon '{daemon_id}' in the specified time range");
-    } else {
-        eprintln!("\n{} {} {}", edim("==="), edim("Error logs"), edim("==="));
-        for (date, _id, msg) in log_lines {
-            eprintln!("{} {}", edim(&date), msg);
-        }
-        eprintln!("{} {} {}\n", edim("==="), edim("End of logs"), edim("==="));
+        return;
     }
 
-    Ok(())
+    let is_tty = std::io::stderr().is_terminal();
+    let format_msg = |msg: &str| -> String {
+        let stripped = strip_pty_controls(msg);
+        if is_tty {
+            stripped
+        } else {
+            console::strip_ansi_codes(&stripped).to_string()
+        }
+    };
+
+    let tag = estyle(" ERROR LOGS ").white().on_red();
+    eprintln!("\n{tag}");
+
+    // Determine if we need to show daemon IDs (same logic as startup logs)
+    let unique_ids: BTreeSet<&str> = log_lines.iter().map(|(_, id, _)| id.as_str()).collect();
+    let show_id = unique_ids.len() > 1;
+
+    if show_id {
+        let id_width = log_lines
+            .iter()
+            .map(|(_, id, _)| console::measure_text_width(id))
+            .max()
+            .unwrap_or(0);
+        for (date, id, msg) in log_lines {
+            let time = date.split(' ').nth(1).unwrap_or(date);
+            let colored = dimmed_id(id, is_tty && console::colors_enabled_stderr());
+            let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
+            eprintln!(
+                "{}  {} {}",
+                padded,
+                estyle(time).red().dim(),
+                format_msg(msg)
+            );
+        }
+    } else {
+        for (date, _, msg) in log_lines {
+            let time = date.split(' ').nth(1).unwrap_or(date);
+            eprintln!("{} {}", estyle(time).red().dim(), format_msg(msg));
+        }
+    }
+}
+
+/// Describes the type of ready check being performed for display purposes.
+pub enum ReadyCheckType {
+    Output(String),
+    Http(String),
+    Port(u16),
+    Cmd(String),
+    Delay(u64),
+    Default,
+}
+
+impl std::fmt::Display for ReadyCheckType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadyCheckType::Output(pattern) => write!(f, "output matching '{pattern}'"),
+            ReadyCheckType::Http(url) => write!(f, "HTTP {url}"),
+            ReadyCheckType::Port(port) => write!(f, "TCP port {port}"),
+            ReadyCheckType::Cmd(cmd) => write!(f, "command '{cmd}'"),
+            ReadyCheckType::Delay(secs) => write!(f, "delay ({secs}s)"),
+            ReadyCheckType::Default => write!(f, "default readiness check"),
+        }
+    }
+}
+
+/// Creates a progress job showing a spinner while waiting for a ready check.
+///
+/// Returns a `Arc<ProgressJob>` that the caller should update:
+/// - Set body to success message and status to `Done` when the daemon is ready
+/// - Set body to failure message and status to `Failed` when the daemon fails
+pub fn create_ready_check_job(
+    daemon_id: &DaemonId,
+    check_type: &ReadyCheckType,
+) -> std::sync::Arc<clx::progress::ProgressJob> {
+    use clx::progress::{ProgressJobBuilder, ProgressJobDoneBehavior, ProgressStatus};
+
+    let is_tty = std::io::stderr().is_terminal();
+    let colors_enabled = is_tty && console::colors_enabled_stderr();
+    let id_label = colored_id_label(&daemon_id.qualified(), colors_enabled);
+    let show_ts = crate::settings::settings().general.startup_log_timestamps;
+
+    // When timestamps are off, {{spinner()}} renders as an animated spinner
+    // (1 char wide) matching the "•" prefix used by println.  When on,
+    // we show a dim timestamp instead.
+    let prefix = if show_ts {
+        // The timestamp updates each refresh via the now() tera function.
+        // We use a fixed-width format (HH:MM:SS = 8 chars) for alignment.
+        edim(chrono::Local::now().format("%H:%M:%S").to_string()).to_string()
+    } else {
+        "{{spinner()}}".to_string()
+    };
+
+    ProgressJobBuilder::new()
+        .body(format!(
+            "{} {} waiting for {{{{ check_type }}}}...",
+            prefix, id_label
+        ))
+        .prop("check_type", &check_type.to_string())
+        .status(ProgressStatus::Running)
+        .on_done(ProgressJobDoneBehavior::Keep)
+        .start()
 }
 
 /// Collects startup log lines for a single daemon (does not print).
@@ -1398,7 +1493,7 @@ pub fn collect_startup_logs(
     let path = daemon_id.log_path();
     let log_lines = if path.exists() {
         match read_lines_in_time_range(&path, Some(from), None) {
-            Ok(lines) => merge_log_lines(&daemon_id.qualified(), lines, false),
+            Ok((lines, _)) => merge_log_lines(&daemon_id.qualified(), lines, false),
             Err(e) => {
                 error!("{}: {}", path.display(), e);
                 vec![]
@@ -1411,76 +1506,161 @@ pub fn collect_startup_logs(
     Ok(log_lines)
 }
 
-/// Prints collected startup log lines for all daemons in a unified block.
-///
-/// When only one daemon ID appears in the log lines, omits the ID column since
-/// it would be redundant.  When multiple daemons are present, aligns the ID column.
-///
-/// Format (single daemon):
-/// ```text
-///   STARTUP LOGS
-///   17:12:14 v24.14.0
-/// ```
-///
-/// Format (multiple daemons):
-/// ```text
-///   STARTUP LOGS
-///   api     17:12:14 v3.1.0 ready
-///   web     17:12:14 listening on 0.0.0.0:8080
-/// ```
-pub fn print_startup_logs_block(log_lines: &[(String, String, String)]) {
-    if log_lines.is_empty() {
-        return;
-    }
+/// Reads new lines from a file starting at the given byte offset.
+/// Only returns complete lines (ending with `\n`). Returns the new offset
+/// that points past the last complete line, so partial lines at EOF are
+/// preserved for the next read.
+fn read_from_offset(path: &Path, offset: u64) -> Result<(Vec<String>, u64)> {
+    let mut file = File::open(path).into_diagnostic()?;
+    file.seek(SeekFrom::Start(offset)).into_diagnostic()?;
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).into_diagnostic()?;
 
-    // Sort by timestamp so logs from multiple daemons are interleaved
-    // rather than grouped per-daemon.
-    let log_lines = log_lines
-        .iter()
-        .sorted_by_cached_key(|(ts, _, _)| ts.clone())
-        .collect_vec();
-
-    // Unique daemon IDs to decide whether to show the ID column.
-    // We decide based on what's actually in the logs, not how many daemons
-    // were started — if multiple daemons started but only one emitted logs,
-    // the user still needs to know which daemon the logs belong to.
-    let unique_ids: BTreeSet<&str> = log_lines.iter().map(|(_, id, _)| id.as_str()).collect();
-    let show_id = unique_ids.len() > 1;
-
-    // Filter PTY control sequences from log messages, keeping SGR (color) codes.
-    // Non-tty: also strip all remaining ANSI color codes.
-    let is_tty = std::io::stderr().is_terminal();
-    let format_msg = |msg: &str| -> String {
-        let stripped = strip_pty_controls(msg);
-        if is_tty {
-            stripped
-        } else {
-            console::strip_ansi_codes(&stripped).to_string()
-        }
-    };
-
-    // Tag with dim background style, always on its own line
-    let tag = estyle(" STARTUP LOGS ").black().on_color256(8); // dark gray bg
-    eprintln!("\n{tag}");
-
-    if show_id {
-        let id_width = log_lines
-            .iter()
-            .map(|(_, id, _)| console::measure_text_width(id))
-            .max()
-            .unwrap_or(0);
-        for (date, id, msg) in log_lines {
-            let time = date.split(' ').nth(1).unwrap_or(date);
-            let colored = dimmed_id(id, is_tty && console::colors_enabled_stderr());
-            let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
-            eprintln!("{}  {} {}", padded, edim(time), format_msg(msg));
-        }
+    // Only process up to the last complete line (ending with \n).
+    // Any trailing partial line is kept for the next poll.
+    if let Some(last_newline) = buf.rfind('\n') {
+        let complete = &buf[..=last_newline];
+        let new_offset = offset + (last_newline + 1) as u64;
+        let lines = complete.lines().map(String::from).collect();
+        Ok((lines, new_offset))
     } else {
-        for (date, _, msg) in log_lines {
-            let time = date.split(' ').nth(1).unwrap_or(date);
-            eprintln!("{} {}", edim(time), format_msg(msg));
-        }
+        // No complete lines yet — don't advance offset.
+        Ok((vec![], offset))
     }
+}
+
+/// Stream startup logs for a daemon to a progress job in real-time.
+///
+/// Spawns a background tokio task that polls the daemon's log file
+/// and calls `job.println()` for each new line. Returns a watch sender
+/// that stops the streaming when sent `true`.
+pub fn stream_startup_logs(
+    daemon_id: &DaemonId,
+    from: DateTime<Local>,
+    job: std::sync::Arc<clx::progress::ProgressJob>,
+) -> (
+    tokio::sync::watch::Sender<bool>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, mut rx) = tokio::sync::watch::channel(false);
+    let id = daemon_id.clone();
+    let from = from
+        .with_nanosecond(0)
+        .expect("0 is always valid for nanoseconds");
+
+    let show_ts = crate::settings::settings().general.startup_log_timestamps;
+
+    let handle = tokio::spawn(async move {
+        let path = id.log_path();
+        let is_tty = std::io::stderr().is_terminal();
+        let colors_enabled = is_tty && console::colors_enabled_stderr();
+        let id_label = colored_id_label(&id.qualified(), colors_enabled);
+        let prefix = if show_ts {
+            // Will be replaced with actual timestamp per line
+            String::new()
+        } else {
+            edim("•").to_string()
+        };
+
+        // Wait for log file to be created (up to 2s)
+        for _ in 0..20 {
+            if path.exists() {
+                break;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                _ = rx.changed() => return,
+            }
+        }
+        if !path.exists() {
+            return;
+        }
+
+        // Print existing lines from `from` time, then capture the exact
+        // end-of-read offset so the subsequent polling loop continues from
+        // exactly where this left off (eliminates a tiny race window).
+        let mut offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if let Ok((lines, read_end)) = read_lines_in_time_range(&path, Some(from), None) {
+            let merged = merge_log_lines(&id.qualified(), lines, false);
+            for (date, _, msg) in &merged {
+                let time = date.split(' ').nth(1).unwrap_or(date);
+                let msg = strip_pty_controls(msg);
+                let msg = if is_tty {
+                    msg
+                } else {
+                    console::strip_ansi_codes(&msg).to_string()
+                };
+                let line_prefix = if show_ts {
+                    edim(time).to_string()
+                } else {
+                    prefix.clone()
+                };
+                job.println(&format!("{} {} {}", line_prefix, id_label, msg));
+            }
+            offset = read_end;
+        }
+        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
+
+        // Poll for new lines
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                    if let Ok(metadata) = std::fs::metadata(&path) {
+                        if metadata.len() > offset {
+                            if let Ok((new_lines, new_offset)) = read_from_offset(&path, offset) {
+                                for line in &new_lines {
+                                    if let Some(caps) = re.captures(line) {
+                                        let time = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                                        let time = time.split(' ').nth(1).unwrap_or(time);
+                                        let msg = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                                        let msg = strip_pty_controls(msg);
+                                        let msg = if is_tty {
+                                            msg
+                                        } else {
+                                            console::strip_ansi_codes(&msg).to_string()
+                                        };
+                                        let line_prefix = if show_ts { edim(time).to_string() } else { prefix.clone() };
+                                        job.println(&format!("{} {} {}", line_prefix, id_label, msg));
+                                    }
+                                }
+                                offset = new_offset;
+                            }
+                        }
+                    }
+                }
+                _ = rx.changed() => {
+                    break;
+                }
+            }
+        }
+
+        // Final drain: pick up any lines written after the last timer tick
+        // but before the stop signal arrived. Since the caller awaits this
+        // task before touching the job state, this println() is safe.
+        if let Ok((new_lines, _new_offset)) = read_from_offset(&path, offset) {
+            for line in &new_lines {
+                if let Some(caps) = re.captures(line) {
+                    let time = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let time = time.split(' ').nth(1).unwrap_or(time);
+                    let msg = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                    let msg = strip_pty_controls(msg);
+                    let msg = if is_tty {
+                        msg
+                    } else {
+                        console::strip_ansi_codes(&msg).to_string()
+                    };
+                    let line_prefix = if show_ts {
+                        edim(time).to_string()
+                    } else {
+                        prefix.clone()
+                    };
+                    job.println(&format!("{} {} {}", line_prefix, id_label, msg));
+                }
+            }
+        }
+    });
+
+    (tx, handle)
 }
 
 /// Strips PTY control sequences from a string while preserving SGR (color/style) codes.

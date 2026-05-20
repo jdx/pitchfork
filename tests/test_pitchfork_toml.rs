@@ -182,13 +182,62 @@ ready_cmd = "test -f /tmp/ready"
     assert_eq!(daemon.ready_delay, Some(5000));
     assert_eq!(daemon.ready_output, Some("Server is ready".to_string()));
     assert_eq!(
-        daemon.ready_http,
-        Some("http://localhost:8080/health".to_string())
+        daemon.ready_http.as_ref().unwrap().url,
+        "http://localhost:8080/health"
     );
+    assert!(daemon.ready_http.as_ref().unwrap().status.is_empty());
     assert_eq!(daemon.ready_port, Some(8080));
     assert_eq!(daemon.ready_cmd, Some("test -f /tmp/ready".to_string()));
 
     Ok(())
+}
+
+/// Test daemon with structured HTTP ready check
+#[test]
+fn test_daemon_with_ready_http_status() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_http = { url = "http://localhost:8080/health", status = [200, 401] }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+    let ready_http = daemon.ready_http.as_ref().unwrap();
+
+    assert_eq!(ready_http.url, "http://localhost:8080/health");
+    assert_eq!(ready_http.status, vec![200, 401]);
+    assert!(ready_http.accepts_status(401));
+    assert!(!ready_http.accepts_status(403));
+
+    Ok(())
+}
+
+/// Test daemon with invalid HTTP status ready check
+#[test]
+fn test_daemon_with_invalid_ready_http_status() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_http = { url = "http://localhost:8080/health", status = [99] }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(
+        err.contains("ready_http status must be between 100 and 599"),
+        "unexpected error: {err}"
+    );
 }
 
 /// Test multiple daemons in one file

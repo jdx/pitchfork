@@ -218,12 +218,18 @@ ready_output = "ready to accept connections"
 
 ### `ready_http`
 
-HTTP endpoint URL to poll for readiness (2xx = ready).
+HTTP endpoint URL to poll for readiness. By default, any 2xx response is ready.
+Use the object form when specific non-2xx statuses also mean the service is up
+(for example an authenticated endpoint returning 401).
 
 ```toml
 [daemons.api]
 run = "npm run server"
 ready_http = "http://localhost:3000/health"
+
+[daemons.private_api]
+run = "npm run server"
+ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
 ```
 
 ### `ready_port`
