@@ -376,14 +376,19 @@ impl Supervisor {
                     .is_some();
 
                 if should_trigger {
-                    // Update last_cron_triggered to prevent re-triggering the same event
+                    // Update last_cron_triggered to prevent re-triggering the same event.
+                    // This write is synchronous and critical: deferring it to the
+                    // background flush task creates a window where a supervisor
+                    // crash-then-restart will see the stale timestamp from disk and
+                    // re-fire the cron job immediately.
                     {
                         let mut state_file = self.state_file.lock().await;
-                        if let Some(d) = state_file.daemons.get_mut(&id) {
-                            d.last_cron_triggered = Some(now);
-                        }
-                        if let Err(e) = state_file.write() {
-                            error!("failed to update cron trigger time: {e}");
+                        if state_file.set_last_cron_triggered(&id, now) {
+                            if let Err(e) = state_file.write() {
+                                error!(
+                                    "failed to persist last_cron_triggered for daemon {id}: {e}"
+                                );
+                            }
                         }
                     }
 
