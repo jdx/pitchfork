@@ -7,7 +7,7 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
 use crate::web::bp;
-use crate::web::helpers::{css_safe_id, daemon_row, format_daemon_id_html, url_encode};
+use crate::web::helpers::{css_safe_id, daemon_row_with_stats, format_daemon_id_html, url_encode};
 
 fn get_stats() -> crate::Result<(usize, usize, usize, usize)> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
@@ -121,13 +121,17 @@ pub async fn index() -> Html<String> {
     let total = all_ids.len();
 
     // Build daemon table rows
+    let pids: Vec<u32> = user_daemons.iter().filter_map(|(_, d)| d.pid).collect();
+    let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
+
     let mut rows = String::new();
     for (id, daemon) in &state.daemons {
         if *id == pitchfork_id {
             continue;
         }
         let is_disabled = state.disabled.contains(id);
-        rows.push_str(&daemon_row(id, daemon, is_disabled));
+        let stats = daemon.pid.and_then(|pid| stats_by_pid.get(&pid).copied());
+        rows.push_str(&daemon_row_with_stats(id, daemon, is_disabled, stats));
     }
 
     // Add configured-but-not-started daemons
