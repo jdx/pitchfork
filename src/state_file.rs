@@ -76,7 +76,9 @@ impl StateFile {
                 for (id, daemon) in state_file.daemons.iter_mut() {
                     daemon.id = id.clone();
                 }
-                state_file.last_content = Mutex::new(None);
+                // Seed last_content with the raw TOML so the first write() can
+                // skip disk I/O when the state hasn't actually changed.
+                state_file.last_content = Mutex::new(Some(raw));
                 Ok(state_file)
             }
             Err(parse_err) => {
@@ -327,6 +329,8 @@ impl StateFile {
     /// avoid unnecessary I/O. Used during shutdown and migration where async
     /// flushing is not available.
     pub fn write(&self) -> Result<()> {
+        let canonical_path = normalized_lock_path(&self.path);
+        let _lock = xx::fslock::get(&canonical_path, false)?;
         let raw = toml::to_string(self).map_err(|e| FileError::SerializeError {
             path: self.path.clone(),
             source: e,
@@ -342,8 +346,6 @@ impl StateFile {
             self.dirty.store(false, Ordering::Relaxed);
             return Ok(());
         }
-        let canonical_path = normalized_lock_path(&self.path);
-        let _lock = xx::fslock::get(&canonical_path, false)?;
         Self::write_raw(&self.path, &raw)?;
         *self.last_content.lock().unwrap() = Some(raw);
         self.dirty.store(false, Ordering::Relaxed);
