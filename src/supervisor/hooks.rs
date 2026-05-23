@@ -65,7 +65,7 @@ pub(crate) async fn fire_hook(
     extra_env: Vec<(String, String)>,
 ) {
     let handle = tokio::spawn(async move {
-        let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
+        let pt = PitchforkToml::all_merged_all_namespaces().unwrap_or_else(|e| {
             warn!("Failed to load config for hook '{hook_type}': {e}");
             PitchforkToml::default()
         });
@@ -149,7 +149,7 @@ pub(crate) async fn fire_output_hook(
 ) {
     let handle = tokio::spawn(async move {
         // Render Tera templates in output hook command
-        let pt = PitchforkToml::all_merged().unwrap_or_default();
+        let pt = PitchforkToml::all_merged_all_namespaces().unwrap_or_default();
         let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
             Ok(cmd) => cmd,
             Err(e) => {

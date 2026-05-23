@@ -3,11 +3,18 @@ mod routes;
 mod server;
 mod static_files;
 
-pub use server::serve;
+pub use server::{serve, serve_api};
 
 use std::sync::OnceLock;
 
 static BASE_PATH: OnceLock<String> = OnceLock::new();
+
+static WEB_PORT: OnceLock<u16> = OnceLock::new();
+
+/// Returns the port the web server is bound on, or None if not set.
+pub fn port() -> Option<u16> {
+    WEB_PORT.get().copied()
+}
 
 /// Returns the base path prefix for all web routes (e.g. "" or "/ps").
 pub(crate) fn bp() -> &'static str {

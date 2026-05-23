@@ -181,6 +181,12 @@ impl Supervisor {
             info!("Starting supervisor with pid {pid}");
         }
 
+        // If the previous supervisor died uncleanly, its daemon child processes
+        // may still be alive (orphaned, re-parented to init).  Terminate them
+        // before we take over so we don't end up with duplicate processes
+        // holding the same ports.
+        cleanup_orphaned_daemons(self).await;
+
         self.upsert_daemon(
             UpsertDaemonOpts::builder(DaemonId::pitchfork())
                 .set(|o| {
@@ -241,6 +247,29 @@ impl Supervisor {
             });
         }
 
+        // Start standalone API server if configured
+        let api_port = if s.api.auto_start {
+            match u16::try_from(s.api.bind_port).ok().filter(|&p| p > 0) {
+                Some(p) => Some(p),
+                None => {
+                    error!(
+                        "api.bind_port {} is out of valid port range (1-65535), API server disabled",
+                        s.api.bind_port
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(port) = api_port {
+            tokio::spawn(async move {
+                if let Err(e) = crate::web::serve_api(port, None).await {
+                    error!("API server error: {e}");
+                }
+            });
+        }
+
         // Start reverse proxy server if enabled
         if s.proxy.enable {
             // Pre-generate the TLS certificate synchronously before spawning the proxy
@@ -297,7 +326,7 @@ impl Supervisor {
             *self.proxy_task.lock().await = Some(proxy_task);
             match bind_rx.await {
                 Ok(Ok(())) => {
-                    // Proxy bound successfully — start mDNS if LAN mode is enabled.
+                    info!("Proxy server bound successfully");
                     self.start_mdns().await;
                 }
                 Ok(Err(msg)) => {
@@ -311,6 +340,12 @@ impl Supervisor {
                 }
             }
         }
+
+        // Pre-warm slug cache so the first /api/proxies request is fast.
+        // Spawned as a background task so it does not block startup.
+        tokio::spawn(async {
+            crate::proxy::server::get_cached_slugs().await;
+        });
 
         let (ipc, ipc_handle) = IpcServer::new()?;
         *self.ipc_shutdown.lock().await = Some(ipc_handle);
@@ -1007,6 +1042,117 @@ fn chmod_safe_subtrees(state_dir: &std::path::Path) {
         if subdir.is_dir() {
             chmod_recursive(&subdir);
         }
+    }
+}
+
+/// On startup, kill any daemon processes left behind by a previous supervisor
+/// that was terminated unexpectedly (e.g. `kill -9`).
+///
+/// This iterates the state file for daemon entries with a recorded PID.  If the
+/// PID is still alive and the process name matches the recorded `title`, it is
+/// assumed to be an orphan from the previous supervisor session and is killed.
+/// The daemon's state is then reset to `Stopped` with no PID.
+///
+/// The process-name check protects against the rare case where a PID has been
+/// recycled by an unrelated process since the state file was written.
+///
+/// This is gated by the `supervisor.cleanup_orphans` setting (default: true).
+async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
+    if !settings().supervisor.cleanup_orphans {
+        return;
+    }
+
+    let candidates: Vec<_> = {
+        let state = supervisor.state_file.lock().await;
+        state
+            .daemons
+            .values()
+            .filter(|d| d.id != DaemonId::pitchfork() && d.pid.is_some())
+            .cloned()
+            .collect()
+    };
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    info!(
+        "checking {} daemon(s) for orphaned processes",
+        candidates.len()
+    );
+
+    for daemon in candidates {
+        let Some(pid) = daemon.pid else { continue };
+
+        PROCS.refresh_pids(&[pid]);
+
+        if !PROCS.is_running(pid) {
+            // PID already dead — just reset its state
+            let _ = supervisor
+                .upsert_daemon(
+                    UpsertDaemonOpts::builder(daemon.id.clone())
+                        .set(|o| {
+                            o.pid = None;
+                            o.status = DaemonStatus::Stopped;
+                            o.active_port = None;
+                        })
+                        .build(),
+                )
+                .await;
+            continue;
+        }
+
+        // Safety check: verify the process name matches what we recorded.
+        // This avoids accidentally killing an unrelated process if the PID
+        // was recycled by the kernel between state-file writes.
+        let current_title = PROCS.title(pid);
+        let matches = match (&current_title, &daemon.title) {
+            (Some(current), Some(expected)) => current == expected,
+            // If we don't have a recorded title, fall back to allowing the kill
+            // (this is a degraded but functional state — the process was probably
+            _ => true,
+        };
+
+        if !matches {
+            warn!(
+                "pid {pid} for daemon {} has changed name (expected '{}', found '{}'); skipping orphan cleanup",
+                daemon.id,
+                daemon.title.as_deref().unwrap_or("?"),
+                current_title.as_deref().unwrap_or("?")
+            );
+            // Still reset state so we don't track a stale PID
+            let _ = supervisor
+                .upsert_daemon(
+                    UpsertDaemonOpts::builder(daemon.id.clone())
+                        .set(|o| {
+                            o.pid = None;
+                            o.status = DaemonStatus::Stopped;
+                            o.active_port = None;
+                        })
+                        .build(),
+                )
+                .await;
+            continue;
+        }
+
+        info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
+
+        let stop_cfg = daemon.stop_signal.unwrap_or_default();
+        let _ = PROCS
+            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
+            .await;
+
+        let _ = supervisor
+            .upsert_daemon(
+                UpsertDaemonOpts::builder(daemon.id.clone())
+                    .set(|o| {
+                        o.pid = None;
+                        o.status = DaemonStatus::Stopped;
+                        o.active_port = None;
+                    })
+                    .build(),
+            )
+            .await;
     }
 }
 

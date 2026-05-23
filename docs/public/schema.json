@@ -25,6 +25,7 @@
       "description": "Settings configuration (merged from all config files).\n\n**Note:** This field exists for serialization round-trips and for\n`PitchforkToml::merge()` to collect per-file overrides.  It is **not**\nconsumed by the global `settings()` singleton, which is populated\nindependently by `Settings::load()` to avoid a circular dependency\nbetween `PitchforkToml` and `Settings`.  Do not rely on mutations to\nthis field being reflected in `settings()`.",
       "$ref": "#/$defs/SettingsPartial",
       "default": {
+        "api": {},
         "general": {},
         "ipc": {},
         "proxy": {},
@@ -488,6 +489,48 @@
         }
       ]
     },
+    "SettingsApiPartial": {
+      "type": "object",
+      "properties": {
+        "auto_start": {
+          "description": "Automatically start the standalone API server",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "bind_address": {
+          "description": "IP address the API server binds to",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bind_port": {
+          "description": "Port the standalone API server listens on",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "port_attempts": {
+          "description": "Number of consecutive ports to try if api.bind_port is in use",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "token": {
+          "description": "Authentication token for API access when bound to non-loopback addresses",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "SettingsGeneralPartial": {
       "type": "object",
       "properties": {
@@ -594,6 +637,10 @@
     "SettingsPartial": {
       "type": "object",
       "properties": {
+        "api": {
+          "$ref": "#/$defs/SettingsApiPartial",
+          "default": {}
+        },
         "general": {
           "$ref": "#/$defs/SettingsGeneralPartial",
           "default": {}
@@ -734,6 +781,13 @@
     "SettingsSupervisorPartial": {
       "type": "object",
       "properties": {
+        "cleanup_orphans": {
+          "description": "Kill orphaned daemon processes when supervisor starts",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "container": {
           "description": "Enable container/PID1 mode for running inside Docker containers",
           "type": [

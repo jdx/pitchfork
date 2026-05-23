@@ -202,7 +202,7 @@ impl Supervisor {
     /// Enable a daemon (remove from disabled set)
     pub async fn enable(&self, id: &DaemonId) -> Result<bool> {
         info!("enabling daemon: {id}");
-        let config = PitchforkToml::all_merged()?;
+        let config = PitchforkToml::all_merged_all_namespaces()?;
         let mut state_file = self.state_file.lock().await;
         let exists = state_file.daemons.contains_key(id) || config.daemons.contains_key(id);
         if !exists {
@@ -215,7 +215,7 @@ impl Supervisor {
     /// Disable a daemon (add to disabled set)
     pub async fn disable(&self, id: &DaemonId) -> Result<bool> {
         info!("disabling daemon: {id}");
-        let config = PitchforkToml::all_merged()?;
+        let config = PitchforkToml::all_merged_all_namespaces()?;
         let mut state_file = self.state_file.lock().await;
         let exists = state_file.daemons.contains_key(id) || config.daemons.contains_key(id);
         if !exists {

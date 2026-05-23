@@ -206,20 +206,11 @@ impl Supervisor {
             return Ok(());
         }
 
-        // Refresh all processes so we can walk the process tree for each daemon.
-        // This is necessary to aggregate stats across multi-process daemons
-        // (e.g. gunicorn/nginx workers) where child processes may consume
-        // significant resources beyond the root PID.
-        PROCS.refresh_processes();
-
-        // Collect all root PIDs and fetch stats in a single pass (O(N) instead
-        // of O(D × N) when calling get_group_stats per daemon).
+        // Refresh process tree and collect stats for all running daemons
+        // in a single pass.  O(N) instead of O(D × N) when calling
+        // `get_group_stats` per daemon.
         let pids: Vec<u32> = daemons.iter().filter_map(|d| d.pid).collect();
-        let batch_stats = PROCS.get_batch_group_stats(&pids);
-        let stats_map: HashMap<u32, _> = batch_stats
-            .into_iter()
-            .filter_map(|(pid, stats)| stats.map(|s| (pid, s)))
-            .collect();
+        let stats_map: HashMap<u32, _> = PROCS.refresh_and_get_batch_stats(&pids);
 
         // Track which daemon IDs are still active so we can prune stale entries
         // from cpu_violation_counts at the end.
@@ -445,7 +436,7 @@ impl Supervisor {
     /// Watch files for daemons that have `watch` patterns configured.
     /// When a watched file changes, the daemon is automatically restarted.
     pub(crate) fn daemon_file_watch(&self) -> Result<()> {
-        let pt = PitchforkToml::all_merged()?;
+        let pt = PitchforkToml::all_merged_all_namespaces()?;
 
         // Collect all daemons with watch patterns and their base directories
         let watch_configs: Vec<WatchConfig> = pt

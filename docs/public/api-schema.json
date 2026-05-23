@@ -1,0 +1,175 @@
+{
+  "endpoints": [
+    {
+      "path": "/api/stats",
+      "method": "GET",
+      "description": "Return system-level statistics: process count, CPU count, and memory usage.",
+      "response_type": "ApiStats",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons",
+      "method": "GET",
+      "description": "List all daemons with full state including status, ports, CPU/memory usage, and proxy URLs.",
+      "response_type": "Vec<ApiDaemonEntry>",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons/{id}",
+      "method": "GET",
+      "description": "Get a single daemon by its qualified ID.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID (e.g. \"project/hello\")",
+          "required": true
+        }
+      ],
+      "response_type": "ApiDaemonEntry",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons/{id}/start",
+      "method": "POST",
+      "description": "Start a stopped or failed daemon.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "{ \"ok\": bool, \"error\": String|null }",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons/{id}/stop",
+      "method": "POST",
+      "description": "Gracefully stop a running daemon.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "{ \"ok\": bool, \"error\": null }",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons/{id}/restart",
+      "method": "POST",
+      "description": "Stop and then start a daemon.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "{ \"ok\": bool, \"error\": String|null }",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons/{id}/enable",
+      "method": "POST",
+      "description": "Enable a daemon so it can be started.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "{ \"ok\": bool, \"error\": String|null }",
+      "auth": true
+    },
+    {
+      "path": "/api/daemons/{id}/disable",
+      "method": "POST",
+      "description": "Disable a daemon so it cannot be started.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "{ \"ok\": bool, \"error\": String|null }",
+      "auth": true
+    },
+    {
+      "path": "/api/logs/{id}/tail",
+      "method": "GET",
+      "description": "Stream daemon logs via SSE (Server-Sent Events). Each line is prefixed with \"data: \".",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "text/event-stream",
+      "auth": true
+    },
+    {
+      "path": "/api/namespaces",
+      "method": "GET",
+      "description": "List all registered namespaces.",
+      "response_type": "Vec<ApiNamespaceEntry>",
+      "auth": true
+    },
+    {
+      "path": "/api/namespaces",
+      "method": "POST",
+      "description": "Register a new namespace by directory path.",
+      "request_body": "{ \"dir\": \"String\" }",
+      "response_type": "{ \"ok\": bool }",
+      "auth": true
+    },
+    {
+      "path": "/api/namespaces/{name}",
+      "method": "DELETE",
+      "description": "Remove a namespace by name.",
+      "path_params": [
+        {
+          "name": "name",
+          "type_name": "String",
+          "description": "Namespace name",
+          "required": true
+        }
+      ],
+      "response_type": "{ \"ok\": bool }",
+      "auth": true
+    },
+    {
+      "path": "/api/proxies",
+      "method": "GET",
+      "description": "List all configured proxy slugs with their target daemon, worktree, and URL.",
+      "response_type": "Vec<ApiProxyWorktreeEntry>",
+      "auth": true
+    },
+    {
+      "path": "/api/processes/{id}/tree",
+      "method": "GET",
+      "description": "Return the process tree rooted at the given daemon's PID, including child processes.",
+      "path_params": [
+        {
+          "name": "id",
+          "type_name": "String",
+          "description": "Qualified daemon ID",
+          "required": true
+        }
+      ],
+      "response_type": "Vec<ApiProcessTree>",
+      "auth": true
+    }
+  ]
+}

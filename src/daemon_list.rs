@@ -59,7 +59,6 @@ pub async fn get_all_daemons_direct(
     let config = PitchforkToml::all_merged()?;
 
     // Read all daemons from state file (including failed/stopped ones)
-    // Note: Don't use supervisor.active_daemons() as it only returns daemons with PIDs
     let state_file = supervisor.state_file.lock().await;
     let state_daemons: Vec<Daemon> = state_file.daemons.values().cloned().collect();
     let disabled_set: HashSet<DaemonId> = state_file.disabled.clone().into_iter().collect();
@@ -131,6 +130,52 @@ fn build_daemon_list(
             is_disabled: disabled_set.contains(daemon_id),
             is_available: true,
         });
+        seen_ids.insert(daemon_id.clone());
+    }
+
+    // Add daemons from registered namespaces
+    let namespaces = PitchforkToml::read_global_namespaces();
+    for (ns_name, entry) in namespaces {
+        match PitchforkToml::all_merged_from(&entry.dir) {
+            Ok(ns_config) => {
+                for (daemon_id, daemon_config) in &ns_config.daemons {
+                    if *daemon_id == pitchfork_id || seen_ids.contains(daemon_id) {
+                        continue;
+                    }
+                    let placeholder = Daemon {
+                        id: daemon_id.clone(),
+                        status: DaemonStatus::Stopped,
+                        port: daemon_config.port.clone(),
+                        depends: vec![],
+                        env: None,
+                        watch: vec![],
+                        watch_mode: daemon_config.watch_mode,
+                        watch_base_dir: None,
+                        mise: daemon_config.mise,
+                        user: daemon_config.user.clone(),
+                        active_port: None,
+                        slug: None,
+                        proxy: None,
+                        memory_limit: daemon_config.memory_limit,
+                        cpu_limit: daemon_config.cpu_limit,
+                        ..Daemon::default()
+                    };
+                    entries.push(DaemonListEntry {
+                        id: daemon_id.clone(),
+                        daemon: placeholder,
+                        is_disabled: disabled_set.contains(daemon_id),
+                        is_available: true,
+                    });
+                    seen_ids.insert(daemon_id.clone());
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to load namespace '{ns_name}' from {}: {e}",
+                    entry.dir.display()
+                );
+            }
+        }
     }
 
     Ok(entries)

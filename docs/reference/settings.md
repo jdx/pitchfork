@@ -10,11 +10,11 @@ This page documents all configurable settings for pitchfork. Settings can be con
 Settings are merged in precedence order, with later sources overriding earlier ones.
 
 Settings for supervisor-owned services, such as `[settings.web]` and
-`[settings.proxy]`, are resolved when the supervisor process starts. Put
-persistent values for those services in global config or set them with
-environment variables/CLI flags for that supervisor invocation. Project-level
-values only apply when the supervisor is started from that project directory and
-do not reconfigure an already-running supervisor.
+`[settings.proxy]`, are resolved when the supervisor process starts. After that,
+they do not hot-reload: changing any setting requires restarting the supervisor
+with `pitchfork supervisor start --force` for the change to take effect. This
+applies regardless of whether the setting is in a project-level or global config
+file.
 
 ## Configuration in pitchfork.toml
 

@@ -104,26 +104,31 @@ pub struct StartOptions {
 pub fn build_run_options(
     id: &DaemonId,
     daemon_config: &PitchforkTomlDaemon,
-    opts: &StartOptions,
+    overrides: Option<&StartOptions>,
 ) -> std::result::Result<RunOptions, String> {
     let cmd = shell_words::split(&daemon_config.run)
         .map_err(|e| format!("Failed to parse command: {e}"))?;
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
-    run_opts.shell_pid = opts.shell_pid;
-    run_opts.force = opts.force;
     run_opts.wait_ready = true;
-    run_opts.ready_delay = opts.delay.or(run_opts.ready_delay).or(Some(3));
-    run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
-    run_opts.ready_http = merge_ready_http_override(run_opts.ready_http, opts.http.clone());
-    run_opts.ready_port = opts.port.or(run_opts.ready_port);
-    run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
-    if let Some(ref expected) = opts.expected_port {
-        run_opts.port.get_or_insert_with(Default::default).expect = expected.clone();
+    run_opts.ready_delay = run_opts.ready_delay.or(Some(3));
+
+    if let Some(opts) = overrides {
+        run_opts.shell_pid = opts.shell_pid;
+        run_opts.force = opts.force;
+        run_opts.ready_delay = opts.delay.or(run_opts.ready_delay);
+        run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
+        run_opts.ready_http = merge_ready_http_override(run_opts.ready_http, opts.http.clone());
+        run_opts.ready_port = opts.port.or(run_opts.ready_port);
+        run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
+        if let Some(ref expected) = opts.expected_port {
+            run_opts.port.get_or_insert_with(Default::default).expect = expected.clone();
+        }
+        if let Some(bump) = opts.auto_bump_port {
+            run_opts.port.get_or_insert_with(Default::default).bump = bump;
+        }
     }
-    if let Some(bump) = opts.auto_bump_port {
-        run_opts.port.get_or_insert_with(Default::default).bump = bump;
-    }
+
     Ok(run_opts)
 }
 
@@ -345,7 +350,7 @@ impl IpcClient {
         ids: &[DaemonId],
         opts: StartOptions,
     ) -> Result<StartResult> {
-        let pt = PitchforkToml::all_merged()?;
+        let pt = PitchforkToml::all_merged_all_namespaces()?;
         let disabled_daemons = self.get_disabled_daemons().await?;
 
         // Get all active daemons for ad-hoc restart support
@@ -659,7 +664,7 @@ impl IpcClient {
         let mut start_opts = opts.clone();
         start_opts.force = opts.force && is_explicitly_requested;
 
-        let run_opts = build_run_options(&id, daemon_config, &start_opts);
+        let run_opts = build_run_options(&id, daemon_config, Some(&start_opts));
         let quiet = opts.quiet;
 
         tokio::spawn(async move {
@@ -814,6 +819,50 @@ impl IpcClient {
             let result = ipc.stop(id.clone()).await.map(|_| ());
             (id, result)
         })
+    }
+    // =========================================================================
+    // Single-daemon operations (shared by CLI, TUI, and Web UI)
+    // =========================================================================
+
+    /// Start a single daemon with configuration from pitchfork.toml.
+    ///
+    /// Handles:
+    /// - ID resolution
+    /// - Config reading and command parsing
+    /// - `RunOptions` construction with correct defaults (`wait_ready=true`, `ready_delay=Some(3)`)
+    /// - IPC communication with supervisor
+    ///
+    /// `overrides` can be used by the CLI to override config defaults with command-line flags.
+    /// Web callers pass `None` to use pure config defaults.
+    pub async fn start_daemon(
+        &self,
+        id: &DaemonId,
+        overrides: Option<&StartOptions>,
+    ) -> Result<RunResult> {
+        let pt = PitchforkToml::all_merged_all_namespaces()?;
+
+        let daemon_config = pt
+            .daemons
+            .get(id)
+            .cloned()
+            .ok_or_else(|| miette::miette!("Daemon config not found for {id}"))?;
+
+        let run_opts =
+            build_run_options(id, &daemon_config, overrides).map_err(|e| miette::miette!("{e}"))?;
+
+        self.run(run_opts).await
+    }
+
+    /// Restart a single daemon by stopping then starting it.
+    ///
+    /// Stop errors are ignored (daemon may not be running).
+    pub async fn restart_daemon(
+        &self,
+        id: &DaemonId,
+        overrides: Option<&StartOptions>,
+    ) -> Result<RunResult> {
+        let _ = self.stop(id.clone()).await;
+        self.start_daemon(id, overrides).await
     }
 
     /// Stop daemons by ID with dependency resolution
@@ -1002,7 +1051,7 @@ mod tests {
             ..StartOptions::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, &opts).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
         let ready_http = run_opts.ready_http.unwrap();
 
         assert_eq!(ready_http.url, "http://localhost:3000/health");

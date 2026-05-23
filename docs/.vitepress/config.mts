@@ -72,7 +72,7 @@ export default defineConfig({
           { text: "Start on Boot", link: "/guides/boot-start" },
           { text: "Log Management", link: "/guides/logs" },
           { text: "TUI Dashboard", link: "/guides/tui" },
-          { text: "Web UI", link: "/guides/web-ui" },
+          { text: "Web UI & API", link: "/guides/web-ui" },
         ],
       },
       {
