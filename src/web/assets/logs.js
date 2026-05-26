@@ -28,4 +28,15 @@
       closeLogSources();
     }
   });
+
+  window.addEventListener("pageshow", function (evt) {
+    if (evt.persisted) {
+      logSources.forEach(function (source) {
+        if (source.readyState !== EventSource.OPEN) {
+          source.close();
+          logSources.delete(source);
+        }
+      });
+    }
+  });
 })();
