@@ -747,6 +747,33 @@ all share the same backend server.
 Set to `false` to require exact hostname matches only.
 """
 
+[proxy.worktree]
+type = "Bool"
+env = "PITCHFORK_PROXY_WORKTREE"
+default = "true"
+description = "Enable git worktree / jj workspace auto-discovery for slug routing"
+docs = """
+When enabled (default), pitchfork automatically detects git worktrees or jj
+workspaces for registered slugs and routes subdomain prefixes to the
+corresponding worktree / workspace.
+
+For example, with slug "myapp" pointing to /home/user/myapp (main branch),
+a git worktree at /home/user/myapp-feature-a (branch feature-a) or a jj
+workspace at /home/user/myapp-feature-a is automatically discovered.
+Requests to feature-a.myapp.localhost are routed to the daemon running in
+that directory.
+
+Each worktree / workspace gets its own namespace (the directory name), so
+multiple copies can run the same daemon name without conflict.
+
+Branch / workspace names are sanitized for URL compatibility:
+`feature/my-endpoint` becomes `feature-my-endpoint`, accessed as
+`feature-my-endpoint.myapp.localhost`.
+
+Set to `false` to disable worktree/workspace discovery. Only the main
+project directory will be used for slug routing.
+"""
+
 [proxy.lan]
 type = "Bool"
 env = "PITCHFORK_PROXY_LAN"

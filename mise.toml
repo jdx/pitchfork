@@ -56,3 +56,4 @@ node = "24"
 pkl = "latest"
 usage = "latest" # for rendering CLI usage
 "cargo:cargo-nextest" = "latest"
+rust = "stable"

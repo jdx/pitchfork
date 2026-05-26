@@ -195,10 +195,7 @@ impl Supervisor {
             stop_signal: opts.stop_signal.or(existing.and_then(|d| d.stop_signal)),
             pty: opts.pty.or(existing.and_then(|d| d.pty)),
         };
-        state_file.daemons.insert(opts.id.clone(), daemon.clone());
-        if let Err(err) = state_file.write() {
-            warn!("failed to update state file: {err:#}");
-        }
+        state_file.insert_daemon(&opts.id, daemon.clone());
         Ok(daemon)
     }
 
@@ -211,8 +208,7 @@ impl Supervisor {
         if !exists {
             return Err(miette::miette!("daemon '{}' not found", id));
         }
-        let result = state_file.disabled.remove(id);
-        state_file.write()?;
+        let result = state_file.enable_daemon(id);
         Ok(result)
     }
 
@@ -225,8 +221,7 @@ impl Supervisor {
         if !exists {
             return Err(miette::miette!("daemon '{}' not found", id));
         }
-        let result = state_file.disabled.insert(id.clone());
-        state_file.write()?;
+        let result = state_file.disable_daemon(id);
         Ok(result)
     }
 
@@ -251,18 +246,14 @@ impl Supervisor {
     /// Remove a daemon from state
     pub(crate) async fn remove_daemon(&self, id: &DaemonId) -> Result<()> {
         let mut state_file = self.state_file.lock().await;
-        state_file.daemons.remove(id);
-        if let Err(err) = state_file.write() {
-            warn!("failed to update state file: {err:#}");
-        }
+        state_file.remove_daemon(id);
         Ok(())
     }
 
     /// Set the shell's working directory
     pub(crate) async fn set_shell_dir(&self, shell_pid: u32, dir: PathBuf) -> Result<()> {
         let mut state_file = self.state_file.lock().await;
-        state_file.shell_dirs.insert(shell_pid.to_string(), dir);
-        state_file.write()?;
+        state_file.set_shell_dir(shell_pid, dir);
         Ok(())
     }
 
@@ -279,13 +270,7 @@ impl Supervisor {
     /// Remove a shell PID from tracking
     pub(crate) async fn remove_shell_pid(&self, shell_pid: u32) -> Result<()> {
         let mut state_file = self.state_file.lock().await;
-        if state_file
-            .shell_dirs
-            .remove(&shell_pid.to_string())
-            .is_some()
-        {
-            state_file.write()?;
-        }
+        state_file.remove_shell_dir(shell_pid);
         Ok(())
     }
 
@@ -310,8 +295,7 @@ impl Supervisor {
     /// Clean up daemons that have no PID
     pub(crate) async fn clean(&self) -> Result<()> {
         let mut state_file = self.state_file.lock().await;
-        state_file.daemons.retain(|_id, d| d.pid.is_some());
-        state_file.write()?;
+        state_file.retain_daemons(|_id, d| d.pid.is_some());
         Ok(())
     }
 }
