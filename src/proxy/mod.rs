@@ -15,3 +15,4 @@ pub mod lan_ip;
 pub mod mdns;
 pub mod server;
 pub mod trust;
+pub mod worktree;
