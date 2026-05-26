@@ -344,6 +344,10 @@ url = "https://github.com/apple/pkl/releases/download/0.31.1/pkl-windows-amd64.e
 checksum = "sha256:a8834481667325b44c539dbb758d7365a16389070f343c04b639bbe525ede013"
 url = "https://github.com/apple/pkl/releases/download/0.31.1/pkl-windows-amd64.exe"
 
+[[tools.rust]]
+version = "stable"
+backend = "core:rust"
+
 [[tools.usage]]
 version = "3.2.0"
 backend = "aqua:jdx/usage"
