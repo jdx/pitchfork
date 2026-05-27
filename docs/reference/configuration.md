@@ -569,7 +569,7 @@ daemons = ["postgres", "redis", "api", "worker"]
 ```
 
 - `daemons` is a list of short names or fully qualified IDs (`"global/postgres"`)
-- Invalid or undefined references fail config parsing
+- Malformed daemon name strings (e.g. an unparseable qualified ID) fail config parsing; references to non-existent daemons are reported when the group is used (e.g. `pitchfork start --group backend`)
 - Groups merge like other config values: later definitions override earlier ones
 - `pitchfork start --group backend` resolves dependencies and starts daemons in parallel as usual
 
