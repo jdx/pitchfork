@@ -408,30 +408,26 @@ impl Supervisor {
 
                     if should_run {
                         info!("cron: triggering daemon {id} (retrigger: {retrigger:?})");
-                        // Get the run command from pitchfork.toml
-                        if let Some(run_cmd) = self.get_daemon_run_command(&id) {
-                            let cmd = match shell_words::split(&run_cmd) {
-                                Ok(cmd) => cmd,
-                                Err(e) => {
-                                    error!("failed to parse command for cron daemon {id}: {e}");
-                                    continue;
-                                }
-                            };
-                            let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                            // Use force: true for Always retrigger to ensure restart
-                            let force =
-                                matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
-                            let mut opts = daemon.to_run_options(cmd);
-                            opts.dir = crate::config_types::Dir(dir);
-                            opts.force = force;
-                            opts.wait_ready = false;
-                            opts.cron_schedule = Some(schedule_str.clone());
-                            opts.cron_retrigger = Some(retrigger);
-                            if let Err(e) = self.run(opts).await {
-                                error!("failed to run cron daemon {id}: {e}");
+                        // Use the persisted command from daemon state
+                        let cmd = match daemon.cmd.clone() {
+                            Some(cmd) => cmd,
+                            None => {
+                                warn!("no run command found in state for cron daemon {id}");
+                                continue;
                             }
-                        } else {
-                            warn!("no run command found for cron daemon {id}");
+                        };
+                        let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                        // Use force: true for Always retrigger to ensure restart
+                        let force =
+                            matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
+                        let mut opts = daemon.to_run_options(cmd);
+                        opts.dir = crate::config_types::Dir(dir);
+                        opts.force = force;
+                        opts.wait_ready = false;
+                        opts.cron_schedule = Some(schedule_str.clone());
+                        opts.cron_retrigger = Some(retrigger);
+                        if let Err(e) = self.run(opts).await {
+                            error!("failed to run cron daemon {id}: {e}");
                         }
                     }
                 }
