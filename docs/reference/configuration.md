@@ -556,6 +556,23 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - If the process does not exit within the timeout, `SIGKILL` is sent as a last resort
 - Useful for daemons that handle `SIGINT` (Ctrl+C) for graceful termination but ignore `SIGTERM`
 
+## Daemon Groups
+
+Named groups of daemons for batch operations. Use the `--group` flag with `start`, `stop`, or `restart`.
+
+```toml
+[groups.backend]
+daemons = ["api", "worker"]
+
+[groups.all]
+daemons = ["postgres", "redis", "api", "worker"]
+```
+
+- `daemons` is a list of short names or fully qualified IDs (`"global/postgres"`)
+- Invalid or undefined references fail config parsing
+- Groups merge like other config values: later definitions override earlier ones
+- `pitchfork start --group backend` resolves dependencies and starts daemons in parallel as usual
+
 ## Complete Example
 
 ```toml
