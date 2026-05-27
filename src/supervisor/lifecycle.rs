@@ -935,12 +935,7 @@ impl Supervisor {
             // Clear active_port since the process is no longer running
             {
                 let mut state_file = SUPERVISOR.state_file.lock().await;
-                if let Some(d) = state_file.daemons.get_mut(&id) {
-                    d.active_port = None;
-                }
-                if let Err(e) = state_file.write() {
-                    debug!("Failed to write state after clearing active_port for {id}: {e}");
-                }
+                state_file.clear_active_port(&id);
             }
 
             // Get the final exit status
@@ -1597,12 +1592,12 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
             if let Some(port) = active_port {
                 debug!("daemon {id} active_port detected: {port}");
                 let mut state_file = SUPERVISOR.state_file.lock().await;
-                if let Some(d) = state_file.daemons.get_mut(&id) {
+                if let Some(d) = state_file.daemons.get(&id) {
                     // Guard against PID reuse: if the original process exited and the OS
                     // assigned the same PID to an unrelated process that happens to bind
                     // a port, we must not route proxy traffic to that unrelated service.
                     if d.pid == Some(pid) {
-                        d.active_port = Some(port);
+                        state_file.set_active_port(&id, port);
                     } else {
                         debug!(
                             "daemon {id}: skipping active_port write — PID mismatch \
@@ -1611,9 +1606,6 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
                         );
                         return;
                     }
-                }
-                if let Err(e) = state_file.write() {
-                    debug!("Failed to write state after detecting active_port for {id}: {e}");
                 }
                 return;
             }

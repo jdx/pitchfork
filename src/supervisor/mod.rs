@@ -89,6 +89,8 @@ pub struct Supervisor {
         Mutex<Option<std::sync::Arc<tokio::sync::Mutex<crate::proxy::mdns::MdnsPublisher>>>>,
     /// Join handle for the LAN IP monitor task.
     pub(crate) lan_monitor_task: Mutex<Option<JoinHandle<()>>>,
+    /// Cancellation token for the background state flush task.
+    pub(crate) flush_cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -150,6 +152,7 @@ impl Supervisor {
             proxy_task: Mutex::new(None),
             mdns_publisher: Mutex::new(None),
             lan_monitor_task: Mutex::new(None),
+            flush_cancel: std::sync::Mutex::new(None),
         })
     }
 
@@ -311,6 +314,7 @@ impl Supervisor {
 
         let (ipc, ipc_handle) = IpcServer::new()?;
         *self.ipc_shutdown.lock().await = Some(ipc_handle);
+        self.start_state_flush_task();
         self.conn_watch(ipc).await
     }
 
@@ -443,6 +447,43 @@ impl Supervisor {
             if !pub_guard.is_published(&hostname) {
                 log::info!("mDNS: publishing new slug {slug}");
                 pub_guard.publish(&hostname, port);
+            }
+        }
+    }
+
+    /// Spawn a background task that periodically flushes the state file to
+    /// disk if it has been marked dirty.  Uses debouncing (1s interval) to
+    /// batch rapid state changes.
+    fn start_state_flush_task(&self) {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        *self.flush_cancel.lock().unwrap() = Some(cancel.clone());
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cancel.cancelled() => {
+                        debug!("state flush task received shutdown signal");
+                        break;
+                    }
+                }
+                let state = SUPERVISOR.state_file.lock().await;
+                if state.is_dirty() {
+                    if let Err(e) = state.write() {
+                        warn!("failed to flush state file: {e}");
+                    }
+                }
+            }
+            debug!("state flush task exiting");
+        });
+    }
+
+    pub(crate) async fn flush_state(&self) {
+        let state = self.state_file.lock().await;
+        if state.is_dirty() {
+            if let Err(e) = state.write() {
+                warn!("failed to flush state file: {e}");
             }
         }
     }
@@ -737,6 +778,23 @@ impl Supervisor {
             }
         }
         let _ = self.remove_daemon(&pitchfork_id).await;
+
+        // Signal the background state flush task to exit so it doesn't
+        // keep waking up and acquiring the state mutex after shutdown.
+        if let Some(cancel) = self.flush_cancel.lock().unwrap().take() {
+            cancel.cancel();
+        }
+
+        // Force-flush state to disk before shutting down IPC so no
+        // in-memory-only changes are lost.
+        {
+            let state = self.state_file.lock().await;
+            if state.is_dirty() {
+                if let Err(e) = state.write() {
+                    warn!("failed to flush state file during shutdown: {e}");
+                }
+            }
+        }
 
         // Signal IPC server to shut down gracefully
         if let Some(mut handle) = self.ipc_shutdown.lock().await.take() {

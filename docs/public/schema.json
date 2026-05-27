@@ -721,6 +721,13 @@
             "boolean",
             "null"
           ]
+        },
+        "worktree": {
+          "description": "Enable git worktree / jj workspace auto-discovery for slug routing",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },

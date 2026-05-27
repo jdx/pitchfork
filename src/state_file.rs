@@ -6,8 +6,10 @@ use once_cell::sync::Lazy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct StateFile {
     #[serde(default)]
     pub daemons: BTreeMap<DaemonId, Daemon>,
@@ -17,6 +19,14 @@ pub struct StateFile {
     pub shell_dirs: BTreeMap<String, PathBuf>,
     #[serde(skip)]
     pub(crate) path: PathBuf,
+    #[serde(skip)]
+    pub(crate) dirty: AtomicBool,
+    /// Snapshot of the last written TOML content. Used by `write()` to skip
+    /// redundant disk I/O when the serialized state hasn't changed.
+    /// Guarded by the file lock in practice; `Mutex` is used only to satisfy
+    /// `Sync` since `write` takes `&self`.
+    #[serde(skip)]
+    pub(crate) last_content: Mutex<Option<String>>,
 }
 
 impl StateFile {
@@ -26,6 +36,8 @@ impl StateFile {
             disabled: Default::default(),
             shell_dirs: Default::default(),
             path,
+            dirty: AtomicBool::new(false),
+            last_content: Mutex::new(None),
         }
     }
 
@@ -60,9 +72,13 @@ impl StateFile {
         match toml::from_str::<Self>(&raw) {
             Ok(mut state_file) => {
                 state_file.path = path.to_path_buf();
+                state_file.dirty = AtomicBool::new(false);
                 for (id, daemon) in state_file.daemons.iter_mut() {
                     daemon.id = id.clone();
                 }
+                // Seed last_content with the raw TOML so the first write() can
+                // skip disk I/O when the state hasn't actually changed.
+                state_file.last_content = Mutex::new(Some(raw));
                 Ok(state_file)
             }
             Err(parse_err) => {
@@ -195,16 +211,145 @@ impl StateFile {
         Ok(state_file)
     }
 
-    pub fn write(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| FileError::WriteError {
-                path: parent.to_path_buf(),
-                details: Some(format!("failed to create state file directory: {e}")),
-            })?;
+    /// Mark the state file as dirty so the background flush task will
+    /// persist it on the next tick.
+    fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Check whether the state file needs to be flushed.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Relaxed)
+    }
+
+    /// Insert or replace a daemon entry and mark the state dirty.
+    pub fn insert_daemon(&mut self, id: &DaemonId, daemon: Daemon) {
+        self.daemons.insert(id.clone(), daemon);
+        self.mark_dirty();
+    }
+
+    /// Remove a daemon entry and mark the state dirty if the daemon existed.
+    pub fn remove_daemon(&mut self, id: &DaemonId) {
+        if self.daemons.remove(id).is_some() {
+            self.mark_dirty();
         }
+    }
+
+    /// Disable a daemon (add to disabled set) and mark the state dirty.
+    /// Returns true if the daemon was not already disabled.
+    pub fn disable_daemon(&mut self, id: &DaemonId) -> bool {
+        let inserted = self.disabled.insert(id.clone());
+        if inserted {
+            self.mark_dirty();
+        }
+        inserted
+    }
+
+    /// Enable a daemon (remove from disabled set) and mark the state dirty.
+    /// Returns true if the daemon was previously disabled.
+    pub fn enable_daemon(&mut self, id: &DaemonId) -> bool {
+        let removed = self.disabled.remove(id);
+        if removed {
+            self.mark_dirty();
+        }
+        removed
+    }
+
+    /// Set the active port for a daemon and mark the state dirty.
+    /// Returns true if the daemon was found and updated.
+    pub fn set_active_port(&mut self, id: &DaemonId, port: u16) -> bool {
+        if let Some(d) = self.daemons.get_mut(id) {
+            d.active_port = Some(port);
+            self.mark_dirty();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear the active port for a daemon and mark the state dirty.
+    /// Returns true if the daemon was found and updated.
+    pub fn clear_active_port(&mut self, id: &DaemonId) -> bool {
+        if let Some(d) = self.daemons.get_mut(id) {
+            d.active_port = None;
+            self.mark_dirty();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Update the last cron trigger time for a daemon and mark the state dirty.
+    /// Returns true if the daemon was found and updated.
+    pub fn set_last_cron_triggered(
+        &mut self,
+        id: &DaemonId,
+        time: chrono::DateTime<chrono::Local>,
+    ) -> bool {
+        if let Some(d) = self.daemons.get_mut(id) {
+            d.last_cron_triggered = Some(time);
+            self.mark_dirty();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Set a shell working directory and mark the state dirty.
+    pub fn set_shell_dir(&mut self, shell_pid: u32, dir: PathBuf) {
+        self.shell_dirs.insert(shell_pid.to_string(), dir);
+        self.mark_dirty();
+    }
+
+    /// Remove a shell working directory and mark the state dirty.
+    /// Returns true if the entry existed.
+    pub fn remove_shell_dir(&mut self, shell_pid: u32) -> bool {
+        let removed = self.shell_dirs.remove(&shell_pid.to_string()).is_some();
+        if removed {
+            self.mark_dirty();
+        }
+        removed
+    }
+
+    /// Retain only daemons matching the predicate and mark the state dirty
+    /// if any were removed.
+    pub fn retain_daemons<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&DaemonId, &Daemon) -> bool,
+    {
+        let before = self.daemons.len();
+        self.daemons.retain(|id, daemon| f(id, daemon));
+        if self.daemons.len() != before {
+            self.mark_dirty();
+        }
+    }
+
+    /// Synchronous force-write. Clears the dirty flag. If the serialized
+    /// content matches the last written content, the disk write is skipped to
+    /// avoid unnecessary I/O. Used during shutdown and migration where async
+    /// flushing is not available.
+    pub fn write(&self) -> Result<()> {
         let canonical_path = normalized_lock_path(&self.path);
         let _lock = xx::fslock::get(&canonical_path, false)?;
-        self.write_unlocked()
+        let raw = toml::to_string(self).map_err(|e| FileError::SerializeError {
+            path: self.path.clone(),
+            source: e,
+        })?;
+        if self
+            .last_content
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|last| last == &raw)
+        {
+            // No real change — just clear the dirty flag
+            self.dirty.store(false, Ordering::Relaxed);
+            return Ok(());
+        }
+        Self::write_raw(&self.path, &raw)?;
+        *self.last_content.lock().unwrap() = Some(raw);
+        self.dirty.store(false, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Write the state file without acquiring the lock.
@@ -214,16 +359,29 @@ impl StateFile {
             path: self.path.clone(),
             source: e,
         })?;
+        Self::write_raw(&self.path, &raw)?;
+        *self.last_content.lock().unwrap() = Some(raw);
+        self.dirty.store(false, Ordering::Relaxed);
+        Ok(())
+    }
 
-        // Use atomic write: write to temp file first, then rename
-        // This prevents readers from seeing partially written content
-        let temp_path = self.path.with_extension("toml.tmp");
-        xx::file::write(&temp_path, &raw).map_err(|e| FileError::WriteError {
+    /// Perform the actual file I/O (temp file + atomic rename).
+    /// **The caller MUST hold the file lock** (via `xx::fslock::get`) before
+    /// calling this function; otherwise concurrent writes may corrupt the file.
+    pub(crate) fn write_raw(path: &Path, raw: &str) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| FileError::WriteError {
+                path: parent.to_path_buf(),
+                details: Some(format!("failed to create state file directory: {e}")),
+            })?;
+        }
+        let temp_path = path.with_extension("toml.tmp");
+        xx::file::write(&temp_path, raw).map_err(|e| FileError::WriteError {
             path: temp_path.clone(),
             details: Some(e.to_string()),
         })?;
-        std::fs::rename(&temp_path, &self.path).map_err(|e| FileError::WriteError {
-            path: self.path.clone(),
+        std::fs::rename(&temp_path, path).map_err(|e| FileError::WriteError {
+            path: path.to_path_buf(),
             details: Some(format!("failed to rename temp file: {e}")),
         })?;
         Ok(())

@@ -114,6 +114,9 @@ impl Supervisor {
                 IpcResponse::MdnsSynced
             }
         };
+        // Ensure state is flushed to disk before returning the response
+        // so that CLI commands reading StateFile::get() see fresh data.
+        self.flush_state().await;
         Ok(rsp)
     }
 }

@@ -71,6 +71,8 @@ struct CachedSlugEntry {
     daemon_name: String,
     /// Project directory for this slug (needed for auto-start).
     dir: std::path::PathBuf,
+    /// Worktrees (git) / workspaces (jj) discovered under this slug's project directory.
+    worktrees: Vec<crate::proxy::worktree::WorktreeEntry>,
 }
 
 /// In-memory cache for the global slug registry + derived namespaces.
@@ -87,14 +89,44 @@ static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
         })
     });
 
-/// Build the slug lookup table from disk (expensive — involves file I/O).
-/// Called outside the cache lock to avoid blocking concurrent proxy requests.
+/// Build the slug lookup table from disk (expensive — involves file I/O + subprocesses).
+/// Called outside the cache lock via `spawn_blocking` to avoid blocking the Tokio runtime.
 fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
     let mut entries = std::collections::HashMap::with_capacity(global_slugs.len());
+    let worktree_enabled = crate::settings::settings().proxy.worktree;
     for (slug, entry) in &global_slugs {
         let ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();
+        let worktrees = if worktree_enabled {
+            let wts = crate::proxy::worktree::discover_worktrees(&entry.dir);
+            // Warn about sanitized-branch collisions and drop duplicates so that
+            // unreachable entries don't waste memory in the cache.
+            let mut seen = std::collections::HashMap::with_capacity(wts.len());
+            let mut deduped = Vec::with_capacity(wts.len());
+            for mut wt in wts {
+                let wt_ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&wt.path).ok();
+                wt.namespace = wt_ns;
+                match seen.entry(wt.sanitized_branch.clone()) {
+                    std::collections::hash_map::Entry::Occupied(e) => {
+                        log::warn!(
+                            "Worktree slug collision: '{}' and '{}' both sanitize to '{}'. \
+                             Only the first (in discovery order) will be routed.",
+                            e.get(),
+                            wt.branch,
+                            wt.sanitized_branch,
+                        );
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(wt.branch.clone());
+                        deduped.push(wt);
+                    }
+                }
+            }
+            deduped
+        } else {
+            vec![]
+        };
         entries.insert(
             slug.clone(),
             CachedSlugEntry {
@@ -102,6 +134,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
                 namespace: ns,
                 daemon_name,
                 dir: entry.dir.clone(),
+                worktrees,
             },
         );
     }
@@ -122,8 +155,15 @@ async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugE
         }
     } // lock released before disk I/O
 
-    // Slow path: refresh from disk (no lock held).
-    let new_entries = Arc::new(build_slug_entries());
+    // Slow path: refresh from disk on a blocking thread (involves subprocess calls).
+    let new_entries = Arc::new(
+        tokio::task::spawn_blocking(build_slug_entries)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to refresh slug cache: {e}");
+                std::collections::HashMap::new()
+            }),
+    );
 
     // Store the refreshed entries.
     {
@@ -1284,33 +1324,55 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
-    // Strip the TLD suffix to get the subdomain part.
     let Some(subdomain) = strip_tld(host, tld) else {
         return ResolveResult::NotFound;
     };
 
-    // Look up the slug via the in-memory cache (refreshed every SLUG_CACHE_TTL).
     let Some(cached) = cached_slug_lookup(&subdomain).await else {
         return ResolveResult::NotFound;
     };
 
-    let daemon_name = &cached.daemon_name;
-    let expected_namespace = &cached.namespace;
+    // ─── Worktree prefix extraction ──────────────────────────────────────
+    // When a wildcard subdomain like "feature-a.myapp" matched slug "myapp",
+    // the prefix "feature-a" may correspond to a git worktree or jj workspace.
+    let (expected_namespace, worktree_dir) = if subdomain != cached.slug {
+        let prefix = subdomain
+            .strip_suffix(&format!(".{}", cached.slug))
+            .map(|s| s.to_string());
+        match prefix {
+            Some(ref p) => match cached.worktrees.iter().find(|w| w.sanitized_branch == *p) {
+                Some(wt) => {
+                    let ns = wt.namespace.clone().or_else(|| {
+                        log::warn!(
+                            "Worktree '{}' has no cached namespace; \
+                             falling back to parent slug namespace.",
+                            wt.path.display()
+                        );
+                        cached.namespace.clone()
+                    });
+                    (ns, Some(wt.path.clone()))
+                }
+                None => (cached.namespace.clone(), None),
+            },
+            None => (cached.namespace.clone(), None),
+        }
+    } else {
+        (cached.namespace.clone(), None)
+    };
 
-    // Find matching daemons in the state file.
+    let daemon_name = &cached.daemon_name;
+
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
         state_file.daemons.clone()
     };
 
-    // Find running daemons whose short name matches the slug's daemon name,
-    // scoped to the slug's registered project namespace when available.
     let running_matches: Vec<(&DaemonId, &crate::daemon::Daemon)> = daemons
         .iter()
         .filter(|(id, d)| {
             id.name() == daemon_name
                 && d.status.is_running()
-                && match expected_namespace {
+                && match &expected_namespace {
                     Some(ns) => id.namespace() == ns,
                     None => true,
                 }
@@ -1319,10 +1381,13 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
 
     match running_matches.as_slice() {
         [] => {
-            // Daemon not running — try auto-start if enabled.
-            // Use cached.slug (not subdomain) so wildcard matches show the
-            // actual slug name in the "Starting…" page, not the full subdomain.
-            try_auto_start(&cached.slug, &cached).await
+            try_auto_start(
+                &cached.slug,
+                &cached,
+                worktree_dir.as_deref(),
+                expected_namespace.as_deref(),
+            )
+            .await
         }
         [(_, d)] => {
             if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
@@ -1374,27 +1439,26 @@ impl Drop for AutoStartGuard {
 ///
 /// The entire operation — including `SUPERVISOR.run()` and the port-polling
 /// loop — is bounded by `proxy_auto_start_timeout`.
-async fn try_auto_start(slug: &str, cached: &CachedSlugEntry) -> ResolveResult {
+async fn try_auto_start(
+    slug: &str,
+    cached: &CachedSlugEntry,
+    worktree_dir: Option<&std::path::Path>,
+    expected_namespace: Option<&str>,
+) -> ResolveResult {
     let s = settings();
     if !s.proxy.auto_start {
         return ResolveResult::NotFound;
     }
 
-    // Resolve the daemon ID from the slug's project directory.
-    // Fall back to "global" when no namespace is resolved so that global
-    // daemons can also benefit from auto-start (matching the name-only
-    // routing fallback in `resolve_target`).
-    let ns = cached
-        .namespace
-        .clone()
+    let ns = expected_namespace
+        .map(|s| s.to_string())
+        .or_else(|| cached.namespace.clone())
         .unwrap_or_else(|| "global".to_string());
     let daemon_id = match DaemonId::try_new(&ns, &cached.daemon_name) {
         Ok(id) => id,
         Err(_) => return ResolveResult::NotFound,
     };
 
-    // Atomically check-and-mark the daemon as in-progress so that concurrent
-    // requests for the same stopped daemon don't trigger multiple starts.
     {
         let mut in_progress = AUTO_START_IN_PROGRESS.lock().await;
         if !in_progress.insert(daemon_id.clone()) {
@@ -1404,17 +1468,18 @@ async fn try_auto_start(slug: &str, cached: &CachedSlugEntry) -> ResolveResult {
         }
     }
 
-    // RAII guard: ensures the in-progress flag is cleared even on panic.
     let _guard = AutoStartGuard {
         daemon_id: daemon_id.clone(),
     };
 
-    // Apply proxy_auto_start_timeout to the *entire* auto-start operation,
-    // including SUPERVISOR.run() (which waits for the daemon's readiness
-    // signal) and the subsequent port-detection polling loop.
     let timeout = s.proxy_auto_start_timeout();
 
-    match tokio::time::timeout(timeout, try_auto_start_inner(slug, cached, &daemon_id)).await {
+    match tokio::time::timeout(
+        timeout,
+        try_auto_start_inner(slug, cached, &daemon_id, worktree_dir),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_elapsed) => {
             log::warn!("Auto-start: total timeout ({timeout:?}) exceeded for daemon {daemon_id}");
@@ -1435,14 +1500,16 @@ async fn try_auto_start_inner(
     slug: &str,
     cached: &CachedSlugEntry,
     daemon_id: &DaemonId,
+    worktree_dir: Option<&std::path::Path>,
 ) -> ResolveResult {
-    // Load config from the slug's project directory to find the daemon definition.
-    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(&cached.dir) {
+    let config_dir = worktree_dir.unwrap_or(&cached.dir);
+
+    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(config_dir) {
         Ok(pt) => pt,
         Err(e) => {
             log::warn!(
                 "Auto-start: failed to load config from {}: {e}",
-                cached.dir.display()
+                config_dir.display()
             );
             return ResolveResult::NotFound;
         }
@@ -1453,15 +1520,12 @@ async fn try_auto_start_inner(
         None => {
             log::debug!(
                 "Auto-start: daemon {daemon_id} not found in config at {}",
-                cached.dir.display()
+                config_dir.display()
             );
             return ResolveResult::NotFound;
         }
     };
 
-    // Build run options — keep wait_ready=true (set by build_run_options) so
-    // SUPERVISOR.run() waits for the daemon's readiness signal before returning,
-    // matching the same lifecycle as `pf start` via IPC.
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
         ..crate::ipc::batch::StartOptions::default()
@@ -1474,14 +1538,14 @@ async fn try_auto_start_inner(
         }
     };
 
+    // Only set the working directory when the daemon config didn't specify one.
+    // If the config has an explicit `dir`, respect it even in a worktree context.
     if run_opts.dir.0.as_os_str().is_empty() {
-        run_opts.dir = crate::config_types::Dir(cached.dir.clone());
+        run_opts.dir = crate::config_types::Dir(config_dir.to_path_buf());
     }
 
     log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
 
-    // Trigger the start and wait for daemon readiness.
-    // This call is bounded by the tokio::time::timeout in try_auto_start().
     let run_result = SUPERVISOR.run(run_opts).await;
 
     if let Err(e) = run_result {
@@ -1489,9 +1553,6 @@ async fn try_auto_start_inner(
         return ResolveResult::Error(format!("Failed to start daemon: {e}"));
     }
 
-    // Daemon is ready. Poll briefly for the active_port to be detected
-    // (detect_and_store_active_port runs asynchronously after readiness).
-    // No per-loop timeout needed — the outer tokio::time::timeout covers this.
     let poll_interval = std::time::Duration::from_millis(250);
 
     loop {
@@ -1517,8 +1578,6 @@ async fn try_auto_start_inner(
                 ));
             }
         } else {
-            // Daemon not found in state file after a successful run() —
-            // it was likely cleaned up immediately.  Don't spin until timeout.
             log::warn!("Auto-start: daemon {daemon_id} not found in state file after start");
             return ResolveResult::Error(format!(
                 "Daemon '{daemon_id}' started but disappeared from the state file.\n\
@@ -1750,6 +1809,7 @@ mod tests {
             namespace: None,
             daemon_name: name.to_string(),
             dir: std::path::PathBuf::from(format!("/tmp/{name}")),
+            worktrees: vec![],
         }
     }
 
