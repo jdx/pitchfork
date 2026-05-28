@@ -1166,15 +1166,10 @@ impl App {
     fn refresh_process_stats(&mut self) {
         let pids: Vec<u32> = self.daemons.iter().filter_map(|d| d.pid).collect();
         if !pids.is_empty() {
-            PROCS.refresh_pids(&pids);
+            PROCS.refresh_processes();
         }
         self.process_stats.clear();
 
-        let pids: Vec<u32> = self
-            .daemons
-            .iter()
-            .filter_map(|daemon| daemon.pid)
-            .collect();
         let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
 
         for daemon in &self.daemons {

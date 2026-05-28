@@ -17,11 +17,11 @@ use crate::web::helpers::{
     css_safe_id, daemon_row, daemon_row_with_stats, format_daemon_id_html, html_escape, url_encode,
 };
 
-/// Refresh process info for accurate CPU/memory stats (only managed daemons).
+/// Refresh process info for accurate process-tree CPU/memory stats.
 fn refresh_daemon_list_pids(entries: &[DaemonListEntry]) -> Vec<u32> {
     let pids: Vec<u32> = entries.iter().filter_map(|e| e.daemon.pid).collect();
     if !pids.is_empty() {
-        PROCS.refresh_pids(&pids);
+        PROCS.refresh_processes();
     }
     pids
 }

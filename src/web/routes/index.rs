@@ -80,8 +80,6 @@ pub async fn index() -> Html<String> {
     let state = StateFile::read(&*env::PITCHFORK_STATE_FILE)
         .unwrap_or_else(|_| StateFile::new(env::PITCHFORK_STATE_FILE.clone()));
 
-    // Refresh process info for accurate CPU/memory stats (only managed daemons)
-    PROCS.refresh_daemon_pids(&state);
     let pt = match PitchforkToml::all_merged() {
         Ok(pt) => pt,
         Err(e) => {
@@ -122,6 +120,11 @@ pub async fn index() -> Html<String> {
 
     // Build daemon table rows
     let pids: Vec<u32> = user_daemons.iter().filter_map(|(_, d)| d.pid).collect();
+    if !pids.is_empty() {
+        // Tree aggregation needs a full process snapshot so newly spawned
+        // descendants are visible to sysinfo before the BFS runs.
+        PROCS.refresh_processes();
+    }
     let stats_by_pid = PROCS.get_batch_tree_stats_map(&pids);
 
     let mut rows = String::new();
