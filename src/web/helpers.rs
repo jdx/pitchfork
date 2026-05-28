@@ -2,7 +2,7 @@
 
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
-use crate::procs::PROCS;
+use crate::procs::{PROCS, ProcessStats};
 
 /// HTML-escape a string to prevent XSS attacks.
 pub fn html_escape(s: &str) -> String {
@@ -75,6 +75,17 @@ pub fn format_daemon_id_html(id: &DaemonId) -> String {
 ///
 /// This is used by both the index page and the daemons list page.
 pub fn daemon_row(id: &DaemonId, d: &Daemon, is_disabled: bool) -> String {
+    let stats = d.pid.and_then(|pid| PROCS.get_stats(pid));
+    daemon_row_with_stats(id, d, is_disabled, stats)
+}
+
+/// Generate an HTML table row using precomputed process-tree stats.
+pub fn daemon_row_with_stats(
+    id: &DaemonId,
+    d: &Daemon,
+    is_disabled: bool,
+    stats: Option<ProcessStats>,
+) -> String {
     let id_str = id.to_string();
     let safe_id = css_safe_id(&id_str);
     let confirm_id = html_escape(&id_str); // For display in confirm dialogs
@@ -94,8 +105,6 @@ pub fn daemon_row(id: &DaemonId, d: &Daemon, is_disabled: bool) -> String {
         .map(|p| p.to_string())
         .unwrap_or_else(|| "-".to_string());
 
-    // Get process stats (CPU, memory, uptime)
-    let stats = d.pid.and_then(|pid| PROCS.get_stats(pid));
     let cpu_display = stats
         .map(|s| s.cpu_display())
         .unwrap_or_else(|| "-".to_string());

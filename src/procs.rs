@@ -3,6 +3,7 @@ use crate::Result;
 use crate::settings::settings;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
 
@@ -20,9 +21,11 @@ impl Default for Procs {
 
 impl Procs {
     pub fn new() -> Self {
-        Self {
+        let procs = Self {
             system: Mutex::new(sysinfo::System::new()),
-        }
+        };
+        procs.refresh_processes();
+        procs
     }
 
     fn lock_system(&self) -> std::sync::MutexGuard<'_, sysinfo::System> {
@@ -67,7 +70,6 @@ impl Procs {
         children
     }
 
-    /// Async wrapper for `kill_process_group`. See its docs for details and precondition.
     pub async fn kill_process_group_async(
         &self,
         pid: u32,
@@ -89,11 +91,6 @@ impl Procs {
     /// so this atomically signals all descendant processes.
     ///
     /// Returns `Err` if the signal could not be sent (e.g. permission denied).
-    ///
-    /// **Precondition:** the caller must have called `refresh_pids` or `refresh_processes`
-    /// for `pid` before invoking this method. Without a prior refresh, the internal
-    /// process map is empty and this method will incorrectly conclude the process is
-    /// already dead (`Ok(false)`) without sending any signal.
     #[cfg(unix)]
     fn kill_process_group(
         &self,
@@ -180,7 +177,6 @@ impl Procs {
         self.kill(pid, 0, None)
     }
 
-    /// Async wrapper for `kill`. See its docs for details and precondition.
     pub async fn kill_async(
         &self,
         pid: u32,
@@ -201,11 +197,6 @@ impl Procs {
     ///
     /// Returns `Err` if the signal could not be sent (e.g. permission denied
     /// when targeting a process owned by another user/root).
-    ///
-    /// **Precondition:** the caller must have called `refresh_pids` or `refresh_processes`
-    /// for `pid` before invoking this method. Without a prior refresh, the internal
-    /// process map is empty and this method will incorrectly conclude the process is
-    /// already dead (`Ok(false)`) without sending any signal.
     fn kill(
         &self,
         pid: u32,
@@ -345,22 +336,16 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
     }
 
-    /// Collect daemon PIDs from a StateFile and refresh only those.
-    /// Avoids the cost of refreshing all system processes when we only
-    /// need stats for managed daemons.
-    pub(crate) fn refresh_daemon_pids(&self, state: &crate::state_file::StateFile) {
-        let pids: Vec<u32> = state.daemons.values().filter_map(|d| d.pid).collect();
-        if !pids.is_empty() {
-            self.refresh_pids(&pids);
-        }
-    }
-
-    /// Get aggregated stats for multiple process groups in a single pass.
+    /// Get aggregated stats for multiple process trees in a single pass.
     ///
     /// Builds the parent→children map once (O(N)) and then BFS-es from each
     /// root PID (O(D_i) per daemon). Total cost is O(N + ΣD_i) instead of
-    /// O(D × N) when calling `get_group_stats` in a loop.
+    /// O(D × N) when collecting stats for each daemon separately.
     pub fn get_batch_group_stats(&self, pids: &[u32]) -> Vec<(u32, Option<ProcessStats>)> {
+        if pids.is_empty() {
+            return Vec::new();
+        }
+
         let system = self.lock_system();
         let processes = system.processes();
 
@@ -417,57 +402,88 @@ impl Procs {
             .collect()
     }
 
-    /// Get process stats (cpu%, memory bytes, uptime secs, disk I/O) for a given PID
+    /// Get process-tree stats for multiple root PIDs, omitting roots that no longer exist.
+    pub fn get_batch_tree_stats_map(&self, pids: &[u32]) -> HashMap<u32, ProcessStats> {
+        self.get_batch_group_stats(pids)
+            .into_iter()
+            .filter_map(|(pid, stats)| stats.map(|stats| (pid, stats)))
+            .collect()
+    }
+
+    /// Get process-tree stats (cpu%, memory bytes, uptime secs, disk I/O) for a given root PID.
     pub fn get_stats(&self, pid: u32) -> Option<ProcessStats> {
-        let system = self.lock_system();
-        system.process(sysinfo::Pid::from_u32(pid)).map(|p| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let disk = p.disk_usage();
-            ProcessStats {
-                cpu_percent: p.cpu_usage(),
-                memory_bytes: p.memory(),
-                uptime_secs: now.saturating_sub(p.start_time()),
-                disk_read_bytes: disk.read_bytes,
-                disk_write_bytes: disk.written_bytes,
-            }
-        })
+        self.get_batch_group_stats(&[pid])
+            .into_iter()
+            .next()
+            .and_then(|(_, stats)| stats)
     }
 
     /// Get extended process information for a given PID
     pub fn get_extended_stats(&self, pid: u32) -> Option<ExtendedProcessStats> {
         let system = self.lock_system();
-        system.process(sysinfo::Pid::from_u32(pid)).map(|p| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let disk = p.disk_usage();
+        let processes = system.processes();
+        let root_pid = sysinfo::Pid::from_u32(pid);
+        let p = processes.get(&root_pid)?;
 
-            ExtendedProcessStats {
-                name: p.name().to_string_lossy().to_string(),
-                exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
-                cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
-                environ: p
-                    .environ()
-                    .iter()
-                    .take(20)
-                    .map(|s| s.to_string_lossy().to_string())
-                    .collect(),
-                status: format!("{:?}", p.status()),
-                cpu_percent: p.cpu_usage(),
-                memory_bytes: p.memory(),
-                virtual_memory_bytes: p.virtual_memory(),
-                uptime_secs: now.saturating_sub(p.start_time()),
-                start_time: p.start_time(),
-                disk_read_bytes: disk.read_bytes,
-                disk_write_bytes: disk.written_bytes,
-                parent_pid: p.parent().map(|pp| pp.as_u32()),
-                thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
-                user_id: p.user_id().map(|u| u.to_string()),
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let root_disk = p.disk_usage();
+        let mut aggregate_stats = ProcessStats {
+            cpu_percent: p.cpu_usage(),
+            memory_bytes: p.memory(),
+            uptime_secs: now.saturating_sub(p.start_time()),
+            disk_read_bytes: root_disk.read_bytes,
+            disk_write_bytes: root_disk.written_bytes,
+        };
+
+        let mut children_map: HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> = HashMap::new();
+        for (child_pid, child) in processes {
+            if let Some(ppid) = child.parent() {
+                children_map.entry(ppid).or_default().push(*child_pid);
             }
+        }
+
+        let mut queue = std::collections::VecDeque::new();
+        if let Some(direct_children) = children_map.get(&root_pid) {
+            queue.extend(direct_children);
+        }
+        while let Some(child_pid) = queue.pop_front() {
+            if let Some(child) = processes.get(&child_pid) {
+                let disk = child.disk_usage();
+                aggregate_stats.cpu_percent += child.cpu_usage();
+                aggregate_stats.memory_bytes += child.memory();
+                aggregate_stats.disk_read_bytes += disk.read_bytes;
+                aggregate_stats.disk_write_bytes += disk.written_bytes;
+            }
+            if let Some(grandchildren) = children_map.get(&child_pid) {
+                queue.extend(grandchildren);
+            }
+        }
+
+        Some(ExtendedProcessStats {
+            name: p.name().to_string_lossy().to_string(),
+            exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
+            cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
+            environ: p
+                .environ()
+                .iter()
+                .take(20)
+                .map(|s| s.to_string_lossy().to_string())
+                .collect(),
+            status: format!("{:?}", p.status()),
+            cpu_percent: aggregate_stats.cpu_percent,
+            memory_bytes: aggregate_stats.memory_bytes,
+            virtual_memory_bytes: p.virtual_memory(),
+            uptime_secs: aggregate_stats.uptime_secs,
+            start_time: p.start_time(),
+            disk_read_bytes: aggregate_stats.disk_read_bytes,
+            disk_write_bytes: aggregate_stats.disk_write_bytes,
+            parent_pid: p.parent().map(|pp| pp.as_u32()),
+            thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
+            user_id: p.user_id().map(|u| u.to_string()),
         })
     }
 }
@@ -608,5 +624,102 @@ fn signal_name(sig: i32) -> &'static str {
         libc::SIGUSR2 => "SIGUSR2",
         libc::SIGKILL => "SIGKILL",
         _ => "UNKNOWN",
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let pid = self.0.id() as i32;
+            // The test process is started in its own session, so PID == PGID.
+            let _ = unsafe { libc::killpg(pid, libc::SIGKILL) };
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn get_stats_includes_descendant_rss() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let parent = command.spawn().expect("failed to spawn process tree");
+        let parent_pid = parent.id();
+        let _parent = ChildGuard(parent);
+
+        let procs = Procs::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut child_pids = Vec::new();
+        while Instant::now() < deadline {
+            procs.refresh_processes();
+            child_pids = procs.all_children(parent_pid);
+            if !child_pids.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !child_pids.is_empty(),
+            "test process tree did not appear under parent pid {parent_pid}"
+        );
+
+        procs.refresh_processes();
+        child_pids = procs.all_children(parent_pid);
+        assert!(
+            !child_pids.is_empty(),
+            "test process tree disappeared under parent pid {parent_pid}"
+        );
+        let root_pid = sysinfo::Pid::from_u32(parent_pid);
+        let direct_memory = {
+            let system = procs.lock_system();
+            system
+                .process(root_pid)
+                .expect("parent process should exist")
+                .memory()
+        };
+        let descendant_memory = {
+            let system = procs.lock_system();
+            child_pids
+                .iter()
+                .filter_map(|pid| system.process(sysinfo::Pid::from_u32(*pid)))
+                .map(|process| process.memory())
+                .sum::<u64>()
+        };
+        assert!(
+            descendant_memory > 0,
+            "descendants {child_pids:?} should have nonzero RSS"
+        );
+
+        let stats = procs
+            .get_stats(parent_pid)
+            .expect("parent process should have aggregate stats");
+
+        assert_eq!(
+            stats.memory_bytes,
+            direct_memory + descendant_memory,
+            "get_stats should include descendant RSS for parent pid {parent_pid}; \
+             descendants: {child_pids:?}, direct RSS: {direct_memory}, \
+             descendant RSS: {descendant_memory}, reported RSS: {}",
+            stats.memory_bytes
+        );
     }
 }
