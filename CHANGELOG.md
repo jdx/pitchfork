@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.1](https://github.com/endevco/pitchfork/compare/v2.12.0...v2.12.1) - 2026-05-28
+
+### Fixed
+
+- *(procs)* show process-tree daemon metrics ([#435](https://github.com/endevco/pitchfork/pull/435))
+- get running command directly in cron/watch instead of getting from DaemonId ([#453](https://github.com/endevco/pitchfork/pull/453))
+
 ## [2.12.0](https://github.com/endevco/pitchfork/compare/v2.11.0...v2.12.0) - 2026-05-27
 
 ### Added
