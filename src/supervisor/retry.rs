@@ -5,7 +5,6 @@
 use super::Supervisor;
 use super::hooks::{HookType, fire_hook};
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::PitchforkToml;
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 
@@ -53,63 +52,41 @@ impl Supervisor {
                 daemon.retry.count()
             );
 
-            // Get command from pitchfork.toml
-            if let Some(run_cmd) = self.get_daemon_run_command(&id) {
-                let cmd = match shell_words::split(&run_cmd) {
-                    Ok(cmd) => cmd,
-                    Err(e) => {
-                        error!("failed to parse command for daemon {id}: {e}");
-                        // Mark as exhausted to prevent infinite retry loop, preserving error status
-                        self.upsert_daemon(
-                            UpsertDaemonOpts::builder(id)
-                                .set(|o| {
-                                    o.status = daemon.status.clone();
-                                    o.retry_count = Some(daemon.retry.count());
-                                })
-                                .build(),
-                        )
-                        .await?;
-                        continue;
-                    }
-                };
-                let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                fire_hook(
-                    HookType::OnRetry,
-                    id.clone(),
-                    dir.clone(),
-                    daemon.retry_count + 1,
-                    daemon.env.clone(),
-                    vec![],
-                )
-                .await;
-                let mut retry_opts = daemon.to_run_options(cmd);
-                retry_opts.retry_count = daemon.retry_count + 1;
-                if let Err(e) = self.run(retry_opts).await {
-                    error!("failed to retry daemon {id}: {e}");
+            // Use the persisted command from daemon state
+            let cmd = match daemon.cmd.clone() {
+                Some(cmd) => cmd,
+                None => {
+                    warn!("no run command found in state for daemon {id}, cannot retry");
+                    // Mark as exhausted to prevent infinite retry loop, preserving error status
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id)
+                            .set(|o| {
+                                o.status = daemon.status.clone();
+                                o.retry_count = Some(daemon.retry.count());
+                            })
+                            .build(),
+                    )
+                    .await?;
+                    continue;
                 }
-            } else {
-                warn!("no run command found for daemon {id}, cannot retry");
-                // Mark as exhausted
-                self.upsert_daemon(
-                    UpsertDaemonOpts::builder(id)
-                        .set(|o| {
-                            o.retry_count = Some(daemon.retry.count());
-                        })
-                        .build(),
-                )
-                .await?;
+            };
+            let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+            fire_hook(
+                HookType::OnRetry,
+                id.clone(),
+                dir.clone(),
+                daemon.retry_count + 1,
+                daemon.env.clone(),
+                vec![],
+            )
+            .await;
+            let mut retry_opts = daemon.to_run_options(cmd);
+            retry_opts.retry_count = daemon.retry_count + 1;
+            if let Err(e) = self.run(retry_opts).await {
+                error!("failed to retry daemon {id}: {e}");
             }
         }
 
         Ok(())
-    }
-
-    /// Get the run command for a daemon from the pitchfork.toml configuration
-    pub(crate) fn get_daemon_run_command(&self, id: &DaemonId) -> Option<String> {
-        let pt = PitchforkToml::all_merged().unwrap_or_else(|e| {
-            warn!("Failed to load config for run-command lookup: {e}");
-            crate::pitchfork_toml::PitchforkToml::default()
-        });
-        pt.daemons.get(id).map(|d| d.run.clone())
     }
 }
