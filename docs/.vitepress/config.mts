@@ -113,7 +113,10 @@ export default defineConfig({
       {
         text: "Resources",
         collapsed: true,
-        items: [{ text: "Troubleshooting", link: "/troubleshooting" }],
+        items: [
+          { text: "Troubleshooting", link: "/troubleshooting" },
+          { text: "Sponsors", link: "/sponsors" },
+        ],
       },
     ],
 
