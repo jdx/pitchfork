@@ -115,7 +115,6 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "Troubleshooting", link: "/troubleshooting" },
-          { text: "Sponsors", link: "https://en.dev/sponsors.html" },
         ],
       },
     ],
