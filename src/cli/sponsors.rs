@@ -5,9 +5,13 @@ use crate::Result;
 pub struct Sponsors;
 
 impl Sponsors {
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run() -> Result<()> {
         println!(
-            "pitchfork and the en.dev project family are sponsored by:\n\n  37signals - https://37signals.com\n\nView all sponsors: https://en.dev/sponsors.html"
+            r#"pitchfork and the en.dev project family are sponsored by:
+
+  37signals - https://37signals.com
+
+View all sponsors: https://en.dev/sponsors.html"#
         );
         Ok(())
     }

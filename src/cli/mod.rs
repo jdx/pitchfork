@@ -78,7 +78,7 @@ pub async fn run() -> Result<()> {
         Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
         Commands::Schema(schema) => schema.run().await,
-        Commands::Sponsors(sponsors) => sponsors.run().await,
+        Commands::Sponsors(_) => sponsors::Sponsors::run().await,
         Commands::Start(start) => start.run().await,
         Commands::Status(status) => status.run().await,
         Commands::Stop(stop) => stop.run().await,
