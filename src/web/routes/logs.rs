@@ -7,17 +7,17 @@ use axum::{
 };
 use std::convert::Infallible;
 
-use crate::daemon::daemon_log_path;
 use crate::daemon::is_valid_daemon_id;
 use crate::daemon_id::DaemonId;
 use crate::env;
+use crate::log_store::sqlite::LOG_STORE;
+use crate::log_store::{LogQuery, LogStore};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::web::bp;
 use crate::web::helpers::{html_escape, url_encode};
 use console;
-use std::io::{Read, Seek, SeekFrom};
 
 fn base_html(title: &str, content: &str) -> String {
     let bp = bp();
@@ -59,6 +59,25 @@ fn base_html(title: &str, content: &str) -> String {
 </body>
 </html>"#
     )
+}
+
+fn fetch_latest_logs(daemon_id: &DaemonId) -> String {
+    let log_lines = settings().web.log_lines.max(0) as usize;
+    let entries = match LOG_STORE.query(&LogQuery {
+        daemon_ids: vec![daemon_id.qualified()],
+        from: None,
+        to: None,
+        limit: if log_lines > 0 { Some(log_lines) } else { None },
+        order_desc: true,
+        after_id: None,
+    }) {
+        Ok(e) => e,
+        Err(_) => return String::new(),
+    };
+    let mut lines: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+    lines.reverse();
+    let joined = lines.join("\n");
+    html_escape(&console::strip_ansi_codes(&joined))
 }
 
 pub async fn index() -> Html<String> {
@@ -127,28 +146,11 @@ pub async fn index() -> Html<String> {
                 r#"<button class="tab{active_class}" onclick="switchTab('{js_id}', event)">{safe_id}</button>"#
             ));
 
-            // Tab content
-            let log_path = daemon_log_path(id);
-
-            let initial_logs = if log_path.exists() {
-                match std::fs::read(&log_path) {
-                    Ok(bytes) => {
-                        let content = String::from_utf8_lossy(&bytes);
-                        let lines: Vec<&str> = content.lines().collect();
-                        let log_lines = settings().web.log_lines.max(0) as usize;
-                        let start = if log_lines > 0 && lines.len() > log_lines {
-                            lines.len() - log_lines
-                        } else {
-                            0
-                        };
-                        let stripped = lines[start..].join("\n");
-                        html_escape(&console::strip_ansi_codes(&stripped))
-                    }
-                    Err(_) => String::new(),
-                }
-            } else {
-                "No logs available yet.".to_string()
+            let daemon_id = match DaemonId::parse(id) {
+                Ok(d) => d,
+                Err(_) => continue,
             };
+            let initial_logs = fetch_latest_logs(&daemon_id);
 
             tab_contents.push_str(&format!(
                 r#"
@@ -212,28 +214,9 @@ pub async fn index() -> Html<String> {
                     }}
                 }});
 
-                // Setup clear event listeners for all tabs
-                {}
             </script>
             "#,
-            tabs,
-            tab_contents,
-            ids.iter()
-                .enumerate()
-                .map(|(idx, id)| {
-                    let js_id = js_escape(id);
-                    let url_id = url_encode(id);
-                    format!(
-                        r#"
-                var clearSource_{idx} = window.pitchforkLogEventSource('{bp}/logs/{url_id}/stream');
-                clearSource_{idx}.addEventListener('clear', function(e) {{
-                    document.getElementById('log-output-' + '{js_id}').textContent = '';
-                }});
-                "#
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            tabs, tab_contents
         )
     };
 
@@ -242,8 +225,6 @@ pub async fn index() -> Html<String> {
 
 pub async fn show(Path(id): Path<String>) -> Html<String> {
     let bp = bp();
-    // Require a fully-qualified daemon ID ("namespace/name") so the log path
-    // can be resolved correctly via DaemonId::log_path().
     let daemon_id = match DaemonId::parse(&id) {
         Ok(d) => d,
         Err(_) => {
@@ -256,28 +237,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 
     let safe_id = html_escape(&daemon_id.to_string());
     let url_id = url_encode(&daemon_id.to_string());
-    let log_path = daemon_id.log_path();
-
-    let initial_logs = if log_path.exists() {
-        match std::fs::read(&log_path) {
-            Ok(bytes) => {
-                // Use lossy conversion to handle invalid UTF-8
-                let content = String::from_utf8_lossy(&bytes);
-                // Get last N lines (configurable via web.log_lines setting)
-                let lines: Vec<&str> = content.lines().collect();
-                let log_lines = settings().web.log_lines.max(0) as usize;
-                let start = if log_lines > 0 && lines.len() > log_lines {
-                    lines.len() - log_lines
-                } else {
-                    0
-                };
-                html_escape(&lines[start..].join("\n"))
-            }
-            Err(_) => String::new(),
-        }
-    } else {
-        "No logs available yet.".to_string()
-    };
+    let initial_logs = fetch_latest_logs(&daemon_id);
 
     let content = format!(
         r#"
@@ -294,11 +254,6 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
         <script>
             // Auto-scroll to bottom on load
             document.getElementById('log-output').scrollTop = document.getElementById('log-output').scrollHeight;
-            // Listen for clear event using native EventSource (htmx-ext-sse only handles 'message' events)
-            var clearSource = window.pitchforkLogEventSource('{bp}/logs/{url_id}/stream');
-            clearSource.addEventListener('clear', function(e) {{
-                document.getElementById('log-output').textContent = '';
-            }});
         </script>
     "#
     );
@@ -312,29 +267,22 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
         Err(_) => return Html(String::new()),
     };
 
-    let log_path = daemon_id.log_path();
-
-    let logs = if log_path.exists() {
-        match std::fs::read(&log_path) {
-            Ok(bytes) => {
-                // Use lossy conversion to handle invalid UTF-8
-                let content = String::from_utf8_lossy(&bytes);
-                let lines: Vec<&str> = content.lines().collect();
-                let log_lines = settings().web.log_lines.max(0) as usize;
-                let start = if log_lines > 0 && lines.len() > log_lines {
-                    lines.len() - log_lines
-                } else {
-                    0
-                };
-                html_escape(&lines[start..].join("\n"))
-            }
-            Err(_) => String::new(),
-        }
-    } else {
-        String::new()
+    let log_lines = settings().web.log_lines.max(0) as usize;
+    let entries = match LOG_STORE.query(&LogQuery {
+        daemon_ids: vec![daemon_id.qualified()],
+        from: None,
+        to: None,
+        limit: if log_lines > 0 { Some(log_lines) } else { None },
+        order_desc: true,
+        after_id: None,
+    }) {
+        Ok(e) => e,
+        Err(_) => return Html(String::new()),
     };
 
-    Html(logs)
+    let mut lines: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+    lines.reverse();
+    Html(html_escape(&console::strip_ansi_codes(&lines.join("\n"))))
 }
 
 pub async fn stream_sse(
@@ -343,7 +291,6 @@ pub async fn stream_sse(
     let sse_poll_interval = settings().web_sse_poll_interval();
 
     let stream = async_stream::stream! {
-        // Validate daemon ID to prevent path traversal before touching the filesystem
         if !is_valid_daemon_id(&id) {
             yield Ok(Event::default().event("error").data("invalid daemon id"));
             return;
@@ -356,273 +303,40 @@ pub async fn stream_sse(
                 return;
             }
         };
-        let log_path = daemon_id.log_path();
-        let (mut last_size, mut last_path_ino) = match tokio::task::spawn_blocking({
-            let path = log_path.clone();
-            move || {
-                match std::fs::metadata(&path) {
-                    Ok(metadata) => {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::MetadataExt;
-                            (metadata.len(), Some(metadata.ino()))
-                        }
-                        #[cfg(not(unix))]
-                        {
-                            (metadata.len(), None)
-                        }
-                    }
-                    Err(_) => (0, None),
-                }
-            }
-        })
-        .await
-        {
-            Ok(state) => state,
-            Err(err) => {
-                warn!(
-                    "SSE log stream: failed to read initial metadata for '{}': {err:?}",
-                    log_path.display()
-                );
-                (0, None)
-            }
+
+        // Track the highest row ID we've sent so we only stream new entries.
+        let mut last_id: i64 = match LOG_STORE.query(&LogQuery {
+            daemon_ids: vec![daemon_id.qualified()],
+            from: None,
+            to: None,
+            limit: Some(1),
+            order_desc: true,
+            after_id: None,
+        }) {
+            Ok(entries) => entries.last().map(|e| e.id).unwrap_or(0),
+            Err(_) => 0,
         };
-        let mut file_handle: Option<std::fs::File> = None;
-
-        // Internal result type for file operations within spawn_blocking
-        #[allow(dead_code)] // FileRotated is constructed only on Unix
-        enum FileOpResult {
-            Data(Vec<u8>),
-            Truncated,
-            FileRotated,
-            SeekFailed,
-            ReadFailed,
-            Eof,
-        }
-
-        struct FileOpOutput {
-            file: Option<std::fs::File>,
-            size: u64,
-            result: Option<FileOpResult>,
-            inode: Option<u64>,
-        }
-
-        let mut poll_count = 0u64;
 
         loop {
             tokio::time::sleep(sse_poll_interval).await;
-            poll_count = poll_count.wrapping_add(1);
 
-            // Use spawn_blocking for all blocking file operations
-            let file_op_result = {
-                let path = log_path.clone();
-                let fh = file_handle.take();
-                let mut ls = last_size;
-                let prev_ino = last_path_ino;
-                #[cfg_attr(not(unix), allow(unused_variables))]
-                let poll_count = poll_count;
-                tokio::task::spawn_blocking(move || {
-                    #[cfg_attr(not(unix), allow(unused_variables))]
-                    let opened_fresh = fh.is_none();
-                    let mut file = match fh {
-                        Some(f) => f,
-                        None => match std::fs::File::open(&path) {
-                            Ok(f) => f,
-                            Err(_) => {
-                                return FileOpOutput {
-                                    file: None,
-                                    size: ls,
-                                    result: None,
-                                    inode: prev_ino,
-                                };
-                            }
-                        },
-                    };
-
-                    // Check if file was rotated while we had no handle (fresh open case)
-                    // and cache metadata to avoid redundant fstat calls
-                    #[cfg(unix)]
-                    let (fresh_open_rotated, cached_metadata, fresh_ino) = if opened_fresh {
-                        use std::os::unix::fs::MetadataExt;
-                        if let Ok(meta) = file.metadata() {
-                            let ino = meta.ino();
-                            if let Some(prev_ino_val) = prev_ino {
-                                if ino != prev_ino_val {
-                                    // File was rotated since we last had a handle
-                                    (true, Some(meta), Some(ino))
-                                } else {
-                                    (false, Some(meta), Some(ino))
-                                }
-                            } else {
-                                // No previous inode, capture current one for future checks
-                                (false, Some(meta), Some(ino))
-                            }
-                        } else {
-                            (false, None, None)
-                        }
-                    } else {
-                        (false, None, None)
-                    };
-                    #[cfg(unix)]
-                    if fresh_open_rotated {
-                        return FileOpOutput {
-                            file: None,
-                            size: 0,
-                            result: Some(FileOpResult::FileRotated),
-                            inode: fresh_ino,
-                        };
-                    }
-
-                    // Fallback for non-unix platforms
-                    #[cfg(not(unix))]
-                    let (cached_metadata, fresh_ino): (Option<std::fs::Metadata>, Option<u64>) = (None, None);
-
-                    let metadata = match cached_metadata {
-                        Some(m) => m,
-                        None => match file.metadata() {
-                            Ok(m) => m,
-                            Err(_) => {
-                                return FileOpOutput {
-                                    file: None,
-                                    size: ls,
-                                    result: None,
-                                    inode: fresh_ino,
-                                };
-                            }
-                        },
-                    };
-                    let current_size = metadata.len();
-
-                    // Check if file was recreated (inode changed) on Unix systems
-                    #[cfg(unix)]
-                    if current_size != ls || poll_count.is_multiple_of(10) {
-                        use std::os::unix::fs::MetadataExt;
-                        let path_ino = std::fs::metadata(&path).map(|m| m.ino()).ok();
-                        let file_ino = metadata.ino();
-                        if let Some(path_ino) = path_ino && path_ino != file_ino {
-                            // File was recreated; drop handle and reset
-                            return FileOpOutput {
-                                file: None,
-                                size: 0,
-                                result: Some(FileOpResult::FileRotated),
-                                inode: Some(path_ino),
-                            };
-                        }
-                    }
-
-                    // Use the current file's inode for future rotation checks
-                    // metadata is already available from above, no need for extra fstat
-                    #[cfg(unix)]
-                    let current_ino = fresh_ino.or_else(|| {
-                        use std::os::unix::fs::MetadataExt;
-                        Some(metadata.ino())
-                    });
-                    #[cfg(not(unix))]
-                    let current_ino: Option<u64> = None;
-
-                    if current_size > ls {
-                        // Read new content as bytes to handle invalid UTF-8
-                        if file.seek(SeekFrom::Start(ls)).is_err() {
-                            return FileOpOutput {
-                                file: None,
-                                size: ls,
-                                result: Some(FileOpResult::SeekFailed),
-                                inode: current_ino,
-                            };
-                        }
-
-                        const MAX_READ_SIZE: u64 = 1024 * 1024;
-                        let bytes_to_read = (current_size - ls).min(MAX_READ_SIZE) as usize;
-                        let mut buffer = Vec::with_capacity(bytes_to_read);
-                        match (&mut file).take(bytes_to_read as u64).read_to_end(&mut buffer) {
-                            Ok(0) => {
-                                return FileOpOutput {
-                                    file: Some(file),
-                                    size: ls,
-                                    result: Some(FileOpResult::Eof),
-                                    inode: current_ino,
-                                };
-                            }
-                            Ok(n) => {
-                                ls += n as u64;
-                                return FileOpOutput {
-                                    file: Some(file),
-                                    size: ls,
-                                    result: Some(FileOpResult::Data(buffer)),
-                                    inode: current_ino,
-                                };
-                            }
-                            Err(_) => {
-                                return FileOpOutput {
-                                    file: None,
-                                    size: ls,
-                                    result: Some(FileOpResult::ReadFailed),
-                                    inode: current_ino,
-                                };
-                            }
-                        }
-                    } else if current_size < ls {
-                        // File was truncated (cleared)
-                        return FileOpOutput {
-                            file: Some(file),
-                            size: 0,
-                            result: Some(FileOpResult::Truncated),
-                            inode: current_ino,
-                        };
-                    }
-
-                    FileOpOutput {
-                        file: Some(file),
-                        size: ls,
-                        result: None,
-                        inode: current_ino,
-                    }
-                }).await
+            let entries = match LOG_STORE.query(&LogQuery {
+                daemon_ids: vec![daemon_id.qualified()],
+                from: None,
+                to: None,
+                limit: None,
+                order_desc: false,
+                after_id: Some(last_id),
+            }) {
+                Ok(e) => e,
+                Err(_) => continue,
             };
 
-            match file_op_result {
-                Ok(output) => {
-                    file_handle = output.file;
-                    last_size = output.size;
-                    last_path_ino = output.inode;
-
-                    match output.result {
-                        Some(FileOpResult::Data(buffer)) => {
-                            let new_content = String::from_utf8_lossy(&buffer);
-                            let stripped = console::strip_ansi_codes(&new_content);
-                            let escaped = html_escape(&stripped);
-                            yield Ok(Event::default().event("message").data(escaped));
-                        }
-                        Some(FileOpResult::Truncated) => {
-                            yield Ok(Event::default().event("clear").data(""));
-                        }
-                        Some(FileOpResult::FileRotated) => {
-                            // Signal the client to clear stale content from the previous file
-                            yield Ok(Event::default().event("clear").data(""));
-                        }
-                        Some(FileOpResult::SeekFailed) => {
-                            debug!("SSE log stream: seek failed on '{}', will reopen", log_path.display());
-                        }
-                        Some(FileOpResult::ReadFailed) => {
-                            debug!("SSE log stream: read failed on '{}', will reopen", log_path.display());
-                        }
-                        Some(FileOpResult::Eof) => {
-                            debug!(
-                                "SSE log stream: read 0 bytes from '{}' after size check; retrying",
-                                log_path.display()
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                Err(err) => {
-                    // file_handle is already None after take() above;
-                    // last_size remains valid from before this iteration.
-                    warn!(
-                        "SSE log stream: spawn_blocking panicked for '{}': {err:?}",
-                        log_path.display()
-                    );
-                }
+            for entry in entries {
+                last_id = entry.id;
+                let stripped = console::strip_ansi_codes(&entry.message);
+                let escaped = html_escape(&stripped);
+                yield Ok(Event::default().event("message").data(escaped));
             }
         }
     };
@@ -636,11 +350,7 @@ pub async fn clear(Path(id): Path<String>) -> Html<String> {
         Err(_) => return Html("".to_string()),
     };
 
-    let log_path = daemon_id.log_path();
-
-    if log_path.exists() {
-        let _ = std::fs::write(&log_path, "");
-    }
+    let _ = LOG_STORE.clear(&[daemon_id]);
 
     Html("".to_string())
 }

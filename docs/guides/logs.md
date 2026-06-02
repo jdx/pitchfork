@@ -1,6 +1,6 @@
 # Log Management
 
-View, filter, and manage daemon logs.
+View, filter, and manage daemon logs. Pitchfork stores all daemon logs in an SQLite database (`~/.local/state/pitchfork/logs/logs.db`) with full timestamp indexing, making filtering by time fast and reliable.
 
 ## View Logs
 
@@ -125,6 +125,44 @@ Delete all logs for a daemon:
 pitchfork logs api --clear
 ```
 
+## Log Rotation
+
+Pitchfork supports automatic log rotation via `time_retention` and `line_retention` settings. Old entries are pruned periodically by the supervisor so the database does not grow unbounded.
+
+### Automatic Rotation
+
+Configure in any `pitchfork.toml` under `[settings.logs]`:
+
+```toml
+[settings.logs]
+# Keep only the last 7 days of logs
+time_retention = "7d"
+
+# Or keep only the most recent 10,000 entries
+line_retention = 10000
+
+# You can also combine both (entries older than 7d OR exceeding 10,000 lines are pruned)
+# time_retention = "7d"
+# line_retention = 10000
+```
+
+Supported formats:
+- **Time-based (`time_retention`):** `"7d"`, `"30d"`, `"1h"` — delete entries older than this duration
+- **Count-based (`line_retention`):** `10000`, `5000` — keep only the most recent N entries per daemon
+- **Unset (default):** no automatic pruning
+
+The supervisor evaluates this policy during its regular interval watcher cycle.
+
+## Migrate Legacy Logs
+
+If you were using pitchfork before the SQLite log store was introduced, legacy text log files may still exist under the logs directory. Import them into the SQLite database with:
+
+```bash
+pitchfork logs --migrate
+```
+
+This is a one-time operation. After migration, the legacy text files are no longer used.
+
 ## Supervisor Logs
 
 View pitchfork's own logs:
@@ -133,12 +171,10 @@ View pitchfork's own logs:
 pitchfork logs pitchfork
 ```
 
-## Log Location
-
-Logs are stored in `~/.local/state/pitchfork/logs/<namespace>--<name>/`. See [File Locations](/reference/file-locations#logs) for details on the path format.
-
-Each daemon has its own log file that persists across restarts.
-
 ## TUI and Web UI
 
 You can also view logs in real-time through the [TUI](/guides/tui) (`pitchfork tui`) or [Web UI](/guides/web-ui) (if enabled).
+
+## Log Storage Location
+
+Logs are stored in a single SQLite database at `~/.local/state/pitchfork/logs/logs.db`. Each daemon has its own table partition identified by its qualified ID (`namespace/name`). See [File Locations](/reference/file-locations#logs) for details on the state directory resolution.

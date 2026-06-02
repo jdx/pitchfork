@@ -68,19 +68,17 @@ wait_for_status() {
   return 1
 }
 
-# Wait for a log file to have at least N lines (up to 10s)
+# Wait for a daemon to have at least N log entries (up to 10s)
 wait_for_log_lines() {
   local daemon="$1"
   local min_lines="$2"
-  local log_dir="$PITCHFORK_LOGS_DIR/$daemon"
-  local log_file="$log_dir/$daemon.log"
+  # Convert filesystem-safe name (e.g. "ns--daemon") to daemon ID (e.g. "ns/daemon")
+  local daemon_id="${daemon//--//}"
   for _ in $(seq 1 50); do
-    if [[ -f "$log_file" ]]; then
-      local count
-      count=$(wc -l < "$log_file" 2>/dev/null || echo 0)
-      if [[ "$count" -ge "$min_lines" ]]; then
-        return 0
-      fi
+    local count
+    count=$(pitchfork logs "$daemon_id" --raw 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$count" -ge "$min_lines" ]]; then
+      return 0
     fi
     sleep 0.2
   done

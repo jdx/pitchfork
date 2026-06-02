@@ -1,20 +1,18 @@
 use crate::daemon_id::DaemonId;
+use crate::log_store::sqlite::{LOG_STORE, has_legacy_logs};
+use crate::log_store::{LogQuery, LogStore};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 use crate::ui::style::{edim, estyle, ndim};
 use crate::{Result, env};
-use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeZone, Timelike};
+use chrono::{DateTime, Local, NaiveDateTime, NaiveTime, TimeZone};
 use console;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
-use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeSet, BinaryHeap};
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::io::{self, IsTerminal, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
-use xx::regex;
 
 /// Pager configuration for displaying logs
 struct PagerConfig {
@@ -119,179 +117,6 @@ pub fn colored_id_label(id: &str, colors_enabled: bool) -> String {
     format!("\x1b[{color}m[{id}]\x1b[0m")
 }
 
-/// A parsed log entry with timestamp, daemon name, and message
-#[derive(Debug)]
-struct LogEntry {
-    timestamp: String,
-    daemon: String,
-    message: String,
-    source_idx: usize, // Index of the source iterator
-}
-
-impl PartialEq for LogEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.timestamp == other.timestamp
-    }
-}
-
-impl Eq for LogEntry {}
-
-impl PartialOrd for LogEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for LogEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.timestamp.cmp(&other.timestamp)
-    }
-}
-
-/// Streaming merger for multiple sorted log files using a min-heap.
-/// This allows merging sorted iterators without loading all data into memory.
-struct StreamingMerger<I>
-where
-    I: Iterator<Item = (String, String)>,
-{
-    sources: Vec<(String, I)>,           // (daemon_name, line_iterator)
-    heap: BinaryHeap<Reverse<LogEntry>>, // Min-heap (using Reverse for ascending order)
-}
-
-impl<I> StreamingMerger<I>
-where
-    I: Iterator<Item = (String, String)>,
-{
-    fn new() -> Self {
-        Self {
-            sources: Vec::new(),
-            heap: BinaryHeap::new(),
-        }
-    }
-
-    fn add_source(&mut self, daemon_name: String, iter: I) {
-        self.sources.push((daemon_name, iter));
-    }
-
-    fn initialize(&mut self) {
-        // Pull the first entry from each source into the heap
-        for (idx, (daemon, iter)) in self.sources.iter_mut().enumerate() {
-            if let Some((timestamp, message)) = iter.next() {
-                self.heap.push(Reverse(LogEntry {
-                    timestamp,
-                    daemon: daemon.clone(),
-                    message,
-                    source_idx: idx,
-                }));
-            }
-        }
-    }
-}
-
-impl<I> Iterator for StreamingMerger<I>
-where
-    I: Iterator<Item = (String, String)>,
-{
-    type Item = (String, String, String); // (timestamp, daemon, message)
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Pop the smallest entry from the heap
-        let Reverse(entry) = self.heap.pop()?;
-
-        // Pull the next entry from the same source and push to heap
-        let (daemon, iter) = &mut self.sources[entry.source_idx];
-        if let Some((timestamp, message)) = iter.next() {
-            self.heap.push(Reverse(LogEntry {
-                timestamp,
-                daemon: daemon.clone(),
-                message,
-                source_idx: entry.source_idx,
-            }));
-        }
-
-        Some((entry.timestamp, entry.daemon, entry.message))
-    }
-}
-
-/// A proper streaming log parser that handles multi-line entries
-struct StreamingLogParser {
-    reader: BufReader<File>,
-    current_entry: Option<(String, String)>,
-    finished: bool,
-}
-
-impl StreamingLogParser {
-    fn new(file: File) -> Self {
-        Self {
-            reader: BufReader::new(file),
-            current_entry: None,
-            finished: false,
-        }
-    }
-}
-
-impl Iterator for StreamingLogParser {
-    type Item = (String, String);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
-
-        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
-
-        loop {
-            let mut line = String::new();
-            match self.reader.read_line(&mut line) {
-                Ok(0) => {
-                    // EOF - return the last entry if any
-                    self.finished = true;
-                    return self.current_entry.take();
-                }
-                Ok(_) => {
-                    // Remove trailing newline
-                    if line.ends_with('\n') {
-                        line.pop();
-                        if line.ends_with('\r') {
-                            line.pop();
-                        }
-                    }
-
-                    if let Some(caps) = re.captures(&line) {
-                        let date = match caps.get(1) {
-                            Some(d) => d.as_str().to_string(),
-                            None => continue,
-                        };
-                        let msg = match caps.get(3) {
-                            Some(m) => m.as_str().to_string(),
-                            None => continue,
-                        };
-
-                        // Return the previous entry and start a new one
-                        let prev = self.current_entry.take();
-                        self.current_entry = Some((date, msg));
-
-                        if prev.is_some() {
-                            return prev;
-                        }
-                        // First entry - continue to read more
-                    } else {
-                        // Continuation line - append to current entry
-                        if let Some((_, ref mut msg)) = self.current_entry {
-                            msg.push('\n');
-                            msg.push_str(&line);
-                        }
-                    }
-                }
-                Err(_) => {
-                    self.finished = true;
-                    return self.current_entry.take();
-                }
-            }
-        }
-    }
-}
-
 /// Displays logs for daemon(s)
 #[derive(Debug, clap::Args)]
 #[clap(
@@ -364,6 +189,10 @@ pub struct Logs {
     /// Output raw log lines without color or formatting
     #[clap(long)]
     raw: bool,
+
+    /// Migrate legacy text log files into the SQLite log store
+    #[clap(long)]
+    migrate: bool,
 }
 
 impl Logs {
@@ -371,6 +200,19 @@ impl Logs {
         // Migrate legacy log directories (old format: "api" → new format: "legacy--api").
         // This is idempotent and silent so it is safe to run on every invocation.
         migrate_legacy_log_dirs();
+
+        // --migrate: migrate legacy text logs into SQLite
+        if self.migrate {
+            return self.run_migrate().await;
+        }
+
+        // Warn about remaining legacy logs (not yet migrated to SQLite)
+        if has_legacy_logs() {
+            eprintln!(
+                "{}: legacy text log files detected. Run `pitchfork logs --migrate` to import them into the SQLite log store.",
+                estyle("warning")
+            );
+        }
 
         // Resolve user-provided IDs to qualified IDs
         let resolved_ids: Vec<DaemonId> = if self.id.is_empty() {
@@ -381,12 +223,7 @@ impl Logs {
         };
 
         if self.clear {
-            for id in &resolved_ids {
-                let path = id.log_path();
-                if path.exists() {
-                    xx::file::create(&path)?;
-                }
-            }
+            LOG_STORE.clear(&resolved_ids)?;
             return Ok(());
         }
 
@@ -410,6 +247,46 @@ impl Logs {
         Ok(())
     }
 
+    /// Migrate legacy text logs into the SQLite log store.
+    async fn run_migrate(&self) -> Result<()> {
+        let ids: Vec<DaemonId> = if self.id.is_empty() {
+            // Gather all daemons that have a legacy text log file.
+            let mut ids = BTreeSet::new();
+            match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+                Ok(state) => ids.extend(state.daemons.keys().cloned()),
+                Err(e) => warn!("Failed to read state for migration: {e}"),
+            }
+            match PitchforkToml::all_merged() {
+                Ok(config) => ids.extend(config.daemons.keys().cloned()),
+                Err(e) => warn!("Failed to read config for migration: {e}"),
+            }
+            ids.into_iter().collect()
+        } else {
+            PitchforkToml::resolve_ids(&self.id)?
+        };
+
+        if ids.is_empty() {
+            eprintln!("No daemons to migrate.");
+            return Ok(());
+        }
+
+        let mut total_migrated = 0u64;
+        for id in &ids {
+            match LOG_STORE.migrate_daemon_text_logs(id) {
+                Ok(0) => {}
+                Ok(n) => {
+                    total_migrated += n;
+                    eprintln!("Migrated {n} entries from {}", id.qualified());
+                }
+                Err(e) => {
+                    warn!("Failed to migrate text logs for {}: {e}", id.qualified());
+                }
+            }
+        }
+        eprintln!("Total migrated: {total_migrated} entries.");
+        Ok(())
+    }
+
     fn print_existing_logs(
         &self,
         resolved_ids: &[DaemonId],
@@ -417,118 +294,58 @@ impl Logs {
         to: Option<DateTime<Local>>,
         single_daemon: bool,
     ) -> Result<()> {
-        let valid_ids: Vec<DaemonId> = resolved_ids
-            .iter()
-            .filter(|id| id.log_path().exists())
-            .cloned()
-            .collect();
-        let id_width = valid_ids
-            .iter()
-            .map(|id| id.qualified().len())
-            .max()
-            .unwrap_or(0);
-        trace!(
-            "log files for: {}",
-            valid_ids.iter().map(|id| id.qualified()).join(", ")
-        );
+        let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
+        let id_width = daemon_ids.iter().map(|id| id.len()).max().unwrap_or(0);
+        trace!("log query for: {}", daemon_ids.iter().join(", "));
         let has_time_filter = from.is_some() || to.is_some();
 
-        if has_time_filter {
-            let mut log_lines = self.collect_log_lines_forward(&valid_ids, from, to)?;
+        let opts = LogQuery {
+            daemon_ids: daemon_ids.clone(),
+            from,
+            to,
+            limit: if !has_time_filter { self.n } else { None },
+            order_desc: !has_time_filter,
+            after_id: None,
+        };
+        let entries = LOG_STORE.query(&opts)?;
+        let log_lines: Vec<(String, String, String)> = entries
+            .into_iter()
+            .map(|e| {
+                let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+                (ts, e.daemon_id, e.message)
+            })
+            .collect();
 
+        let log_lines = if has_time_filter {
             if let Some(n) = self.n {
-                let len = log_lines.len();
-                if len > n {
-                    log_lines = log_lines.into_iter().skip(len - n).collect_vec();
-                }
-            }
-
-            self.output_logs(
-                log_lines,
-                single_daemon,
-                id_width,
-                has_time_filter,
-                self.raw,
-            )?;
-        } else if let Some(n) = self.n {
-            let log_lines = self.collect_log_lines_reverse(&valid_ids, Some(n))?;
-            self.output_logs(
-                log_lines,
-                single_daemon,
-                id_width,
-                has_time_filter,
-                self.raw,
-            )?;
-        } else {
-            self.stream_logs_to_pager(&valid_ids, single_daemon, id_width, self.raw)?;
-        }
-
-        Ok(())
-    }
-
-    fn collect_log_lines_forward(
-        &self,
-        ids: &[DaemonId],
-        from: Option<DateTime<Local>>,
-        to: Option<DateTime<Local>>,
-    ) -> Result<Vec<(String, String, String)>> {
-        let log_lines: Vec<(String, String, String)> = ids
-            .iter()
-            .flat_map(|id| {
-                let path = id.log_path();
-                match read_lines_in_time_range(&path, from, to) {
-                    Ok((lines, _)) => merge_log_lines(&id.qualified(), lines, false),
-                    Err(e) => {
-                        error!("{}: {}", path.display(), e);
-                        vec![]
-                    }
-                }
-            })
-            .sorted_by_cached_key(|l| l.0.to_string())
-            .collect_vec();
-
-        Ok(log_lines)
-    }
-
-    fn collect_log_lines_reverse(
-        &self,
-        ids: &[DaemonId],
-        limit: Option<usize>,
-    ) -> Result<Vec<(String, String, String)>> {
-        let log_lines: Vec<(String, String, String)> = ids
-            .iter()
-            .flat_map(|id| {
-                let path = id.log_path();
-                let rev = match xx::file::open(&path) {
-                    Ok(f) => rev_lines::RevLines::new(f),
-                    Err(e) => {
-                        error!("{}: {}", path.display(), e);
-                        return vec![];
-                    }
-                };
-                let lines = rev.into_iter().filter_map(Result::ok);
-                let lines = match limit {
-                    Some(n) => lines.take(n).collect_vec(),
-                    None => lines.collect_vec(),
-                };
-                merge_log_lines(&id.qualified(), lines, true)
-            })
-            .sorted_by_cached_key(|l| l.0.to_string())
-            .collect_vec();
-
-        let log_lines = match limit {
-            Some(n) => {
                 let len = log_lines.len();
                 if len > n {
                     log_lines.into_iter().skip(len - n).collect_vec()
                 } else {
                     log_lines
                 }
+            } else {
+                log_lines
             }
-            None => log_lines,
+        } else if let Some(n) = self.n {
+            let len = log_lines.len();
+            if len > n {
+                log_lines.into_iter().skip(len - n).collect_vec()
+            } else {
+                log_lines
+            }
+        } else {
+            log_lines
         };
 
-        Ok(log_lines)
+        self.output_logs(
+            log_lines,
+            single_daemon,
+            id_width,
+            has_time_filter,
+            self.raw,
+        )?;
+        Ok(())
     }
 
     fn output_logs(
@@ -623,220 +440,6 @@ impl Logs {
 
         Ok(())
     }
-
-    fn stream_logs_to_pager(
-        &self,
-        ids: &[DaemonId],
-        single_daemon: bool,
-        id_width: usize,
-        raw: bool,
-    ) -> Result<()> {
-        let strip_ansi = raw || !console::colors_enabled();
-
-        if !io::stdout().is_terminal() || self.no_pager || self.tail || raw {
-            return self.stream_logs_direct(ids, single_daemon, id_width, raw, strip_ansi);
-        }
-
-        let pager_config = PagerConfig::new(true); // start_at_end = true
-
-        match pager_config.spawn_piped() {
-            Ok(mut child) => {
-                if let Some(stdin) = child.stdin.take() {
-                    // Collect file info for the streaming thread
-                    let file_infos: Vec<_> = ids
-                        .iter()
-                        .map(|id| (id.qualified(), id.log_path()))
-                        .collect();
-                    let single_daemon_clone = single_daemon;
-                    let strip_ansi_clone = strip_ansi;
-                    let id_width_clone = id_width;
-
-                    // Stream logs using a background thread to avoid blocking
-                    std::thread::spawn(move || {
-                        let mut writer = BufWriter::new(stdin);
-
-                        // Single file: stream directly without merge overhead
-                        if file_infos.len() == 1 {
-                            let (name, path) = &file_infos[0];
-                            let file = match File::open(path) {
-                                Ok(f) => f,
-                                Err(_) => return,
-                            };
-                            let parser = StreamingLogParser::new(file);
-                            for (timestamp, message) in parser {
-                                let output = format!(
-                                    "{}\n",
-                                    format_log_line(
-                                        &timestamp,
-                                        name,
-                                        &message,
-                                        single_daemon_clone,
-                                        id_width_clone,
-                                        strip_ansi_clone
-                                    )
-                                );
-                                if writer.write_all(output.as_bytes()).is_err() {
-                                    return;
-                                }
-                            }
-                            let _ = writer.flush();
-                            return;
-                        }
-
-                        // Multiple files: use streaming merger for sorted/interleaved output
-                        let mut merger: StreamingMerger<StreamingLogParser> =
-                            StreamingMerger::new();
-
-                        for (name, path) in file_infos {
-                            let file = match File::open(&path) {
-                                Ok(f) => f,
-                                Err(_) => continue,
-                            };
-                            let parser = StreamingLogParser::new(file);
-                            merger.add_source(name, parser);
-                        }
-
-                        // Initialize the heap with first entry from each source
-                        merger.initialize();
-
-                        // Stream merged entries to pager
-                        for (timestamp, daemon, message) in merger {
-                            let output = format!(
-                                "{}\n",
-                                format_log_line(
-                                    &timestamp,
-                                    &daemon,
-                                    &message,
-                                    single_daemon_clone,
-                                    id_width_clone,
-                                    strip_ansi_clone
-                                )
-                            );
-                            if writer.write_all(output.as_bytes()).is_err() {
-                                return;
-                            }
-                        }
-
-                        let _ = writer.flush();
-                    });
-
-                    let _ = child.wait();
-                } else {
-                    debug!("Failed to get pager stdin, falling back to direct output");
-                    return self.stream_logs_direct(ids, single_daemon, id_width, raw, strip_ansi);
-                }
-            }
-            Err(e) => {
-                debug!("Failed to spawn pager: {e}, falling back to direct output");
-                return self.stream_logs_direct(ids, single_daemon, id_width, raw, strip_ansi);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn stream_logs_direct(
-        &self,
-        ids: &[DaemonId],
-        single_daemon: bool,
-        id_width: usize,
-        raw: bool,
-        strip_ansi: bool,
-    ) -> Result<()> {
-        // Fast path for single daemon: directly output file content without parsing
-        // This avoids expensive regex parsing for each line in large log files
-        if ids.len() == 1 {
-            let daemon_id = &ids[0];
-            let path = daemon_id.log_path();
-            let file = match File::open(&path) {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("{}: {}", path.display(), e);
-                    return Ok(());
-                }
-            };
-            let reader = BufReader::new(file);
-            if raw {
-                // Raw mode: output lines as-is (but strip ansi if colors disabled)
-                for line in reader.lines() {
-                    match line {
-                        Ok(l) => {
-                            let l = if strip_ansi {
-                                console::strip_ansi_codes(&l).to_string()
-                            } else {
-                                l
-                            };
-                            if io::stdout().write_all(l.as_bytes()).is_err()
-                                || io::stdout().write_all(b"\n").is_err()
-                            {
-                                return Ok(());
-                            }
-                        }
-                        Err(_) => continue,
-                    }
-                }
-            } else {
-                // Formatted mode: parse and format each line
-                let parser = StreamingLogParser::new(File::open(&path).into_diagnostic()?);
-                for (timestamp, message) in parser {
-                    let output = format!(
-                        "{}\n",
-                        format_log_line(
-                            &timestamp,
-                            &daemon_id.qualified(),
-                            &message,
-                            single_daemon,
-                            id_width,
-                            strip_ansi
-                        )
-                    );
-                    if io::stdout().write_all(output.as_bytes()).is_err() {
-                        return Ok(());
-                    }
-                }
-            }
-            return Ok(());
-        }
-
-        // Multiple daemons: use streaming merger for sorted output
-        let mut merger: StreamingMerger<StreamingLogParser> = StreamingMerger::new();
-
-        for id in ids {
-            let path = id.log_path();
-            let file = match File::open(&path) {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("{}: {}", path.display(), e);
-                    continue;
-                }
-            };
-            let parser = StreamingLogParser::new(file);
-            merger.add_source(id.qualified(), parser);
-        }
-
-        // Initialize the heap with first entry from each source
-        merger.initialize();
-
-        // Stream merged entries to stdout
-        for (timestamp, daemon, message) in merger {
-            let output = format!(
-                "{}\n",
-                format_log_line(
-                    &timestamp,
-                    &daemon,
-                    &message,
-                    single_daemon,
-                    id_width,
-                    strip_ansi
-                )
-            );
-            if io::stdout().write_all(output.as_bytes()).is_err() {
-                return Ok(());
-            }
-        }
-
-        Ok(())
-    }
 }
 
 fn should_use_pager(line_count: usize) -> bool {
@@ -856,189 +459,6 @@ fn get_terminal_height() -> Option<usize> {
     }
 
     crossterm::terminal::size().ok().map(|(_, h)| h as usize)
-}
-
-fn read_lines_in_time_range(
-    path: &Path,
-    from: Option<DateTime<Local>>,
-    to: Option<DateTime<Local>>,
-) -> Result<(Vec<String>, u64)> {
-    let mut file = File::open(path).into_diagnostic()?;
-    let file_size = file.metadata().into_diagnostic()?.len();
-
-    if file_size == 0 {
-        return Ok((vec![], 0));
-    }
-
-    let start_pos = if let Some(from_time) = from {
-        binary_search_log_position(&mut file, file_size, from_time, true)?
-    } else {
-        0
-    };
-
-    let end_pos = if let Some(to_time) = to {
-        binary_search_log_position(&mut file, file_size, to_time, false)?
-    } else {
-        file_size
-    };
-
-    if start_pos >= end_pos {
-        return Ok((vec![], end_pos));
-    }
-
-    file.seek(SeekFrom::Start(start_pos)).into_diagnostic()?;
-    let mut reader = BufReader::new(&file);
-    let mut lines = Vec::new();
-    let mut current_pos = start_pos;
-
-    loop {
-        if current_pos >= end_pos {
-            break;
-        }
-
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(bytes_read) => {
-                current_pos += bytes_read as u64;
-                if line.ends_with('\n') {
-                    line.pop();
-                    if line.ends_with('\r') {
-                        line.pop();
-                    }
-                }
-                lines.push(line);
-            }
-            Err(_) => break,
-        }
-    }
-
-    Ok((lines, end_pos))
-}
-
-fn binary_search_log_position(
-    file: &mut File,
-    file_size: u64,
-    target_time: DateTime<Local>,
-    find_start: bool,
-) -> Result<u64> {
-    let mut low: u64 = 0;
-    let mut high: u64 = file_size;
-
-    while low < high {
-        let mid = low + (high - low) / 2;
-
-        let line_start = find_line_start(file, mid)?;
-
-        file.seek(SeekFrom::Start(line_start)).into_diagnostic()?;
-        let mut reader = BufReader::new(&*file);
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line).into_diagnostic()?;
-        if bytes_read == 0 {
-            high = mid;
-            continue;
-        }
-
-        let line_time = extract_timestamp(&line);
-
-        match line_time {
-            Some(lt) => {
-                if find_start {
-                    if lt < target_time {
-                        low = line_start + bytes_read as u64;
-                    } else {
-                        high = line_start;
-                    }
-                } else if lt <= target_time {
-                    low = line_start + bytes_read as u64;
-                } else {
-                    high = line_start;
-                }
-            }
-            None => {
-                low = line_start + bytes_read as u64;
-            }
-        }
-    }
-
-    find_line_start(file, low)
-}
-
-fn find_line_start(file: &mut File, pos: u64) -> Result<u64> {
-    if pos == 0 {
-        return Ok(0);
-    }
-
-    // Start searching from the byte just before `pos`.
-    let mut search_pos = pos.saturating_sub(1);
-    const CHUNK_SIZE: usize = 8192;
-
-    loop {
-        // Determine the start of the chunk we want to read.
-        let chunk_start = search_pos.saturating_sub(CHUNK_SIZE as u64 - 1);
-        let len_u64 = search_pos - chunk_start + 1;
-        let len = len_u64 as usize;
-
-        // Seek once to the beginning of this chunk.
-        file.seek(SeekFrom::Start(chunk_start)).into_diagnostic()?;
-        let mut buf = vec![0u8; len];
-        if file.read_exact(&mut buf).is_err() {
-            // Match the original behavior: on read error, fall back to start of file.
-            return Ok(0);
-        }
-
-        // Scan this chunk backwards for a newline.
-        for (i, &b) in buf.iter().enumerate().rev() {
-            if b == b'\n' {
-                return Ok(chunk_start + i as u64 + 1);
-            }
-        }
-
-        // No newline in this chunk; if we've reached the start of the file,
-        // there is no earlier newline.
-        if chunk_start == 0 {
-            return Ok(0);
-        }
-
-        // Move to the previous chunk (just before this one).
-        search_pos = chunk_start - 1;
-    }
-}
-
-fn extract_timestamp(line: &str) -> Option<DateTime<Local>> {
-    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})");
-    re.captures(line)
-        .and_then(|caps| caps.get(1))
-        .and_then(|m| parse_datetime(m.as_str()).ok())
-}
-
-fn merge_log_lines(id: &str, lines: Vec<String>, reverse: bool) -> Vec<(String, String, String)> {
-    let lines = if reverse {
-        lines.into_iter().rev().collect()
-    } else {
-        lines
-    };
-
-    let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
-    lines
-        .into_iter()
-        .fold(vec![], |mut acc, line| match re.captures(&line) {
-            Some(caps) => {
-                let (date, msg) = match (caps.get(1), caps.get(3)) {
-                    (Some(d), Some(m)) => (d.as_str().to_string(), m.as_str().to_string()),
-                    _ => return acc,
-                };
-                acc.push((date, id.to_string(), msg));
-                acc
-            }
-            None => {
-                if let Some(l) = acc.last_mut() {
-                    l.2.push('\n');
-                    l.2.push_str(&line);
-                }
-                acc
-            }
-        })
 }
 
 /// Rename legacy log directories that predate namespace-qualified daemon IDs.
@@ -1154,9 +574,11 @@ fn get_all_daemon_ids() -> Result<Vec<DaemonId>> {
         Err(e) => warn!("Failed to read config for log daemon discovery: {e}"),
     }
 
+    let logged_ids: std::collections::HashSet<String> =
+        LOG_STORE.list_daemon_ids()?.into_iter().collect();
     Ok(ids
         .into_iter()
-        .filter(|id| id.log_path().exists())
+        .filter(|id| logged_ids.contains(&id.qualified()))
         .collect())
 }
 
@@ -1165,42 +587,36 @@ pub async fn tail_logs(
     single_daemon: bool,
     start_from_end: bool,
 ) -> Result<()> {
-    // Poll each log file in a loop instead of using file-system event watchers.
-    //
-    // Why polling:
-    // - Real-time enough: 200ms interval is imperceptible for human consumption,
-    //   and comparable to what `tail -f` provides.
-    // - No long-running overhead: `logs --tail` runs in the foreground with the
-    //   user watching output; the polling stops when the process exits.
-    // - Cross-platform reliable: avoids edge cases in notify/FSEvents where events
-    //   can be missed when the writer uses buffered I/O.
-    //
-    // `start_from_end`: when true, skip content already output by a prior
-    // print_existing_logs call (used by `logs --tail`). When false, start from
-    // the beginning so no content is missed (used by `wait`).
+    // Poll SQLite log store for new entries since last known row id.
     let id_width = names
         .iter()
         .map(|id| id.qualified().len())
         .max()
         .unwrap_or(0);
 
-    let mut states: Vec<(DaemonId, PathBuf, u64)> = names
+    let strip_ansi = !console::colors_enabled();
+
+    let mut states: std::collections::HashMap<String, i64> = names
         .iter()
-        .filter_map(|id| {
-            let path = id.log_path();
-            if !path.exists() {
-                return None;
-            }
-            let pos = if start_from_end {
-                fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+        .map(|id| {
+            let since = if start_from_end {
+                match LOG_STORE.query(&LogQuery {
+                    daemon_ids: vec![id.qualified()],
+                    from: None,
+                    to: None,
+                    limit: Some(1),
+                    order_desc: true,
+                    after_id: None,
+                }) {
+                    Ok(entries) => entries.last().map(|e| e.id).unwrap_or(0),
+                    Err(_) => 0,
+                }
             } else {
                 0
             };
-            Some((id.clone(), path, pos))
+            (id.qualified(), since)
         })
         .collect();
-
-    let strip_ansi = !console::colors_enabled();
 
     let interval = tokio::time::interval(Duration::from_millis(200));
     tokio::pin!(interval);
@@ -1208,65 +624,29 @@ pub async fn tail_logs(
     loop {
         interval.tick().await;
 
-        // Discover log files that appeared since last iteration.
-        // Always start from position 0 — content written between ticks
-        // must not be silently dropped.
-        for id in names {
-            let path = id.log_path();
-            if !path.exists() || states.iter().any(|(s, _, _)| s == id) {
-                continue;
-            }
-            states.push((id.clone(), path, 0));
-        }
-
         let mut out = vec![];
-        for (id, path, pos) in &mut states {
-            let mut file = match fs::File::open(path) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let file_size = match file.metadata() {
-                Ok(m) => m.len(),
-                Err(_) => continue,
-            };
-            let start = if *pos > file_size { 0 } else { *pos };
-            file.seek(SeekFrom::Start(start)).into_diagnostic()?;
-
-            // Track bytes consumed rather than using stream_position(),
-            // which includes BufReader's read-ahead buffer and would skip
-            // content written concurrently.
-            let mut reader = BufReader::new(&file);
-            let mut bytes_read: u64 = 0;
-            let mut lines = vec![];
-            loop {
-                let mut line = String::new();
-                let n = reader.read_line(&mut line).into_diagnostic()?;
-                if n == 0 {
-                    break;
-                }
-                // Only advance position for complete lines (ending with \n).
-                // Partial lines at the end of file may still be written to;
-                // leave them for the next tick.
-                if line.ends_with('\n') {
-                    bytes_read += n as u64;
-                    line.pop();
-                    if line.ends_with('\r') {
-                        line.pop();
+        for id in names {
+            let after_id = states.get(&id.qualified()).copied();
+            match LOG_STORE.tail(id, after_id) {
+                Ok(entries) => {
+                    for entry in &entries {
+                        let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+                        out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
                     }
-                    lines.push(line);
-                } else {
-                    // Partial line — don't advance, will retry next tick.
-                    break;
+                    if let Some(last) = entries.last() {
+                        states.insert(id.qualified(), last.id);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to tail logs for {}: {e}", id.qualified());
                 }
             }
-            *pos = start + bytes_read;
-            out.extend(merge_log_lines(&id.qualified(), lines, false));
         }
 
         if !out.is_empty() {
             let out = out
                 .into_iter()
-                .sorted_by_cached_key(|l| l.0.to_string())
+                .sorted_by_cached_key(|l| (l.0.to_string(), l.1.to_string()))
                 .collect_vec();
             for (date, name, msg) in out {
                 println!(
@@ -1486,52 +866,28 @@ pub fn collect_startup_logs(
     daemon_id: &DaemonId,
     from: DateTime<Local>,
 ) -> Result<Vec<(String, String, String)>> {
-    let from = from
-        .with_nanosecond(0)
-        .expect("0 is always valid for nanoseconds");
-
-    let path = daemon_id.log_path();
-    let log_lines = if path.exists() {
-        match read_lines_in_time_range(&path, Some(from), None) {
-            Ok((lines, _)) => merge_log_lines(&daemon_id.qualified(), lines, false),
-            Err(e) => {
-                error!("{}: {}", path.display(), e);
-                vec![]
-            }
-        }
-    } else {
-        vec![]
-    };
+    let entries = LOG_STORE.query(&LogQuery {
+        daemon_ids: vec![daemon_id.qualified()],
+        from: Some(from),
+        to: None,
+        limit: None,
+        order_desc: false,
+        after_id: None,
+    })?;
+    let log_lines = entries
+        .into_iter()
+        .map(|e| {
+            let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+            (ts, e.daemon_id, e.message)
+        })
+        .collect();
 
     Ok(log_lines)
 }
 
-/// Reads new lines from a file starting at the given byte offset.
-/// Only returns complete lines (ending with `\n`). Returns the new offset
-/// that points past the last complete line, so partial lines at EOF are
-/// preserved for the next read.
-fn read_from_offset(path: &Path, offset: u64) -> Result<(Vec<String>, u64)> {
-    let mut file = File::open(path).into_diagnostic()?;
-    file.seek(SeekFrom::Start(offset)).into_diagnostic()?;
-    let mut buf = String::new();
-    file.read_to_string(&mut buf).into_diagnostic()?;
-
-    // Only process up to the last complete line (ending with \n).
-    // Any trailing partial line is kept for the next poll.
-    if let Some(last_newline) = buf.rfind('\n') {
-        let complete = &buf[..=last_newline];
-        let new_offset = offset + (last_newline + 1) as u64;
-        let lines = complete.lines().map(String::from).collect();
-        Ok((lines, new_offset))
-    } else {
-        // No complete lines yet — don't advance offset.
-        Ok((vec![], offset))
-    }
-}
-
 /// Stream startup logs for a daemon to a progress job in real-time.
 ///
-/// Spawns a background tokio task that polls the daemon's log file
+/// Spawns a background tokio task that polls the daemon's log store
 /// and calls `job.println()` for each new line. Returns a watch sender
 /// that stops the streaming when sent `true`.
 pub fn stream_startup_logs(
@@ -1544,47 +900,35 @@ pub fn stream_startup_logs(
 ) {
     let (tx, mut rx) = tokio::sync::watch::channel(false);
     let id = daemon_id.clone();
-    let from = from
-        .with_nanosecond(0)
-        .expect("0 is always valid for nanoseconds");
 
     let show_ts = crate::settings::settings().general.startup_log_timestamps;
 
     let handle = tokio::spawn(async move {
-        let path = id.log_path();
         let is_tty = std::io::stderr().is_terminal();
         let colors_enabled = is_tty && console::colors_enabled_stderr();
         let id_label = colored_id_label(&id.qualified(), colors_enabled);
         let prefix = if show_ts {
-            // Will be replaced with actual timestamp per line
             String::new()
         } else {
             edim("•").to_string()
         };
 
-        // Wait for log file to be created (up to 2s)
-        for _ in 0..20 {
-            if path.exists() {
-                break;
-            }
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
-                _ = rx.changed() => return,
-            }
-        }
-        if !path.exists() {
-            return;
-        }
+        let mut last_id: i64 = 0;
 
-        // Print existing lines from `from` time, then capture the exact
-        // end-of-read offset so the subsequent polling loop continues from
-        // exactly where this left off (eliminates a tiny race window).
-        let mut offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        if let Ok((lines, read_end)) = read_lines_in_time_range(&path, Some(from), None) {
-            let merged = merge_log_lines(&id.qualified(), lines, false);
-            for (date, _, msg) in &merged {
-                let time = date.split(' ').nth(1).unwrap_or(date);
-                let msg = strip_pty_controls(msg);
+        // Initial fetch: all logs since daemon start time
+        let initial_entries = LOG_STORE.query(&LogQuery {
+            daemon_ids: vec![id.qualified()],
+            from: Some(from),
+            to: None,
+            limit: None,
+            order_desc: false,
+            after_id: None,
+        });
+
+        if let Ok(entries) = initial_entries {
+            for entry in &entries {
+                let time = entry.timestamp.format("%H:%M:%S").to_string();
+                let msg = strip_pty_controls(&entry.message);
                 let msg = if is_tty {
                     msg
                 } else {
@@ -1597,34 +941,32 @@ pub fn stream_startup_logs(
                 };
                 job.println(&format!("{} {} {}", line_prefix, id_label, msg));
             }
-            offset = read_end;
+            if let Some(last) = entries.last() {
+                last_id = last.id;
+            }
         }
-        let re = regex!(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) ([\w./-]+) (.*)$");
 
-        // Poll for new lines
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(200)) => {
-                    if let Ok(metadata) = std::fs::metadata(&path) {
-                        if metadata.len() > offset {
-                            if let Ok((new_lines, new_offset)) = read_from_offset(&path, offset) {
-                                for line in &new_lines {
-                                    if let Some(caps) = re.captures(line) {
-                                        let time = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                                        let time = time.split(' ').nth(1).unwrap_or(time);
-                                        let msg = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-                                        let msg = strip_pty_controls(msg);
-                                        let msg = if is_tty {
-                                            msg
-                                        } else {
-                                            console::strip_ansi_codes(&msg).to_string()
-                                        };
-                                        let line_prefix = if show_ts { edim(time).to_string() } else { prefix.clone() };
-                                        job.println(&format!("{} {} {}", line_prefix, id_label, msg));
-                                    }
-                                }
-                                offset = new_offset;
-                            }
+                    if let Ok(entries) = LOG_STORE.tail(&id, Some(last_id)) {
+                        for entry in &entries {
+                            let time = entry.timestamp.format("%H:%M:%S").to_string();
+                            let msg = strip_pty_controls(&entry.message);
+                            let msg = if is_tty {
+                                msg
+                            } else {
+                                console::strip_ansi_codes(&msg).to_string()
+                            };
+                            let line_prefix = if show_ts {
+                                edim(time).to_string()
+                            } else {
+                                prefix.clone()
+                            };
+                            job.println(&format!("{} {} {}", line_prefix, id_label, msg));
+                        }
+                        if let Some(last) = entries.last() {
+                            last_id = last.id;
                         }
                     }
                 }
@@ -1634,28 +976,22 @@ pub fn stream_startup_logs(
             }
         }
 
-        // Final drain: pick up any lines written after the last timer tick
-        // but before the stop signal arrived. Since the caller awaits this
-        // task before touching the job state, this println() is safe.
-        if let Ok((new_lines, _new_offset)) = read_from_offset(&path, offset) {
-            for line in &new_lines {
-                if let Some(caps) = re.captures(line) {
-                    let time = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    let time = time.split(' ').nth(1).unwrap_or(time);
-                    let msg = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-                    let msg = strip_pty_controls(msg);
-                    let msg = if is_tty {
-                        msg
-                    } else {
-                        console::strip_ansi_codes(&msg).to_string()
-                    };
-                    let line_prefix = if show_ts {
-                        edim(time).to_string()
-                    } else {
-                        prefix.clone()
-                    };
-                    job.println(&format!("{} {} {}", line_prefix, id_label, msg));
-                }
+        // Final drain
+        if let Ok(entries) = LOG_STORE.tail(&id, Some(last_id)) {
+            for entry in &entries {
+                let time = entry.timestamp.format("%H:%M:%S").to_string();
+                let msg = strip_pty_controls(&entry.message);
+                let msg = if is_tty {
+                    msg
+                } else {
+                    console::strip_ansi_codes(&msg).to_string()
+                };
+                let line_prefix = if show_ts {
+                    edim(time).to_string()
+                } else {
+                    prefix.clone()
+                };
+                job.println(&format!("{} {} {}", line_prefix, id_label, msg));
             }
         }
     });

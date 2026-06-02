@@ -142,6 +142,14 @@ struct PitchforkTomlDaemonRaw {
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
+    /// Maximum age of log entries to keep (e.g. "7d", "30d").
+    /// Overrides the global `settings.logs.time_retention` when set.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub time_retention: Option<String>,
+    /// Maximum number of log entries to keep per daemon.
+    /// Overrides the global `settings.logs.line_retention` when set.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line_retention: Option<i64>,
 }
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files.
@@ -945,6 +953,8 @@ impl PitchforkToml {
                 cpu_limit: raw_daemon.cpu_limit,
                 stop_signal: raw_daemon.stop_signal,
                 pty: raw_daemon.pty,
+                time_retention: raw_daemon.time_retention,
+                line_retention: raw_daemon.line_retention,
                 path: Some(path.to_path_buf()),
             };
             pt.daemons.insert(id, daemon);
@@ -1095,6 +1105,8 @@ impl PitchforkToml {
                     cpu_limit: daemon.cpu_limit,
                     stop_signal: daemon.stop_signal,
                     pty: daemon.pty,
+                    time_retention: daemon.time_retention.clone(),
+                    line_retention: daemon.line_retention,
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
@@ -1337,6 +1349,12 @@ pub struct PitchforkTomlDaemon {
     pub stop_signal: Option<StopConfig>,
     /// Allocate a pseudo-terminal for the daemon process.
     pub pty: Option<bool>,
+    /// Maximum age of log entries to keep (e.g. "7d", "30d").
+    /// Overrides the global `settings.logs.time_retention` when set.
+    pub time_retention: Option<String>,
+    /// Maximum number of log entries to keep per daemon.
+    /// Overrides the global `settings.logs.line_retention` when set.
+    pub line_retention: Option<i64>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }

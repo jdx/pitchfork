@@ -144,6 +144,7 @@ cmd logs help="Displays logs for daemon(s)" {
     }
     flag --no-pager help="Disable pager even in interactive terminal"
     flag --raw help="Output raw log lines without color or formatting"
+    flag --migrate help="Migrate legacy text log files into the SQLite log store"
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
 cmd mcp help="Runs a Model Context Protocol (MCP) server over stdin/stdout" {

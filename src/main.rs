@@ -12,6 +12,7 @@ mod deps;
 mod env;
 mod error;
 mod ipc;
+mod log_store;
 mod logger;
 mod pitchfork_toml;
 mod procs;

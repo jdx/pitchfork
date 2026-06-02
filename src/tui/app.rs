@@ -3,6 +3,8 @@ use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::daemon_list::DaemonListEntry;
 use crate::ipc::client::IpcClient;
+use crate::log_store::LogStore;
+use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
     ReadyHttp, Retry, namespace_from_path,
@@ -13,7 +15,6 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use listeners::Listener;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1452,17 +1453,11 @@ impl App {
     }
 
     fn load_logs(&mut self, daemon_id: &DaemonId) {
-        let log_path = daemon_id.log_path();
         let prev_len = self.log_content.len();
 
-        self.log_content = if log_path.exists() {
-            fs::read_to_string(&log_path)
-                .unwrap_or_default()
-                .lines()
-                .map(String::from)
-                .collect()
-        } else {
-            vec!["No logs available".to_string()]
+        self.log_content = match LOG_STORE.tail(daemon_id, None) {
+            Ok(entries) if !entries.is_empty() => entries.into_iter().map(|e| e.message).collect(),
+            _ => vec!["No logs available".to_string()],
         };
 
         // Auto-scroll to bottom when in follow mode

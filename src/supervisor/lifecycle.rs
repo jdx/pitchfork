@@ -9,6 +9,8 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::error::PortError;
 use crate::ipc::IpcResponse;
+use crate::log_store::LogStore;
+use crate::log_store::sqlite::LOG_STORE;
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::shell::Shell;
@@ -24,7 +26,7 @@ use std::ffi::CString;
 use std::iter::once;
 use std::sync::atomic;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufWriter};
+use tokio::io::AsyncBufReadExt;
 use tokio::select;
 use tokio::sync::oneshot;
 use tokio::time;
@@ -269,10 +271,6 @@ impl Supervisor {
             once("exec".to_string()).chain(cmd).collect_vec()
         };
         let args = vec!["-c".to_string(), shell_words::join(&cmd)];
-        let log_path = id.log_path();
-        if let Some(parent) = log_path.parent() {
-            xx::file::mkdirp(parent)?;
-        }
         #[cfg(unix)]
         let run_identity = match resolve_effective_run_identity(opts.user.as_deref()) {
             Ok(identity) => identity,
@@ -554,30 +552,10 @@ impl Supervisor {
                 // Drop the last sender so the channel closes when all readers finish.
                 drop(output_tx);
             }
-            let log_file = match tokio::fs::File::options()
-                .append(true)
-                .create(true)
-                .open(&log_path)
-                .await
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Failed to open log file for daemon {id}: {e}");
-                    return;
-                }
-            };
-            let mut log_appender = BufWriter::new(log_file);
+            let log_store = &*LOG_STORE;
+            let format_line = |line: String| line;
 
-            let now = || chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-            let format_line = |line: String| {
-                let line_for_log = line;
-                if line_for_log.starts_with(&format!("{id} ")) {
-                    // mise tasks often already have the id printed
-                    format!("{} {line_for_log}\n", now())
-                } else {
-                    format!("{} {id} {line_for_log}\n", now())
-                }
-            };
+            // SQLite WAL mode provides automatic durability; no explicit flush needed.
 
             // Setup readiness checking
             let mut ready_notified = false;
@@ -619,7 +597,6 @@ impl Supervisor {
             let s = settings();
             let ready_check_interval = s.supervisor_ready_check_interval();
             let http_client_timeout = s.supervisor_http_client_timeout();
-            let log_flush_interval_duration = s.supervisor_log_flush_interval();
 
             // Setup HTTP readiness check interval
             let mut http_check_interval = ready_http
@@ -640,9 +617,6 @@ impl Supervisor {
             let mut cmd_check_interval = ready_cmd
                 .as_ref()
                 .map(|_| tokio::time::interval(ready_check_interval));
-
-            // Setup periodic log flush interval
-            let mut log_flush_interval = tokio::time::interval(log_flush_interval_duration);
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
@@ -718,7 +692,7 @@ impl Supervisor {
                 select! {
                     Some(line) = output_rx.recv() => {
                         let formatted = format_line(line.clone());
-                        if let Err(e) = log_appender.write_all(formatted.as_bytes()).await {
+                        if let Err(e) = log_store.append(&id, &formatted) {
                             error!("Failed to write to log for daemon {id}: {e}");
                         }
                         trace!("output: {id} {formatted}");
@@ -734,7 +708,6 @@ impl Supervisor {
                         {
                             info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
-                            let _ = log_appender.flush().await;
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
@@ -766,8 +739,6 @@ impl Supervisor {
                         // Process exited - save exit status and notify if not ready yet
                         exit_status = Some(result);
                         debug!("daemon {id} process exited, exit_status: {exit_status:?}");
-                        // Flush logs before notifying so clients see logs immediately
-                        let _ = log_appender.flush().await;
                         if !ready_notified {
                             if let Some(tx) = ready_tx.take() {
                                 // Check if process exited successfully
@@ -804,7 +775,6 @@ impl Supervisor {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
-                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -836,8 +806,6 @@ impl Supervisor {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
-                                    // Flush logs before notifying so clients see logs immediately
-                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -874,7 +842,6 @@ impl Supervisor {
                                 Ok(status) if status.success() => {
                                     info!("daemon {id} ready: readiness command succeeded");
                                     ready_notified = true;
-                                    let _ = log_appender.flush().await;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
@@ -905,8 +872,6 @@ impl Supervisor {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
-                            // Flush logs before notifying so clients see logs immediately
-                            let _ = log_appender.flush().await;
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
@@ -919,18 +884,7 @@ impl Supervisor {
                             detect_and_store_active_port(id.clone(), daemon_pid);
                         }
                     }
-                    _ = log_flush_interval.tick() => {
-                        // Periodic flush to ensure logs are written to disk
-                        if let Err(e) = log_appender.flush().await {
-                            error!("Failed to flush log for daemon {id}: {e}");
-                        }
-                    }
                 }
-            }
-
-            // Final flush to ensure all buffered logs are written
-            if let Err(e) = log_appender.flush().await {
-                error!("Failed to final flush log for daemon {id}: {e}");
             }
 
             // Clear active_port since the process is no longer running
