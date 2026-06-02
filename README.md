@@ -22,6 +22,10 @@
   <a href="https://pitchfork.en.dev/cli">CLI Reference</a>
 </p>
 
+<p align="center">
+  Sponsored by <a href="https://37signals.com">37signals</a>.
+</p>
+
 <hr />
 
 </div>

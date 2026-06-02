@@ -72,9 +72,12 @@ on_fail = "sh -c 'echo $PITCHFORK_EXIT_CODE > {}'"
     println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
     println!("start stderr: {}", String::from_utf8_lossy(&output.stderr));
 
-    // Poll for marker file (hook fires async)
+    // Poll for marker content (hook fires async, and shell redirection can
+    // create the file before echo writes its value).
+    let mut content = String::new();
     for _ in 0..30 {
-        if marker.exists() {
+        content = std::fs::read_to_string(&marker).unwrap_or_default();
+        if !content.trim().is_empty() {
             break;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -84,7 +87,6 @@ on_fail = "sh -c 'echo $PITCHFORK_EXIT_CODE > {}'"
         "on_fail hook should have created marker file"
     );
 
-    let content = std::fs::read_to_string(&marker).unwrap();
     assert_eq!(
         content.trim(),
         "42",

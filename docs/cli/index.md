@@ -32,6 +32,7 @@
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
 - [`pitchfork restart [FLAGS] [ID]…`](/cli/restart.md)
 - [`pitchfork run [FLAGS] <ID> [-- RUN]…`](/cli/run.md)
+- [`pitchfork sponsors`](/cli/sponsors.md)
 - [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)
 - [`pitchfork stop [FLAGS] [ID]…`](/cli/stop.md)
