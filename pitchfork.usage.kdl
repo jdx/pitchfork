@@ -97,6 +97,7 @@ cmd config help="manage/edit pitchfork.toml files" {
         flag --cron-retrigger help="Cron retrigger behavior: finish, always, success, fail" {
             arg <CRON_RETRIGGER>
         }
+        flag --cron-immediate help="Trigger cron immediately on first check (default: false)"
         arg <ID> help="ID of the daemon to add (e.g., \"api\" or \"namespace/api\")"
         arg "[ARGS]…" help="Arguments to pass to the daemon (alternative to --run)" required=#false double_dash=automatic var=#true
     }

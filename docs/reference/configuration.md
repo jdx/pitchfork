@@ -465,6 +465,7 @@ cron = { schedule = "0 0 2 * * *", retrigger = "always" }
 **Fields:**
 - `schedule` - Cron expression (6 fields: second, minute, hour, day, month, weekday)
 - `retrigger` - Behavior when schedule fires: `"finish"` (default), `"always"`, `"success"`, `"fail"`
+- `immediate` - Also fire if a scheduled time occurred within the 10 seconds before the daemon started. Default: `false`
 
 ### `mise`
 

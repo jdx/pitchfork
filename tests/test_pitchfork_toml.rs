@@ -154,6 +154,36 @@ retrigger = "always"
     let cron = daemon.cron.as_ref().unwrap();
     assert_eq!(cron.schedule, "0 0 * * *");
     assert_eq!(cron.retrigger, pitchfork_toml::CronRetrigger::Always);
+    assert!(!cron.immediate);
+
+    Ok(())
+}
+
+/// Test daemon with cron.immediate = true
+#[test]
+fn test_daemon_with_cron_immediate() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.cron_daemon]
+run = "echo 'cron job'"
+
+[daemons.cron_daemon.cron]
+schedule = "0 0 * * *"
+immediate = true
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "cron_daemon").unwrap();
+
+    assert!(daemon.cron.is_some());
+    let cron = daemon.cron.as_ref().unwrap();
+    assert_eq!(cron.schedule, "0 0 * * *");
+    assert_eq!(cron.retrigger, pitchfork_toml::CronRetrigger::Finish);
+    assert!(cron.immediate);
 
     Ok(())
 }

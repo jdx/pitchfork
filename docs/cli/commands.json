@@ -612,6 +612,18 @@
                   "double_dash": "Optional",
                   "hide": false
                 }
+              },
+              {
+                "name": "cron-immediate",
+                "usage": "--cron-immediate",
+                "help": "Trigger cron immediately on first check (default: false)",
+                "help_first_line": "Trigger cron immediately on first check (default: false)",
+                "short": [],
+                "long": [
+                  "cron-immediate"
+                ],
+                "hide": false,
+                "global": false
               }
             ],
             "mounts": [],
