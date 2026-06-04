@@ -40,6 +40,16 @@ Uses standard 6-field cron format:
 - `0 0 0 * * 0` - Weekly on Sunday at midnight
 - `0 30 9 * * 1-5` - Weekdays at 9:30 AM
 
+## First Trigger on Start
+
+By default, a cron daemon does **not** execute immediately when you run `pitchfork start`. It waits for the next scheduled time. If you want a scheduled time within the last 10 seconds before startup to also trigger the daemon, set `immediate = true`:
+
+```toml
+[daemons.backup]
+run = "./backup.sh"
+cron = { schedule = "0 0 2 * * *", immediate = true }
+```
+
 ## Retrigger Modes
 
 Control what happens when the schedule triggers while the previous run is still active:

@@ -25,7 +25,7 @@ jobs:
       tag: ${{ steps.release-plz.outputs.releases && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -63,11 +63,11 @@ jobs:
     env:
       TAG: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
+      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
       - run: communique generate "$TAG" --github-release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
@@ -120,7 +120,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - name: Install mise
-        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
       - name: Squash generated docs into release PR
         run: |
           PR_BRANCH=$(echo "${STEPS_RELEASE_PLZ_OUTPUTS_PR}" | jq -r '.head_branch // empty')

@@ -448,6 +448,11 @@ impl EditorState {
                 "Cron Retrigger",
                 "Behavior when cron triggers while previous run is active.",
             ),
+            FormField::optional_bool(
+                "cron_immediate",
+                "Cron Immediate",
+                "Trigger immediately on first check (default: false).",
+            ),
         ]
     }
 
@@ -504,6 +509,10 @@ impl EditorState {
                             .unwrap_or(CronRetrigger::Finish),
                     );
                 }
+                "cron_immediate" => {
+                    field.value =
+                        FormFieldValue::OptionalBoolean(config.cron.as_ref().map(|c| c.immediate));
+                }
                 _ => {}
             }
         }
@@ -520,6 +529,7 @@ impl EditorState {
 
         let mut cron_schedule: Option<String> = None;
         let mut cron_retrigger = CronRetrigger::Finish;
+        let mut cron_immediate = false;
 
         for field in &self.fields {
             match (field.name, &field.value) {
@@ -558,6 +568,9 @@ impl EditorState {
                 ("watch", FormFieldValue::StringList(v)) => config.watch = v.clone(),
                 ("cron_schedule", FormFieldValue::OptionalText(s)) => cron_schedule = s.clone(),
                 ("cron_retrigger", FormFieldValue::Retrigger(r)) => cron_retrigger = *r,
+                ("cron_immediate", FormFieldValue::OptionalBoolean(b)) => {
+                    cron_immediate = b.unwrap_or(false);
+                }
                 _ => {}
             }
         }
@@ -566,6 +579,7 @@ impl EditorState {
             config.cron = Some(PitchforkTomlCron {
                 schedule,
                 retrigger: cron_retrigger,
+                immediate: cron_immediate,
             });
         }
 

@@ -120,6 +120,9 @@ pub struct Add {
     /// Cron retrigger behavior: finish, always, success, fail
     #[clap(long)]
     cron_retrigger: Option<String>,
+    /// Trigger cron immediately on first check (default: false)
+    #[clap(long)]
+    cron_immediate: bool,
 }
 
 impl Add {
@@ -217,6 +220,7 @@ impl Add {
             Some(PitchforkTomlCron {
                 schedule: schedule.clone(),
                 retrigger,
+                immediate: self.cron_immediate,
             })
         } else {
             None

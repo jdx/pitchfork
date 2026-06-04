@@ -113,7 +113,9 @@ export default defineConfig({
       {
         text: "Resources",
         collapsed: true,
-        items: [{ text: "Troubleshooting", link: "/troubleshooting" }],
+        items: [
+          { text: "Troubleshooting", link: "/troubleshooting" },
+        ],
       },
     ],
 
@@ -125,10 +127,7 @@ export default defineConfig({
 
     logo: "/img/android-chrome-192x192.png",
 
-    footer: {
-      message: "Released under the MIT License.",
-      copyright: "Forged in the fires below",
-    },
+    footer: false,
 
     editLink: {
       pattern: "https://github.com/jdx/pitchfork/edit/main/docs/:path",

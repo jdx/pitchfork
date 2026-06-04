@@ -612,6 +612,18 @@
                   "double_dash": "Optional",
                   "hide": false
                 }
+              },
+              {
+                "name": "cron-immediate",
+                "usage": "--cron-immediate",
+                "help": "Trigger cron immediately on first check (default: false)",
+                "help_first_line": "Trigger cron immediately on first check (default: false)",
+                "short": [],
+                "long": [
+                  "cron-immediate"
+                ],
+                "hide": false,
+                "global": false
               }
             ],
             "mounts": [],
@@ -1602,6 +1614,22 @@
         "hide": true,
         "help": "Generate JSON Schema for pitchfork.toml configuration",
         "name": "schema",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "sponsors": {
+        "full_cmd": [
+          "sponsors"
+        ],
+        "usage": "sponsors",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "Show the companies sponsoring pitchfork and the en.dev project family",
+        "name": "sponsors",
         "aliases": [],
         "hidden_aliases": [],
         "examples": []

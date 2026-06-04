@@ -363,10 +363,30 @@ impl Supervisor {
                 };
 
                 // Check if we should trigger: look for a scheduled time that has passed
-                // since our last trigger (or last 10 seconds if never triggered)
-                let check_since = daemon
-                    .last_cron_triggered
-                    .unwrap_or_else(|| now - chrono::Duration::seconds(10));
+                // since our last trigger.
+                let check_since = match daemon.last_cron_triggered {
+                    Some(t) => t,
+                    None => {
+                        if daemon.cron_immediate.unwrap_or(false) {
+                            // immediate=true: restore the old look-back behavior.
+                            // A scheduled time within the last 10 seconds before startup
+                            // will trigger immediately.
+                            now - chrono::Duration::seconds(10)
+                        } else {
+                            // immediate=false (default): anchor last_cron_triggered to now
+                            // so the next scheduled time is picked up, without firing now.
+                            let mut state_file = self.state_file.lock().await;
+                            if state_file.set_last_cron_triggered(&id, now) {
+                                if let Err(e) = state_file.write() {
+                                    error!(
+                                        "failed to persist last_cron_triggered for daemon {id}: {e}"
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                };
 
                 // Find if there's a scheduled time between check_since and now
                 let should_trigger = schedule

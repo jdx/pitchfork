@@ -628,6 +628,9 @@ pub struct PitchforkTomlCron {
     pub schedule: String,
     /// Behavior when cron triggers while previous run is still active
     pub retrigger: CronRetrigger,
+    /// Whether to trigger immediately on first check when no prior trigger is recorded.
+    /// When false (default), the first trigger is deferred until the next scheduled time.
+    pub immediate: bool,
 }
 
 impl JsonSchema for PitchforkTomlCron {
@@ -637,14 +640,15 @@ impl JsonSchema for PitchforkTomlCron {
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "Cron scheduling: a cron expression string, or { schedule, retrigger } object",
+            "description": "Cron scheduling: a cron expression string, or { schedule, retrigger, immediate } object",
             "oneOf": [
                 { "type": "string", "description": "Cron expression (e.g. '0 * * * *')" },
                 {
                     "type": "object",
                     "properties": {
                         "schedule": { "type": "string", "description": "Cron expression" },
-                        "retrigger": generator.subschema_for::<CronRetrigger>()
+                        "retrigger": generator.subschema_for::<CronRetrigger>(),
+                        "immediate": { "type": "boolean", "description": "Trigger immediately on first check (default: false)" }
                     },
                     "required": ["schedule"]
                 }
@@ -659,6 +663,8 @@ pub struct PitchforkTomlCronRaw {
     schedule: String,
     #[serde(default)]
     retrigger: CronRetrigger,
+    #[serde(default)]
+    immediate: bool,
 }
 
 impl StringOrStruct for PitchforkTomlCron {
@@ -669,6 +675,7 @@ impl StringOrStruct for PitchforkTomlCron {
         Self {
             schedule,
             retrigger: CronRetrigger::default(),
+            immediate: false,
         }
     }
 
@@ -676,11 +683,12 @@ impl StringOrStruct for PitchforkTomlCron {
         Ok(Self {
             schedule: raw.schedule,
             retrigger: raw.retrigger,
+            immediate: raw.immediate,
         })
     }
 
     fn is_shorthand(&self) -> bool {
-        self.retrigger == CronRetrigger::default()
+        self.retrigger == CronRetrigger::default() && !self.immediate
     }
 
     fn to_short(&self) -> String {
@@ -691,6 +699,7 @@ impl StringOrStruct for PitchforkTomlCron {
         PitchforkTomlCronRaw {
             schedule: self.schedule.clone(),
             retrigger: self.retrigger,
+            immediate: self.immediate,
         }
     }
 }

@@ -1378,6 +1378,7 @@ impl PitchforkTomlDaemon {
             autostop: self.auto.contains(&PitchforkTomlAuto::Stop),
             cron_schedule: self.cron.as_ref().map(|c| c.schedule.clone()),
             cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
+            cron_immediate: self.cron.as_ref().map(|c| c.immediate),
             retry: self.retry,
             retry_count: 0,
             ready_delay: self.ready_delay,

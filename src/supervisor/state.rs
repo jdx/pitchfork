@@ -35,6 +35,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub autostop: bool,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
+    pub cron_immediate: Option<bool>,
     pub last_exit_success: Option<bool>,
     pub retry: Option<Retry>,
     pub retry_count: Option<u32>,
@@ -138,6 +139,9 @@ impl Supervisor {
             cron_retrigger: opts
                 .cron_retrigger
                 .or(existing.and_then(|d| d.cron_retrigger)),
+            cron_immediate: opts
+                .cron_immediate
+                .or(existing.and_then(|d| d.cron_immediate)),
             last_cron_triggered: existing.and_then(|d| d.last_cron_triggered),
             last_exit_success: opts
                 .last_exit_success
