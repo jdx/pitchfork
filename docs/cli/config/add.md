@@ -129,3 +129,7 @@ Cron schedule expression (6 fields: second minute hour day month weekday)
 ### `--cron-retrigger <CRON_RETRIGGER>`
 
 Cron retrigger behavior: finish, always, success, fail
+
+### `--cron-immediate`
+
+Trigger cron immediately on first check (default: false)

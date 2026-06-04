@@ -120,7 +120,7 @@
       ]
     },
     "PitchforkTomlCron": {
-      "description": "Cron scheduling: a cron expression string, or { schedule, retrigger } object",
+      "description": "Cron scheduling: a cron expression string, or { schedule, retrigger, immediate } object",
       "oneOf": [
         {
           "description": "Cron expression (e.g. '0 * * * *')",
@@ -129,6 +129,10 @@
         {
           "type": "object",
           "properties": {
+            "immediate": {
+              "description": "Trigger immediately on first check (default: false)",
+              "type": "boolean"
+            },
             "retrigger": {
               "$ref": "#/$defs/CronRetrigger"
             },

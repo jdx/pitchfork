@@ -425,6 +425,7 @@ impl Supervisor {
                         o.autostop = opts.autostop;
                         o.cron_schedule = opts.cron_schedule.clone();
                         o.cron_retrigger = opts.cron_retrigger;
+                        o.cron_immediate = opts.cron_immediate;
                         o.retry = Some(opts.retry);
                         o.retry_count = Some(opts.retry_count);
                         o.ready_delay = opts.ready_delay;
