@@ -13,7 +13,7 @@ fn test_log_preserves_ansi_by_default() {
     let toml_content = format!(
         r#"
 [daemons.ansi_test]
-run = "bun run {} 32 green && sleep 60"
+run = "sh -c 'bun run {} 32 green && sleep 60'"
 "#,
         script.display()
     );
@@ -51,7 +51,7 @@ fn test_pty_true_creates_terminal() {
     env.create_toml(
         r#"
 [daemons.with_pty]
-run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi' && sleep 60"
+run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 60'"
 pty = true
 "#,
     );
@@ -84,7 +84,7 @@ fn test_pty_false_no_terminal() {
     env.create_toml(
         r#"
 [daemons.no_pty]
-run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi' && sleep 60"
+run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 60'"
 "#,
     );
 
@@ -117,7 +117,7 @@ fn test_pty_preserves_ansi() {
     let toml_content = format!(
         r#"
 [daemons.pty_ansi]
-run = "bun run {} 31 red && sleep 60"
+run = "sh -c 'bun run {} 31 red && sleep 60'"
 pty = true
 "#,
         script.display()
