@@ -42,8 +42,8 @@ ready_delay = 1
     assert!(list_stdout.contains("api"), "api daemon should be running");
 
     // Verify logs show both started
-    let db_logs = env.read_logs("db");
-    let api_logs = env.read_logs("api");
+    let db_logs = env.wait_for_logs("db", "db ready", Duration::from_secs(5));
+    let api_logs = env.wait_for_logs("api", "api ready", Duration::from_secs(5));
     assert!(
         db_logs.contains("db ready"),
         "db logs should contain ready message"
@@ -326,7 +326,7 @@ ready_delay = 1
     env.sleep(Duration::from_millis(500));
 
     // Check db logs - should still only have same count (not restarted)
-    let db_logs_after = env.read_logs("db");
+    let db_logs_after = env.wait_for_logs("db", "db_started", Duration::from_secs(5));
     println!("db logs after: {db_logs_after}");
 
     let db_started_count_after = db_logs_after.matches("db_started").count();
@@ -336,7 +336,7 @@ ready_delay = 1
     );
 
     // api should have been restarted (two "api_started" lines)
-    let api_logs = env.read_logs("api");
+    let api_logs = env.wait_for_logs("api", "api_started", Duration::from_secs(5));
     println!("api logs: {api_logs}");
     let api_started_count = api_logs.matches("api_started").count();
     assert_eq!(api_started_count, 2, "api should have been restarted");
