@@ -36,7 +36,7 @@ run = "bun run {} 0"
     );
 
     // Optional: verify logs
-    let logs = env.read_logs("instant_fail");
+    let logs = env.wait_for_logs("instant_fail", "Failed after 0!", Duration::from_secs(5));
     assert!(
         logs.contains("Failed after 0!"),
         "Logs should contain 'Failed after 0!'"
@@ -82,7 +82,7 @@ retry = 0
     );
 
     // Optional: verify logs
-    let logs = env.read_logs("two_sec_fail");
+    let logs = env.wait_for_logs("two_sec_fail", "Failed after 2!", Duration::from_secs(5));
     assert!(
         logs.contains("Failed after 2!"),
         "Logs should contain failure message"
@@ -382,7 +382,7 @@ retry = 0
     );
 
     // Optional: verify only one attempt
-    let logs = env.read_logs("retry_zero");
+    let logs = env.wait_for_logs("retry_zero", "Failed after 0!", Duration::from_secs(5));
     let attempt_count = logs.matches("Failed after 0!").count();
     assert_eq!(attempt_count, 1, "Should only attempt once with retry=0");
 
@@ -428,7 +428,7 @@ retry = 3  # exponential backoff: 1s, 2s, 4s between retries
     );
 
     // Optional: verify multiple attempts were made
-    let logs = env.read_logs("retry_three");
+    let logs = env.wait_for_logs("retry_three", "Failed after 0!", Duration::from_secs(10));
     println!("Logs:\n{logs}");
 
     let attempt_count = logs.matches("Failed after 0!").count();
@@ -484,7 +484,7 @@ retry = 2  # totally 3 attempts
     );
 
     // Optional: verify it did retry and eventually succeed
-    let logs = env.read_logs("retry_success");
+    let logs = env.wait_for_logs("retry_success", "Success!", Duration::from_secs(10));
     println!("Logs:\n{logs}");
 
     let attempt_count = logs.matches("Attempt").count();
@@ -558,7 +558,7 @@ ready_output = "READY"
     );
     assert!(output.status.success(), "Start command should succeed");
 
-    let logs = env.read_logs("ready_pattern");
+    let logs = env.wait_for_logs("ready_pattern", "READY", Duration::from_secs(5));
     assert!(logs.contains("READY"), "Logs should contain READY message");
 
     let _ = env.run_command(&["stop", "ready_pattern"]);
@@ -591,7 +591,7 @@ ready_output = "Listening on http://.*:(\\d+)"
     );
     assert!(output.status.success(), "Start command should succeed");
 
-    let logs = env.read_logs("ready_regex");
+    let logs = env.wait_for_logs("ready_regex", "Listening on", Duration::from_secs(5));
     assert!(
         logs.contains("Listening on"),
         "Logs should contain the ready message"
@@ -633,7 +633,7 @@ ready_output = "NEVER_APPEARS"
     );
 
     // Check logs to verify daemon did run
-    let logs = env.read_logs("ready_no_match");
+    let logs = env.wait_for_logs("ready_no_match", "Output 3/3", Duration::from_secs(5));
     println!("Logs:\n{logs}");
     assert!(
         logs.contains("Output 3/3"),
@@ -748,7 +748,7 @@ ready_delay = 1
     );
 
     // Optional: verify multiple attempts
-    let logs = env.read_logs("retry_ready");
+    let logs = env.wait_for_logs("retry_ready", "Failed after 0!", Duration::from_secs(5));
     println!("Logs:\n{logs}");
 
     let attempt_count = logs.matches("Failed after 0!").count();
@@ -807,11 +807,7 @@ ready_http = "http://localhost:18081/health"
         "Should not take too long to detect ready state"
     );
 
-    // Small delay to let stdout flush to logs
-    env.sleep(Duration::from_millis(500));
-
-    // Verify logs show the server started
-    let logs = env.read_logs("http_test");
+    let logs = env.wait_for_logs("http_test", "Server listening", Duration::from_secs(5));
     println!("Logs: {logs}");
     assert!(
         logs.contains("Server listening"),
@@ -905,11 +901,7 @@ ready_port = 18082
         "Should not take too long to detect ready state"
     );
 
-    // Small delay to let stdout flush to logs
-    env.sleep(Duration::from_millis(500));
-
-    // Verify logs show the server started
-    let logs = env.read_logs("port_test");
+    let logs = env.wait_for_logs("port_test", "Server listening", Duration::from_secs(5));
     println!("Logs: {logs}");
     assert!(
         logs.contains("Server listening"),
@@ -965,11 +957,7 @@ ready_cmd = "test -f {marker_path}"
     // Verify the marker file exists
     assert!(marker_file.exists(), "Marker file should have been created");
 
-    // Small delay to let stdout flush to logs
-    env.sleep(Duration::from_millis(500));
-
-    // Verify logs show the daemon started and became ready
-    let logs = env.read_logs("cmd_test");
+    let logs = env.wait_for_logs("cmd_test", "Ready", Duration::from_secs(5));
     println!("Logs: {logs}");
     assert!(
         logs.contains("Starting"),

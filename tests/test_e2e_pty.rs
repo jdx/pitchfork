@@ -27,9 +27,7 @@ run = "bun run {} 32 green && sleep 60"
         "start should succeed. stdout: {stdout}, stderr: {stderr}"
     );
 
-    env.sleep(Duration::from_millis(500));
-
-    let logs = env.read_logs("ansi_test");
+    let logs = env.wait_for_logs("ansi_test", "\x1b[32m", Duration::from_secs(5));
     assert!(
         logs.contains("\x1b[32m"),
         "Log file should contain ANSI escape code \\x1b[32m (ANSI preserved by default). Got: {logs:?}"
@@ -64,9 +62,7 @@ pty = true
         "start should succeed. stdout: {stdout}, stderr: {stderr}"
     );
 
-    env.sleep(Duration::from_millis(500));
-
-    let logs = env.read_logs("with_pty");
+    let logs = env.wait_for_logs("with_pty", "HAS_TTY", Duration::from_secs(5));
     assert!(
         logs.contains("HAS_TTY"),
         "With pty = true, daemon should detect a TTY. Got: {logs:?}"
@@ -96,9 +92,7 @@ run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi' 
         "start should succeed. stdout: {stdout}, stderr: {stderr}"
     );
 
-    env.sleep(Duration::from_millis(500));
-
-    let logs = env.read_logs("no_pty");
+    let logs = env.wait_for_logs("no_pty", "NO_TTY", Duration::from_secs(5));
     assert!(
         logs.contains("NO_TTY"),
         "Without pty (default), daemon should NOT detect a TTY. Got: {logs:?}"
@@ -132,9 +126,7 @@ pty = true
         "start should succeed. stdout: {stdout}, stderr: {stderr}"
     );
 
-    env.sleep(Duration::from_millis(500));
-
-    let logs = env.read_logs("pty_ansi");
+    let logs = env.wait_for_logs("pty_ansi", "\x1b[31m", Duration::from_secs(5));
     assert!(
         logs.contains("\x1b[31m"),
         "Log should contain ANSI escape code \\x1b[31m (ANSI preserved in PTY mode). Got: {logs:?}"
