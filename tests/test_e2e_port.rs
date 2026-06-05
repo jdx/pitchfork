@@ -137,7 +137,7 @@ fn test_port_env_injection() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let port: u16 = 45680;
+    let port: u16 = 45800;
     let marker_path = env.marker_path("port_test");
 
     // Create the project directory first
@@ -260,7 +260,7 @@ fn test_ready_port_sync() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let port: u16 = 45682;
+    let port: u16 = 45701;
 
     // Create a daemon without explicit ready_port
     // The resolved port should be used as ready_port
@@ -307,7 +307,7 @@ fn test_port_bump_attempts_env_var() {
     env.ensure_binary_exists().unwrap();
 
     // Bind to a series of ports to force multiple bump attempts
-    let base_port: u16 = 45683;
+    let base_port: u16 = 45710;
     let listeners: Vec<TcpListener> = (0..3)
         .map(|i| {
             TcpListener::bind(("0.0.0.0", base_port + i as u16))
