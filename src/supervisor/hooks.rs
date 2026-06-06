@@ -165,9 +165,15 @@ impl GateContext {
         };
 
         // Effective timeout: per-gate timeout > global default > none
-        let timeout = config
-            .timeout_duration()
-            .or_else(|| Some(settings().supervisor_gate_timeout()));
+        // Duration::ZERO means "disable timeout" (wait indefinitely).
+        let global_timeout = settings().supervisor_gate_timeout();
+        let timeout = config.timeout_duration().or_else(|| {
+            if global_timeout.is_zero() {
+                None
+            } else {
+                Some(global_timeout)
+            }
+        });
 
         if let Some(timeout) = timeout {
             match tokio::time::timeout(timeout, child.wait()).await {

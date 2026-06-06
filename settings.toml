@@ -540,7 +540,8 @@ pre_start = { run = "check-db.sh", timeout = "10s" }
 ```
 
 Set to `"0s"` to disable the global timeout (gates wait indefinitely unless
-they have their own timeout).
+they have their own timeout). Note: per-gate `timeout` takes precedence;
+if neither per-gate nor global timeout is set, gates wait indefinitely.
 """
 
 [supervisor.cpu_violation_threshold]

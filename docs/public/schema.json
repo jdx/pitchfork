@@ -82,7 +82,7 @@
           "type": "string"
         },
         "timeout": {
-          "description": "Timeout for the gate command (humantime, e.g. `\"30s\"`).\nDefaults to no timeout (wait indefinitely).",
+          "description": "Timeout for the gate command (humantime, e.g. `\"30s\"`).\nDefaults to `settings.supervisor.gate_timeout` (30s by default) when not set.",
           "type": [
             "string",
             "null"
