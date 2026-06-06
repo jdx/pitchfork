@@ -1560,9 +1560,19 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
 
             let active_port = tokio::task::spawn_blocking(move || {
                 let listeners = listeners::get_all().ok()?;
+
+                // Refresh process tree so all_children sees current descendants.
+                PROCS.refresh_processes();
+
+                let descendant_pids: std::collections::HashSet<u32> = PROCS
+                    .all_children(pid)
+                    .into_iter()
+                    .chain(std::iter::once(pid))
+                    .collect();
+
                 let process_ports: Vec<u16> = listeners
                     .into_iter()
-                    .filter(|listener| listener.process.pid == pid)
+                    .filter(|listener| descendant_pids.contains(&listener.process.pid))
                     .map(|listener| listener.socket.port())
                     .filter(|&port| port > 0)
                     .collect();
@@ -1611,10 +1621,14 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
                 return;
             }
 
-            debug!("daemon {id}: no active port detected for pid {pid} (will retry)");
+            debug!(
+                "daemon {id}: no active port detected for pid {pid} or its descendants (will retry)"
+            );
         }
 
-        debug!("daemon {id}: active port detection exhausted all retries for pid {pid}");
+        debug!(
+            "daemon {id}: active port detection exhausted all retries for pid {pid} and its descendants"
+        );
     });
 }
 

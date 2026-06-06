@@ -7,6 +7,7 @@ cmd activate help="Activate pitchfork in your shell session" {
     long_help "Activate pitchfork in your shell session\n\nGenerates shell code that enables automatic daemon management when changing\ndirectories. Required for auto-start/stop features in pitchfork.toml.\n\nSupported shells: bash, zsh, fish\n\nAdd to your shell config:\n  bash (~/.bashrc):\n    eval \"$(pitchfork activate bash)\"\n\n  zsh (~/.zshrc):\n    eval \"$(pitchfork activate zsh)\"\n\n  fish (~/.config/fish/config.fish):\n    pitchfork activate fish | source"
     arg <SHELL> help="Shell to activate (bash, zsh, fish)"
 }
+cmd api-schema hide=#true help="Generate JSON documentation for the web API endpoints"
 cmd boot subcommand_required=#true help="Enable or disable boot start" {
     long_help "Enable or disable boot start\n\nManages whether pitchfork supervisor starts automatically when the system\nboots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).\n\nWhen run as root (or via sudo), registers a system-level entry that starts\npitchfork for all users:\n  macOS: /Library/LaunchDaemons/pitchfork.plist\n  Linux: /etc/systemd/system/pitchfork.service\n\nWhen run as a normal user, registers a user-level entry:\n  macOS: ~/Library/LaunchAgents/pitchfork.plist\n  Linux: ~/.config/systemd/user/pitchfork.service\n\nTo run the supervisor as root but keep state files and IPC sockets in a\nspecific user's home directory, set `settings.supervisor.user` in the global\npitchfork configuration (~/.config/pitchfork/config.toml or\n/etc/pitchfork/config.toml).\n\nSubcommands:\n  enable    Register pitchfork to start on boot\n  disable   Remove pitchfork from boot startup\n  status    Check if boot start is currently enabled\n\nExamples:\n  pitchfork boot enable           Start pitchfork on system boot (user-level)\n  sudo pitchfork boot enable      Start pitchfork on system boot (system-level)\n  pitchfork boot disable          Don't start pitchfork on boot\n  pitchfork boot status           Check boot start status"
     cmd enable help="Enable boot start for pitchfork supervisor" {
@@ -174,6 +175,9 @@ cmd proxy subcommand_required=#true help="Manage the pitchfork reverse proxy" {
         }
         flag --daemon help="Daemon name within the project (defaults to slug name)" {
             arg <DAEMON>
+        }
+        flag --namespace help="Namespace to associate with the slug. If not provided, derived from the project directory" {
+            arg <NAMESPACE>
         }
         arg <SLUG> help="The slug name (used in proxy URLs, e.g. api → api.localhost)"
     }

@@ -74,6 +74,7 @@ pub async fn stats_partial() -> Html<String> {
     ))
 }
 
+#[allow(dead_code)]
 pub async fn index() -> Html<String> {
     let bp = bp();
 

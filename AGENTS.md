@@ -5,11 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 ```bash
-# Build
-cargo build
+# Build and restart supervisor
+# (do not manually run cargo build, as it does not contain all necessary steps)
+mise run build-dev
 
-# Run tests (uses nextest for faster parallel execution)
-cargo nextest run
+# MUST run this before committing
+mise run ci-dev
+
+# Run tests. It's already included in `ci-dev`
+mise run test
 
 # Run a single test
 cargo nextest run test_name
@@ -22,13 +26,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all
 cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features -- -D warnings
 
-# Full CI pipeline (lint + build + test)
-mise run ci
-
 # Install dev build and start supervisor with debug logging
 mise run install-dev
 
-# Render CLI docs (requires mise and usage tool)
+# Render CLI docs. It's already included in `ci-dev`
 mise run render
 ```
 
@@ -84,7 +85,7 @@ Configs merge in order (later overrides earlier):
 
 **Update rules:**
 - Changing user settings (`src/settings.rs`) → update `settings.toml` (sole source of truth for codegen)
-- Changing CLI flags/args/help text (clap) or config struct (schemars) → run `mise run render` to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
+- Changing CLI flags/args/help text (clap) or config struct (schemars) → run `mise run render` (running `mise run ci-dev` includes itself, recommended) to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
 
 **These files are generated and should not be manually edited:**
 - `docs/cli/*.md`

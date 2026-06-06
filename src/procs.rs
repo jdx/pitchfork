@@ -7,6 +7,12 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
 
+/// Map from parent PID to its child PIDs.
+type ParentToChildren = HashMap<u32, Vec<u32>>;
+
+/// Map from PID to process name and optional executable path.
+type ProcessNames = HashMap<u32, (String, Option<String>)>;
+
 pub struct Procs {
     system: Mutex<sysinfo::System>,
 }
@@ -22,7 +28,7 @@ impl Default for Procs {
 impl Procs {
     pub fn new() -> Self {
         let procs = Self {
-            system: Mutex::new(sysinfo::System::new()),
+            system: Mutex::new(sysinfo::System::new_all()),
         };
         procs.refresh_processes();
         procs
@@ -69,7 +75,36 @@ impl Procs {
         }
         children
     }
+    /// Collect minimal process tree information in a single lock.
+    ///
+    /// Returns a map of parent PID → child PIDs and a map of PID → (name, exe).
+    /// This avoids repeated mutex locking when traversing deep trees.
+    pub fn collect_process_tree_info(&self) -> (ParentToChildren, ProcessNames) {
+        let system = self.lock_system();
+        let all = system.processes();
+        let mut parent_to_children: ParentToChildren = HashMap::new();
+        let mut process_info: ProcessNames = HashMap::new();
 
+        for (pid, proc) in all {
+            let pid_u32 = pid.as_u32();
+            process_info.insert(
+                pid_u32,
+                (
+                    proc.name().to_string_lossy().to_string(),
+                    proc.exe().map(|e| e.to_string_lossy().to_string()),
+                ),
+            );
+
+            if let Some(ppid) = proc.parent() {
+                parent_to_children
+                    .entry(ppid.as_u32())
+                    .or_default()
+                    .push(pid_u32);
+            }
+        }
+
+        (parent_to_children, process_info)
+    }
     pub async fn kill_process_group_async(
         &self,
         pid: u32,
@@ -358,6 +393,11 @@ impl Procs {
         let mut children_map: std::collections::HashMap<sysinfo::Pid, Vec<sysinfo::Pid>> =
             std::collections::HashMap::new();
         for (child_pid, child) in processes {
+            // Skip Linux userland threads: they report the same memory as their parent process,
+            // so including them would cause massive double-counting.
+            if child.thread_kind().is_some() {
+                continue;
+            }
             if let Some(ppid) = child.parent() {
                 children_map.entry(ppid).or_default().push(*child_pid);
             }
@@ -399,6 +439,19 @@ impl Procs {
 
                 (pid, Some(stats))
             })
+            .collect()
+    }
+    /// Refresh the process tree, then call [`Self::get_batch_group_stats`].
+    ///
+    /// Convenience wrapper that guarantees `get_batch_group_stats` sees a
+    /// fresh snapshot of /proc (or its equivalent).  Returns a PID →
+    /// [`ProcessStats`] map so callers do not have to repeat the same
+    /// `filter_map`/`collect` boilerplate.
+    pub fn refresh_and_get_batch_stats(&self, pids: &[u32]) -> HashMap<u32, ProcessStats> {
+        self.refresh_processes();
+        self.get_batch_group_stats(pids)
+            .into_iter()
+            .filter_map(|(pid, stats)| stats.map(|s| (pid, s)))
             .collect()
     }
 
