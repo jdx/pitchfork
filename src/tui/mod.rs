@@ -7,7 +7,6 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_list::DaemonListEntry;
 use crate::ipc::batch::{StartOptions, StartResult, StopResult};
 use crate::ipc::client::IpcClient;
-use crate::log_store::sqlite::has_legacy_logs;
 use crate::settings::settings;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -112,13 +111,6 @@ async fn run_with_cleanup(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>)
     // Create app state
     let mut app = App::new();
     app.refresh(&client).await?;
-
-    // Warn if legacy text logs exist (not yet migrated to SQLite)
-    if has_legacy_logs() {
-        app.set_message(
-            "Legacy text logs detected. Run `pitchfork logs --migrate` to import them.",
-        );
-    }
 
     // Run main loop
     run_app(terminal, &mut app, &client).await
