@@ -54,9 +54,18 @@ pub trait LogStore: Send + Sync {
     /// Clear all logs for the given daemon(s).
     fn clear(&self, daemon_ids: &[DaemonId]) -> Result<()>;
 
-    /// Apply a retention policy (age-based and/or count-based pruning) globally.
-    fn apply_retention(&self, policy: &RetentionPolicy) -> Result<u64> {
-        let _ = policy;
+    /// Apply a retention policy (age-based and/or count-based pruning).
+    ///
+    /// By default this applies to all daemons; `excluded_daemon_ids` can be
+    /// used to skip daemons that have their own per-daemon overrides, so the
+    /// global policy does not accidentally prune entries those daemons intend
+    /// to keep.
+    fn apply_retention(
+        &self,
+        policy: &RetentionPolicy,
+        excluded_daemon_ids: &[DaemonId],
+    ) -> Result<u64> {
+        let _ = (policy, excluded_daemon_ids);
         Ok(0)
     }
 

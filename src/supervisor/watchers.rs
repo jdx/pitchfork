@@ -326,9 +326,6 @@ impl Supervisor {
             count: global_count,
         };
 
-        // Apply global policy to all daemons that do not have per-daemon overrides.
-        let mut total_removed = LOG_STORE.apply_retention(&global_policy)?;
-
         // Collect per-daemon overrides from merged config.
         let per_daemon_policies: Vec<(DaemonId, RetentionPolicy)> = {
             let config = PitchforkToml::all_merged()?;
@@ -366,10 +363,15 @@ impl Supervisor {
                 .collect()
         };
 
+        // Apply global policy to all daemons *except* those that have their
+        // own per-daemon overrides, so overrides are not silently overwritten.
+        let excluded: Vec<DaemonId> = per_daemon_policies
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut total_removed = LOG_STORE.apply_retention(&global_policy, &excluded)?;
+
         // For daemons with per-daemon overrides, apply their specific policy.
-        // This may prune some entries that the global pass already handled,
-        // but it ensures daemons with overrides get the stricter/more-specific
-        // policy applied correctly.
         for (id, policy) in per_daemon_policies {
             total_removed += LOG_STORE.apply_retention_for_daemon(&id, &policy)?;
         }

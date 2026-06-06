@@ -5,6 +5,7 @@ use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, params};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -39,6 +40,11 @@ impl SqliteLogStore {
         .into_diagnostic()?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_daemon_ts ON log_entries(daemon_id, timestamp);",
+            [],
+        )
+        .into_diagnostic()?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daemon_id ON log_entries(daemon_id, id);",
             [],
         )
         .into_diagnostic()?;
@@ -82,7 +88,7 @@ impl SqliteLogStore {
             let rows = tx
                 .execute(
                     "DELETE FROM log_entries WHERE id IN (
-                        SELECT id FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC LIMIT ?2
+                        SELECT id FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC, id ASC LIMIT ?2
                     )",
                     params![daemon_id.qualified(), to_delete],
                 )
@@ -149,7 +155,12 @@ impl SqliteLogStore {
         }
 
         if total_migrated > 0 {
-            let _ = std::fs::remove_file(&text_path);
+            if let Err(e) = std::fs::remove_file(&text_path) {
+                log::warn!(
+                    "failed to remove legacy log file after migration {}: {e}",
+                    text_path.display()
+                );
+            }
         }
 
         Ok(total_migrated)
@@ -250,8 +261,8 @@ impl LogStore for SqliteLogStore {
             .unwrap_or_default();
 
         let sql = format!(
-            "SELECT id, daemon_id, timestamp, message FROM log_entries {} ORDER BY timestamp, id {} {}",
-            where_clause, order, limit_clause
+            "SELECT id, daemon_id, timestamp, message FROM log_entries {} ORDER BY timestamp {}, id {} {}",
+            where_clause, order, order, limit_clause
         );
 
         let mut stmt = conn.prepare(&sql).into_diagnostic()?;
@@ -324,10 +335,18 @@ impl LogStore for SqliteLogStore {
         Ok(ids)
     }
 
-    fn apply_retention(&self, policy: &super::RetentionPolicy) -> Result<u64> {
+    fn apply_retention(
+        &self,
+        policy: &super::RetentionPolicy,
+        excluded_daemon_ids: &[DaemonId],
+    ) -> Result<u64> {
         let daemon_ids = self.list_daemon_ids()?;
+        let excluded: HashSet<String> = excluded_daemon_ids.iter().map(|d| d.qualified()).collect();
         let mut total = 0u64;
         for id_str in daemon_ids {
+            if excluded.contains(&id_str) {
+                continue;
+            }
             let id = DaemonId::parse(&id_str).unwrap_or_else(|_| {
                 DaemonId::try_new("global", &id_str).unwrap_or_else(|_| DaemonId::pitchfork())
             });

@@ -231,8 +231,7 @@
             "integer",
             "null"
           ],
-          "format": "uint64",
-          "minimum": 0
+          "format": "int64"
         },
         "memory_limit": {
           "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nThe supervisor periodically monitors RSS and kills the process if it exceeds the limit.",
