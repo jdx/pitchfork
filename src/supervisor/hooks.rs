@@ -242,6 +242,37 @@ fn get_gate_config(
 }
 
 // ---------------------------------------------------------------------------
+// run_post_stop_gate — convenience wrapper for the PostStop gate
+// ---------------------------------------------------------------------------
+
+/// Run the `post_stop` gate for a daemon with the given exit information.
+///
+/// `exit_code` and `exit_reason` are exposed to the gate command via
+/// `PITCHFORK_EXIT_CODE` and `PITCHFORK_EXIT_REASON` environment variables.
+pub(crate) async fn run_post_stop_gate(
+    daemon_id: DaemonId,
+    daemon_dir: PathBuf,
+    retry_count: u32,
+    daemon_env: Option<IndexMap<String, String>>,
+    exit_code: i32,
+    exit_reason: &str,
+) -> crate::Result<()> {
+    GateContext::new(
+        GateType::PostStop,
+        daemon_id,
+        daemon_dir,
+        retry_count,
+        daemon_env,
+    )
+    .extra_env(vec![
+        ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
+        ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
+    ])
+    .run()
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // fire_hook — fire-and-forget lifecycle hook
 // ---------------------------------------------------------------------------
 

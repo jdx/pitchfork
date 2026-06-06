@@ -2,7 +2,7 @@
 //!
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
-use super::hooks::{self, GateContext, GateType, HookType, fire_hook};
+use super::hooks::{self, GateContext, GateType, HookType, fire_hook, run_post_stop_gate};
 use super::{SUPERVISOR, Supervisor};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
@@ -1087,7 +1087,7 @@ impl Supervisor {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
                     // Run post_start gate after daemon is ready
-                    GateContext::new(
+                    if let Err(e) = GateContext::new(
                         GateType::PostStart,
                         id.clone(),
                         opts.dir.0.clone(),
@@ -1095,7 +1095,15 @@ impl Supervisor {
                         opts.env.clone(),
                     )
                     .run()
-                    .await?;
+                    .await
+                    {
+                        warn!("post_start gate failed for daemon {id} (still running): {e}");
+                        return Ok(IpcResponse::DaemonFailed {
+                            error: format!(
+                                "post_start gate failed: {e} (daemon is still running, use 'pitchfork stop {id}' to stop it)"
+                            ),
+                        });
+                    }
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
                 Ok(Err(exit_code)) => {
@@ -1221,18 +1229,14 @@ impl Supervisor {
                     // Run post_stop gate after daemon has stopped
                     let post_stop_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                     let post_stop_env = daemon.env.clone();
-                    GateContext::new(
-                        GateType::PostStop,
+                    run_post_stop_gate(
                         id.clone(),
                         post_stop_dir,
                         daemon.retry_count,
                         post_stop_env,
+                        -1,
+                        "stop",
                     )
-                    .extra_env(vec![
-                        ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
-                        ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
-                    ])
-                    .run()
                     .await?;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
@@ -1251,18 +1255,15 @@ impl Supervisor {
                     // Run post_stop gate even when process was already dead
                     let post_stop_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                     let post_stop_env = daemon.env.clone();
-                    GateContext::new(
-                        GateType::PostStop,
+                    let (exit_code, exit_reason) = daemon_exit_info(&daemon);
+                    run_post_stop_gate(
                         id.clone(),
                         post_stop_dir,
                         daemon.retry_count,
                         post_stop_env,
+                        exit_code,
+                        exit_reason,
                     )
-                    .extra_env(vec![
-                        ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
-                        ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
-                    ])
-                    .run()
                     .await?;
 
                     return Ok(IpcResponse::DaemonWasNotRunning);
@@ -1273,18 +1274,15 @@ impl Supervisor {
                 // exited. Run post_stop gate for cleanup, then report status.
                 let post_stop_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                 let post_stop_env = daemon.env.clone();
-                GateContext::new(
-                    GateType::PostStop,
+                let (exit_code, exit_reason) = daemon_exit_info(&daemon);
+                run_post_stop_gate(
                     id.clone(),
                     post_stop_dir,
                     daemon.retry_count,
                     post_stop_env,
+                    exit_code,
+                    exit_reason,
                 )
-                .extra_env(vec![
-                    ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
-                    ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
-                ])
-                .run()
                 .await?;
 
                 debug!("daemon {id} not running");
@@ -1294,6 +1292,27 @@ impl Supervisor {
             debug!("daemon {id} not found");
             Ok(IpcResponse::DaemonNotFound)
         }
+    }
+}
+
+/// Extract exit code and reason from a daemon's current state.
+///
+/// Used by `post_stop` gate to set `PITCHFORK_EXIT_CODE` and
+/// `PITCHFORK_EXIT_REASON` environment variables. For daemons that exited
+/// on their own (not via explicit stop), this returns the actual exit info
+/// from `DaemonStatus::Errored(code)` rather than the placeholder `-1/"stop"`.
+fn daemon_exit_info(daemon: &crate::daemon::Daemon) -> (i32, &'static str) {
+    match &daemon.status {
+        DaemonStatus::Errored(code) => (*code, "fail"),
+        DaemonStatus::Stopped => {
+            let reason = if daemon.last_exit_success.unwrap_or(true) {
+                "exit"
+            } else {
+                "fail"
+            };
+            (-1, reason)
+        }
+        _ => (-1, "stop"),
     }
 }
 
