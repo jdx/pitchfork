@@ -824,53 +824,24 @@ impl IpcClient {
     /// - Ad-hoc daemon handling (no dependencies)
     /// - Parallel execution within dependency levels
     pub async fn stop_daemons(self: &Arc<Self>, ids: &[DaemonId]) -> Result<StopResult> {
-        // Get currently running daemons
-        let running_daemons: HashSet<DaemonId> = self
-            .active_daemons()
-            .await?
-            .iter()
-            .filter(|d| d.status.is_running() || d.status.is_waiting())
-            .map(|d| d.id.clone())
-            .collect();
-
-        // Filter to only running daemons
-        let requested_ids: Vec<DaemonId> = ids
-            .iter()
-            .filter(|id| {
-                if !running_daemons.contains(*id) {
-                    warn!("Daemon {id} is not running");
-                    false
-                } else {
-                    true
-                }
-            })
-            .cloned()
-            .collect();
-
-        if requested_ids.is_empty() {
-            info!("No running daemons to stop");
+        if ids.is_empty() {
+            info!("No daemons to stop");
             return Ok(StopResult { any_failed: false });
         }
 
         let mut any_failed = false;
 
         // Use shared reverse dependency ordering
-        let stop_levels = compute_reverse_stop_order(&requested_ids);
+        let stop_levels = compute_reverse_stop_order(ids);
 
         for level in stop_levels {
-            // Filter to only running daemons in this level
-            let to_stop: Vec<DaemonId> = level
-                .into_iter()
-                .filter(|id| running_daemons.contains(id))
-                .collect();
-
-            if to_stop.is_empty() {
+            if level.is_empty() {
                 continue;
             }
 
             // Stop all daemons in this level concurrently
             let mut tasks = Vec::new();
-            for id in to_stop {
+            for id in level {
                 let task = Self::spawn_stop_task(self.clone(), id);
                 tasks.push(task);
             }

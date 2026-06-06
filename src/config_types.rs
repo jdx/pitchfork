@@ -883,6 +883,112 @@ pub struct PitchforkTomlHooks {
 }
 
 // ---------------------------------------------------------------------------
+// GateConfig (string-or-object pattern)
+// ---------------------------------------------------------------------------
+
+/// A single gate command configuration.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// pre_start = "curl http://deps/health"  # shorthand (command only)
+/// pre_start = { run = "curl http://deps/health", timeout = "30s" }  # full
+/// ```
+#[derive(Debug, Clone, JsonSchema)]
+pub struct GateConfig {
+    /// Command to run
+    pub run: String,
+    /// Timeout for the gate command (humantime, e.g. `"30s"`).
+    /// Defaults to no timeout (wait indefinitely).
+    pub timeout: Option<String>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct GateConfigRaw {
+    run: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    timeout: Option<String>,
+}
+
+impl StringOrStruct for GateConfig {
+    type Short = String;
+    type Raw = GateConfigRaw;
+
+    fn from_short(run: String) -> Self {
+        Self { run, timeout: None }
+    }
+
+    fn from_raw(raw: GateConfigRaw) -> std::result::Result<Self, String> {
+        if let Some(ref t) = raw.timeout {
+            humantime::parse_duration(t).map_err(|e| format!("invalid gate timeout '{t}': {e}"))?;
+        }
+        Ok(Self {
+            run: raw.run,
+            timeout: raw.timeout,
+        })
+    }
+
+    fn is_shorthand(&self) -> bool {
+        self.timeout.is_none()
+    }
+
+    fn to_short(&self) -> String {
+        self.run.clone()
+    }
+
+    fn to_raw(&self) -> GateConfigRaw {
+        GateConfigRaw {
+            run: self.run.clone(),
+            timeout: self.timeout.clone(),
+        }
+    }
+}
+
+impl Serialize for GateConfig {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.string_or_struct_serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for GateConfig {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::string_or_struct_deserialize(d)
+    }
+}
+
+impl GateConfig {
+    pub fn timeout_duration(&self) -> Option<std::time::Duration> {
+        self.timeout
+            .as_deref()
+            .and_then(|s| humantime::parse_duration(s).ok())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PitchforkTomlGates
+// ---------------------------------------------------------------------------
+
+/// Lifecycle gates for a daemon.
+///
+/// Gates block the daemon lifecycle until the gate command succeeds.
+/// Unlike hooks (fire-and-forget), gates must pass before proceeding.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
+pub struct PitchforkTomlGates {
+    /// Gate that must pass before the daemon process is spawned
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pre_start: Option<GateConfig>,
+    /// Gate that must pass after the daemon becomes ready
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub post_start: Option<GateConfig>,
+    /// Gate that must pass before the daemon is stopped
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pre_stop: Option<GateConfig>,
+    /// Gate that must pass after the daemon has stopped
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub post_stop: Option<GateConfig>,
+}
+
+// ---------------------------------------------------------------------------
 // PortBump (BoolOrU32 pattern)
 // ---------------------------------------------------------------------------
 

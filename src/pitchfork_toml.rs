@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
-    CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, StopConfig, StopSignal, WatchMode,
+    CpuLimit, CronRetrigger, Dir, GateConfig, MemoryLimit, OnOutputHook, PitchforkTomlAuto,
+    PitchforkTomlCron, PitchforkTomlGates, PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp,
+    Retry, StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -125,6 +126,8 @@ struct PitchforkTomlDaemonRaw {
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub hooks: Option<PitchforkTomlHooks>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gates: Option<PitchforkTomlGates>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
     /// Unix user to run this daemon as.
@@ -939,6 +942,7 @@ impl PitchforkToml {
                 dir: raw_daemon.dir,
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
+                gates: raw_daemon.gates,
                 mise: raw_daemon.mise,
                 user: raw_daemon.user,
                 memory_limit: raw_daemon.memory_limit,
@@ -1089,6 +1093,7 @@ impl PitchforkToml {
                     dir: daemon.dir.clone(),
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
+                    gates: daemon.gates.clone(),
                     mise: daemon.mise,
                     user: daemon.user.clone(),
                     memory_limit: daemon.memory_limit,
@@ -1321,6 +1326,8 @@ pub struct PitchforkTomlDaemon {
     pub env: Option<IndexMap<String, String>>,
     /// Lifecycle hooks (on_ready, on_fail, on_retry)
     pub hooks: Option<PitchforkTomlHooks>,
+    /// Lifecycle gates (pre_start, post_start, pre_stop, post_stop)
+    pub gates: Option<PitchforkTomlGates>,
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,

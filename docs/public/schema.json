@@ -73,6 +73,26 @@
       "type": "string",
       "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
     },
+    "GateConfig": {
+      "description": "A single gate command configuration.\n\nAccepts two TOML forms:\n```toml\npre_start = \"curl http://deps/health\"  # shorthand (command only)\npre_start = { run = \"curl http://deps/health\", timeout = \"30s\" }  # full\n```",
+      "type": "object",
+      "properties": {
+        "run": {
+          "description": "Command to run",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Timeout for the gate command (humantime, e.g. `\"30s\"`).\nDefaults to no timeout (wait indefinitely).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "run"
+      ]
+    },
     "MemoryLimit": {
       "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'",
       "type": "string"
@@ -213,6 +233,17 @@
             "type": "string"
           }
         },
+        "gates": {
+          "description": "Lifecycle gates (pre_start, post_start, pre_stop, post_stop)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PitchforkTomlGates"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "hooks": {
           "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
           "anyOf": [
@@ -351,6 +382,56 @@
       "required": [
         "run"
       ]
+    },
+    "PitchforkTomlGates": {
+      "description": "Lifecycle gates for a daemon.\n\nGates block the daemon lifecycle until the gate command succeeds.\nUnlike hooks (fire-and-forget), gates must pass before proceeding.",
+      "type": "object",
+      "properties": {
+        "post_start": {
+          "description": "Gate that must pass after the daemon becomes ready",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "post_stop": {
+          "description": "Gate that must pass after the daemon has stopped",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pre_start": {
+          "description": "Gate that must pass before the daemon process is spawned",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pre_stop": {
+          "description": "Gate that must pass before the daemon is stopped",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GateConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "PitchforkTomlHooks": {
       "description": "Lifecycle hooks for a daemon",
@@ -762,6 +843,13 @@
         },
         "file_watch_debounce": {
           "description": "File watch debounce duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate_timeout": {
+          "description": "Default timeout for gate commands",
           "type": [
             "string",
             "null"
