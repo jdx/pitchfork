@@ -4,18 +4,15 @@ use crate::log_store::{LogEntry, LogQuery, LogStore};
 use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
-use rusqlite::{Connection, params};
-use std::collections::{HashMap, HashSet};
+use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// SQLite-backed log store with WAL mode for concurrent readers.
 pub struct SqliteLogStore {
     conn: Mutex<Connection>,
-    clear_generations: Mutex<HashMap<String, u64>>,
-    next_generation: AtomicU64,
 }
 
 impl SqliteLogStore {
@@ -56,10 +53,16 @@ impl SqliteLogStore {
             [],
         )
         .into_diagnostic()?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS log_clear_generations (
+                daemon_id TEXT PRIMARY KEY,
+                generation INTEGER NOT NULL DEFAULT 0
+            );",
+            [],
+        )
+        .into_diagnostic()?;
         Ok(Self {
             conn: Mutex::new(conn),
-            clear_generations: Mutex::new(HashMap::new()),
-            next_generation: AtomicU64::new(1),
         })
     }
 
@@ -319,15 +322,15 @@ impl LogStore for SqliteLogStore {
                 params![id.qualified()],
             )
             .into_diagnostic()?;
+            tx.execute(
+                "INSERT INTO log_clear_generations (daemon_id, generation)
+                 VALUES (?1, 1)
+                 ON CONFLICT(daemon_id) DO UPDATE SET generation = generation + 1",
+                params![id.qualified()],
+            )
+            .into_diagnostic()?;
         }
         tx.commit().into_diagnostic()?;
-        drop(conn);
-
-        let mut gens = self.clear_generations.lock().unwrap();
-        for id in daemon_ids {
-            let next_gen = self.next_generation.fetch_add(1, Ordering::SeqCst);
-            gens.insert(id.qualified(), next_gen);
-        }
         Ok(())
     }
 
@@ -388,8 +391,15 @@ impl LogStore for SqliteLogStore {
     }
 
     fn last_clear_generation(&self, daemon_id: &DaemonId) -> Result<Option<u64>> {
-        let gens = self.clear_generations.lock().unwrap();
-        Ok(gens.get(&daemon_id.qualified()).copied())
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT generation FROM log_clear_generations WHERE daemon_id = ?1")
+            .into_diagnostic()?;
+        let generation: Option<u64> = stmt
+            .query_row(params![daemon_id.qualified()], |row| row.get(0))
+            .optional()
+            .into_diagnostic()?;
+        Ok(generation)
     }
 }
 

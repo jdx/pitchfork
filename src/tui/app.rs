@@ -1453,10 +1453,24 @@ impl App {
     }
 
     fn load_logs(&mut self, daemon_id: &DaemonId) {
+        const TUI_LOG_LIMIT: usize = 5000;
         let prev_len = self.log_content.len();
 
-        self.log_content = match LOG_STORE.tail(daemon_id, None) {
-            Ok(entries) if !entries.is_empty() => entries.into_iter().map(|e| e.message).collect(),
+        self.log_content = match LOG_STORE.query(&crate::log_store::LogQuery {
+            daemon_ids: vec![daemon_id.qualified()],
+            from: None,
+            to: None,
+            limit: Some(TUI_LOG_LIMIT),
+            order_desc: false,
+            after_id: None,
+        }) {
+            Ok(entries) if !entries.is_empty() => entries
+                .into_iter()
+                .map(|e| {
+                    let ts = e.timestamp.format("%H:%M:%S").to_string();
+                    format!("{} {}", ts, e.message)
+                })
+                .collect(),
             _ => vec!["No logs available".to_string()],
         };
 
