@@ -9,10 +9,13 @@ const POLL_INTERVAL = 3000
 
 const proxies = shallowRef<ProxyWorktreeEntry[]>([])
 const loading = ref(true)
+const fetching = ref(false)
 const error = ref<string | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
 async function fetchProxies() {
+  if (fetching.value) return
+  fetching.value = true
   try {
     loading.value = true
     error.value = null
@@ -20,6 +23,7 @@ async function fetchProxies() {
   } catch (e: any) {
     error.value = e.message ?? 'Failed to load proxies'
   } finally {
+    fetching.value = false
     loading.value = false
   }
 }

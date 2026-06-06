@@ -30,7 +30,9 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
 
 function openProxy(e: Event) {
   e.stopPropagation()
-  if (props.daemon.proxy_url) window.open(props.daemon.proxy_url, '_blank')
+  if (props.daemon.proxy_url) {
+    window.open(props.daemon.proxy_url, '_blank', 'noopener,noreferrer')
+  }
 }
 </script>
 
@@ -73,7 +75,12 @@ function openProxy(e: Event) {
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
         Stop
       </button>
-      <button class="act-btn act-restart" :disabled="isActing()" @click="onRestart">
+      <button
+        class="act-btn act-restart"
+        v-if="daemon.status.type !== 'available'"
+        :disabled="isActing()"
+        @click="onRestart"
+      >
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
         Restart
       </button>

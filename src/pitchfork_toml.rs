@@ -1358,6 +1358,7 @@ impl PitchforkToml {
 
         // If caller provided a namespace that isn't yet registered,
         // auto-register it at the directory we can resolve.
+        // Falls back to CWD if the slug dir cannot be resolved.
         if let Some(ns) = namespace {
             if !pt.namespaces.contains_key(ns) {
                 let dir = pt

@@ -117,6 +117,7 @@ async function onToggle() {
           <button
             class="act-btn"
             :class="daemon.is_disabled ? 'act-start' : 'act-muted'"
+            :disabled="isActing"
             @click="onToggle"
           >
             {{ daemon.is_disabled ? 'Enable' : 'Disable' }}
@@ -180,7 +181,7 @@ async function onToggle() {
       <!-- Extended Configuration -->
       <div class="section-title" style="margin-top: 1.5rem;">Configuration</div>
       <div class="detail-grid">
-        <div class="info-card" v-if="daemon.ready_delay">
+        <div class="info-card" v-if="daemon.ready_delay != null">
           <div class="info-label">Ready Delay</div>
           <div class="info-value">{{ daemon.ready_delay }}s</div>
         </div>
@@ -259,13 +260,11 @@ async function onToggle() {
       </div>
 
       <!-- Env -->
-      <div v-if="daemon.env" class="section">
+      <div v-if="daemon.env?.length" class="section">
         <div class="section-title">Environment</div>
         <div class="section-body">
-          <div v-for="(val, key) in daemon.env" :key="key" class="env-row">
+          <div v-for="key in daemon.env" :key="key" class="env-row">
             <code class="env-key">{{ key }}</code>
-            <span class="env-sep">=</span>
-            <code class="env-val">{{ val }}</code>
           </div>
         </div>
       </div>

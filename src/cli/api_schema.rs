@@ -227,7 +227,8 @@ impl ApiSchema {
             ],
         };
 
-        let json = serde_json::to_string_pretty(&doc).unwrap();
+        let json =
+            serde_json::to_string_pretty(&doc).expect("failed to serialize API schema to JSON");
         println!("{json}");
         Ok(())
     }

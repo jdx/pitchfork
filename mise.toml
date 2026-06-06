@@ -35,7 +35,7 @@ run = ["cargo build"]
 
 [tasks."build:ui"]
 dir = "ui"
-run = "aube install && exec aube run build && touch src/web/static_files.rs"
+run = "aube install && exec aube run build && touch ../src/web/static_files.rs"
 sources = ["src/**/*"]
 outputs = ["dist/**/*"]
 

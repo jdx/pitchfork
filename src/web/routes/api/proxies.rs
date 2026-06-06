@@ -34,7 +34,7 @@ pub async fn list() -> Json<Vec<ApiProxyWorktreeEntry>> {
     let all_namespaces = crate::pitchfork_toml::PitchforkToml::read_global_namespaces();
 
     #[allow(clippy::type_complexity)]
-    let daemon_state: HashMap<String, (Option<u16>, String, Option<u32>, Option<u64>)> = {
+    let daemon_state: HashMap<String, (Option<u16>, bool, Option<u32>, Option<u64>)> = {
         let state_file = SUPERVISOR.state_file.lock().await;
         state_file
             .daemons
@@ -46,7 +46,7 @@ pub async fn list() -> Json<Vec<ApiProxyWorktreeEntry>> {
                     .pid
                     .and_then(|pid| PROCS.get_stats(pid))
                     .map(|s| s.uptime_secs);
-                (key, (port, d.status.to_string(), d.pid, uptime))
+                (key, (port, d.status.is_running(), d.pid, uptime))
             })
             .collect()
     };
@@ -73,10 +73,13 @@ pub async fn list() -> Json<Vec<ApiProxyWorktreeEntry>> {
         } else {
             daemon_state
                 .get(&lookup_key)
-                .map(|(p, s, pid, up)| {
-                    let status = Some(s.clone());
-                    let is_running = status.as_deref() == Some("running");
-                    (if is_running { *p } else { None }, status, *pid, *up)
+                .map(|(p, running, pid, up)| {
+                    let status = Some(if *running {
+                        "running".to_string()
+                    } else {
+                        "stopped".to_string()
+                    });
+                    (if *running { *p } else { None }, status, *pid, *up)
                 })
                 .unwrap_or((None, Some("available".to_string()), None, None))
         };

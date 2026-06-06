@@ -36,7 +36,7 @@ pub struct ApiDaemonEntry {
     ready_cmd: Option<String>,
     port_config: Option<String>,
     depends: Vec<String>,
-    env: Option<std::collections::HashMap<String, String>>,
+    env: Option<Vec<String>>,
     watch: Vec<String>,
     watch_mode: String,
     watch_base_dir: Option<String>,
@@ -193,7 +193,7 @@ async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
             env: d
                 .env
                 .as_ref()
-                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                .map(|m| m.keys().cloned().collect::<Vec<_>>()),
             watch: d.watch.clone(),
             watch_mode: format!("{:?}", d.watch_mode).to_lowercase(),
             watch_base_dir: d
@@ -216,14 +216,12 @@ async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
     Ok(result)
 }
 
-pub async fn list() -> Json<Vec<ApiDaemonEntry>> {
-    match build_daemon_entries().await {
-        Ok(entries) => Json(entries),
-        Err(e) => {
-            log::error!("Failed to list daemons: {e}");
-            Json(vec![])
-        }
-    }
+pub async fn list() -> Result<Json<Vec<ApiDaemonEntry>>, axum::http::StatusCode> {
+    let entries = build_daemon_entries().await.map_err(|e| {
+        log::error!("Failed to list daemons: {e}");
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    Ok(Json(entries))
 }
 
 pub async fn show(Path(id): Path<String>) -> Result<Json<ApiDaemonEntry>, axum::http::StatusCode> {
@@ -286,8 +284,12 @@ pub async fn stop(
         })?;
 
     match client.stop(daemon_id.clone()).await {
-        Ok(_) => Ok(Json(serde_json::json!({
+        Ok(true) => Ok(Json(serde_json::json!({
             "ok": true,
+        }))),
+        Ok(false) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "daemon is not running",
         }))),
         Err(e) => {
             log::error!("Failed to stop daemon: {e}");
@@ -344,8 +346,12 @@ pub async fn enable(
         })?;
 
     match client.enable(daemon_id.clone()).await {
-        Ok(_) => Ok(Json(serde_json::json!({
+        Ok(true) => Ok(Json(serde_json::json!({
             "ok": true,
+        }))),
+        Ok(false) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "daemon is already enabled",
         }))),
         Err(e) => {
             log::error!("Failed to enable daemon: {e}");
@@ -371,8 +377,12 @@ pub async fn disable(
         })?;
 
     match client.disable(daemon_id.clone()).await {
-        Ok(_) => Ok(Json(serde_json::json!({
+        Ok(true) => Ok(Json(serde_json::json!({
             "ok": true,
+        }))),
+        Ok(false) => Ok(Json(serde_json::json!({
+            "ok": false,
+            "error": "daemon is already disabled",
         }))),
         Err(e) => {
             log::error!("Failed to disable daemon: {e}");

@@ -99,10 +99,10 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
         let ns = entry.resolve_namespace();
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();
         let worktrees = if worktree_enabled {
-            let wts = entry
-                .resolve_dir()
-                .map(|dir| crate::proxy::worktree::discover_worktrees(&dir))
-                .unwrap_or_default();
+            let wts = match entry.resolve_dir() {
+                Some(dir) => crate::proxy::worktree::discover_worktrees(&dir),
+                None => vec![],
+            };
             // Warn about sanitized-branch collisions and drop duplicates so that
             // unreachable entries don't waste memory in the cache.
             let mut seen = std::collections::HashMap::with_capacity(wts.len());

@@ -47,6 +47,11 @@ export default {
     }
 
     const raw = fs.readFileSync(schemaPath, "utf-8");
-    return JSON.parse(raw) as ApiDoc;
+    try {
+      return JSON.parse(raw) as ApiDoc;
+    } catch (e) {
+      console.warn(`[api.data.ts] failed to parse api-schema.json: ${e}`);
+      return { endpoints: [] };
+    }
   },
 };

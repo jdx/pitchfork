@@ -223,7 +223,7 @@ curl http://127.0.0.1:3120/api/logs/myproject/api/tail
 
 **Response format (SSE):**
 
-```
+```text
 data: 2026-05-31 10:00:00 Hello from api daemon
 
 data: 2026-05-31 10:00:02 Another log line

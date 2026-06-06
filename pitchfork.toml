@@ -8,5 +8,6 @@ pty = true
 
 [settings.proxy]
 enable = true
-# Agents prefer non-sudo
+# Use a non-privileged port (7777) so agents don't need sudo.
+# If you need HTTPS on port 443, set https = true and run with sufficient privileges.
 https = false

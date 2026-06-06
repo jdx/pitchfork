@@ -24,6 +24,9 @@ pub mod worktree;
 /// - Proxy is disabled in settings
 /// - `proxy.port` is invalid (out of range or zero)
 pub fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
+    if !s.proxy.enable {
+        return None;
+    }
     let slug = slug?;
 
     let scheme = if s.proxy.https { "https" } else { "http" };

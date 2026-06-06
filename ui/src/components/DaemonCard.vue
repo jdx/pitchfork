@@ -62,7 +62,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start
       </button>
-      <button v-else-if="daemon.status.type === 'running' || daemon.status.type === 'waiting'" class="act-btn act-stop" @click="onStop">
+      <button v-else-if="daemon.status.type === 'running' || daemon.status.type === 'waiting'" class="act-btn act-stop" :disabled="isActing()" @click="onStop">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
         Stop
       </button>
@@ -70,7 +70,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg>
         Stop
       </button>
-      <button v-if="daemon.status.type !== 'available'" class="act-btn act-restart" @click="onRestart">
+      <button v-if="daemon.status.type !== 'available'" class="act-btn act-restart" :disabled="isActing()" @click="onRestart">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
         Restart
       </button>

@@ -24,9 +24,9 @@ function formatBytes(n: number): string {
 
 <template>
   <div class="tree-node">
-    <div class="tree-row" :style="{ paddingLeft: `${depth * 1.2}rem` }" @click="toggleDetails">
+    <div class="tree-row" :style="{ paddingLeft: `${depth * 1.2}rem` }" @click="toggleDetails" tabindex="0" @keydown.enter.space.prevent="toggleDetails">
       <div class="tree-main">
-        <span class="tree-toggle" v-if="node.children.length" @click.stop="toggleChildren">
+        <span class="tree-toggle" v-if="node.children.length" @click.stop="toggleChildren" role="button" tabindex="0" @keydown.enter.space.prevent="toggleChildren">
           <svg v-if="childrenExpanded" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>
           <svg v-else width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"/></svg>
         </span>

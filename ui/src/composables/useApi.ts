@@ -1,6 +1,6 @@
 import { ref, shallowRef, watchEffect, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
-import type { DaemonEntry, DaemonStats, ProcessTree } from '@/types/api'
+import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree } from '@/types/api'
 
 const API_BASE = (() => {
   const base = (window as any).__PITCHFORK_BASE__ as string | undefined
@@ -115,13 +115,22 @@ function daemonName(id: string): string {
 async function toastAction(
   name: string,
   verb: string,
-  action: () => Promise<unknown>,
+  action: () => Promise<boolean>,
 ) {
+  const pastTense: Record<string, string> = {
+    Start: 'started',
+    Stop: 'stopped',
+    Restart: 'restarted',
+    Enable: 'enabled',
+    Disable: 'disabled',
+  }
   const toastId = toast.loading(`${verb} ${name}...`)
   try {
-    await action()
+    const ran = await action()
     toast.dismiss(toastId)
-    toast.success(`${name} ${verb.toLowerCase()}ed`, { duration: 2000 })
+    if (ran) {
+      toast.success(`${name} ${pastTense[verb] ?? verb.toLowerCase()}`, { duration: 2000 })
+    }
   } catch (e: any) {
     toast.dismiss(toastId)
     toast.error(`${verb} ${name} failed`, { duration: 4000, description: e.message ?? 'unknown error' })
@@ -132,12 +141,13 @@ async function toastAction(
 export function useDaemonActions() {
   const acting = ref<Set<string>>(new Set())
 
-  function wrap(name: string, action: () => Promise<unknown>): () => Promise<void> {
+  function wrap(name: string, action: () => Promise<unknown>): () => Promise<boolean> {
     return async () => {
-      if (acting.value.has(name)) return
+      if (acting.value.has(name)) return false
       acting.value = new Set(acting.value).add(name)
       try {
         await action()
+        return true
       } finally {
         const next = new Set(acting.value)
         next.delete(name)
@@ -183,13 +193,15 @@ export function useLogStream(id: Ref<string>) {
   async function connect() {
     lines.value = []
     error.value = null
-    abort = new AbortController()
+    const currentAbort = new AbortController()
+    abort = currentAbort
 
     try {
       const res = await fetch(
         `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail`,
-        { signal: abort.signal, headers: getAuthHeaders() },
+        { signal: currentAbort.signal, headers: getAuthHeaders() },
       )
+      if (currentAbort.signal.aborted) return
       if (!res.ok || !res.body) {
         error.value = `HTTP ${res.status}`
         connected.value = false
@@ -203,13 +215,14 @@ export function useLogStream(id: Ref<string>) {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        if (currentAbort.signal.aborted) break
         buf += decoder.decode(value, { stream: true })
         const parts = buf.split('\n')
         buf = parts.pop() ?? ''
         lines.value.push(...parts)
       }
 
-      if (buf) {
+      if (buf && !currentAbort.signal.aborted) {
         lines.value.push(buf)
       }
     } catch (e: any) {
@@ -217,7 +230,9 @@ export function useLogStream(id: Ref<string>) {
         error.value = e.message ?? 'Stream error'
       }
     } finally {
-      connected.value = false
+      if (abort === currentAbort) {
+        connected.value = false
+      }
     }
   }
 
@@ -258,11 +273,6 @@ export function useStats(pollInterval = 3000) {
   return { stats, startPolling, stopPolling }
 }
 
-export interface NamespaceEntry {
-  name: string
-  dir: string
-}
-
 export function useNamespaces() {
   const namespaces = shallowRef<NamespaceEntry[]>([])
   const loading = ref(false)
@@ -270,10 +280,13 @@ export function useNamespaces() {
 
   async function fetchNamespaces() {
     try {
+      loading.value = true
       error.value = null
       namespaces.value = await api('/namespaces')
     } catch (e: any) {
       error.value = e.message ?? 'Unknown error'
+    } finally {
+      loading.value = false
     }
   }
 
@@ -304,16 +317,21 @@ export function useProcessTree(id: Ref<string>, pollInterval = 3000) {
   const tree = shallowRef<ProcessTree[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
+  let nonce = 0
 
   async function fetchTree() {
+    const current = ++nonce
     try {
       loading.value = true
       error.value = null
-      tree.value = await api<ProcessTree[]>(`/processes/${encodeURIComponent(id.value)}/tree`)
+      const data = await api<ProcessTree[]>(`/processes/${encodeURIComponent(id.value)}/tree`)
+      if (current !== nonce) return
+      tree.value = data
     } catch (e: any) {
+      if (current !== nonce) return
       error.value = e.message ?? 'Unknown error'
     } finally {
-      loading.value = false
+      if (current === nonce) loading.value = false
     }
   }
 

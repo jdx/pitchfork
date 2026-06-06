@@ -18,7 +18,7 @@ function goBack() {
   router.push(`/daemon/${encodeURIComponent(props.id)}`)
 }
 
-watch(lines, () => {
+watch(() => lines.value.length, () => {
   if (autoScroll.value) {
     nextTick(() => {
       if (logContainer.value) {
@@ -26,7 +26,7 @@ watch(lines, () => {
       }
     })
   }
-}, { deep: true })
+}, { immediate: true })
 
 function onScroll() {
   if (!logContainer.value) return

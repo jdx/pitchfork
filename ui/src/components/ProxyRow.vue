@@ -3,21 +3,22 @@ import type { ProxyWorktreeEntry } from '@/types/api'
 import { useRouter } from 'vue-router'
 import { useDaemonActions } from '@/composables/useApi'
 import { formatUptime } from '@/utils/format'
+import { computed } from 'vue'
 
 const props = defineProps<{ proxy: ProxyWorktreeEntry }>()
 const emit = defineEmits<{ refresh: [] }>()
 const router = useRouter()
 const { restart, start, stop, acting } = useDaemonActions()
 
-const daemonKey = props.proxy.daemon_qualified ?? ''
+const daemonKey = computed(() => props.proxy.daemon_qualified ?? '')
 
-async function onRestart() { if (!daemonKey) return; await restart(daemonKey); emit('refresh') }
-async function onStart() { if (!daemonKey) return; await start(daemonKey); emit('refresh') }
-async function onStop() { if (!daemonKey) return; await stop(daemonKey); emit('refresh') }
-function goLogs() { if (!daemonKey) return; router.push(`/logs/${encodeURIComponent(daemonKey)}`) }
+async function onRestart() { if (!daemonKey.value) return; await restart(daemonKey.value); emit('refresh') }
+async function onStart() { if (!daemonKey.value) return; await start(daemonKey.value); emit('refresh') }
+async function onStop() { if (!daemonKey.value) return; await stop(daemonKey.value); emit('refresh') }
+function goLogs() { if (!daemonKey.value) return; router.push(`/logs/${encodeURIComponent(daemonKey.value)}`) }
 
 function statusClass(s: string | null): string { return s ?? '' }
-const isActing = () => acting.value.has(daemonKey)
+const isActing = () => acting.value.has(daemonKey.value)
 </script>
 
 <template>
@@ -27,7 +28,7 @@ const isActing = () => acting.value.has(daemonKey)
       <div class="branch-sub">{{ proxy.daemon_qualified }}</div>
     </td>
     <td class="cell-url">
-      <a v-if="proxy.proxy_url" :href="proxy.proxy_url" target="_blank" class="url-link" @click.stop>{{ proxy.proxy_url }}</a>
+      <a v-if="proxy.proxy_url" :href="proxy.proxy_url" target="_blank" rel="noopener noreferrer" class="url-link" @click.stop>{{ proxy.proxy_url }}</a>
       <span v-else>—</span>
     </td>
     <td class="cell-status">

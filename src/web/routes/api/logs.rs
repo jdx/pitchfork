@@ -19,7 +19,8 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         Err(_) => {
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from(r#"{"error":"invalid daemon id"}"#))
+                .header("content-type", "text/plain")
+                .body(Body::from("invalid daemon id"))
                 .unwrap();
         }
     };
@@ -27,21 +28,30 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
     let log_path = daemon_id.log_path();
     let history_lines = query.lines.unwrap_or(100);
 
+    let mut file = match tokio::fs::File::open(&log_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header("content-type", "text/plain")
+                .body(Body::from(format!("failed to open log file: {e}")))
+                .unwrap();
+        }
+    };
+
     let stream = async_stream::stream! {
-        let mut file = match tokio::fs::File::open(&log_path).await {
-            Ok(f) => f,
+        const MAX_HISTORY_BYTES: u64 = 256 * 1024;
+        let file_len = match file.metadata().await.map(|m| m.len()) {
+            Ok(len) => len,
             Err(e) => {
-                yield Ok::<Vec<u8>, Infallible>(format!(r#"{{"error":"{e}"}}"#).into_bytes());
+                log::warn!("failed to read log metadata for {daemon_id}: {e}");
                 return;
             }
         };
-
-        const MAX_HISTORY_BYTES: u64 = 256 * 1024;
-        let file_len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
         let start_offset = file_len.saturating_sub(MAX_HISTORY_BYTES);
 
         if let Err(e) = file.seek(std::io::SeekFrom::Start(start_offset)).await {
-            yield Ok::<Vec<u8>, Infallible>(format!(r#"{{"error":"{e}"}}"#).into_bytes());
+            log::warn!("failed to seek log file for {daemon_id}: {e}");
             return;
         }
 
@@ -71,7 +81,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                     }
                 }
                 Err(e) => {
-                    yield Ok::<Vec<u8>, Infallible>(format!(r#"{{"error":"{e}"}}"#).into_bytes());
+                    log::warn!("failed to read log file for {daemon_id}: {e}");
                     return;
                 }
             }
@@ -79,7 +89,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
         // Tail -f from end of file
         if let Err(e) = file.seek(std::io::SeekFrom::End(0)).await {
-            yield Ok::<Vec<u8>, Infallible>(format!(r#"{{"error":"{e}"}}"#).into_bytes());
+            log::warn!("failed to seek log file for {daemon_id}: {e}");
             return;
         }
 
@@ -94,7 +104,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                     yield Ok::<Vec<u8>, Infallible>(buf[..n].to_vec());
                 }
                 Err(e) => {
-                    yield Ok::<Vec<u8>, Infallible>(format!(r#"{{"error":"{e}"}}"#).into_bytes());
+                    log::warn!("failed to read log file for {daemon_id}: {e}");
                     return;
                 }
             }

@@ -46,7 +46,7 @@ export interface DaemonEntry {
   pty: boolean | null
   proxy: boolean | null
   depends: string[]
-  env: Record<string, string> | null
+  env: string[] | null
   cron_schedule: string | null
   command: string | null
   dir: string | null

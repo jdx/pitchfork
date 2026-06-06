@@ -1110,6 +1110,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             (Some(current), Some(expected)) => current == expected,
             // If we don't have a recorded title, fall back to allowing the kill
             // (this is a degraded but functional state — the process was probably
+            // started before title tracking was added, or the state was reset).
             _ => true,
         };
 

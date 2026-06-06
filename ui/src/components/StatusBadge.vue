@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 const props = defineProps<{
   status: string | null
   variant?: 'card' | 'table'
@@ -6,7 +8,7 @@ const props = defineProps<{
   port?: number | null
 }>()
 
-const v = props.variant ?? 'table'
+const v = computed(() => props.variant ?? 'table')
 
 function statusClass(s: string | null): string {
   if (!s) return ''
