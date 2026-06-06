@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::cli::daemons::resolve_project_config_path;
+use crate::config_types::{HookConfig, StringOrStruct};
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
@@ -54,6 +55,9 @@ pub struct Add {
     /// Number of retry attempts on failure (use \"true\" for infinite)
     #[clap(long)]
     retry: Option<String>,
+    /// Number of recovery attempts on runtime crash (use \"true\" for infinite, defaults to retry)
+    #[clap(long)]
+    recovery: Option<String>,
     /// Glob patterns to watch for changes (can be specified multiple times)
     #[clap(long = "watch")]
     watch: Vec<String>,
@@ -96,21 +100,33 @@ pub struct Add {
     /// Autostop the daemon when leaving the directory
     #[clap(long)]
     autostop: bool,
+    /// Command to run before the daemon process is spawned
+    #[clap(long)]
+    pre_start: Option<String>,
     /// Command to run when daemon becomes ready
     #[clap(long)]
     on_ready: Option<String>,
-    /// Command to run when daemon fails
+    /// Command to run before the daemon is stopped
     #[clap(long)]
-    on_fail: Option<String>,
-    /// Command to run before each retry attempt
-    #[clap(long)]
-    on_retry: Option<String>,
+    pre_stop: Option<String>,
     /// Command to run when the daemon is explicitly stopped by pitchfork
     #[clap(long)]
     on_stop: Option<String>,
     /// Command to run on any daemon termination (clean exit, crash, or stop)
     #[clap(long)]
     on_exit: Option<String>,
+    /// Command to run when daemon fails
+    #[clap(long)]
+    on_fail: Option<String>,
+    /// Command to run before each retry attempt
+    #[clap(long)]
+    on_retry: Option<String>,
+    /// Command to run before each recovery attempt (runtime)
+    #[clap(long)]
+    on_recover: Option<String>,
+    /// Command to run when daemon crashes permanently (runtime)
+    #[clap(long)]
+    on_crash: Option<String>,
     /// Cron schedule expression (6 fields: second minute hour day month weekday)
     #[clap(long)]
     cron_schedule: Option<String>,
@@ -166,6 +182,12 @@ impl Add {
             Retry::default()
         };
 
+        let recovery = if let Some(ref recovery_str) = self.recovery {
+            Some(Self::parse_retry(recovery_str)?)
+        } else {
+            None
+        };
+
         let env = if self.env.is_empty() {
             None
         } else {
@@ -191,18 +213,53 @@ impl Add {
             auto.push(PitchforkTomlAuto::Stop);
         }
 
-        let hooks = if self.on_ready.is_some()
-            || self.on_fail.is_some()
-            || self.on_retry.is_some()
+        let hooks = if self.pre_start.is_some()
+            || self.on_ready.is_some()
+            || self.pre_stop.is_some()
             || self.on_stop.is_some()
             || self.on_exit.is_some()
+            || self.on_fail.is_some()
+            || self.on_retry.is_some()
+            || self.on_recover.is_some()
+            || self.on_crash.is_some()
         {
             Some(PitchforkTomlHooks {
-                on_ready: self.on_ready.clone(),
-                on_fail: self.on_fail.clone(),
-                on_retry: self.on_retry.clone(),
-                on_stop: self.on_stop.clone(),
-                on_exit: self.on_exit.clone(),
+                pre_start: self
+                    .pre_start
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_ready: self
+                    .on_ready
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                pre_stop: self
+                    .pre_stop
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_stop: self
+                    .on_stop
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_exit: self
+                    .on_exit
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_fail: self
+                    .on_fail
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_retry: self
+                    .on_retry
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_crash: self
+                    .on_crash
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
+                on_recover: self
+                    .on_recover
+                    .as_deref()
+                    .map(|s| HookConfig::from_short(s.to_string())),
                 on_output: None,
             })
         } else {
@@ -243,6 +300,7 @@ impl Add {
                 auto,
                 cron,
                 retry,
+                recovery,
                 ready_delay: self.ready_delay,
                 ready_output: self.ready_output.clone(),
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),

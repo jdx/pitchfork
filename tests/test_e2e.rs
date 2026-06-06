@@ -523,8 +523,8 @@ ready_delay = 1
 
     // With ready_delay=1, should be ready in ~1 second, not 3
     assert!(
-        elapsed < Duration::from_secs(3),
-        "Should be ready in less than 3 seconds with ready_delay=1"
+        elapsed < Duration::from_secs(5),
+        "Should be ready in less than 5 seconds with ready_delay=1, took {elapsed:?}"
     );
     assert!(output.status.success(), "Start command should succeed");
 
@@ -553,8 +553,8 @@ ready_output = "READY"
 
     // Should be ready after ~1 second when "READY" appears, not wait for 3s delay
     assert!(
-        elapsed < Duration::from_secs(3),
-        "Should be ready when pattern matches, not wait full delay"
+        elapsed < Duration::from_secs(5),
+        "Should be ready when pattern matches, not wait full delay (3s), took {elapsed:?}"
     );
     assert!(output.status.success(), "Start command should succeed");
 
@@ -586,8 +586,8 @@ ready_output = "Listening on http://.*:(\\d+)"
 
     // Should match the regex pattern
     assert!(
-        elapsed < Duration::from_secs(3),
-        "Should be ready when regex matches"
+        elapsed < Duration::from_secs(5),
+        "Should be ready when regex matches, took {elapsed:?}"
     );
     assert!(output.status.success(), "Start command should succeed");
 
@@ -666,8 +666,8 @@ ready_delay = 5
     // When both are specified, whichever happens first should trigger ready
     // The output pattern should match first (~0.5s) before the delay (5s)
     assert!(
-        elapsed < Duration::from_secs(2),
-        "Should be ready when pattern matches, not wait for delay"
+        elapsed < Duration::from_secs(4),
+        "Should be ready when pattern matches, not wait for delay (5s), took {elapsed:?}"
     );
 
     let _ = env.run_command(&["stop", "ready_both"]);

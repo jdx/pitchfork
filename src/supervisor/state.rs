@@ -38,7 +38,9 @@ pub(crate) struct UpsertDaemonOpts {
     pub cron_immediate: Option<bool>,
     pub last_exit_success: Option<bool>,
     pub retry: Option<Retry>,
+    pub recovery: Option<Retry>,
     pub retry_count: Option<u32>,
+    pub recovery_count: Option<u32>,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
     pub ready_http: Option<ReadyHttp>,
@@ -149,9 +151,15 @@ impl Supervisor {
             retry: opts
                 .retry
                 .unwrap_or_else(|| existing.map(|d| d.retry).unwrap_or_default()),
+            recovery: opts
+                .recovery
+                .unwrap_or_else(|| existing.map(|d| d.recovery).unwrap_or_default()),
             retry_count: opts
                 .retry_count
                 .unwrap_or(existing.map(|d| d.retry_count).unwrap_or(0)),
+            recovery_count: opts
+                .recovery_count
+                .unwrap_or(existing.map(|d| d.recovery_count).unwrap_or(0)),
             ready_delay: opts.ready_delay.or(existing.and_then(|d| d.ready_delay)),
             ready_output: opts
                 .ready_output

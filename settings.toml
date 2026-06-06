@@ -662,25 +662,25 @@ If unset and the supervisor is running as root via `sudo`, daemons default to
 the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
 """
 
-[supervisor.gate_timeout]
+[supervisor.hook_block_timeout]
 type = "Duration"
-env = "PITCHFORK_GATE_TIMEOUT"
+env = "PITCHFORK_HOOK_BLOCK_TIMEOUT"
 default = "30s"
-description = "Default timeout for gate commands"
+description = "Default timeout for blocking hook commands"
 docs = """
-Maximum time to wait for a gate command to complete when no per-gate `timeout`
-is configured. Gates block the daemon lifecycle, so a hung gate can prevent
-startup or shutdown from completing.
+Maximum time to wait for a blocking hook command to complete when no per-hook
+`timeout` is configured. Blocking hooks (`block = true`) pause the daemon
+lifecycle, so a hung hook can prevent startup or shutdown from completing.
 
-Each gate can override this with its own `timeout` field:
+Each hook can override this with its own `timeout` field:
 ```toml
-[daemons.myapp.gates]
-pre_start = { run = "check-db.sh", timeout = "10s" }
+[daemons.myapp.hooks]
+pre_start = { run = "check-db.sh", block = true, timeout = "10s" }
 ```
 
-Set to `"0s"` to disable the global timeout (gates wait indefinitely unless
-they have their own timeout). Note: per-gate `timeout` takes precedence;
-if neither per-gate nor global timeout is set, gates wait indefinitely.
+Set to `"0s"` to disable the global timeout (blocking hooks wait indefinitely
+unless they have their own timeout). Note: per-hook `timeout` takes precedence;
+if neither per-hook nor global timeout is set, blocking hooks wait indefinitely.
 """
 
 [supervisor.cpu_violation_threshold]

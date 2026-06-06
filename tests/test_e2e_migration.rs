@@ -43,6 +43,7 @@ id = "myservice"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 
 [daemons.worker]
@@ -50,6 +51,7 @@ id = "worker"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 last_exit_success = true
 "#;
@@ -120,6 +122,7 @@ id = "api"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 "#;
     fs::write(&state_path, old_state).unwrap();
@@ -386,6 +389,7 @@ id = "legacy/myservice"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 last_exit_success = true
 "#;

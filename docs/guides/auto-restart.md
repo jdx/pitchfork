@@ -63,6 +63,10 @@ $ pitchfork start api
 ERROR: daemon api failed with exit code 1
 ```
 
+**Hooks:**
+- `on_retry` fires before each startup retry attempt
+- `on_fail` fires when all startup retries are exhausted
+
 **Use case:** Services that fail due to:
 - Waiting for dependent services
 - Temporary port conflicts
@@ -89,10 +93,83 @@ $ # ... daemon runs for a while ...
 # Success! Daemon stays running
 ```
 
+**Hooks:**
+- `on_recover` fires before each runtime recovery attempt
+- `on_crash` fires when all runtime retries are exhausted
+
 **Use case:** Services that experience:
 - Transient network issues
 - Memory leaks causing periodic crashes
 - External resource failures
+
+## Recovery Configuration
+
+By default, runtime recovery uses the same limit as `retry`. Use the `recovery` field to set a different limit for runtime crashes independently from startup retries:
+
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 3       # Startup: retry up to 3 times
+recovery = 1    # Runtime: only 1 recovery attempt after crash
+```
+
+Like `retry`, `recovery` accepts a number, `true` (infinite), or `false`/`0` (none):
+
+```toml
+[daemons.critical]
+run = "npm run worker"
+retry = 3        # Startup: retry up to 3 times
+recovery = true  # Runtime: always recover (infinite)
+```
+
+When `recovery` is not set, it defaults to the value of `retry`. This means a daemon with `retry = 3` will also have up to 3 runtime recovery attempts unless `recovery` is explicitly configured.
+
+### Common Patterns
+
+**Strict startup, lenient runtime** — allow many startup retries but limit runtime recoveries:
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 5        # Startup: retry up to 5 times (service may need time)
+recovery = 1     # Runtime: only 1 recovery (crashes are more concerning)
+```
+
+**Lenient startup, strict runtime** — fail fast on startup but always recover at runtime:
+```toml
+[daemons.worker]
+run = "python worker.py"
+retry = 1         # Startup: only 1 retry (config is probably wrong)
+recovery = true   # Runtime: always recover (transient errors are common)
+```
+
+**No runtime recovery** — only retry at startup, never recover at runtime:
+```toml
+[daemons.batch]
+run = "./process.sh"
+retry = 3          # Startup: retry up to 3 times
+recovery = false   # Runtime: never recover (let it stay crashed)
+```
+
+## Retry Count vs Recovery Count
+
+Pitchfork tracks two separate counters:
+
+| Counter | Phase | Environment Variable | When it increments |
+|---------|-------|---------------------|-------------------|
+| `retry_count` | Startup | `PITCHFORK_RETRY_COUNT` | Each startup retry attempt |
+| `recovery_count` | Runtime | `PITCHFORK_RECOVERY_COUNT` | Each runtime recovery attempt |
+
+Both counters start at 0 on first start. `recovery_count` is persisted to state and survives supervisor restarts. File-change restarts reset `recovery_count` to 0 (fresh start, not a recovery).
+
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 3
+
+[daemons.api.hooks]
+on_retry = "echo 'Startup retry $PITCHFORK_RETRY_COUNT'"
+on_recover = "echo 'Runtime recovery $PITCHFORK_RECOVERY_COUNT'"
+```
 
 ## Example Configurations
 
@@ -110,6 +187,18 @@ ready_http = "http://localhost:3000/health"
 run = "postgres -D /var/lib/pgsql/data"
 retry = 3
 ready_output = "ready to accept connections"
+```
+
+**Service with separate startup and runtime alerts:**
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 3
+
+[daemons.api.hooks]
+on_fail = "./scripts/alert-startup-failure.sh"
+on_crash = "./scripts/alert-runtime-crash.sh"
+on_recover = "./scripts/notify-recovering.sh"
 ```
 
 ## Lifecycle Hooks

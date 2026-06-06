@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
-    CpuLimit, CronRetrigger, Dir, GateConfig, MemoryLimit, OnOutputHook, PitchforkTomlAuto,
-    PitchforkTomlCron, PitchforkTomlGates, PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp,
-    Retry, StopConfig, StopSignal, WatchMode,
+    CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -140,6 +139,11 @@ struct PitchforkTomlDaemonRaw {
     pub cron: Option<PitchforkTomlCron>,
     #[serde(default)]
     pub retry: Retry,
+    /// Number of times to retry if the daemon crashes at runtime.
+    /// Can be a number (e.g., `3`) or `true` for infinite retries.
+    /// Defaults to the value of `retry` if not set.
+    #[serde(default)]
+    pub recovery: Option<Retry>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -176,8 +180,6 @@ struct PitchforkTomlDaemonRaw {
     pub env: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub hooks: Option<PitchforkTomlHooks>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub gates: Option<PitchforkTomlGates>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub mise: Option<bool>,
     /// Unix user to run this daemon as.
@@ -1056,6 +1058,7 @@ impl PitchforkToml {
                 auto: raw_daemon.auto,
                 cron: raw_daemon.cron,
                 retry: raw_daemon.retry,
+                recovery: raw_daemon.recovery,
                 ready_delay: raw_daemon.ready_delay,
                 ready_output: raw_daemon.ready_output,
                 ready_http: raw_daemon.ready_http,
@@ -1069,7 +1072,6 @@ impl PitchforkToml {
                 dir: raw_daemon.dir,
                 env: raw_daemon.env,
                 hooks: raw_daemon.hooks,
-                gates: raw_daemon.gates,
                 mise: raw_daemon.mise,
                 user: raw_daemon.user,
                 memory_limit: raw_daemon.memory_limit,
@@ -1199,6 +1201,7 @@ impl PitchforkToml {
                     auto: daemon.auto.clone(),
                     cron: daemon.cron.clone(),
                     retry: daemon.retry,
+                    recovery: daemon.recovery,
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
                     ready_http: daemon.ready_http.clone(),
@@ -1233,7 +1236,6 @@ impl PitchforkToml {
                     dir: daemon.dir.clone(),
                     env: daemon.env.clone(),
                     hooks: daemon.hooks.clone(),
-                    gates: daemon.gates.clone(),
                     mise: daemon.mise,
                     user: daemon.user.clone(),
                     memory_limit: daemon.memory_limit,
@@ -1544,6 +1546,11 @@ pub struct PitchforkTomlDaemon {
     /// Can be a number (e.g., `3`) or `true` for infinite retries.
     #[schemars(default)]
     pub retry: Retry,
+    /// Number of times to retry if the daemon crashes at runtime.
+    /// Can be a number (e.g., `3`) or `true` for infinite retries.
+    /// Defaults to the value of `retry` if not set.
+    #[schemars(default)]
+    pub recovery: Option<Retry>,
     /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
@@ -1576,10 +1583,8 @@ pub struct PitchforkTomlDaemon {
     pub dir: Option<String>,
     /// Environment variables to set for the daemon process
     pub env: Option<IndexMap<String, String>>,
-    /// Lifecycle hooks (on_ready, on_fail, on_retry)
+    /// Lifecycle hooks (on_ready, on_fail, on_retry, on_stop, on_exit, pre_start, pre_stop)
     pub hooks: Option<PitchforkTomlHooks>,
-    /// Lifecycle gates (pre_start, post_start, pre_stop, post_stop)
-    pub gates: Option<PitchforkTomlGates>,
     /// Wrap this daemon's command with `mise x --` for tool/env setup.
     /// Overrides the global `settings.general.mise` when set.
     pub mise: Option<bool>,
@@ -1645,7 +1650,9 @@ impl PitchforkTomlDaemon {
             cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
             cron_immediate: self.cron.as_ref().map(|c| c.immediate),
             retry: self.retry,
+            recovery: self.recovery.unwrap_or(self.retry),
             retry_count: 0,
+            recovery_count: 0,
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),

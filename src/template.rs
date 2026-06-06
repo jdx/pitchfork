@@ -224,26 +224,96 @@ pub fn render_daemon_templates(
 
     if let Some(ref hooks) = config.hooks {
         let rendered = crate::config_types::PitchforkTomlHooks {
-            on_ready: hooks
-                .on_ready
-                .as_deref()
-                .and_then(|t| renderer.render(t).ok()),
-            on_fail: hooks
-                .on_fail
-                .as_deref()
-                .and_then(|t| renderer.render(t).ok()),
-            on_retry: hooks
-                .on_retry
-                .as_deref()
-                .and_then(|t| renderer.render(t).ok()),
-            on_stop: hooks
-                .on_stop
-                .as_deref()
-                .and_then(|t| renderer.render(t).ok()),
-            on_exit: hooks
-                .on_exit
-                .as_deref()
-                .and_then(|t| renderer.render(t).ok()),
+            pre_start: hooks.pre_start.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_ready: hooks.on_ready.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            pre_stop: hooks.pre_stop.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_stop: hooks.on_stop.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_exit: hooks.on_exit.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_fail: hooks.on_fail.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_retry: hooks.on_retry.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_recover: hooks.on_recover.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
+            on_crash: hooks.on_crash.as_ref().and_then(|h| {
+                renderer
+                    .render(&h.run)
+                    .ok()
+                    .map(|run| crate::config_types::HookConfig {
+                        run,
+                        block: h.block,
+                        timeout: h.timeout.clone(),
+                    })
+            }),
             on_output: hooks.on_output.as_ref().and_then(|hook| {
                 renderer
                     .render(&hook.run)
@@ -508,11 +578,15 @@ mod tests {
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             hooks: Some(crate::config_types::PitchforkTomlHooks {
+                pre_start: None,
                 on_ready: None,
-                on_fail: None,
-                on_retry: None,
+                pre_stop: None,
                 on_stop: None,
                 on_exit: None,
+                on_fail: None,
+                on_retry: None,
+                on_crash: None,
+                on_recover: None,
                 on_output: Some(crate::config_types::OnOutputHook {
                     run: "curl http://localhost:{{ daemons.redis.port }}".to_string(),
                     filter: Some("ready".to_string()),
@@ -537,11 +611,17 @@ mod tests {
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             hooks: Some(crate::config_types::PitchforkTomlHooks {
-                on_ready: Some("{{ nonexistent }}".to_string()),
-                on_fail: None,
-                on_retry: None,
+                pre_start: None,
+                on_ready: Some(crate::config_types::StringOrStruct::from_short(
+                    "{{ nonexistent }}".to_string(),
+                )),
+                pre_stop: None,
                 on_stop: None,
                 on_exit: None,
+                on_fail: None,
+                on_retry: None,
+                on_crash: None,
+                on_recover: None,
                 on_output: None,
             }),
             ..Default::default()

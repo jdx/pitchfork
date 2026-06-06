@@ -1,3 +1,4 @@
+use pitchfork_cli::config_types::HookConfig;
 use pitchfork_cli::daemon_id::DaemonId;
 use pitchfork_cli::*;
 use std::fs;
@@ -1542,10 +1543,28 @@ on_retry = "echo 'retrying...'"
     let hooks = daemon.hooks.as_ref().unwrap();
     assert_eq!(
         hooks.on_ready,
-        Some("curl -X POST https://alerts.example.com/ready".to_string())
+        Some(HookConfig {
+            run: "curl -X POST https://alerts.example.com/ready".to_string(),
+            block: false,
+            timeout: None,
+        })
     );
-    assert_eq!(hooks.on_fail, Some("./scripts/cleanup.sh".to_string()));
-    assert_eq!(hooks.on_retry, Some("echo 'retrying...'".to_string()));
+    assert_eq!(
+        hooks.on_fail,
+        Some(HookConfig {
+            run: "./scripts/cleanup.sh".to_string(),
+            block: false,
+            timeout: None,
+        })
+    );
+    assert_eq!(
+        hooks.on_retry,
+        Some(HookConfig {
+            run: "echo 'retrying...'".to_string(),
+            block: false,
+            timeout: None,
+        })
+    );
 
     Ok(())
 }
@@ -1590,7 +1609,14 @@ on_fail = "echo failed"
     let daemon = get_daemon_by_name(&pt, "test").unwrap();
     let hooks = daemon.hooks.as_ref().unwrap();
     assert!(hooks.on_ready.is_none());
-    assert_eq!(hooks.on_fail, Some("echo failed".to_string()));
+    assert_eq!(
+        hooks.on_fail,
+        Some(HookConfig {
+            run: "echo failed".to_string(),
+            block: false,
+            timeout: None,
+        })
+    );
     assert!(hooks.on_retry.is_none());
 
     Ok(())

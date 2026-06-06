@@ -935,6 +935,7 @@ impl Supervisor {
         let mut run_opts = daemon.to_run_options(cmd);
         run_opts.force = true;
         run_opts.retry_count = 0;
+        run_opts.recovery_count = 0;
         run_opts.wait_ready = false; // Don't block on file-triggered restarts
 
         match self.run(run_opts).await {

@@ -66,16 +66,20 @@
       "type": "string",
       "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
     },
-    "GateConfig": {
-      "description": "A single gate command configuration.\n\nAccepts two TOML forms:\n```toml\npre_start = \"curl http://deps/health\"  # shorthand (command only)\npre_start = { run = \"curl http://deps/health\", timeout = \"30s\" }  # full\n```",
+    "HookConfig": {
+      "description": "A single hook command configuration.\n\nAccepts two TOML forms:\n```toml\non_ready = \"echo ready\"  # shorthand (command only, fire-and-forget)\non_ready = { run = \"curl http://deps/health\", block = true, timeout = \"30s\" }  # full\n```",
       "type": "object",
       "properties": {
+        "block": {
+          "description": "Whether to block the lifecycle until the hook command succeeds.\nWhen `true`, the lifecycle pauses until the command exits with code 0.\nWhen `false` (default), the hook is fire-and-forget.",
+          "type": "boolean"
+        },
         "run": {
           "description": "Command to run",
           "type": "string"
         },
         "timeout": {
-          "description": "Timeout for the gate command (humantime, e.g. `\"30s\"`).\nDefaults to `settings.supervisor.gate_timeout` (30s by default) when not set.",
+          "description": "Timeout for the hook command when `block = true` (humantime, e.g. `\"30s\"`).\nDefaults to `settings.supervisor.hook_block_timeout` (30s by default) when not set.\nIgnored when `block = false`.",
           "type": [
             "string",
             "null"
@@ -83,7 +87,8 @@
         }
       },
       "required": [
-        "run"
+        "run",
+        "block"
       ]
     },
     "MemoryLimit": {
@@ -226,19 +231,8 @@
             "type": "string"
           }
         },
-        "gates": {
-          "description": "Lifecycle gates (pre_start, post_start, pre_stop, post_stop)",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PitchforkTomlGates"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "hooks": {
-          "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
+          "description": "Lifecycle hooks (on_ready, on_fail, on_retry, on_stop, on_exit, pre_start, pre_stop)",
           "anyOf": [
             {
               "$ref": "#/$defs/PitchforkTomlHooks"
@@ -336,6 +330,18 @@
           "maximum": 65535,
           "minimum": 1
         },
+        "recovery": {
+          "description": "Number of times to retry if the daemon crashes at runtime.\nCan be a number (e.g., `3`) or `true` for infinite retries.\nDefaults to the value of `retry` if not set.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Retry"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "retry": {
           "description": "Number of times to retry if the daemon fails.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
           "$ref": "#/$defs/Retry",
@@ -391,72 +397,41 @@
         "run"
       ]
     },
-    "PitchforkTomlGates": {
-      "description": "Lifecycle gates for a daemon.\n\nGates block the daemon lifecycle until the gate command succeeds.\nUnlike hooks (fire-and-forget), gates must pass before proceeding.",
-      "type": "object",
-      "properties": {
-        "post_start": {
-          "description": "Gate that must pass after the daemon becomes ready",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GateConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "post_stop": {
-          "description": "Gate that must pass after the daemon has stopped",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GateConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pre_start": {
-          "description": "Gate that must pass before the daemon process is spawned",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GateConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pre_stop": {
-          "description": "Gate that must pass before the daemon is stopped",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GateConfig"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    },
     "PitchforkTomlHooks": {
       "description": "Lifecycle hooks for a daemon",
       "type": "object",
       "properties": {
+        "on_crash": {
+          "description": "Hook that runs when the daemon crashes and all retries are exhausted (runtime phase)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "on_exit": {
-          "description": "Command to run on any daemon termination (clean exit, crash, or stop)",
-          "type": [
-            "string",
-            "null"
+          "description": "Hook that runs after the daemon has stopped (blocking capable)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "on_fail": {
-          "description": "Command to run when the daemon fails and all retries are exhausted",
-          "type": [
-            "string",
-            "null"
+          "description": "Hook that runs when the daemon fails and all retries are exhausted",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "on_output": {
@@ -471,24 +446,69 @@
           ]
         },
         "on_ready": {
-          "description": "Command to run when the daemon becomes ready",
-          "type": [
-            "string",
-            "null"
+          "description": "Hook that runs when the daemon becomes ready",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "on_recover": {
+          "description": "Hook that runs before each recovery attempt (runtime phase, after a crash)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "on_retry": {
-          "description": "Command to run before each retry attempt",
-          "type": [
-            "string",
-            "null"
+          "description": "Hook that runs before each retry attempt (startup phase)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "on_stop": {
-          "description": "Command to run when the daemon is explicitly stopped by pitchfork",
-          "type": [
-            "string",
-            "null"
+          "description": "Hook that runs when the daemon is explicitly stopped by pitchfork",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pre_start": {
+          "description": "Hook that runs before the daemon process is spawned (blocking)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pre_stop": {
+          "description": "Hook that runs before the daemon is stopped (blocking)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookConfig"
+            },
+            {
+              "type": "null"
+            }
           ]
         }
       }
@@ -925,8 +945,8 @@
             "null"
           ]
         },
-        "gate_timeout": {
-          "description": "Default timeout for gate commands",
+        "hook_block_timeout": {
+          "description": "Default timeout for blocking hook commands",
           "type": [
             "string",
             "null"

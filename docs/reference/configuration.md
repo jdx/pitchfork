@@ -186,6 +186,29 @@ run = "npm run worker"
 retry = true  # Retry forever
 ```
 
+### `recovery`
+
+Number of runtime recovery attempts after a previously-running daemon crashes. Default: inherits from `retry`
+
+- A number (e.g., `1`) means recover that many times
+- `true` means recover indefinitely
+- `false` or `0` means no runtime recovery
+- When not set, defaults to the value of `retry`
+
+```toml
+[daemons.api]
+run = "npm run server"
+retry = 5       # Startup: retry up to 5 times
+recovery = 1    # Runtime: only 1 recovery attempt
+
+[daemons.worker]
+run = "npm run worker"
+retry = 3
+recovery = true  # Runtime: always recover (infinite)
+```
+
+See [Auto Restart guide](/guides/auto-restart) for details on how `retry` and `recovery` interact.
+
 ### `auto`
 
 Auto-start and auto-stop behavior with shell hook. Options: `"start"`, `"stop"`
@@ -423,7 +446,7 @@ boot_start = true
 
 ### `hooks`
 
-Lifecycle hooks that run shell commands in response to daemon events. Hooks are fire-and-forget — they run in the background and never block the daemon.
+Lifecycle hooks that run shell commands in response to daemon events. Each hook can be fire-and-forget (default) or blocking (`block = true`).
 
 ```toml
 [daemons.api]
@@ -432,17 +455,37 @@ retry = 3
 
 [daemons.api.hooks]
 on_ready = "curl -X POST https://alerts.example.com/ready"
-on_fail = "./scripts/cleanup.sh"
-on_retry = "echo 'retrying...'"
+on_crash = "./scripts/cleanup.sh"
+on_recover = "echo 'recovering...'"
 ```
 
 **Fields:**
+- `pre_start` - Runs before the daemon process is spawned
 - `on_ready` - Runs when the daemon becomes ready (passes readiness check)
-- `on_fail` - Runs when the daemon fails and all retries are exhausted
-- `on_retry` - Runs before each retry attempt
+- `pre_stop` - Runs before the daemon is stopped
 - `on_stop` - Runs when the daemon is explicitly stopped by pitchfork
 - `on_exit` - Runs on any daemon termination (stop, clean exit, or crash); also fires during supervisor shutdown
+- `on_retry` - Runs before each startup retry attempt
+- `on_fail` - Runs when the daemon fails to start and all startup retries are exhausted
+- `on_recover` - Runs before each runtime recovery attempt
+- `on_crash` - Runs when a previously-running daemon crashes and all runtime retries are exhausted
 - `on_output` - Fires when the daemon produces matching output. Accepts a command string (shorthand) or an inline table `{ run, filter?, regex?, debounce? }`
+
+Each hook (except `on_output`) accepts a command string (shorthand) or an inline table (full form):
+
+```toml
+# Shorthand (command only, fire-and-forget)
+on_ready = "curl -sf http://localhost:3000/health"
+
+# Full form with block and timeout
+on_ready = { run = "curl -sf http://localhost:3000/health", block = true, timeout = "30s" }
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `run` | Yes | Shell command to execute |
+| `block` | No | Whether to block the lifecycle until the command exits with code 0. Default: `false`. Not all hooks support `block = true` — see [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details. |
+| `timeout` | No | Maximum time to wait when `block = true` (humantime). Defaults to `settings.supervisor.hook_block_timeout`. Ignored when `block = false`. |
 
 Hook commands receive environment variables: `PITCHFORK_DAEMON_ID` (fully-qualified `namespace/name`), `PITCHFORK_DAEMON_NAMESPACE`, `PITCHFORK_RETRY_COUNT`, `PITCHFORK_EXIT_CODE`, and (for `on_stop`/`on_exit`) `PITCHFORK_EXIT_REASON` (`"stop"`, `"exit"`, or `"fail"`). See [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
 
@@ -605,7 +648,7 @@ cpu_limit = 200
 
 [daemons.api.hooks]
 on_ready = "curl -X POST https://alerts.example.com/ready"
-on_fail = "./scripts/alert-failure.sh"
+on_crash = "./scripts/alert-failure.sh"
 
 # Frontend dev server in a subdirectory
 [daemons.frontend]

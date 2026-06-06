@@ -648,3 +648,243 @@ on_exit = "sh -c 'echo x >> {}'"
         "on_exit should fire exactly once (after retries exhausted), not on each crash attempt, got {fire_count} fires"
     );
 }
+
+/// Test that on_crash hook fires when a previously-running daemon crashes and retries are exhausted
+#[test]
+fn test_hook_on_crash() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker = env.marker_path("on_crash");
+
+    // Daemon becomes ready (prints "ready"), then crashes after 0.5s.
+    // With recovery = 0 (default when not specified), the daemon crashes
+    // immediately after becoming ready, triggering on_crash (not on_fail).
+    let toml_content = format!(
+        r#"
+[daemons.crash_hook_test]
+run = "sh -c 'echo ready && sleep 0.5 && exit 1'"
+retry = 1
+recovery = 0
+ready_output = "ready"
+
+[daemons.crash_hook_test.hooks]
+on_crash = "touch {}"
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "crash_hook_test"]);
+    println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
+
+    // Wait for daemon to become ready, crash, and on_crash to fire
+    for _ in 0..60 {
+        if marker.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert!(
+        marker.exists(),
+        "on_crash hook should fire when daemon becomes ready then crashes with recovery exhausted"
+    );
+}
+
+/// Test that on_recover hook fires before each runtime recovery attempt
+#[test]
+fn test_hook_on_recover() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker = env.marker_path("on_recover");
+
+    let toml_content = format!(
+        r#"
+[daemons.recover_hook_test]
+run = "sh -c 'exit 1'"
+retry = 2
+
+[daemons.recover_hook_test.hooks]
+on_recover = "sh -c 'echo recover >> {}'"
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    // Start the daemon - it will fail immediately, then check_retry will
+    // attempt recovery with on_recover hook
+    let output = env.run_command_with_env(
+        &["start", "recover_hook_test"],
+        &[("PITCHFORK_INTERVAL", "1s")],
+    );
+    println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
+
+    // Wait for recovery attempts
+    for _ in 0..60 {
+        if let Ok(content) = std::fs::read_to_string(&marker) {
+            let lines: Vec<&str> = content.lines().collect();
+            if lines.len() >= 2 {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    assert!(
+        marker.exists(),
+        "on_recover hook should have created marker file"
+    );
+    let content = std::fs::read_to_string(&marker).unwrap();
+    let lines: Vec<&str> = content.lines().collect();
+    assert!(
+        lines.len() >= 2,
+        "Should have at least 2 on_recover invocations (retry=2), got: {lines:?}"
+    );
+}
+
+/// Test that PITCHFORK_RECOVERY_COUNT env var is available and incremented
+#[test]
+fn test_env_var_pitchfork_recovery_count() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker = env.marker_path("recovery_count");
+
+    let toml_content = format!(
+        r#"
+[daemons.recovery_count_test]
+run = "sh -c 'echo $PITCHFORK_RECOVERY_COUNT > {0} && exit 1'"
+retry = 2
+
+[daemons.recovery_count_test.hooks]
+on_recover = "sh -c 'echo $PITCHFORK_RECOVERY_COUNT >> {0}'"
+"#,
+        marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command_with_env(
+        &["start", "recovery_count_test"],
+        &[("PITCHFORK_INTERVAL", "1s")],
+    );
+    println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
+
+    // Wait for recovery to happen
+    for _ in 0..60 {
+        if let Ok(content) = std::fs::read_to_string(&marker) {
+            if !content.trim().is_empty() {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    assert!(marker.exists(), "recovery count marker should exist");
+}
+
+/// Test that explicit recovery config limits runtime recovery independently from retry
+#[test]
+fn test_recovery_config_limits_runtime_recovery() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let counter_file = env.marker_path("recovery_counter");
+
+    // The daemon becomes ready (prints "ready"), then crashes after 0.5s.
+    // With recovery = 1, only 1 runtime recovery should happen.
+    // With retry = 5, startup would allow 5 retries, but recovery is independent.
+    let toml_content = format!(
+        r#"
+[daemons.recovery_limit_test]
+run = "sh -c 'echo ready && sleep 0.5 && exit 1'"
+retry = 5
+recovery = 1
+ready_output = "ready"
+
+[daemons.recovery_limit_test.hooks]
+on_recover = "sh -c 'echo x >> {0}'"
+on_crash = "touch {1}"
+"#,
+        counter_file.display(),
+        env.marker_path("on_crash_recovery").display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "recovery_limit_test"]);
+    assert!(
+        output.status.success(),
+        "Start should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Wait for on_crash to fire (recovery=1 means 1 recovery then crash)
+    let crash_marker = env.marker_path("on_crash_recovery");
+    for _ in 0..60 {
+        if crash_marker.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    assert!(
+        crash_marker.exists(),
+        "on_crash should fire when recovery limit is exhausted"
+    );
+
+    let content = std::fs::read_to_string(&counter_file).unwrap_or_default();
+    let recover_count = content.lines().count();
+    assert_eq!(
+        recover_count, 1,
+        "Should have exactly 1 recovery attempt (recovery=1), got {recover_count}"
+    );
+}
+
+/// Test that recovery = false prevents any runtime recovery
+#[test]
+fn test_recovery_false_no_runtime_recovery() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let crash_marker = env.marker_path("no_recovery_crash");
+    let recover_marker = env.marker_path("no_recovery_recover");
+
+    // Daemon becomes ready (prints "ready"), then crashes after 0.5s.
+    // With recovery = false, no runtime recovery should happen.
+    // on_crash should fire immediately (not on_recover).
+    let toml_content = format!(
+        r#"
+[daemons.no_recovery_test]
+run = "sh -c 'echo ready && sleep 0.5 && exit 1'"
+retry = 3
+recovery = false
+ready_output = "ready"
+
+[daemons.no_recovery_test.hooks]
+on_recover = "touch {0}"
+on_crash = "touch {1}"
+"#,
+        recover_marker.display(),
+        crash_marker.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "no_recovery_test"]);
+    println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
+
+    for _ in 0..60 {
+        if crash_marker.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    assert!(
+        crash_marker.exists(),
+        "on_crash should fire immediately when recovery = false"
+    );
+    assert!(
+        !recover_marker.exists(),
+        "on_recover should NOT fire when recovery = false"
+    );
+}

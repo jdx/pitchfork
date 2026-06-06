@@ -248,6 +248,25 @@
                 }
               },
               {
+                "name": "recovery",
+                "usage": "--recovery <RECOVERY>",
+                "help": "Number of recovery attempts on runtime crash (use \\\"true\\\" for infinite, defaults to retry)",
+                "help_first_line": "Number of recovery attempts on runtime crash (use \\\"true\\\" for infinite, defaults to retry)",
+                "short": [],
+                "long": [
+                  "recovery"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "RECOVERY",
+                  "usage": "<RECOVERY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "watch",
                 "usage": "--watch… <WATCH>",
                 "help": "Glob patterns to watch for changes (can be specified multiple times)",
@@ -497,6 +516,25 @@
                 "global": false
               },
               {
+                "name": "pre-start",
+                "usage": "--pre-start <PRE_START>",
+                "help": "Command to run before the daemon process is spawned",
+                "help_first_line": "Command to run before the daemon process is spawned",
+                "short": [],
+                "long": [
+                  "pre-start"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "PRE_START",
+                  "usage": "<PRE_START>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "on-ready",
                 "usage": "--on-ready <ON_READY>",
                 "help": "Command to run when daemon becomes ready",
@@ -510,6 +548,63 @@
                 "arg": {
                   "name": "ON_READY",
                   "usage": "<ON_READY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "pre-stop",
+                "usage": "--pre-stop <PRE_STOP>",
+                "help": "Command to run before the daemon is stopped",
+                "help_first_line": "Command to run before the daemon is stopped",
+                "short": [],
+                "long": [
+                  "pre-stop"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "PRE_STOP",
+                  "usage": "<PRE_STOP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-stop",
+                "usage": "--on-stop <ON_STOP>",
+                "help": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "help_first_line": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "short": [],
+                "long": [
+                  "on-stop"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_STOP",
+                  "usage": "<ON_STOP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "on-exit",
+                "usage": "--on-exit <ON_EXIT>",
+                "help": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "help_first_line": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "short": [],
+                "long": [
+                  "on-exit"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "ON_EXIT",
+                  "usage": "<ON_EXIT>",
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false
@@ -554,38 +649,38 @@
                 }
               },
               {
-                "name": "on-stop",
-                "usage": "--on-stop <ON_STOP>",
-                "help": "Command to run when the daemon is explicitly stopped by pitchfork",
-                "help_first_line": "Command to run when the daemon is explicitly stopped by pitchfork",
+                "name": "on-recover",
+                "usage": "--on-recover <ON_RECOVER>",
+                "help": "Command to run before each recovery attempt (runtime)",
+                "help_first_line": "Command to run before each recovery attempt (runtime)",
                 "short": [],
                 "long": [
-                  "on-stop"
+                  "on-recover"
                 ],
                 "hide": false,
                 "global": false,
                 "arg": {
-                  "name": "ON_STOP",
-                  "usage": "<ON_STOP>",
+                  "name": "ON_RECOVER",
+                  "usage": "<ON_RECOVER>",
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false
                 }
               },
               {
-                "name": "on-exit",
-                "usage": "--on-exit <ON_EXIT>",
-                "help": "Command to run on any daemon termination (clean exit, crash, or stop)",
-                "help_first_line": "Command to run on any daemon termination (clean exit, crash, or stop)",
+                "name": "on-crash",
+                "usage": "--on-crash <ON_CRASH>",
+                "help": "Command to run when daemon crashes permanently (runtime)",
+                "help_first_line": "Command to run when daemon crashes permanently (runtime)",
                 "short": [],
                 "long": [
-                  "on-exit"
+                  "on-crash"
                 ],
                 "hide": false,
                 "global": false,
                 "arg": {
-                  "name": "ON_EXIT",
-                  "usage": "<ON_EXIT>",
+                  "name": "ON_CRASH",
+                  "usage": "<ON_CRASH>",
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false

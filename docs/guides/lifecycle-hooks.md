@@ -1,6 +1,6 @@
-# Lifecycle Hooks & Gates
+# Lifecycle Hooks
 
-**Hooks** are fire-and-forget shell commands that run in response to daemon lifecycle events. **Gates** are blocking checkpoints that must pass before the lifecycle proceeds. Use hooks for notifications and side effects; use gates for preconditions and validation.
+Lifecycle hooks are shell commands that run in response to daemon lifecycle events. Each hook can be **fire-and-forget** (default) or **blocking** — blocking hooks pause the lifecycle until the command succeeds.
 
 ## Configuration
 
@@ -12,77 +12,111 @@ ready_http = "http://localhost:3000/health"
 
 [daemons.api.hooks]
 on_ready = "curl -X POST https://alerts.example.com/ready"
-on_fail = "./scripts/cleanup.sh"
+on_crash = "./scripts/cleanup.sh"
 on_output = { filter = "Server started", run = "./scripts/notify-ready.sh" }
-
-[daemons.api.gates]
-pre_start = "curl -sf http://deps:8080/health"
-post_start = { run = "curl -sf http://localhost:3000/api/version", timeout = "10s" }
-pre_stop = "./scripts/drain-connections.sh"
-post_stop = "./scripts/cleanup-sockets.sh"
 ```
 
-## Hooks
+## Hook Types
 
-Hooks run in the background and never block the daemon. Errors are logged but do not affect the lifecycle.
+| Hook | When it runs | Default behavior |
+|------|-------------|-----------------|
+| `pre_start` | Before the daemon process is spawned | Fire-and-forget |
+| `on_ready` | Daemon passes its readiness check | Fire-and-forget |
+| `pre_stop` | Before the daemon is stopped | Fire-and-forget |
+| `on_stop` | Daemon is explicitly stopped by pitchfork | Fire-and-forget |
+| `on_exit` | Any daemon termination (stop, clean exit, or crash) | Fire-and-forget |
+| `on_retry` | Before each startup retry attempt | Fire-and-forget |
+| `on_fail` | Startup fails and all retries are exhausted | Fire-and-forget |
+| `on_recover` | Before each runtime recovery attempt | Fire-and-forget |
+| `on_crash` | Runtime crash and all retries exhausted | Fire-and-forget |
+| `on_output` | Daemon writes a line matching an optional pattern | Fire-and-forget |
 
-### Hook Types
+### `pre_start`
 
-| Hook | When it fires |
-|------|--------------|
-| `on_ready` | Daemon passes its readiness check (delay, output match, HTTP, port, or command) |
-| `on_fail` | Daemon fails and all retries are exhausted |
-| `on_retry` | Before each retry attempt |
-| `on_stop` | Daemon is explicitly stopped by pitchfork |
-| `on_exit` | Any daemon termination (stop, clean exit, or crash) |
-| `on_output` | Daemon writes a line matching an optional pattern |
+Runs before the daemon process is spawned. Use `block = true` to ensure dependencies or preconditions are met before starting.
 
-#### `on_ready`
+```toml
+[daemons.api.hooks]
+pre_start = "curl -sf http://deps:8080/health"
+```
+
+### `on_ready`
+
+Runs when the daemon passes its readiness check (delay, output match, HTTP, port, or command).
 
 ```toml
 [daemons.api.hooks]
 on_ready = "curl -s -X POST https://slack.example.com/webhook -d '{\"text\": \"API is up\"}'"
 ```
 
-#### `on_fail`
+### `pre_stop`
 
-Fires when the daemon fails and all retries are exhausted. If `retry = 0`, fires immediately on failure.
-
-```toml
-[daemons.api.hooks]
-on_fail = "./scripts/alert-team.sh"
-```
-
-#### `on_retry`
-
-Fires before each retry attempt.
+Runs before the daemon is stopped. Use `block = true` to drain connections or perform graceful shutdown steps.
 
 ```toml
 [daemons.api.hooks]
-on_retry = "echo 'Retrying api (attempt $PITCHFORK_RETRY_COUNT)...'"
+pre_stop = "./scripts/drain-connections.sh"
 ```
 
-#### `on_stop`
+### `on_stop`
 
-Fires when the daemon is explicitly stopped by pitchfork (via `pitchfork stop`, `auto = ["stop"]` directory exit, or supervisor shutdown).
+Runs when the daemon is explicitly stopped by pitchfork (via `pitchfork stop`, `auto = ["stop"]` directory exit, or supervisor shutdown).
 
 ```toml
 [daemons.api.hooks]
 on_stop = "./scripts/notify-stopped.sh"
 ```
 
-#### `on_exit`
+### `on_exit`
 
-Fires on **any** daemon termination — intentional stop, clean exit, or crash. Also fires during supervisor shutdown. Use this for cleanup that should always run regardless of why the daemon stopped.
+Runs on **any** daemon termination — intentional stop, clean exit, or crash. Also fires during supervisor shutdown. Use this for cleanup that should always run regardless of why the daemon stopped.
 
-> **Note:** For daemons with `retry > 0`, `on_exit` fires **only after all retries are exhausted**, not on each individual crash attempt. Use `on_retry` if you need to react to every failure.
+> **Note:** `on_exit` does not support `block = true` — it is always fire-and-forget. If you need blocking cleanup, use `on_stop` with `block = true` instead.
+
+> **Note:** For daemons with `retry > 0`, `on_exit` fires **only after all retries are exhausted**, not on each individual crash attempt. Use `on_recover` if you need to react to every runtime failure.
 
 ```toml
 [daemons.infra.hooks]
 on_exit = "docker compose down --volumes"
 ```
 
-#### `on_output`
+### `on_retry`
+
+Fires before each **startup** retry attempt. This hook runs during the initial startup retry loop when the daemon fails to start.
+
+```toml
+[daemons.api.hooks]
+on_retry = "echo 'Retrying api (attempt $PITCHFORK_RETRY_COUNT)...'"
+```
+
+### `on_fail`
+
+Fires when the daemon fails to start and all **startup** retries are exhausted. If `retry = 0`, fires immediately on startup failure.
+
+```toml
+[daemons.api.hooks]
+on_fail = "./scripts/alert-team.sh"
+```
+
+### `on_recover`
+
+Fires before each **runtime** recovery attempt. This hook runs when a previously-running daemon crashes and pitchfork is about to restart it. The `PITCHFORK_RECOVERY_COUNT` environment variable tracks how many times the daemon has been recovered.
+
+```toml
+[daemons.api.hooks]
+on_recover = "echo 'Recovering api (attempt $PITCHFORK_RECOVERY_COUNT)...'"
+```
+
+### `on_crash`
+
+Fires when a previously-running daemon crashes and all **runtime** retries are exhausted. Also fires `on_exit`. This is the runtime equivalent of `on_fail`.
+
+```toml
+[daemons.api.hooks]
+on_crash = "./scripts/alert-team.sh"
+```
+
+### `on_output`
 
 Fires when the daemon writes a line to stdout or stderr that matches an optional pattern. Accepts a command string (shorthand) or an inline table (full form):
 
@@ -105,84 +139,124 @@ on_output = { filter = "Server started", run = "curl https://monitor.example.com
 
 The matched line is available as `$PITCHFORK_MATCHED_LINE`.
 
-### Hook Behavior
+## Startup vs Runtime Hooks
 
-- Hooks are **fire-and-forget** — they run in the background and never block the daemon
-- Hook commands run in the daemon's working directory
-- Errors in hooks are logged but do not affect the daemon
-- Hooks read fresh configuration from `pitchfork.toml` each time they fire
+Hooks are split into two phases based on when they fire:
 
-## Gates
+### Startup phase
 
-Gates block the lifecycle until the gate command exits with code 0. If a gate fails (non-zero exit or timeout), the lifecycle action is aborted with an error.
+These hooks fire during the initial `pitchfork start` or `pitchfork run` command:
 
-### Gate Types
+- `on_retry` — before each startup retry attempt
+- `on_fail` — when all startup retries are exhausted
 
-| Gate | When it runs | Blocks until |
-|------|-------------|-------------|
-| `pre_start` | Before the daemon process is spawned | Command exits 0 |
-| `post_start` | After the daemon becomes ready (or 500 ms after spawn if no readiness check) | Command exits 0 |
-| `pre_stop` | Before the daemon is stopped | Command exits 0 |
-| `post_stop` | After the daemon has stopped | Command exits 0 |
+Startup hooks support `block = true` because they run in the caller's context.
 
-### Shorthand vs Full Form
+### Runtime phase
 
-Each gate accepts a command string (shorthand) or an inline table (full form):
+These hooks fire in the background (monitor task or interval watcher) after the daemon has been running:
+
+- `on_recover` — before each runtime recovery attempt
+- `on_crash` — when all runtime retries are exhausted
+
+Runtime hooks are always fire-and-forget because blocking would stall the monitor task or interval watcher.
+
+## Shorthand vs Full Form
+
+Each hook (except `on_output`) accepts a command string (shorthand) or an inline table (full form):
 
 ```toml
-# Shorthand (command only, no timeout)
-pre_start = "curl -sf http://deps:8080/health"
+# Shorthand (command only, fire-and-forget)
+on_ready = "curl -sf http://localhost:3000/health"
 
-# Full form with timeout
-pre_start = { run = "curl -sf http://deps:8080/health", timeout = "30s" }
+# Full form with block and timeout
+on_ready = { run = "curl -sf http://localhost:3000/health", block = true, timeout = "30s" }
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `run` | Yes | Shell command to execute |
-| `timeout` | No | Maximum time to wait (humantime, e.g. `"30s"`, `"5m"`). Defaults to `settings.supervisor.gate_timeout` if not set. |
+| `block` | No | Whether to block the lifecycle until the command exits with code 0. Default: `false` |
+| `timeout` | No | Maximum time to wait when `block = true` (humantime, e.g. `"30s"`, `"5m"`). Defaults to `settings.supervisor.hook_block_timeout` if not set. Ignored when `block = false`. |
 
-### Default Gate Timeout
+## Blocking vs Fire-and-Forget
 
-If no per-gate `timeout` is specified, the global default from `settings.supervisor.gate_timeout` is used (default: `"30s"`). This prevents gates from blocking indefinitely.
+By default, hooks are **fire-and-forget** — they run in the background and never block the daemon. Set `block = true` to make a hook **blocking**:
+
+- The lifecycle pauses until the hook command exits with code 0
+- If the command exits non-zero, a warning is logged but the daemon state is not changed
+- If the command times out, it is killed and a warning is logged
+
+### Block support by hook
+
+Not all hooks support `block = true`. Hooks that run in the monitor task or interval watcher cannot block because doing so would stall those background loops.
+
+| Hook | `block = true` | Notes |
+|------|----------------|-------|
+| `pre_start` | Yes | Blocks `run()`, failure returns error |
+| `on_ready` | Partial | Blocks during `wait_ready` start; fire-and-forget in monitor task and non-waiting start |
+| `pre_stop` | Yes | Blocks `stop()`, failure returns error |
+| `on_stop` | Partial | Blocks during explicit `stop()`; fire-and-forget in monitor task |
+| `on_exit` | No | Always fire-and-forget |
+| `on_retry` | Partial | Blocks during startup retry loop; fire-and-forget in interval watcher |
+| `on_fail` | No | Always fire-and-forget |
+| `on_recover` | No | Always fire-and-forget (runtime only) |
+| `on_crash` | No | Always fire-and-forget (runtime only) |
+| `on_output` | No | Has its own config format, always fire-and-forget |
+
+### When to use `block = true`
+
+| Hook | Use case |
+|------|----------|
+| `pre_start` | Wait for a dependency to be available before starting |
+| `on_ready` | Validate the daemon is healthy after startup |
+| `pre_stop` | Drain connections or perform graceful shutdown steps before stopping |
+| `on_stop` | Ensure cleanup completes before proceeding |
+| `on_retry` | Block until pre-retry setup completes |
+
+### Known Limitations
+
+- **`on_exit`, `on_fail`, `on_recover`, and `on_crash` do not support `block = true`**. They are always fire-and-forget.
+- **`on_ready` supports `block = true` only during startup with `wait_ready = true`**. When the daemon starts without `wait_ready`, `on_ready` fires from the monitor task as fire-and-forget (even if `block = true` is set).
+- **`on_stop` only supports `block = true` during explicit stop**. When it fires from the monitor task, `block = true` is silently ignored and the hook runs as fire-and-forget.
+- **`on_retry` only supports `block = true` during the startup retry loop**. When it fires from the interval watcher, `block = true` is silently ignored.
+
+### Default Block Timeout
+
+If no per-hook `timeout` is specified with `block = true`, the global default from `settings.supervisor.hook_block_timeout` is used (default: `"30s"`). This prevents blocking hooks from running indefinitely.
 
 ```toml
 [settings.supervisor]
-gate_timeout = "60s"
+hook_block_timeout = "60s"
 ```
 
-### Gate Behavior
+## Hook Behavior
 
-- Gates **block** the lifecycle — the start/stop operation waits for the gate to pass
-- If a gate command exits with a non-zero code, the lifecycle action fails with an error
-- If a gate command times out, it is killed and the lifecycle action fails
-- Gate commands run in the daemon's working directory
-- Gates read fresh configuration from `pitchfork.toml` each time they run
-- `post_start` in non-wait-ready mode runs as a fire-and-forget task after a 500 ms delay (errors are logged but do not block)
-
-## Hooks vs Gates
-
-| | Hooks | Gates |
-|--|-------|-------|
-| Blocking | No (fire-and-forget) | Yes (blocks lifecycle) |
-| Failure impact | Logged, daemon unaffected | Lifecycle aborted with error |
-| Timeout | No | Yes (per-gate or global default) |
-| Config section | `[daemons.<name>.hooks]` | `[daemons.<name>.gates]` |
+- Hook commands run in the daemon's working directory
+- Errors in fire-and-forget hooks are logged but do not affect the daemon
+- Blocking hook failures log a warning but do not change daemon state
+- Hooks read fresh configuration from `pitchfork.toml` each time they fire
 
 ## Environment Variables
 
-All hooks and gates receive these environment variables:
+All hooks receive these environment variables:
 
-| Variable | Hooks | Gates | Description |
-|----------|-------|-------|-------------|
-| `PITCHFORK_DAEMON_ID` | All | All | The daemon's fully-qualified ID (`namespace/name`) |
-| `PITCHFORK_DAEMON_NAMESPACE` | All | All | The daemon's namespace |
-| `PITCHFORK_RETRY_COUNT` | All | All | Current retry attempt (0 on first run) |
-| `PITCHFORK_EXIT_CODE` | `on_fail`, `on_stop`, `on_exit` | `post_stop` | Exit code of the process. On Unix, processes terminated by a signal (e.g. SIGTERM) have no POSIX exit code; set to `-1`. |
-| `PITCHFORK_EXIT_REASON` | `on_stop`, `on_exit` | `post_stop` | Why the daemon stopped: `"stop"` (intentional), `"fail"` (non-zero exit), or `"exit"` (clean exit) |
-| `PITCHFORK_MATCHED_LINE` | `on_output` | — | The raw output line that triggered the hook |
+| Variable | All hooks | `on_fail`, `on_crash`, `on_exit` | `on_stop` | `on_output` |
+|----------|-----------|----------------------------------|-----------|-------------|
+| `PITCHFORK_DAEMON_ID` | Yes | Yes | Yes | Yes |
+| `PITCHFORK_DAEMON_NAMESPACE` | Yes | Yes | Yes | Yes |
+| `PITCHFORK_RETRY_COUNT` | Yes | Yes | Yes | Yes |
+| `PITCHFORK_RECOVERY_COUNT` | Yes | Yes | Yes | Yes |
+| `PITCHFORK_EXIT_CODE` | — | Yes | Yes | — |
+| `PITCHFORK_EXIT_REASON` | — | — | Yes | Yes (`on_exit` too) |
+| `PITCHFORK_MATCHED_LINE` | — | — | — | Yes |
 
-Any custom `env` variables from the daemon config are also passed to hooks and gates.
+- `PITCHFORK_RETRY_COUNT`: Number of startup retry attempts (0 on first start)
+- `PITCHFORK_RECOVERY_COUNT`: Number of runtime recovery attempts (0 on first start)
+- `PITCHFORK_EXIT_CODE`: Exit code of the process. On Unix, processes terminated by a signal (e.g. SIGTERM) have no POSIX exit code; set to `-1`.
+- `PITCHFORK_EXIT_REASON`: Why the daemon stopped: `"stop"` (intentional), `"fail"` (non-zero exit), or `"exit"` (clean exit)
+
+Any custom `env` variables from the daemon config are also passed to hooks.
 
 ## Stop Signal
 
@@ -213,9 +287,9 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 
 ## Examples
 
-### Hooks
+### Fire-and-forget notifications
 
-**Send a Slack notification on failure:**
+**Send a Slack notification on crash:**
 
 ```toml
 [daemons.api]
@@ -223,10 +297,10 @@ run = "npm run server"
 retry = 3
 
 [daemons.api.hooks]
-on_fail = "curl -s -X POST $SLACK_WEBHOOK -d '{\"text\": \"API failed (exit $PITCHFORK_EXIT_CODE)\"}'"
+on_crash = "curl -s -X POST $SLACK_WEBHOOK -d '{\"text\": \"API crashed (exit $PITCHFORK_EXIT_CODE)\"}'"
 ```
 
-**Log retry attempts to a file:**
+**Log startup retry attempts to a file:**
 
 ```toml
 [daemons.worker]
@@ -234,10 +308,21 @@ run = "python worker.py"
 retry = 5
 
 [daemons.worker.hooks]
-on_retry = "sh -c 'echo \"$(date): retry $PITCHFORK_RETRY_COUNT\" >> /var/log/worker-retries.log'"
+on_retry = "sh -c 'echo \"$(date): startup retry $PITCHFORK_RETRY_COUNT\" >> /var/log/worker-retries.log'"
 ```
 
-**Run cleanup on failure:**
+**Log runtime recovery attempts:**
+
+```toml
+[daemons.worker]
+run = "python worker.py"
+retry = 5
+
+[daemons.worker.hooks]
+on_recover = "sh -c 'echo \"$(date): recovery $PITCHFORK_RECOVERY_COUNT\" >> /var/log/worker-recoveries.log'"
+```
+
+**Run cleanup on startup failure:**
 
 ```toml
 [daemons.processor]
@@ -269,6 +354,51 @@ run = "npm run server"
 on_exit = "sh -c 'echo \"Daemon exited: reason=$PITCHFORK_EXIT_REASON code=$PITCHFORK_EXIT_CODE\" >> /var/log/api-exits.log'"
 ```
 
+### Blocking hooks
+
+**Wait for a dependency before starting:**
+
+```toml
+[daemons.api]
+run = "npm run server"
+
+[daemons.api.hooks]
+pre_start = { run = "curl -sf http://localhost:5432/health", block = true }
+```
+
+**Validate the daemon is healthy after startup:**
+
+```toml
+[daemons.api]
+run = "npm run server"
+ready_http = "http://localhost:3000/health"
+
+[daemons.api.hooks]
+on_ready = { run = "curl -sf http://localhost:3000/api/version", block = true, timeout = "10s" }
+```
+
+**Drain connections before stopping:**
+
+```toml
+[daemons.api]
+run = "npm run server"
+
+[daemons.api.hooks]
+pre_stop = { run = "./scripts/drain-connections.sh", block = true }
+```
+
+**Clean up after a daemon stops:**
+
+```toml
+[daemons.api]
+run = "npm run server"
+
+[daemons.api.hooks]
+on_stop = { run = "./scripts/cleanup-sockets.sh", block = true }
+```
+
+### Output hooks
+
 **React to a specific log message:**
 
 ```toml
@@ -297,47 +427,4 @@ run = "python worker.py"
 
 [daemons.worker.hooks]
 on_output = { run = "sh -c 'echo \"$(date): active\" >> /var/log/worker-activity.log'", debounce = "10s" }
-```
-
-### Gates
-
-**Wait for a dependency before starting:**
-
-```toml
-[daemons.api]
-run = "npm run server"
-
-[daemons.api.gates]
-pre_start = "curl -sf http://localhost:5432/health"
-```
-
-**Validate the daemon is healthy after startup:**
-
-```toml
-[daemons.api]
-run = "npm run server"
-ready_http = "http://localhost:3000/health"
-
-[daemons.api.gates]
-post_start = { run = "curl -sf http://localhost:3000/api/version", timeout = "10s" }
-```
-
-**Drain connections before stopping:**
-
-```toml
-[daemons.api]
-run = "npm run server"
-
-[daemons.api.gates]
-pre_stop = "./scripts/drain-connections.sh"
-```
-
-**Clean up after a daemon stops:**
-
-```toml
-[daemons.api]
-run = "npm run server"
-
-[daemons.api.gates]
-post_stop = "./scripts/cleanup-sockets.sh"
 ```

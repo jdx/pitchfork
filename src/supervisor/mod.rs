@@ -110,7 +110,31 @@ pub fn start_if_not_running() -> Result<()> {
             return Ok(());
         }
     }
-    start_in_background()
+    start_in_background()?;
+    wait_for_ipc_socket()
+}
+
+/// Wait for the IPC socket file to appear after starting the supervisor.
+///
+/// `start_in_background()` spawns the supervisor process and returns
+/// immediately, but the supervisor needs time to initialize before the
+/// IPC socket is ready. Without waiting, the IPC client's connect retry
+/// logic may exhaust its attempts under heavy load (e.g. parallel tests).
+fn wait_for_ipc_socket() -> Result<()> {
+    let sock_path = &*env::IPC_SOCK_MAIN;
+    let timeout = Duration::from_secs(10);
+    let start = std::time::Instant::now();
+    while !sock_path.exists() {
+        if start.elapsed() >= timeout {
+            warn!(
+                "IPC socket {} not created after {timeout:?}, proceeding anyway",
+                sock_path.display()
+            );
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
 }
 
 pub fn start_in_background() -> Result<()> {

@@ -40,6 +40,9 @@ cmd daemons help="List configured daemons from all merged config files." {
         flag --retry help="Number of retry attempts on failure (use \\\"true\\\" for infinite)" {
             arg <RETRY>
         }
+        flag --recovery help="Number of recovery attempts on runtime crash (use \\\"true\\\" for infinite, defaults to retry)" {
+            arg <RECOVERY>
+        }
         flag --watch help="Glob patterns to watch for changes (can be specified multiple times)" var=#true {
             arg <WATCH>
         }
@@ -76,8 +79,20 @@ cmd daemons help="List configured daemons from all merged config files." {
         flag --boot-start help="Start this daemon automatically on system boot"
         flag --autostart help="Autostart the daemon when entering the directory"
         flag --autostop help="Autostop the daemon when leaving the directory"
+        flag --pre-start help="Command to run before the daemon process is spawned" {
+            arg <PRE_START>
+        }
         flag --on-ready help="Command to run when daemon becomes ready" {
             arg <ON_READY>
+        }
+        flag --pre-stop help="Command to run before the daemon is stopped" {
+            arg <PRE_STOP>
+        }
+        flag --on-stop help="Command to run when the daemon is explicitly stopped by pitchfork" {
+            arg <ON_STOP>
+        }
+        flag --on-exit help="Command to run on any daemon termination (clean exit, crash, or stop)" {
+            arg <ON_EXIT>
         }
         flag --on-fail help="Command to run when daemon fails" {
             arg <ON_FAIL>
@@ -85,11 +100,11 @@ cmd daemons help="List configured daemons from all merged config files." {
         flag --on-retry help="Command to run before each retry attempt" {
             arg <ON_RETRY>
         }
-        flag --on-stop help="Command to run when the daemon is explicitly stopped by pitchfork" {
-            arg <ON_STOP>
+        flag --on-recover help="Command to run before each recovery attempt (runtime)" {
+            arg <ON_RECOVER>
         }
-        flag --on-exit help="Command to run on any daemon termination (clean exit, crash, or stop)" {
-            arg <ON_EXIT>
+        flag --on-crash help="Command to run when daemon crashes permanently (runtime)" {
+            arg <ON_CRASH>
         }
         flag --cron-schedule help="Cron schedule expression (6 fields: second minute hour day month weekday)" {
             arg <CRON_SCHEDULE>

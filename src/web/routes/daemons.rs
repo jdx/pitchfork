@@ -379,6 +379,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                     <dl>
                         <dt>Command</dt><dd><code>{}</code></dd>
                         <dt>Retry</dt><dd>{}</dd>
+                        <dt>Recovery</dt><dd>{}</dd>
                         <dt>Ready Delay</dt><dd>{}</dd>
                         <dt>Ready Output</dt><dd>{}</dd>
                         <dt>Ready HTTP</dt><dd>{}</dd>
@@ -387,6 +388,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             "#,
                 html_escape(&cfg.run),
                 cfg.retry,
+                cfg.recovery.unwrap_or(cfg.retry),
                 cfg.ready_delay
                     .map(|d| format!("{d}s"))
                     .unwrap_or_else(|| "-".into()),
@@ -419,6 +421,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
                         <dt>Ad-hoc</dt><dd>{}</dd>
                         <dt>Disabled</dt><dd>{}</dd>
                         <dt>Retry Count</dt><dd>{} / {}</dd>
+                        <dt>Recovery Count</dt><dd>{} / {}</dd>
                     </dl>
                 </div>
                 {process_section}
@@ -438,6 +441,8 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
             if is_disabled { "Yes" } else { "No" },
             d.retry_count,
             d.retry,
+            d.recovery_count,
+            d.recovery,
         )
     } else if config_info.is_some() {
         format!(

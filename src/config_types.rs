@@ -856,107 +856,96 @@ impl OnOutputHook {
 }
 
 // ---------------------------------------------------------------------------
-// PitchforkTomlHooks
+// HookConfig (string-or-object pattern)
 // ---------------------------------------------------------------------------
 
-/// Lifecycle hooks for a daemon
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
-pub struct PitchforkTomlHooks {
-    /// Command to run when the daemon becomes ready
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub on_ready: Option<String>,
-    /// Command to run when the daemon fails and all retries are exhausted
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub on_fail: Option<String>,
-    /// Command to run before each retry attempt
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub on_retry: Option<String>,
-    /// Command to run when the daemon is explicitly stopped by pitchfork
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub on_stop: Option<String>,
-    /// Command to run on any daemon termination (clean exit, crash, or stop)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub on_exit: Option<String>,
-    /// Hook triggered when the daemon produces matching output
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub on_output: Option<OnOutputHook>,
-}
-
-// ---------------------------------------------------------------------------
-// GateConfig (string-or-object pattern)
-// ---------------------------------------------------------------------------
-
-/// A single gate command configuration.
+/// A single hook command configuration.
 ///
 /// Accepts two TOML forms:
 /// ```toml
-/// pre_start = "curl http://deps/health"  # shorthand (command only)
-/// pre_start = { run = "curl http://deps/health", timeout = "30s" }  # full
+/// on_ready = "echo ready"  # shorthand (command only, fire-and-forget)
+/// on_ready = { run = "curl http://deps/health", block = true, timeout = "30s" }  # full
 /// ```
-#[derive(Debug, Clone, JsonSchema)]
-pub struct GateConfig {
+#[derive(Debug, Clone, PartialEq, JsonSchema)]
+pub struct HookConfig {
     /// Command to run
     pub run: String,
-    /// Timeout for the gate command (humantime, e.g. `"30s"`).
-    /// Defaults to `settings.supervisor.gate_timeout` (30s by default) when not set.
+    /// Whether to block the lifecycle until the hook command succeeds.
+    /// When `true`, the lifecycle pauses until the command exits with code 0.
+    /// When `false` (default), the hook is fire-and-forget.
+    pub block: bool,
+    /// Timeout for the hook command when `block = true` (humantime, e.g. `"30s"`).
+    /// Defaults to `settings.supervisor.hook_block_timeout` (30s by default) when not set.
+    /// Ignored when `block = false`.
     pub timeout: Option<String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[doc(hidden)]
-pub struct GateConfigRaw {
+pub struct HookConfigRaw {
     run: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    block: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     timeout: Option<String>,
 }
 
-impl StringOrStruct for GateConfig {
+impl StringOrStruct for HookConfig {
     type Short = String;
-    type Raw = GateConfigRaw;
+    type Raw = HookConfigRaw;
 
     fn from_short(run: String) -> Self {
-        Self { run, timeout: None }
+        Self {
+            run,
+            block: false,
+            timeout: None,
+        }
     }
 
-    fn from_raw(raw: GateConfigRaw) -> std::result::Result<Self, String> {
+    fn from_raw(raw: HookConfigRaw) -> std::result::Result<Self, String> {
         if let Some(ref t) = raw.timeout {
-            humantime::parse_duration(t).map_err(|e| format!("invalid gate timeout '{t}': {e}"))?;
+            humantime::parse_duration(t).map_err(|e| format!("invalid hook timeout '{t}': {e}"))?;
+        }
+        if raw.block && raw.timeout.is_none() {
+            // block=true without explicit timeout is fine; global default applies
         }
         Ok(Self {
             run: raw.run,
+            block: raw.block,
             timeout: raw.timeout,
         })
     }
 
     fn is_shorthand(&self) -> bool {
-        self.timeout.is_none()
+        !self.block && self.timeout.is_none()
     }
 
     fn to_short(&self) -> String {
         self.run.clone()
     }
 
-    fn to_raw(&self) -> GateConfigRaw {
-        GateConfigRaw {
+    fn to_raw(&self) -> HookConfigRaw {
+        HookConfigRaw {
             run: self.run.clone(),
+            block: self.block,
             timeout: self.timeout.clone(),
         }
     }
 }
 
-impl Serialize for GateConfig {
+impl Serialize for HookConfig {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         self.string_or_struct_serialize(s)
     }
 }
 
-impl<'de> Deserialize<'de> for GateConfig {
+impl<'de> Deserialize<'de> for HookConfig {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         Self::string_or_struct_deserialize(d)
     }
 }
 
-impl GateConfig {
+impl HookConfig {
     pub fn timeout_duration(&self) -> Option<std::time::Duration> {
         self.timeout
             .as_deref()
@@ -965,27 +954,42 @@ impl GateConfig {
 }
 
 // ---------------------------------------------------------------------------
-// PitchforkTomlGates
+// PitchforkTomlHooks
 // ---------------------------------------------------------------------------
 
-/// Lifecycle gates for a daemon.
-///
-/// Gates block the daemon lifecycle until the gate command succeeds.
-/// Unlike hooks (fire-and-forget), gates must pass before proceeding.
+/// Lifecycle hooks for a daemon
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
-pub struct PitchforkTomlGates {
-    /// Gate that must pass before the daemon process is spawned
+pub struct PitchforkTomlHooks {
+    /// Hook that runs before the daemon process is spawned (blocking)
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub pre_start: Option<GateConfig>,
-    /// Gate that must pass after the daemon becomes ready
+    pub pre_start: Option<HookConfig>,
+    /// Hook that runs when the daemon becomes ready
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub post_start: Option<GateConfig>,
-    /// Gate that must pass before the daemon is stopped
+    pub on_ready: Option<HookConfig>,
+    /// Hook that runs before the daemon is stopped (blocking)
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub pre_stop: Option<GateConfig>,
-    /// Gate that must pass after the daemon has stopped
+    pub pre_stop: Option<HookConfig>,
+    /// Hook that runs when the daemon is explicitly stopped by pitchfork
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub post_stop: Option<GateConfig>,
+    pub on_stop: Option<HookConfig>,
+    /// Hook that runs after the daemon has stopped (blocking capable)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_exit: Option<HookConfig>,
+    /// Hook that runs when the daemon fails and all retries are exhausted
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_fail: Option<HookConfig>,
+    /// Hook that runs before each retry attempt (startup phase)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_retry: Option<HookConfig>,
+    /// Hook that runs before each recovery attempt (runtime phase, after a crash)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_recover: Option<HookConfig>,
+    /// Hook that runs when the daemon crashes and all retries are exhausted (runtime phase)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_crash: Option<HookConfig>,
+    /// Hook triggered when the daemon produces matching output
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub on_output: Option<OnOutputHook>,
 }
 
 // ---------------------------------------------------------------------------

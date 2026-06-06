@@ -449,6 +449,7 @@ id = "api"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 "#;
         assert!(StateFile::looks_like_old_format(old));
@@ -464,6 +465,7 @@ status = "stopped"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 "#;
         assert!(!StateFile::looks_like_old_format(new));
@@ -483,6 +485,7 @@ id = "api"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 
 [daemons.worker]
@@ -490,6 +493,7 @@ id = "worker"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 last_exit_success = true
 "#;
@@ -519,6 +523,7 @@ id = "api"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 "#;
         let migrated = StateFile::migrate_old_format(old).expect("migration should succeed");
@@ -543,6 +548,7 @@ id = "bare"
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 "#;
         let migrated = StateFile::migrate_old_format(mixed).expect("migration should succeed");
@@ -566,6 +572,7 @@ cmd = ["echo", "old"]
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 
 [daemons."legacy/api"]
@@ -574,6 +581,7 @@ cmd = ["echo", "new"]
 autostop = false
 retry = 0
 retry_count = 0
+recovery_count = 0
 status = "stopped"
 "#;
 

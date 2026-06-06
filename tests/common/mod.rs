@@ -2,7 +2,7 @@
 
 use pitchfork_cli::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -91,7 +91,7 @@ impl TestEnv {
             .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
             .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
             .env("PITCHFORK_LOG", "debug")
-            // Set fast watcher refresh/poll intervals for tests
+            .env("PITCHFORK_IPC_CONNECT_ATTEMPTS", "10")
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
             .env("PITCHFORK_WATCH_POLL_INTERVAL", "100ms")
             .stdout(Stdio::piped())
@@ -114,7 +114,7 @@ impl TestEnv {
             .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
             .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
             .env("PITCHFORK_LOG", "debug")
-            // Set fast watcher refresh/poll intervals for tests
+            .env("PITCHFORK_IPC_CONNECT_ATTEMPTS", "10")
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
             .env("PITCHFORK_WATCH_POLL_INTERVAL", "100ms")
             .stdout(Stdio::piped())
@@ -268,7 +268,7 @@ impl TestEnv {
             .env("XDG_CONFIG_HOME", self.home_dir.join(".config"))
             .env("XDG_STATE_HOME", self.home_dir.join(".local").join("state"))
             .env("PITCHFORK_LOG", "debug")
-            // Set fast watcher refresh/poll intervals for tests
+            .env("PITCHFORK_IPC_CONNECT_ATTEMPTS", "10")
             .env("PITCHFORK_WATCH_INTERVAL", "100ms")
             .env("PITCHFORK_WATCH_POLL_INTERVAL", "100ms")
             .stdout(Stdio::piped())
@@ -296,6 +296,22 @@ impl TestEnv {
     /// Get a path for a marker file in the temp directory
     pub fn marker_path(&self, name: &str) -> PathBuf {
         self.temp_dir.path().join(format!("{name}_marker"))
+    }
+
+    /// Poll until a file exists, returning true if found within timeout.
+    #[allow(dead_code)]
+    #[allow(clippy::ptr_arg)]
+    pub fn poll_file_exists(&self, path: &Path, timeout: Duration) -> bool {
+        let start = std::time::Instant::now();
+        loop {
+            if path.exists() {
+                return true;
+            }
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 
     /// Get daemon status by running `pitchfork status <id>`

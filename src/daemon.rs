@@ -57,7 +57,11 @@ pub struct Daemon {
     #[serde(default)]
     pub retry: Retry,
     #[serde(default)]
+    pub recovery: Retry,
+    #[serde(default)]
     pub retry_count: u32,
+    #[serde(default)]
+    pub recovery_count: u32,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -134,7 +138,9 @@ pub struct RunOptions {
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
     pub retry: Retry,
+    pub recovery: Retry,
     pub retry_count: u32,
+    pub recovery_count: u32,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
     pub ready_http: Option<ReadyHttp>,
@@ -217,7 +223,9 @@ impl Daemon {
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,
             retry: self.retry,
+            recovery: self.recovery,
             retry_count: self.retry_count,
+            recovery_count: self.recovery_count,
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),

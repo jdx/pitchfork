@@ -1,14 +1,33 @@
-//! Hook and gate execution for daemon lifecycle events
+//! Hook execution for daemon lifecycle events
 //!
-//! Hooks are fire-and-forget shell commands that run in response to daemon
-//! lifecycle events (ready, fail, retry). They are configured in pitchfork.toml
-//! under `[daemons.<name>.hooks]`.
+//! Hooks are shell commands that run in response to daemon lifecycle events.
+//! They are configured in pitchfork.toml under `[daemons.<name>.hooks]`.
 //!
-//! Gates block the lifecycle until the command exits with code 0. They are
-//! configured under `[daemons.<name>.gates]`.
+//! Each hook can be:
+//! - **Fire-and-forget** (`block = false`, default): runs in background, errors are logged
+//! - **Blocking** (`block = true`): lifecycle pauses until the command exits with code 0
+//!
+//! ## Block support by hook type
+//!
+//! | Hook | `block = true` supported? | Notes |
+//! |------|---------------------------|-------|
+//! | `pre_start` | Yes | Blocks `run()`, failure returns error |
+//! | `on_ready` | Yes (wait_ready only) | Blocks `run()` during wait_ready; fire-and-forget otherwise |
+//! | `pre_stop` | Yes | Blocks `stop()`, failure returns error |
+//! | `on_stop` | Yes (explicit stop only) | Blocks `stop()`; fire-and-forget in monitor task |
+//! | `on_exit` | No | Always fire-and-forget |
+//! | `on_fail` | No | Always fire-and-forget |
+//! | `on_retry` | Yes (startup only) | Blocks during startup retry loop; fire-and-forget in interval watcher |
+//! | `on_crash` | No | Always fire-and-forget (runtime only) |
+//! | `on_recover` | No | Always fire-and-forget (runtime only) |
+//!
+//! Hooks that run in the monitor task or interval watcher cannot block because
+//! doing so would stall those background loops. This is a known limitation —
+//! see the lifecycle hooks guide for details.
 
+use crate::config_types::HookConfig;
 use crate::daemon_id::DaemonId;
-use crate::pitchfork_toml::{GateConfig, PitchforkToml};
+use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::shell::Shell;
 use crate::supervisor::SUPERVISOR;
@@ -18,227 +37,227 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
-// HookType / GateType
+// HookType
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::enum_variant_names)]
 pub(crate) enum HookType {
+    PreStart,
     OnReady,
-    OnFail,
-    OnRetry,
+    PreStop,
     OnStop,
     OnExit,
-}
-
-pub(crate) enum GateType {
-    PreStart,
-    PostStart,
-    PreStop,
-    PostStop,
-}
-
-impl std::fmt::Display for GateType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GateType::PreStart => write!(f, "pre_start"),
-            GateType::PostStart => write!(f, "post_start"),
-            GateType::PreStop => write!(f, "pre_stop"),
-            GateType::PostStop => write!(f, "post_stop"),
-        }
-    }
+    OnFail,
+    OnRetry,
+    OnCrash,
+    OnRecover,
 }
 
 impl std::fmt::Display for HookType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HookType::PreStart => write!(f, "pre_start"),
             HookType::OnReady => write!(f, "on_ready"),
-            HookType::OnFail => write!(f, "on_fail"),
-            HookType::OnRetry => write!(f, "on_retry"),
+            HookType::PreStop => write!(f, "pre_stop"),
             HookType::OnStop => write!(f, "on_stop"),
             HookType::OnExit => write!(f, "on_exit"),
+            HookType::OnFail => write!(f, "on_fail"),
+            HookType::OnRetry => write!(f, "on_retry"),
+            HookType::OnCrash => write!(f, "on_crash"),
+            HookType::OnRecover => write!(f, "on_recover"),
         }
     }
 }
 
+fn get_hook_config<'a>(
+    hooks: &'a Option<pitchfork_toml::PitchforkTomlHooks>,
+    hook_type: &HookType,
+) -> Option<&'a HookConfig> {
+    hooks.as_ref().and_then(|h| match hook_type {
+        HookType::PreStart => h.pre_start.as_ref(),
+        HookType::OnReady => h.on_ready.as_ref(),
+        HookType::PreStop => h.pre_stop.as_ref(),
+        HookType::OnStop => h.on_stop.as_ref(),
+        HookType::OnExit => h.on_exit.as_ref(),
+        HookType::OnFail => h.on_fail.as_ref(),
+        HookType::OnRetry => h.on_retry.as_ref(),
+        HookType::OnCrash => h.on_crash.as_ref(),
+        HookType::OnRecover => h.on_recover.as_ref(),
+    })
+}
+
 // ---------------------------------------------------------------------------
-// GateContext — encapsulates all data needed to run a gate
+// run_hook — blocking hook execution
 // ---------------------------------------------------------------------------
 
-pub(crate) struct GateContext {
-    gate_type: GateType,
+/// Run a hook, respecting the `block` config.
+///
+/// For `block = true` hooks, the lifecycle pauses until the command exits with
+/// code 0. Returns `Ok(())` on success, `Err` on failure or timeout.
+///
+/// For `block = false` hooks, this is equivalent to `fire_hook` — the command
+/// is spawned in the background and errors are logged.
+///
+/// **Note:** `on_exit` does not support `block = true` — it is always
+/// fire-and-forget. Callers should use `fire_hook` directly for `on_exit`.
+///
+/// If no hook is configured for the given type, returns `Ok(())` immediately.
+/// If the config file cannot be loaded, returns an error (blocking hooks must
+/// not be silently skipped).
+pub(crate) async fn run_hook(
+    hook_type: HookType,
     daemon_id: DaemonId,
     daemon_dir: PathBuf,
     retry_count: u32,
+    recovery_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
     extra_env: Vec<(String, String)>,
-}
+) -> crate::Result<()> {
+    let pt = PitchforkToml::all_merged().map_err(|e| {
+        miette::miette!("failed to load config for {hook_type} hook of daemon {daemon_id}: {e}")
+    })?;
 
-impl GateContext {
-    pub(crate) fn new(
-        gate_type: GateType,
-        daemon_id: DaemonId,
-        daemon_dir: PathBuf,
-        retry_count: u32,
-        daemon_env: Option<IndexMap<String, String>>,
-    ) -> Self {
-        Self {
-            gate_type,
+    let hook_config = pt
+        .daemons
+        .get(&daemon_id)
+        .and_then(|d| get_hook_config(&d.hooks, &hook_type));
+
+    let Some(config) = hook_config else {
+        return Ok(());
+    };
+
+    if config.block {
+        run_blocking_hook(
+            &hook_type,
+            &daemon_id,
+            &daemon_dir,
+            retry_count,
+            recovery_count,
+            &daemon_env,
+            &extra_env,
+            config,
+        )
+        .await
+    } else {
+        fire_hook(
+            hook_type,
             daemon_id,
             daemon_dir,
             retry_count,
+            recovery_count,
             daemon_env,
-            extra_env: vec![],
-        }
-    }
-
-    pub(crate) fn extra_env(mut self, env: Vec<(String, String)>) -> Self {
-        self.extra_env = env;
-        self
-    }
-
-    /// Run the gate, blocking until it succeeds or fails.
-    ///
-    /// Unlike hooks (fire-and-forget), gates block the lifecycle until the command
-    /// exits with code 0. Returns `Ok(())` on success, `Err` on failure or timeout.
-    ///
-    /// If no gate is configured for the given type, returns `Ok(())` immediately.
-    /// If the config file cannot be loaded, returns an error (gates must not be
-    /// silently skipped — they are blocking by design).
-    pub(crate) async fn run(self) -> crate::Result<()> {
-        let gate_type = self.gate_type;
-        let daemon_id = self.daemon_id;
-
-        let pt = PitchforkToml::all_merged().map_err(|e| {
-            miette::miette!("failed to load config for {gate_type} gate of daemon {daemon_id}: {e}")
-        })?;
-
-        let gate_config = pt
-            .daemons
-            .get(&daemon_id)
-            .and_then(|d| get_gate_config(&d.gates, &gate_type));
-
-        let Some(config) = gate_config else {
-            return Ok(());
-        };
-
-        let cmd = match render_hook_template(&config.run, &daemon_id, &pt).await {
-            Ok(cmd) => cmd,
-            Err(e) => {
-                return Err(miette::miette!(
-                    "{gate_type} gate template error for daemon {daemon_id}: {e}"
-                ));
-            }
-        };
-
-        info!("running {gate_type} gate for daemon {daemon_id}: {cmd}");
-
-        let mut command = Shell::default_for_platform().command(&cmd);
-        command
-            .current_dir(&self.daemon_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-
-        if let Some(ref path) = *env::ORIGINAL_PATH {
-            command.env("PATH", path);
-        }
-
-        if let Some(ref env_vars) = self.daemon_env {
-            command.envs(env_vars);
-        }
-
-        command
-            .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
-            .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
-            .env("PITCHFORK_RETRY_COUNT", self.retry_count.to_string());
-
-        for (key, value) in &self.extra_env {
-            command.env(key, value);
-        }
-
-        let mut child = match command.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(miette::miette!(
-                    "failed to spawn {gate_type} gate for daemon {daemon_id}: {e}"
-                ));
-            }
-        };
-
-        // Effective timeout: per-gate timeout > global default > none
-        // Duration::ZERO means "disable timeout" (wait indefinitely).
-        let global_timeout = settings().supervisor_gate_timeout();
-        let timeout = config.timeout_duration().or_else(|| {
-            if global_timeout.is_zero() {
-                None
-            } else {
-                Some(global_timeout)
-            }
-        });
-
-        if let Some(timeout) = timeout {
-            match tokio::time::timeout(timeout, child.wait()).await {
-                Ok(Ok(status)) if status.success() => {
-                    info!("{gate_type} gate for daemon {daemon_id} passed");
-                    Ok(())
-                }
-                Ok(Ok(status)) => Err(miette::miette!(
-                    "{gate_type} gate for daemon {daemon_id} exited with {status}"
-                )),
-                Ok(Err(e)) => Err(miette::miette!(
-                    "{gate_type} gate for daemon {daemon_id} failed: {e}"
-                )),
-                Err(_) => {
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
-                    Err(miette::miette!(
-                        "{gate_type} gate for daemon {daemon_id} timed out after {timeout:?}"
-                    ))
-                }
-            }
-        } else {
-            match child.wait().await {
-                Ok(status) if status.success() => {
-                    info!("{gate_type} gate for daemon {daemon_id} passed");
-                    Ok(())
-                }
-                Ok(status) => Err(miette::miette!(
-                    "{gate_type} gate for daemon {daemon_id} exited with {status}"
-                )),
-                Err(e) => Err(miette::miette!(
-                    "{gate_type} gate for daemon {daemon_id} failed: {e}"
-                )),
-            }
-        }
+            extra_env,
+        )
+        .await;
+        Ok(())
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-fn get_hook_cmd(
-    hooks: &Option<pitchfork_toml::PitchforkTomlHooks>,
+/// Internal: run a blocking hook command, waiting for it to succeed.
+#[allow(clippy::too_many_arguments)]
+async fn run_blocking_hook(
     hook_type: &HookType,
-) -> Option<String> {
-    hooks.as_ref().and_then(|h| match hook_type {
-        HookType::OnReady => h.on_ready.clone(),
-        HookType::OnFail => h.on_fail.clone(),
-        HookType::OnRetry => h.on_retry.clone(),
-        HookType::OnStop => h.on_stop.clone(),
-        HookType::OnExit => h.on_exit.clone(),
-    })
-}
+    daemon_id: &DaemonId,
+    daemon_dir: &PathBuf,
+    retry_count: u32,
+    recovery_count: u32,
+    daemon_env: &Option<IndexMap<String, String>>,
+    extra_env: &[(String, String)],
+    config: &HookConfig,
+) -> crate::Result<()> {
+    let cmd = match render_hook_template(
+        &config.run,
+        daemon_id,
+        &PitchforkToml::all_merged().unwrap_or_default(),
+    )
+    .await
+    {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            return Err(miette::miette!(
+                "{hook_type} hook template error for daemon {daemon_id}: {e}"
+            ));
+        }
+    };
 
-fn get_gate_config(
-    gates: &Option<pitchfork_toml::PitchforkTomlGates>,
-    gate_type: &GateType,
-) -> Option<GateConfig> {
-    gates.as_ref().and_then(|g| match gate_type {
-        GateType::PreStart => g.pre_start.clone(),
-        GateType::PostStart => g.post_start.clone(),
-        GateType::PreStop => g.pre_stop.clone(),
-        GateType::PostStop => g.post_stop.clone(),
-    })
+    info!("running {hook_type} hook for daemon {daemon_id}: {cmd}");
+
+    let mut command = Shell::default_for_platform().command(&cmd);
+    command
+        .current_dir(daemon_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    if let Some(ref path) = *env::ORIGINAL_PATH {
+        command.env("PATH", path);
+    }
+
+    if let Some(env_vars) = &daemon_env {
+        command.envs(env_vars);
+    }
+
+    command
+        .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
+        .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
+        .env("PITCHFORK_RETRY_COUNT", retry_count.to_string())
+        .env("PITCHFORK_RECOVERY_COUNT", recovery_count.to_string());
+
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(miette::miette!(
+                "failed to spawn {hook_type} hook for daemon {daemon_id}: {e}"
+            ));
+        }
+    };
+
+    let global_timeout = settings().supervisor_hook_block_timeout();
+    let timeout = config.timeout_duration().or_else(|| {
+        if global_timeout.is_zero() {
+            None
+        } else {
+            Some(global_timeout)
+        }
+    });
+
+    if let Some(timeout) = timeout {
+        match tokio::time::timeout(timeout, child.wait()).await {
+            Ok(Ok(status)) if status.success() => {
+                info!("{hook_type} hook for daemon {daemon_id} passed");
+                Ok(())
+            }
+            Ok(Ok(status)) => Err(miette::miette!(
+                "{hook_type} hook for daemon {daemon_id} exited with {status}"
+            )),
+            Ok(Err(e)) => Err(miette::miette!(
+                "{hook_type} hook for daemon {daemon_id} failed: {e}"
+            )),
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Err(miette::miette!(
+                    "{hook_type} hook for daemon {daemon_id} timed out after {timeout:?}"
+                ))
+            }
+        }
+    } else {
+        match child.wait().await {
+            Ok(status) if status.success() => {
+                info!("{hook_type} hook for daemon {daemon_id} passed");
+                Ok(())
+            }
+            Ok(status) => Err(miette::miette!(
+                "{hook_type} hook for daemon {daemon_id} exited with {status}"
+            )),
+            Err(e) => Err(miette::miette!(
+                "{hook_type} hook for daemon {daemon_id} failed: {e}"
+            )),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +277,7 @@ pub(crate) async fn fire_hook(
     daemon_id: DaemonId,
     daemon_dir: PathBuf,
     retry_count: u32,
+    recovery_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
     extra_env: Vec<(String, String)>,
 ) {
@@ -266,14 +286,14 @@ pub(crate) async fn fire_hook(
             warn!("Failed to load config for hook '{hook_type}': {e}");
             PitchforkToml::default()
         });
-        let hook_cmd = pt
+        let hook_config = pt
             .daemons
             .get(&daemon_id)
-            .and_then(|d| get_hook_cmd(&d.hooks, &hook_type));
+            .and_then(|d| get_hook_config(&d.hooks, &hook_type));
 
-        let Some(cmd) = hook_cmd else { return };
+        let Some(config) = hook_config else { return };
 
-        let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
+        let cmd = match render_hook_template(&config.run, &daemon_id, &pt).await {
             Ok(cmd) => cmd,
             Err(e) => {
                 warn!("{hook_type} hook template error for daemon {daemon_id}: {e}");
@@ -300,7 +320,8 @@ pub(crate) async fn fire_hook(
         command
             .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
             .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
-            .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
+            .env("PITCHFORK_RETRY_COUNT", retry_count.to_string())
+            .env("PITCHFORK_RECOVERY_COUNT", recovery_count.to_string());
 
         for (key, value) in &extra_env {
             command.env(key, value);
@@ -331,6 +352,7 @@ pub(crate) async fn fire_output_hook(
     daemon_id: DaemonId,
     daemon_dir: PathBuf,
     retry_count: u32,
+    recovery_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
     cmd: String,
     matched_line: String,
@@ -365,6 +387,7 @@ pub(crate) async fn fire_output_hook(
             .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
             .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string())
+            .env("PITCHFORK_RECOVERY_COUNT", recovery_count.to_string())
             .env("PITCHFORK_MATCHED_LINE", &matched_line);
 
         match command.status().await {
@@ -388,7 +411,7 @@ pub(crate) async fn fire_output_hook(
 // Template rendering
 // ---------------------------------------------------------------------------
 
-/// Render Tera templates in a hook/gate command using the current state file data.
+/// Render Tera templates in a hook command using the current state file data.
 ///
 /// In the supervisor, daemons are already running, so `resolved_port` and
 /// `active_port` are available from the state file.

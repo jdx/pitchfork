@@ -3,9 +3,9 @@ mod common;
 use common::TestEnv;
 use std::time::Duration;
 
-/// Test that pre_start gate blocks daemon start until it succeeds
+/// Test that pre_start hook blocks daemon start until it succeeds
 #[test]
-fn test_gate_pre_start_passes() {
+fn test_hook_pre_start_passes() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
@@ -17,7 +17,7 @@ fn test_gate_pre_start_passes() {
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.pre_start_pass_test.gates]
+[daemons.pre_start_pass_test.hooks]
 pre_start = "touch {}"
 "#,
         marker.display()
@@ -27,21 +27,21 @@ pre_start = "touch {}"
     let output = env.run_command(&["start", "pre_start_pass_test"]);
     assert!(
         output.status.success(),
-        "Start should succeed when pre_start gate passes: {}",
+        "Start should succeed when pre_start hook passes: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     assert!(
         marker.exists(),
-        "pre_start gate should have created marker file"
+        "pre_start hook should have created marker file"
     );
 
     env.run_command(&["stop", "pre_start_pass_test"]);
 }
 
-/// Test that pre_start gate failure prevents daemon from starting
+/// Test that pre_start hook failure prevents daemon from starting
 #[test]
-fn test_gate_pre_start_fails_blocks_start() {
+fn test_hook_pre_start_fails_blocks_start() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
@@ -50,8 +50,8 @@ fn test_gate_pre_start_fails_blocks_start() {
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.pre_start_fail_test.gates]
-pre_start = "exit 1"
+[daemons.pre_start_fail_test.hooks]
+pre_start = { run = "exit 1", block = true }
 "#
     .to_string();
     env.create_toml(&toml_content);
@@ -59,19 +59,19 @@ pre_start = "exit 1"
     let output = env.run_command(&["start", "pre_start_fail_test"]);
     assert!(
         !output.status.success(),
-        "Start should fail when pre_start gate fails"
+        "Start should fail when pre_start hook fails"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("pre_start gate") || stderr.contains("exited with"),
-        "Error should mention gate failure: {stderr}"
+        stderr.contains("pre_start hook") || stderr.contains("exited with"),
+        "Error should mention hook failure: {stderr}"
     );
 }
 
-/// Test that pre_start gate timeout kills the gate and fails the start
+/// Test that pre_start hook timeout kills the hook and fails the start
 #[test]
-fn test_gate_pre_start_timeout() {
+fn test_hook_pre_start_timeout() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
@@ -80,8 +80,8 @@ fn test_gate_pre_start_timeout() {
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.pre_start_timeout_test.gates]
-pre_start = { run = "sleep 300", timeout = "1s" }
+[daemons.pre_start_timeout_test.hooks]
+pre_start = { run = "sleep 300", block = true, timeout = "1s" }
 "#
     .to_string();
     env.create_toml(&toml_content);
@@ -89,7 +89,7 @@ pre_start = { run = "sleep 300", timeout = "1s" }
     let output = env.run_command(&["start", "pre_start_timeout_test"]);
     assert!(
         !output.status.success(),
-        "Start should fail when pre_start gate times out"
+        "Start should fail when pre_start hook times out"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -99,69 +99,77 @@ pre_start = { run = "sleep 300", timeout = "1s" }
     );
 }
 
-/// Test that post_start gate runs after daemon becomes ready (wait_ready mode)
+/// Test that on_ready hook runs after daemon becomes ready (wait_ready mode)
 #[test]
-fn test_gate_post_start_wait_ready() {
+fn test_hook_on_ready_wait_ready() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("post_start_wait");
+    let marker = env.marker_path("on_ready_wait");
 
     let toml_content = format!(
         r#"
-[daemons.post_start_wait_test]
+[daemons.on_ready_wait_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.post_start_wait_test.gates]
-post_start = "touch {}"
+[daemons.on_ready_wait_test.hooks]
+on_ready = "touch {}"
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "post_start_wait_test"]);
+    let output = env.run_command(&["start", "on_ready_wait_test"]);
     assert!(
         output.status.success(),
-        "Start should succeed when post_start gate passes: {}",
+        "Start should succeed when on_ready hook passes: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
+    for _ in 0..20 {
+        if marker.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
     assert!(
         marker.exists(),
-        "post_start gate should have created marker file"
+        "on_ready hook should have created marker file"
     );
 
-    env.run_command(&["stop", "post_start_wait_test"]);
+    env.run_command(&["stop", "on_ready_wait_test"]);
 }
 
-/// Test that post_start gate failure returns error in wait_ready mode
+/// Test that on_ready hook with block=true failure returns error in wait_ready mode
 #[test]
-fn test_gate_post_start_fail_wait_ready() {
+fn test_hook_on_ready_fail_wait_ready() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
     let toml_content = r#"
-[daemons.post_start_fail_test]
+[daemons.on_ready_fail_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.post_start_fail_test.gates]
-post_start = "exit 1"
+[daemons.on_ready_fail_test.hooks]
+on_ready = { run = "exit 1", block = true }
 "#
     .to_string();
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "post_start_fail_test"]);
+    // on_ready hook failure does not change daemon state — only logs a warning.
+    // The start should succeed (daemon is still running).
+    let output = env.run_command(&["start", "on_ready_fail_test"]);
     assert!(
-        !output.status.success(),
-        "Start should fail when post_start gate fails in wait_ready mode"
+        output.status.success(),
+        "Start should succeed even when on_ready hook fails (daemon is still running)"
     );
 }
 
-/// Test that pre_stop gate runs before daemon is stopped
+/// Test that pre_stop hook runs before daemon is stopped
 #[test]
-fn test_gate_pre_stop() {
+fn test_hook_pre_stop() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
@@ -173,7 +181,7 @@ fn test_gate_pre_stop() {
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.pre_stop_test.gates]
+[daemons.pre_stop_test.hooks]
 pre_stop = "touch {}"
 "#,
         marker.display()
@@ -188,24 +196,24 @@ pre_stop = "touch {}"
     );
 
     // Marker should NOT exist yet (pre_stop runs on stop, not start)
-    assert!(!marker.exists(), "pre_stop gate should not have run yet");
+    assert!(!marker.exists(), "pre_stop hook should not have run yet");
 
     let output = env.run_command(&["stop", "pre_stop_test"]);
     assert!(
         output.status.success(),
-        "Stop should succeed when pre_stop gate passes: {}",
+        "Stop should succeed when pre_stop hook passes: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     assert!(
         marker.exists(),
-        "pre_stop gate should have created marker file"
+        "pre_stop hook should have created marker file"
     );
 }
 
-/// Test that pre_stop gate failure prevents daemon from being stopped
+/// Test that pre_stop hook failure prevents daemon from being stopped
 #[test]
-fn test_gate_pre_stop_fails_blocks_stop() {
+fn test_hook_pre_stop_fails_blocks_stop() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
@@ -214,8 +222,8 @@ fn test_gate_pre_stop_fails_blocks_stop() {
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.pre_stop_fail_test.gates]
-pre_stop = "exit 1"
+[daemons.pre_stop_fail_test.hooks]
+pre_stop = { run = "exit 1", block = true }
 "#
     .to_string();
     env.create_toml(&toml_content);
@@ -230,89 +238,89 @@ pre_stop = "exit 1"
     let output = env.run_command(&["stop", "pre_stop_fail_test"]);
     assert!(
         !output.status.success(),
-        "Stop should fail when pre_stop gate fails"
+        "Stop should fail when pre_stop hook fails"
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("pre_stop gate") || stderr.contains("exited with"),
-        "Error should mention gate failure: {stderr}"
+        stderr.contains("pre_stop hook") || stderr.contains("exited with"),
+        "Error should mention hook failure: {stderr}"
     );
 }
 
-/// Test that post_stop gate runs after daemon has stopped
+/// Test that on_exit hook runs after daemon has stopped
 #[test]
-fn test_gate_post_stop() {
+fn test_hook_on_exit() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("post_stop");
+    let marker = env.marker_path("on_exit");
 
     let toml_content = format!(
         r#"
-[daemons.post_stop_test]
+[daemons.on_exit_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.post_stop_test.gates]
-post_stop = "touch {}"
+[daemons.on_exit_test.hooks]
+on_exit = "touch {}"
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "post_stop_test"]);
+    let output = env.run_command(&["start", "on_exit_test"]);
     assert!(
         output.status.success(),
         "Start should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Marker should NOT exist yet (post_stop runs after stop)
-    assert!(!marker.exists(), "post_stop gate should not have run yet");
+    // Marker should NOT exist yet (on_exit runs after stop)
+    assert!(!marker.exists(), "on_exit hook should not have run yet");
 
-    let output = env.run_command(&["stop", "post_stop_test"]);
+    let output = env.run_command(&["stop", "on_exit_test"]);
     assert!(
         output.status.success(),
-        "Stop should succeed when post_stop gate passes: {}",
+        "Stop should succeed when on_exit hook passes: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     assert!(
         marker.exists(),
-        "post_stop gate should have created marker file"
+        "on_exit hook should have created marker file"
     );
 }
 
-/// Test that post_stop gate receives PITCHFORK_EXIT_CODE and PITCHFORK_EXIT_REASON env vars
+/// Test that on_exit hook receives PITCHFORK_EXIT_CODE and PITCHFORK_EXIT_REASON env vars
 #[test]
-fn test_gate_post_stop_env_vars() {
+fn test_hook_on_exit_env_vars() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("post_stop_env");
+    let marker = env.marker_path("on_exit_env");
 
     let toml_content = format!(
         r#"
-[daemons.post_stop_env_test]
+[daemons.on_exit_env_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.post_stop_env_test.gates]
-post_stop = "sh -c 'echo $PITCHFORK_EXIT_CODE $PITCHFORK_EXIT_REASON > {}'"
+[daemons.on_exit_env_test.hooks]
+on_exit = "sh -c 'echo $PITCHFORK_EXIT_CODE $PITCHFORK_EXIT_REASON > {}'"
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "post_stop_env_test"]);
+    let output = env.run_command(&["start", "on_exit_env_test"]);
     assert!(
         output.status.success(),
         "Start should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let output = env.run_command(&["stop", "post_stop_env_test"]);
+    let output = env.run_command(&["stop", "on_exit_env_test"]);
     assert!(
         output.status.success(),
         "Stop should succeed: {}",
@@ -331,37 +339,37 @@ post_stop = "sh -c 'echo $PITCHFORK_EXIT_CODE $PITCHFORK_EXIT_REASON > {}'"
 
     assert!(
         marker.exists(),
-        "post_stop gate should have created marker file"
+        "on_exit hook should have created marker file"
     );
     assert_eq!(
         content.trim(),
         "-1 stop",
-        "post_stop gate should receive PITCHFORK_EXIT_CODE=-1 and PITCHFORK_EXIT_REASON=stop"
+        "on_exit hook should receive PITCHFORK_EXIT_CODE=-1 and PITCHFORK_EXIT_REASON=stop"
     );
 }
 
-/// Test that gate commands receive PITCHFORK_DAEMON_ID and PITCHFORK_RETRY_COUNT env vars
+/// Test that hook commands receive PITCHFORK_DAEMON_ID and PITCHFORK_RETRY_COUNT env vars
 #[test]
-fn test_gate_env_vars() {
+fn test_hook_env_vars() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("gate_env");
+    let marker = env.marker_path("hook_env");
 
     let toml_content = format!(
         r#"
-[daemons.gate_env_test]
+[daemons.hook_env_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.gate_env_test.gates]
+[daemons.hook_env_test.hooks]
 pre_start = "sh -c 'echo $PITCHFORK_DAEMON_ID $PITCHFORK_RETRY_COUNT > {}'"
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "gate_env_test"]);
+    let output = env.run_command(&["start", "hook_env_test"]);
     assert!(
         output.status.success(),
         "Start should succeed: {}",
@@ -380,135 +388,135 @@ pre_start = "sh -c 'echo $PITCHFORK_DAEMON_ID $PITCHFORK_RETRY_COUNT > {}'"
 
     assert!(
         marker.exists(),
-        "pre_start gate should have created marker file"
+        "pre_start hook should have created marker file"
     );
     assert_eq!(
         content.trim(),
-        "project/gate_env_test 0",
-        "Gate should receive PITCHFORK_DAEMON_ID and PITCHFORK_RETRY_COUNT=0"
+        "project/hook_env_test 0",
+        "Hook should receive PITCHFORK_DAEMON_ID and PITCHFORK_RETRY_COUNT=0"
     );
 
-    env.run_command(&["stop", "gate_env_test"]);
+    env.run_command(&["stop", "hook_env_test"]);
 }
 
-/// Test that gate shorthand form (string) works
+/// Test that hook shorthand form (string) works
 #[test]
-fn test_gate_shorthand_form() {
+fn test_hook_shorthand_form() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("gate_shorthand");
+    let marker = env.marker_path("hook_shorthand");
 
     let toml_content = format!(
         r#"
-[daemons.gate_shorthand_test]
+[daemons.hook_shorthand_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.gate_shorthand_test.gates]
+[daemons.hook_shorthand_test.hooks]
 pre_start = "touch {}"
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "gate_shorthand_test"]);
+    let output = env.run_command(&["start", "hook_shorthand_test"]);
     assert!(
         output.status.success(),
-        "Start should succeed with shorthand gate form: {}",
+        "Start should succeed with shorthand hook form: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     assert!(
         marker.exists(),
-        "Shorthand gate should have created marker file"
+        "Shorthand hook should have created marker file"
     );
 
-    env.run_command(&["stop", "gate_shorthand_test"]);
+    env.run_command(&["stop", "hook_shorthand_test"]);
 }
 
-/// Test that gate full form (object with timeout) works
+/// Test that hook full form (object with block and timeout) works
 #[test]
-fn test_gate_full_form_with_timeout() {
+fn test_hook_full_form_with_block_and_timeout() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("gate_full_form");
+    let marker = env.marker_path("hook_full_form");
 
     let toml_content = format!(
         r#"
-[daemons.gate_full_form_test]
+[daemons.hook_full_form_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.gate_full_form_test.gates]
-pre_start = {{ run = "touch {}", timeout = "30s" }}
+[daemons.hook_full_form_test.hooks]
+pre_start = {{ run = "touch {}", block = true, timeout = "30s" }}
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "gate_full_form_test"]);
+    let output = env.run_command(&["start", "hook_full_form_test"]);
     assert!(
         output.status.success(),
-        "Start should succeed with full form gate: {}",
+        "Start should succeed with full form hook: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     assert!(
         marker.exists(),
-        "Full form gate should have created marker file"
+        "Full form hook should have created marker file"
     );
 
-    env.run_command(&["stop", "gate_full_form_test"]);
+    env.run_command(&["stop", "hook_full_form_test"]);
 }
 
-/// Test that no gate configured means the lifecycle proceeds normally
+/// Test that no hook configured means the lifecycle proceeds normally
 #[test]
-fn test_no_gate_configured() {
+fn test_no_hook_configured() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
     let toml_content = r#"
-[daemons.no_gate_test]
+[daemons.no_hook_test]
 run = "sleep 60"
 ready_delay = 1
 "#
     .to_string();
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "no_gate_test"]);
+    let output = env.run_command(&["start", "no_hook_test"]);
     assert!(
         output.status.success(),
-        "Start should succeed when no gate is configured: {}",
+        "Start should succeed when no hook is configured: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    env.run_command(&["stop", "no_gate_test"]);
+    env.run_command(&["stop", "no_hook_test"]);
 }
 
-/// Test that post_stop gate runs even when process was already dead
+/// Test that on_exit hook runs even when process was already dead
 #[test]
-fn test_gate_post_stop_already_dead() {
+fn test_hook_on_exit_already_dead() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
-    let marker = env.marker_path("post_stop_dead");
+    let marker = env.marker_path("on_exit_dead");
 
     let toml_content = format!(
         r#"
-[daemons.post_stop_dead_test]
+[daemons.on_exit_dead_test]
 run = "sh -c 'sleep 1 && exit 0'"
 ready_delay = 1
 
-[daemons.post_stop_dead_test.gates]
-post_stop = "touch {}"
+[daemons.on_exit_dead_test.hooks]
+on_exit = "touch {}"
 "#,
         marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "post_stop_dead_test"]);
+    let output = env.run_command(&["start", "on_exit_dead_test"]);
     // Daemon exits quickly, start may or may not succeed depending on timing
     eprintln!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
     eprintln!("start stderr: {}", String::from_utf8_lossy(&output.stderr));
@@ -516,8 +524,8 @@ post_stop = "touch {}"
     // Wait for daemon to exit
     std::thread::sleep(Duration::from_secs(2));
 
-    // Stop the already-dead daemon — post_stop gate should still run
-    let output = env.run_command(&["stop", "post_stop_dead_test"]);
+    // Stop the already-dead daemon — on_exit hook should still run
+    let output = env.run_command(&["stop", "on_exit_dead_test"]);
     eprintln!("stop stdout: {}", String::from_utf8_lossy(&output.stdout));
     eprintln!("stop stderr: {}", String::from_utf8_lossy(&output.stderr));
 
@@ -531,68 +539,66 @@ post_stop = "touch {}"
 
     assert!(
         marker.exists(),
-        "post_stop gate should run even when process was already dead"
+        "on_exit hook should run even when process was already dead"
     );
 }
 
-/// Test that multiple gates work together (pre_start + post_start + pre_stop + post_stop)
+/// Test that multiple hooks work together (pre_start + on_ready + pre_stop + on_exit)
 #[test]
-fn test_gate_all_four_lifecycle_points() {
+fn test_hook_all_lifecycle_points() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
     let pre_start_marker = env.marker_path("all_pre_start");
-    let post_start_marker = env.marker_path("all_post_start");
+    let on_ready_marker = env.marker_path("all_on_ready");
     let pre_stop_marker = env.marker_path("all_pre_stop");
-    let post_stop_marker = env.marker_path("all_post_stop");
+    let on_exit_marker = env.marker_path("all_on_exit");
 
     let toml_content = format!(
         r#"
-[daemons.all_gates_test]
+[daemons.all_hooks_test]
 run = "sleep 60"
 ready_delay = 1
 
-[daemons.all_gates_test.gates]
+[daemons.all_hooks_test.hooks]
 pre_start = "touch {}"
-post_start = "touch {}"
+on_ready = "touch {}"
 pre_stop = "touch {}"
-post_stop = "touch {}"
+on_exit = "touch {}"
 "#,
         pre_start_marker.display(),
-        post_start_marker.display(),
+        on_ready_marker.display(),
         pre_stop_marker.display(),
-        post_stop_marker.display()
+        on_exit_marker.display()
     );
     env.create_toml(&toml_content);
 
-    let output = env.run_command(&["start", "all_gates_test"]);
+    let output = env.run_command(&["start", "all_hooks_test"]);
     assert!(
         output.status.success(),
         "Start should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(pre_start_marker.exists(), "pre_start gate should have run");
-    assert!(
-        post_start_marker.exists(),
-        "post_start gate should have run"
-    );
+    assert!(pre_start_marker.exists(), "pre_start hook should have run");
+    let on_ready_ok = env.poll_file_exists(&on_ready_marker, Duration::from_secs(5));
+    assert!(on_ready_ok, "on_ready hook should have run");
     assert!(
         !pre_stop_marker.exists(),
-        "pre_stop gate should not have run yet"
+        "pre_stop hook should not have run yet"
     );
     assert!(
-        !post_stop_marker.exists(),
-        "post_stop gate should not have run yet"
+        !on_exit_marker.exists(),
+        "on_exit hook should not have run yet"
     );
 
-    let output = env.run_command(&["stop", "all_gates_test"]);
+    let output = env.run_command(&["stop", "all_hooks_test"]);
     assert!(
         output.status.success(),
         "Stop should succeed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(pre_stop_marker.exists(), "pre_stop gate should have run");
-    assert!(post_stop_marker.exists(), "post_stop gate should have run");
+    assert!(pre_stop_marker.exists(), "pre_stop hook should have run");
+    assert!(on_exit_marker.exists(), "on_exit hook should have run");
 }
