@@ -2,7 +2,7 @@
 //!
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
-use super::hooks::{self, HookType, fire_hook};
+use super::hooks::{self, GateContext, GateType, HookType, fire_hook};
 use super::{SUPERVISOR, Supervisor};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
@@ -150,6 +150,17 @@ impl Supervisor {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
         let cmd = opts.cmd;
+
+        // Run pre_start gate (blocks until success or failure)
+        GateContext::new(
+            GateType::PreStart,
+            id.clone(),
+            opts.dir.0.clone(),
+            opts.retry_count,
+            opts.env.clone(),
+        )
+        .run()
+        .await?;
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
@@ -1029,6 +1040,16 @@ impl Supervisor {
             match ready_rx.await {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
+                    // Run post_start gate after daemon is ready
+                    GateContext::new(
+                        GateType::PostStart,
+                        id.clone(),
+                        opts.dir.0.clone(),
+                        opts.retry_count,
+                        opts.env.clone(),
+                    )
+                    .run()
+                    .await?;
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
                 Ok(Err(exit_code)) => {
@@ -1041,6 +1062,28 @@ impl Supervisor {
                 }
             }
         } else {
+            // Non-waiting start: fire post_start gate in background after a brief
+            // delay to allow the process to initialize. The gate runs as a
+            // fire-and-forget task since the caller has already returned.
+            let gate_id = id.clone();
+            let gate_dir = opts.dir.0.clone();
+            let gate_retry_count = opts.retry_count;
+            let gate_env = opts.env.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if let Err(e) = GateContext::new(
+                    GateType::PostStart,
+                    gate_id.clone(),
+                    gate_dir,
+                    gate_retry_count,
+                    gate_env,
+                )
+                .run()
+                .await
+                {
+                    warn!("post_start gate for daemon {gate_id} failed: {e}");
+                }
+            });
             Ok(IpcResponse::DaemonStart { daemon })
         }
     }
@@ -1057,6 +1100,18 @@ impl Supervisor {
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
+                // Run pre_stop gate before stopping the daemon
+                let daemon_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                let daemon_env = daemon.env.clone();
+                GateContext::new(
+                    GateType::PreStop,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    daemon.retry_count,
+                    daemon_env,
+                )
+                .run()
+                .await?;
                 trace!("killing pid: {pid}");
                 PROCS.refresh_pids(&[pid]);
                 if PROCS.is_running(pid) {
@@ -1116,6 +1171,23 @@ impl Supervisor {
                             .build(),
                     )
                     .await?;
+
+                    // Run post_stop gate after daemon has stopped
+                    let post_stop_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                    let post_stop_env = daemon.env.clone();
+                    GateContext::new(
+                        GateType::PostStop,
+                        id.clone(),
+                        post_stop_dir,
+                        daemon.retry_count,
+                        post_stop_env,
+                    )
+                    .extra_env(vec![
+                        ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
+                        ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                    ])
+                    .run()
+                    .await?;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
                     // Process already dead, directly mark as stopped
@@ -1129,10 +1201,46 @@ impl Supervisor {
                             .build(),
                     )
                     .await?;
+
+                    // Run post_stop gate even when process was already dead
+                    let post_stop_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                    let post_stop_env = daemon.env.clone();
+                    GateContext::new(
+                        GateType::PostStop,
+                        id.clone(),
+                        post_stop_dir,
+                        daemon.retry_count,
+                        post_stop_env,
+                    )
+                    .extra_env(vec![
+                        ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
+                        ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                    ])
+                    .run()
+                    .await?;
+
                     return Ok(IpcResponse::DaemonWasNotRunning);
                 }
                 Ok(IpcResponse::Ok)
             } else {
+                // Daemon exists in state but has no PID — it may have already
+                // exited. Run post_stop gate for cleanup, then report status.
+                let post_stop_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                let post_stop_env = daemon.env.clone();
+                GateContext::new(
+                    GateType::PostStop,
+                    id.clone(),
+                    post_stop_dir,
+                    daemon.retry_count,
+                    post_stop_env,
+                )
+                .extra_env(vec![
+                    ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
+                    ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                ])
+                .run()
+                .await?;
+
                 debug!("daemon {id} not running");
                 Ok(IpcResponse::DaemonNotRunning)
             }

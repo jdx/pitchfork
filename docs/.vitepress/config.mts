@@ -67,7 +67,7 @@ export default defineConfig({
           { text: "Port Management & Proxy", link: "/guides/port-management" },
           { text: "File Watching", link: "/guides/file-watching" },
           { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
-          { text: "Lifecycle Hooks", link: "/guides/lifecycle-hooks" },
+          { text: "Lifecycle Hooks & Gates", link: "/guides/lifecycle-hooks" },
           { text: "Cron Scheduling", link: "/guides/scheduling" },
           { text: "Start on Boot", link: "/guides/boot-start" },
           { text: "Log Management", link: "/guides/logs" },
