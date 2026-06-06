@@ -189,6 +189,13 @@ export function useLogStream(id: Ref<string>) {
   const error = ref<string | null>(null)
   const connected = ref(false)
   let abort: AbortController | null = null
+  const MAX_LINES = 10000
+
+  function trimLines() {
+    if (lines.value.length > MAX_LINES) {
+      lines.value.splice(0, lines.value.length - MAX_LINES)
+    }
+  }
 
   async function connect() {
     lines.value = []
@@ -220,10 +227,12 @@ export function useLogStream(id: Ref<string>) {
         const parts = buf.split('\n')
         buf = parts.pop() ?? ''
         lines.value.push(...parts)
+        trimLines()
       }
 
       if (buf && !currentAbort.signal.aborted) {
         lines.value.push(buf)
+        trimLines()
       }
     } catch (e: any) {
       if (e.name !== 'AbortError') {

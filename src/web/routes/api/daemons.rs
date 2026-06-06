@@ -1,7 +1,7 @@
 use axum::{extract::Path, response::Json};
 use serde::Serialize;
 
-use crate::daemon_list::get_all_daemons_direct;
+use crate::daemon_list::{DaemonListEntry, get_all_daemons_direct, get_daemon_direct};
 use crate::daemon_status::DaemonStatus;
 use crate::procs::PROCS;
 use crate::supervisor::SUPERVISOR;
@@ -102,13 +102,114 @@ fn api_status(status: &DaemonStatus, is_available: bool) -> ApiDaemonStatus {
     }
 }
 
+/// Convert a single `DaemonListEntry` into `ApiDaemonEntry`.
+fn entry_to_api(
+    entry: &DaemonListEntry,
+    stats_map: &std::collections::HashMap<u32, crate::procs::ProcessStats>,
+    global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
+    settings: &crate::settings::Settings,
+) -> ApiDaemonEntry {
+    let d = &entry.daemon;
+    let cmd = d.cmd.as_ref().map(|c| c.join(" "));
+    let (cpu, mem, uptime) = d
+        .pid
+        .and_then(|pid| stats_map.get(&pid))
+        .map(|s| {
+            (
+                Some(s.cpu_percent),
+                Some(s.memory_bytes),
+                Some(s.uptime_secs),
+            )
+        })
+        .unwrap_or((None, None, None));
+
+    ApiDaemonEntry {
+        id: api_id(&entry.id),
+        title: d.title.clone(),
+        pid: d.pid,
+        shell_pid: d.shell_pid,
+        status: api_status(&d.status, entry.is_available),
+        dir: d.dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+        autostop: d.autostop,
+        cron_schedule: d.cron_schedule.clone(),
+        last_exit_success: d.last_exit_success,
+        retry_count: d.retry_count,
+        resolved_port: if d.status.is_running() {
+            d.resolved_port.clone()
+        } else {
+            Vec::new()
+        },
+        active_port: if d.status.is_running() {
+            d.active_port
+        } else {
+            None
+        },
+        slug: d.slug.clone(),
+        is_disabled: entry.is_disabled,
+        is_available: entry.is_available,
+        command: cmd,
+        cpu_percent: cpu,
+        memory_bytes: mem,
+        uptime_secs: uptime,
+        proxy_url: if d.status.is_running() {
+            let slug = crate::pitchfork_toml::PitchforkToml::find_slug_for_daemon_in_registry(
+                &entry.id,
+                global_slugs,
+            );
+            crate::proxy::build_proxy_url(slug.as_deref(), settings)
+        } else {
+            None
+        },
+        ready_delay: d.ready_delay,
+        ready_output: d.ready_output.clone(),
+        ready_http_url: d.ready_http.as_ref().map(|r| r.url.clone()),
+        ready_port: d.ready_port,
+        ready_cmd: d.ready_cmd.clone(),
+        port_config: d.port.as_ref().map(|p| {
+            if p.bump.0 == 0 {
+                p.expect
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            } else {
+                format!(
+                    "{}+{} bumps",
+                    p.expect.first().map(|e| e.to_string()).unwrap_or_default(),
+                    p.bump.0
+                )
+            }
+        }),
+        depends: d.depends.iter().map(|id| id.qualified()).collect(),
+        env: d
+            .env
+            .as_ref()
+            .map(|m| m.keys().cloned().collect::<Vec<_>>()),
+        watch: d.watch.clone(),
+        watch_mode: format!("{:?}", d.watch_mode).to_lowercase(),
+        watch_base_dir: d
+            .watch_base_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
+        mise: d.mise,
+        user: d.user.clone(),
+        memory_limit: d.memory_limit.map(|m| m.to_string()),
+        cpu_limit: d.cpu_limit.map(|c| format!("{:.1}%", c.0)),
+        stop_signal: d.stop_signal.map(|s| s.signal.name().to_string()),
+        stop_timeout: d
+            .stop_signal
+            .and_then(|s| s.timeout.map(|d| humantime::format_duration(d).to_string())),
+        pty: d.pty,
+        proxy: d.proxy,
+    }
+}
+
 async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
     let entries = get_all_daemons_direct(&SUPERVISOR).await?;
 
     // Batch refresh process stats for all running daemons
     let pids: Vec<u32> = entries.iter().filter_map(|e| e.daemon.pid).collect();
-    let stats_map: std::collections::HashMap<u32, crate::procs::ProcessStats> = if !pids.is_empty()
-    {
+    let stats_map = if !pids.is_empty() {
         PROCS.refresh_and_get_batch_stats(&pids)
     } else {
         std::collections::HashMap::new()
@@ -116,104 +217,12 @@ async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
 
     // Pre-load global slug registry once for proxy URL lookups
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    let mut result = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let d = &entry.daemon;
-        let cmd = d.cmd.as_ref().map(|c| c.join(" "));
-        let (cpu, mem, uptime) = d
-            .pid
-            .and_then(|pid| stats_map.get(&pid))
-            .map(|s| {
-                (
-                    Some(s.cpu_percent),
-                    Some(s.memory_bytes),
-                    Some(s.uptime_secs),
-                )
-            })
-            .unwrap_or((None, None, None));
+    let settings = crate::settings::settings();
 
-        result.push(ApiDaemonEntry {
-            id: api_id(&entry.id),
-            title: d.title.clone(),
-            pid: d.pid,
-            shell_pid: d.shell_pid,
-            status: api_status(&d.status, entry.is_available),
-            dir: d.dir.as_ref().map(|p| p.to_string_lossy().to_string()),
-            autostop: d.autostop,
-            cron_schedule: d.cron_schedule.clone(),
-            last_exit_success: d.last_exit_success,
-            retry_count: d.retry_count,
-            resolved_port: if d.status.is_running() {
-                d.resolved_port.clone()
-            } else {
-                Vec::new()
-            },
-            active_port: if d.status.is_running() {
-                d.active_port
-            } else {
-                None
-            },
-            slug: d.slug.clone(),
-            is_disabled: entry.is_disabled,
-            is_available: entry.is_available,
-            command: cmd,
-            cpu_percent: cpu,
-            memory_bytes: mem,
-            uptime_secs: uptime,
-            proxy_url: if d.status.is_running() {
-                let slug = crate::pitchfork_toml::PitchforkToml::find_slug_for_daemon_in_registry(
-                    &entry.id,
-                    &global_slugs,
-                );
-                crate::proxy::build_proxy_url(slug.as_deref(), crate::settings::settings())
-            } else {
-                None
-            },
-            ready_delay: d.ready_delay,
-            ready_output: d.ready_output.clone(),
-            ready_http_url: d.ready_http.as_ref().map(|r| r.url.clone()),
-            ready_port: d.ready_port,
-            ready_cmd: d.ready_cmd.clone(),
-            port_config: d.port.as_ref().map(|p| {
-                if p.bump.0 == 0 {
-                    p.expect
-                        .iter()
-                        .map(|n| n.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                } else {
-                    format!(
-                        "{}+{} bumps",
-                        p.expect.first().map(|e| e.to_string()).unwrap_or_default(),
-                        p.bump.0
-                    )
-                }
-            }),
-            depends: d.depends.iter().map(|id| id.qualified()).collect(),
-            env: d
-                .env
-                .as_ref()
-                .map(|m| m.keys().cloned().collect::<Vec<_>>()),
-            watch: d.watch.clone(),
-            watch_mode: format!("{:?}", d.watch_mode).to_lowercase(),
-            watch_base_dir: d
-                .watch_base_dir
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            mise: d.mise,
-            user: d.user.clone(),
-            memory_limit: d.memory_limit.map(|m| m.to_string()),
-            cpu_limit: d.cpu_limit.map(|c| format!("{:.1}%", c.0)),
-            stop_signal: d.stop_signal.map(|s| s.signal.name().to_string()),
-            stop_timeout: d
-                .stop_signal
-                .and_then(|s| s.timeout.map(|d| humantime::format_duration(d).to_string())),
-            pty: d.pty,
-            proxy: d.proxy,
-        });
-    }
-
-    Ok(result)
+    Ok(entries
+        .iter()
+        .map(|e| entry_to_api(e, &stats_map, &global_slugs, settings))
+        .collect())
 }
 
 pub async fn list() -> Result<Json<Vec<ApiDaemonEntry>>, axum::http::StatusCode> {
@@ -225,16 +234,30 @@ pub async fn list() -> Result<Json<Vec<ApiDaemonEntry>>, axum::http::StatusCode>
 }
 
 pub async fn show(Path(id): Path<String>) -> Result<Json<ApiDaemonEntry>, axum::http::StatusCode> {
-    let entries = build_daemon_entries()
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let daemon_id =
+        crate::daemon_id::DaemonId::parse(&id).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
 
-    let entry = entries
-        .into_iter()
-        .find(|e| e.id.qualified == id)
+    let entry = get_daemon_direct(&SUPERVISOR, &daemon_id)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(axum::http::StatusCode::NOT_FOUND)?;
 
-    Ok(Json(entry))
+    // Fetch stats for just this daemon's PID (if running)
+    let stats_map = if let Some(pid) = entry.daemon.pid {
+        PROCS.refresh_and_get_batch_stats(&[pid])
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let settings = crate::settings::settings();
+
+    Ok(Json(entry_to_api(
+        &entry,
+        &stats_map,
+        &global_slugs,
+        settings,
+    )))
 }
 
 pub async fn start(
