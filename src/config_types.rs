@@ -898,7 +898,7 @@ pub struct GateConfig {
     /// Command to run
     pub run: String,
     /// Timeout for the gate command (humantime, e.g. `"30s"`).
-    /// Defaults to no timeout (wait indefinitely).
+    /// Defaults to `settings.supervisor.gate_timeout` (30s by default) when not set.
     pub timeout: Option<String>,
 }
 
