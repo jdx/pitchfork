@@ -1464,13 +1464,17 @@ impl App {
             order_desc: true,
             after_id: None,
         }) {
-            Ok(entries) if !entries.is_empty() => entries
-                .into_iter()
-                .map(|e| {
-                    let ts = e.timestamp.format("%H:%M:%S").to_string();
-                    format!("{} {}", ts, e.message)
-                })
-                .collect(),
+            Ok(entries) if !entries.is_empty() => {
+                let mut lines: Vec<String> = entries
+                    .into_iter()
+                    .map(|e| {
+                        let ts = e.timestamp.format("%H:%M:%S").to_string();
+                        format!("{} {}", ts, e.message)
+                    })
+                    .collect();
+                lines.reverse();
+                lines
+            }
             _ => vec!["No logs available".to_string()],
         };
 

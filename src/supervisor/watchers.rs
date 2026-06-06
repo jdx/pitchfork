@@ -319,9 +319,15 @@ impl Supervisor {
         };
 
         let global_policy = RetentionPolicy {
-            age: global_age.map(|std_dur| {
-                chrono::Duration::seconds(std_dur.as_secs() as i64)
-                    + chrono::Duration::nanoseconds(std_dur.subsec_nanos() as i64)
+            age: global_age.and_then(|std_dur| match chrono::Duration::from_std(std_dur) {
+                Ok(d) => Some(d),
+                Err(_) => {
+                    warn!(
+                        "global logs.time_retention duration {:?} out of range; ignoring",
+                        std_dur
+                    );
+                    None
+                }
             }),
             count: global_count,
         };
@@ -361,11 +367,17 @@ impl Supervisor {
                         Some((
                             id.clone(),
                             RetentionPolicy {
-                                age: age.map(|std_dur| {
-                                    chrono::Duration::seconds(std_dur.as_secs() as i64)
-                                        + chrono::Duration::nanoseconds(
-                                            std_dur.subsec_nanos() as i64
-                                        )
+                                age: age.and_then(|std_dur| {
+                                    match chrono::Duration::from_std(std_dur) {
+                                        Ok(d) => Some(d),
+                                        Err(_) => {
+                                            warn!(
+                                                "daemon {id} time_retention duration {:?} out of range; ignoring",
+                                                std_dur
+                                            );
+                                            None
+                                        }
+                                    }
                                 }),
                                 count,
                             },
@@ -387,17 +399,25 @@ impl Supervisor {
             .iter()
             .map(|(id, _)| id.clone())
             .collect();
-        let mut total_removed = LOG_STORE.apply_retention(&global_policy, &excluded)?;
 
-        // For daemons with per-daemon overrides, apply their specific policy,
-        // falling back to the global setting for any dimension they don't override.
-        for (id, policy) in per_daemon_policies {
-            let effective_policy = RetentionPolicy {
-                age: policy.age.or(global_policy.age),
-                count: policy.count.or(global_policy.count),
-            };
-            total_removed += LOG_STORE.apply_retention_for_daemon(&id, &effective_policy)?;
-        }
+        // Offload blocking SQLite work to a dedicated thread.
+        let total_removed = tokio::task::spawn_blocking(move || {
+            let mut total = LOG_STORE.apply_retention(&global_policy, &excluded)?;
+
+            // For daemons with per-daemon overrides, apply their specific policy,
+            // falling back to the global setting for any dimension they don't override.
+            for (id, policy) in per_daemon_policies {
+                let effective_policy = RetentionPolicy {
+                    age: policy.age.or(global_policy.age),
+                    count: policy.count.or(global_policy.count),
+                };
+                total += LOG_STORE.apply_retention_for_daemon(&id, &effective_policy)?;
+            }
+
+            Ok::<u64, miette::Error>(total)
+        })
+        .await
+        .map_err(|e| miette::miette!("retention task panicked: {e}"))??;
 
         Ok(total_removed)
     }
