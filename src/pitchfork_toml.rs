@@ -395,10 +395,46 @@ impl PitchforkToml {
             .collect();
 
         if matches.is_empty() {
-            // No config matches. Validate short ID format and return no matches.
+            // No config matches. Search state file for any daemon with matching short name.
+            let state_matches = Self::find_in_state_file(user_id);
+            match state_matches.as_slice() {
+                [] => {}
+                [id] => return Ok(vec![id.clone()]),
+                _ => {
+                    let mut candidates: Vec<String> =
+                        state_matches.iter().map(|id| id.qualified()).collect();
+                    candidates.sort();
+                    return Err(miette::miette!(
+                        "daemon '{}' is ambiguous; matches: {}. Use a qualified daemon ID (namespace/name)",
+                        user_id,
+                        candidates.join(", ")
+                    ));
+                }
+            }
+            // No config or state matches. Validate short ID format and return no matches.
             let _ = DaemonId::try_new("global", user_id)?;
         }
         Ok(matches)
+    }
+
+    /// Finds all daemons in the persisted state file whose short name matches `short_name`.
+    ///
+    /// Logs a warning if the state file exists but cannot be read or parsed.
+    ///
+    /// Returns the matching `DaemonId`s. The caller must handle zero / one / many cases.
+    fn find_in_state_file(short_name: &str) -> Vec<DaemonId> {
+        match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+            Ok(state) => state
+                .daemons
+                .keys()
+                .filter(|id| id.name() == short_name)
+                .cloned()
+                .collect(),
+            Err(e) => {
+                warn!("cannot read state file: {e}");
+                Vec::new()
+            }
+        }
     }
 
     /// Resolves a user-provided daemon ID to a qualified DaemonId, preferring the current directory's namespace.
@@ -505,15 +541,6 @@ impl PitchforkToml {
         // to global when it is explicitly configured.
         let global_id = DaemonId::try_new("global", user_id)?;
         if self.daemons.contains_key(&global_id) {
-            return Ok(global_id);
-        }
-
-        // Also allow existing ad-hoc daemons (persisted in state file) to be
-        // referenced by short ID. This keeps commands like status/restart/stop
-        // working for daemons started via `pitchfork run`.
-        if let Ok(state) = StateFile::read(&*env::PITCHFORK_STATE_FILE)
-            && state.daemons.contains_key(&global_id)
-        {
             return Ok(global_id);
         }
 
