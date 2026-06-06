@@ -222,7 +222,7 @@ impl Logs {
         };
 
         let single_daemon = resolved_ids.len() == 1;
-        self.print_existing_logs(&resolved_ids, from, to, single_daemon)?;
+        self.print_existing_logs(&resolved_ids, from, to, single_daemon, self.tail)?;
         if self.tail {
             tail_logs(&resolved_ids, single_daemon, true).await?;
         }
@@ -236,6 +236,7 @@ impl Logs {
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
         single_daemon: bool,
+        force_no_pager: bool,
     ) -> Result<()> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
         let id_width = daemon_ids.iter().map(|id| id.len()).max().unwrap_or(0);
@@ -287,6 +288,7 @@ impl Logs {
             id_width,
             has_time_filter,
             self.raw,
+            force_no_pager,
         )?;
         Ok(())
     }
@@ -298,6 +300,7 @@ impl Logs {
         id_width: usize,
         has_time_filter: bool,
         raw: bool,
+        force_no_pager: bool,
     ) -> Result<()> {
         if log_lines.is_empty() {
             return Ok(());
@@ -314,7 +317,7 @@ impl Logs {
             return Ok(());
         }
 
-        let use_pager = !self.no_pager && should_use_pager(log_lines.len());
+        let use_pager = !force_no_pager && !self.no_pager && should_use_pager(log_lines.len());
 
         if use_pager {
             self.output_with_pager(

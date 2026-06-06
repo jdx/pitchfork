@@ -175,7 +175,7 @@ impl TestEnv {
         let db_path = self.log_db_path();
         let conn = rusqlite::Connection::open(&db_path).ok()?;
         let mut stmt = conn
-            .prepare("SELECT message FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC")
+            .prepare("SELECT message FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC, id ASC")
             .ok()?;
         let rows = stmt
             .query_map([&qualified_id], |row| {
