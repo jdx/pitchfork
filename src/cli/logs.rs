@@ -222,7 +222,7 @@ impl Logs {
         };
 
         let single_daemon = resolved_ids.len() == 1;
-        self.print_existing_logs(&resolved_ids, from, to, single_daemon)?;
+        self.print_existing_logs(&resolved_ids, from, to, single_daemon, self.tail)?;
         if self.tail {
             tail_logs(&resolved_ids, single_daemon, true).await?;
         }
@@ -236,6 +236,7 @@ impl Logs {
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
         single_daemon: bool,
+        force_no_pager: bool,
     ) -> Result<()> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
         let id_width = daemon_ids.iter().map(|id| id.len()).max().unwrap_or(0);
@@ -273,9 +274,9 @@ impl Logs {
         } else if let Some(n) = self.n {
             let len = log_lines.len();
             if len > n {
-                log_lines.into_iter().skip(len - n).collect_vec()
+                log_lines.into_iter().skip(len - n).rev().collect_vec()
             } else {
-                log_lines
+                log_lines.into_iter().rev().collect_vec()
             }
         } else {
             log_lines.into_iter().rev().collect_vec()
@@ -287,6 +288,7 @@ impl Logs {
             id_width,
             has_time_filter,
             self.raw,
+            force_no_pager,
         )?;
         Ok(())
     }
@@ -298,6 +300,7 @@ impl Logs {
         id_width: usize,
         has_time_filter: bool,
         raw: bool,
+        force_no_pager: bool,
     ) -> Result<()> {
         if log_lines.is_empty() {
             return Ok(());
@@ -314,7 +317,7 @@ impl Logs {
             return Ok(());
         }
 
-        let use_pager = !self.no_pager && should_use_pager(log_lines.len());
+        let use_pager = !force_no_pager && !self.no_pager && should_use_pager(log_lines.len());
 
         if use_pager {
             self.output_with_pager(
@@ -555,7 +558,7 @@ pub async fn tail_logs(
                     order_desc: true,
                     after_id: None,
                 }) {
-                    Ok(entries) => entries.last().map(|e| e.id).unwrap_or(0),
+                    Ok(entries) => entries.first().map(|e| e.id).unwrap_or(0),
                     Err(_) => 0,
                 }
             } else {
@@ -593,7 +596,7 @@ pub async fn tail_logs(
         if !out.is_empty() {
             let out = out
                 .into_iter()
-                .sorted_by_cached_key(|l| (l.0.to_string(), l.1.to_string()))
+                .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
                 .collect_vec();
             for (date, name, msg) in out {
                 println!(

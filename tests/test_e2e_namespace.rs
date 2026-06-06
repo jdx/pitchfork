@@ -74,13 +74,21 @@ run = "echo 'Hello from project-b' && sleep 10"
     env.sleep(Duration::from_secs(1));
 
     // Verify logs are stored separately via SQLite
-    let log_a_content = env.read_logs("project-a/api");
+    let log_a_content = env.wait_for_logs(
+        "project-a/api",
+        "Hello from project-a",
+        Duration::from_secs(5),
+    );
     assert!(
         log_a_content.contains("Hello from project-a"),
         "project-a log should contain its message, got: {log_a_content}"
     );
 
-    let log_b_content = env.read_logs("project-b/api");
+    let log_b_content = env.wait_for_logs(
+        "project-b/api",
+        "Hello from project-b",
+        Duration::from_secs(5),
+    );
     assert!(
         log_b_content.contains("Hello from project-b"),
         "project-b log should contain its message, got: {log_b_content}"
@@ -357,7 +365,11 @@ run = "echo 'encoding test' && sleep 30"
 
     // Verify log path uses correct encoding via SQLite store
     // my-cool-project/my-service -> my-cool-project--my-service
-    let log_content = env.read_logs("my-cool-project/my-service");
+    let log_content = env.wait_for_logs(
+        "my-cool-project/my-service",
+        "encoding test",
+        Duration::from_secs(5),
+    );
     assert!(
         log_content.contains("encoding test"),
         "Log should contain test message, got: {log_content}"

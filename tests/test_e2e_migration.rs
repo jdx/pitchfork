@@ -271,7 +271,8 @@ fn test_log_dir_migration_idempotent() {
     .unwrap();
 
     // First invocation — auto-migration should import the text file into SQLite
-    env.run_command(&["logs"]);
+    let output = env.run_command(&["logs"]);
+    assert!(output.status.success(), "logs command should succeed");
 
     // Directory must still exist
     assert!(
@@ -297,6 +298,10 @@ fn test_log_dir_migration_idempotent() {
 
     // Second invocation (idempotency check)
     let output = env.run_command(&["logs"]);
+    assert!(
+        output.status.success(),
+        "logs command should succeed on idempotency check"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // No name-collision dir should have been created

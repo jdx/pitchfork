@@ -74,7 +74,16 @@ fn fetch_latest_logs(daemon_id: &DaemonId) -> String {
         Ok(e) => e,
         Err(_) => return String::new(),
     };
-    let mut lines: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{} {}",
+                e.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                e.message.as_str()
+            )
+        })
+        .collect();
     lines.reverse();
     let joined = lines.join("\n");
     html_escape(&console::strip_ansi_codes(&joined))
@@ -280,7 +289,16 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
         Err(_) => return Html(String::new()),
     };
 
-    let mut lines: Vec<&str> = entries.iter().map(|e| e.message.as_str()).collect();
+    let mut lines: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{} {}",
+                e.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                e.message.as_str()
+            )
+        })
+        .collect();
     lines.reverse();
     Html(html_escape(&console::strip_ansi_codes(&lines.join("\n"))))
 }
@@ -333,11 +351,12 @@ pub async fn stream_sse(
                 continue;
             }
 
+            const BATCH_SIZE: usize = 500;
             let entries = match LOG_STORE.query(&LogQuery {
                 daemon_ids: vec![daemon_id.qualified()],
                 from: None,
                 to: None,
-                limit: None,
+                limit: Some(BATCH_SIZE),
                 order_desc: false,
                 after_id: Some(last_id),
             }) {
@@ -347,8 +366,9 @@ pub async fn stream_sse(
 
             for entry in entries {
                 last_id = entry.id;
+                let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
                 let stripped = console::strip_ansi_codes(&entry.message);
-                let escaped = html_escape(&stripped);
+                let escaped = html_escape(&format!("{ts} {stripped}"));
                 yield Ok(Event::default().event("message").data(escaped));
             }
         }
@@ -363,7 +383,11 @@ pub async fn clear(Path(id): Path<String>) -> Html<String> {
         Err(_) => return Html("".to_string()),
     };
 
-    let _ = LOG_STORE.clear(&[daemon_id]);
+    let name = daemon_id.qualified();
+    if let Err(e) = LOG_STORE.clear(&[daemon_id]) {
+        log::warn!("Failed to clear logs for {name}: {e}");
+        return Html(r#"<div class="error">Failed to clear logs</div>"#.to_string());
+    }
 
     Html("".to_string())
 }

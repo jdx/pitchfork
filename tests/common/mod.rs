@@ -165,6 +165,11 @@ impl TestEnv {
             .unwrap_or_default()
     }
 
+    /// Read logs from the SQLite log store only (no legacy fallback).
+    pub fn read_logs_db_only(&self, daemon_id: &str) -> Option<String> {
+        self.read_logs_from_db(daemon_id)
+    }
+
     /// Read logs from the SQLite log store.
     fn read_logs_from_db(&self, daemon_id: &str) -> Option<String> {
         let qualified_id = if daemon_id.contains('/') {
@@ -175,7 +180,7 @@ impl TestEnv {
         let db_path = self.log_db_path();
         let conn = rusqlite::Connection::open(&db_path).ok()?;
         let mut stmt = conn
-            .prepare("SELECT message FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC")
+            .prepare("SELECT message FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC, id ASC")
             .ok()?;
         let rows = stmt
             .query_map([&qualified_id], |row| {
@@ -183,13 +188,8 @@ impl TestEnv {
                 Ok(msg)
             })
             .ok()?;
-        let mut out = String::new();
-        for msg in rows.flatten() {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&msg);
-        }
+        let msgs: Vec<String> = rows.collect::<Result<Vec<_>, _>>().ok()?;
+        let out = msgs.join("\n");
         if out.is_empty() { None } else { Some(out) }
     }
 

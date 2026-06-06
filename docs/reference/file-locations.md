@@ -75,7 +75,7 @@ Within a given project directory, files take precedence in this order:
 
 Logs are stored in a single SQLite database (`logs.db`) for efficient querying, filtering, and rotation. The database uses WAL mode for concurrent readers so the CLI, TUI, and Web UI can all read logs at the same time without blocking the supervisor's writes.
 
-```
+```text
 ~/.local/state/pitchfork/logs/logs.db
 ```
 
@@ -83,15 +83,11 @@ Inside the database, each daemon is identified by its qualified ID (`namespace/n
 
 For backwards compatibility, the legacy log directory structure still exists but is no longer written to by the supervisor:
 
-```
+```text
 ~/.local/state/pitchfork/logs/<namespace>--<daemon-name>/
 ```
 
-If you have legacy text log files from an older pitchfork version, migrate them into the SQLite store with:
-
-```bash
-pitchfork logs --migrate
-```
+Legacy text log files from older pitchfork versions are automatically imported into the SQLite store on first access, so no manual migration is needed.
 
 ### IPC Socket
 

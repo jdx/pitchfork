@@ -68,7 +68,3 @@ Disable pager even in interactive terminal
 ### `--raw`
 
 Output raw log lines without color or formatting
-
-### `--migrate`
-
-Migrate legacy text log files into the SQLite log store

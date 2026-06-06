@@ -298,10 +298,19 @@ impl Supervisor {
     /// daemons in the merged config and applies per-daemon overrides when set.
     async fn apply_log_retention(&self) -> Result<u64> {
         let settings = settings();
-        let global_age = if settings.logs.time_retention.is_empty() {
-            None
+        let (global_age, global_age_warn) = if settings.logs.time_retention.is_empty() {
+            (None, None)
         } else {
-            humantime::parse_duration(&settings.logs.time_retention).ok()
+            match humantime::parse_duration(&settings.logs.time_retention) {
+                Ok(d) => (Some(d), None),
+                Err(_) => {
+                    let msg = format!(
+                        "invalid global logs.time_retention '{}': expected format like '7d', '24h', '30min'",
+                        settings.logs.time_retention
+                    );
+                    (None, Some(msg))
+                }
+            }
         };
         let global_count = if settings.logs.line_retention <= 0 {
             None
@@ -317,7 +326,12 @@ impl Supervisor {
             count: global_count,
         };
 
+        if let Some(w) = global_age_warn {
+            warn!("{w}");
+        }
+
         // Collect per-daemon overrides from merged config.
+        let mut per_daemon_warns: Vec<String> = Vec::new();
         let per_daemon_policies: Vec<(DaemonId, RetentionPolicy)> = {
             let config = PitchforkToml::all_merged()?;
             config
@@ -328,7 +342,16 @@ impl Supervisor {
                         if s.is_empty() {
                             None
                         } else {
-                            humantime::parse_duration(s).ok()
+                            match humantime::parse_duration(s) {
+                                Ok(d) => Some(d),
+                                Err(_) => {
+                                    per_daemon_warns.push(format!(
+                                        "invalid time_retention '{}' for daemon {}: expected format like '7d', '24h', '30min'",
+                                        s, id
+                                    ));
+                                    None
+                                }
+                            }
                         }
                     });
                     let count = d
@@ -354,6 +377,10 @@ impl Supervisor {
                 .collect()
         };
 
+        for w in per_daemon_warns {
+            warn!("{w}");
+        }
+
         // Apply global policy to all daemons *except* those that have their
         // own per-daemon overrides, so overrides are not silently overwritten.
         let excluded: Vec<DaemonId> = per_daemon_policies
@@ -362,9 +389,14 @@ impl Supervisor {
             .collect();
         let mut total_removed = LOG_STORE.apply_retention(&global_policy, &excluded)?;
 
-        // For daemons with per-daemon overrides, apply their specific policy.
+        // For daemons with per-daemon overrides, apply their specific policy,
+        // falling back to the global setting for any dimension they don't override.
         for (id, policy) in per_daemon_policies {
-            total_removed += LOG_STORE.apply_retention_for_daemon(&id, &policy)?;
+            let effective_policy = RetentionPolicy {
+                age: policy.age.or(global_policy.age),
+                count: policy.count.or(global_policy.count),
+            };
+            total_removed += LOG_STORE.apply_retention_for_daemon(&id, &effective_policy)?;
         }
 
         Ok(total_removed)

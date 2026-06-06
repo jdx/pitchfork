@@ -155,13 +155,7 @@ The supervisor evaluates this policy during its regular interval watcher cycle.
 
 ## Migrate Legacy Logs
 
-If you were using pitchfork before the SQLite log store was introduced, legacy text log files may still exist under the logs directory. Import them into the SQLite database with:
-
-```bash
-pitchfork logs --migrate
-```
-
-This is a one-time operation. After migration, the legacy text files are no longer used.
+If you were using pitchfork before the SQLite log store was introduced, legacy text log files may still exist under the logs directory. They are automatically imported into the SQLite database on the first access to the log store, so no manual action is required.
 
 ## Supervisor Logs
 

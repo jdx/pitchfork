@@ -948,18 +948,6 @@
             ],
             "hide": false,
             "global": false
-          },
-          {
-            "name": "migrate",
-            "usage": "--migrate",
-            "help": "Migrate legacy text log files into the SQLite log store",
-            "help_first_line": "Migrate legacy text log files into the SQLite log store",
-            "short": [],
-            "long": [
-              "migrate"
-            ],
-            "hide": false,
-            "global": false
           }
         ],
         "mounts": [],

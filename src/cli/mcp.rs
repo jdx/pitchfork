@@ -356,10 +356,11 @@ impl PitchforkServer {
         use crate::log_store::{LogQuery, LogStore};
 
         let daemon_ids = if params.id.is_empty() {
-            LOG_STORE
-                .list_daemon_ids()
-                .unwrap_or_default()
-                .into_iter()
+            let ids = tokio::task::spawn_blocking(|| LOG_STORE.list_daemon_ids())
+                .await
+                .map_err(|e| internal_err(format!("Failed to list daemon IDs: {e}")))?
+                .map_err(|e| internal_err(format!("Failed to list daemon IDs: {e}")))?;
+            ids.into_iter()
                 .filter_map(|id| DaemonId::parse(&id).ok())
                 .collect()
         } else {
@@ -373,30 +374,36 @@ impl PitchforkServer {
             )]));
         }
 
-        let mut output = String::new();
-
-        for daemon_id in &daemon_ids {
-            let entries = match LOG_STORE.query(&LogQuery {
-                daemon_ids: vec![daemon_id.qualified()],
+        let qualified: Vec<String> = daemon_ids.iter().map(|d| d.qualified()).collect();
+        let limit = params.n;
+        let entries = tokio::task::spawn_blocking(move || {
+            LOG_STORE.query(&LogQuery {
+                daemon_ids: qualified,
                 from: None,
                 to: None,
-                limit: Some(params.n),
+                limit: Some(limit),
                 order_desc: true,
                 after_id: None,
-            }) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+            })
+        })
+        .await
+        .map_err(|e| internal_err(format!("Failed to query logs: {e}")))?
+        .map_err(|e| internal_err(format!("Failed to query logs: {e}")))?;
 
-            if entries.is_empty() {
+        let mut output = String::new();
+        for daemon_id in &daemon_ids {
+            let daemon_entries: Vec<_> = entries
+                .iter()
+                .filter(|e| e.daemon_id == daemon_id.qualified())
+                .collect();
+            if daemon_entries.is_empty() {
                 continue;
             }
-
             if !output.is_empty() {
                 output.push_str("\n\n");
             }
             output.push_str(&format!("=== {} ===\n", daemon_id.qualified()));
-            for entry in entries.into_iter().rev() {
+            for entry in daemon_entries.into_iter().rev() {
                 let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
                 output.push_str(&format!("{} {}\n", ts, entry.message));
             }

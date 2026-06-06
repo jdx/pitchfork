@@ -1461,7 +1461,7 @@ impl App {
             from: None,
             to: None,
             limit: Some(TUI_LOG_LIMIT),
-            order_desc: false,
+            order_desc: true,
             after_id: None,
         }) {
             Ok(entries) if !entries.is_empty() => entries

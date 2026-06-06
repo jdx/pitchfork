@@ -205,23 +205,13 @@ impl LogStore for SqliteLogStore {
         let id = daemon_id.qualified();
         let msg = message.to_string();
 
-        let exec = || {
-            let conn = self.conn.lock().unwrap();
-            conn.execute(
+        let conn = self.conn.lock().unwrap();
+        let _ = conn
+            .execute(
                 "INSERT INTO log_entries (daemon_id, timestamp, message) VALUES (?1, ?2, ?3)",
                 params![id, ts, msg],
             )
-            .into_diagnostic()
-        };
-
-        // If we are inside a Tokio runtime, use block_in_place so the scheduler
-        // knows this section is blocking and can schedule other tasks.
-        // Otherwise (e.g. tests without a runtime) fall back to a direct call.
-        if let Ok(_handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(exec)?;
-        } else {
-            exec()?;
-        }
+            .into_diagnostic()?;
         Ok(())
     }
 
@@ -409,18 +399,27 @@ use std::sync::Arc;
 
 pub static LOG_STORE: Lazy<Arc<SqliteLogStore>> = Lazy::new(|| {
     let path = crate::env::PITCHFORK_LOGS_DIR.join("logs.db");
+    let mut is_fallback = false;
     let store = Arc::new(SqliteLogStore::open(&path).unwrap_or_else(|e| {
         error!(
             "failed to open log store at {}: {e}. Falling back to in-memory store; logs will not persist across restarts.",
             path.display()
         );
+        is_fallback = true;
         SqliteLogStore::open(":memory:").expect("in-memory SQLite should always open")
     }));
 
     // Auto-migrate any legacy text log files into SQLite on first access.
     // This runs once per process startup and is idempotent.
-    if let Err(e) = auto_migrate_legacy_logs(&store) {
-        warn!("legacy log auto-migration failed: {e}");
+    // Skip migration when using the in-memory fallback to prevent data loss.
+    if !is_fallback {
+        if let Err(e) = auto_migrate_legacy_logs(&store) {
+            warn!("legacy log auto-migration failed: {e}");
+        }
+    } else {
+        warn!(
+            "skipping legacy log auto-migration because log store is in-memory (no durable destination)"
+        );
     }
 
     store
