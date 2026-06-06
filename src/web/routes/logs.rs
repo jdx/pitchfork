@@ -317,8 +317,21 @@ pub async fn stream_sse(
             Err(_) => 0,
         };
 
+        // Track the clear generation so we can detect log wipes.
+        let mut last_clear_gen: u64 = LOG_STORE.last_clear_generation(&daemon_id).unwrap_or(None).unwrap_or(0);
+
         loop {
             tokio::time::sleep(sse_poll_interval).await;
+
+            // Detect log clear and notify client to blank its display.
+            let current_gen = LOG_STORE.last_clear_generation(&daemon_id).unwrap_or(None).unwrap_or(0);
+            if current_gen != last_clear_gen {
+                last_clear_gen = current_gen;
+                // Reset cursor so future new entries are streamed correctly.
+                last_id = 0;
+                yield Ok(Event::default().event("clear").data(""));
+                continue;
+            }
 
             let entries = match LOG_STORE.query(&LogQuery {
                 daemon_ids: vec![daemon_id.qualified()],

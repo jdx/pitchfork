@@ -5,14 +5,17 @@ use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, params};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// SQLite-backed log store with WAL mode for concurrent readers.
 pub struct SqliteLogStore {
     conn: Mutex<Connection>,
+    clear_generations: Mutex<HashMap<String, u64>>,
+    next_generation: AtomicU64,
 }
 
 impl SqliteLogStore {
@@ -55,6 +58,8 @@ impl SqliteLogStore {
         .into_diagnostic()?;
         Ok(Self {
             conn: Mutex::new(conn),
+            clear_generations: Mutex::new(HashMap::new()),
+            next_generation: AtomicU64::new(1),
         })
     }
 
@@ -316,6 +321,13 @@ impl LogStore for SqliteLogStore {
             .into_diagnostic()?;
         }
         tx.commit().into_diagnostic()?;
+        drop(conn);
+
+        let mut gens = self.clear_generations.lock().unwrap();
+        for id in daemon_ids {
+            let next_gen = self.next_generation.fetch_add(1, Ordering::SeqCst);
+            gens.insert(id.qualified(), next_gen);
+        }
         Ok(())
     }
 
@@ -374,6 +386,11 @@ impl LogStore for SqliteLogStore {
         }
         Ok(total)
     }
+
+    fn last_clear_generation(&self, daemon_id: &DaemonId) -> Result<Option<u64>> {
+        let gens = self.clear_generations.lock().unwrap();
+        Ok(gens.get(&daemon_id.qualified()).copied())
+    }
 }
 
 /// Global singleton log store.
@@ -382,41 +399,98 @@ use std::sync::Arc;
 
 pub static LOG_STORE: Lazy<Arc<SqliteLogStore>> = Lazy::new(|| {
     let path = crate::env::PITCHFORK_LOGS_DIR.join("logs.db");
-    Arc::new(SqliteLogStore::open(&path).unwrap_or_else(|e| {
+    let store = Arc::new(SqliteLogStore::open(&path).unwrap_or_else(|e| {
         error!(
             "failed to open log store at {}: {e}. Falling back to in-memory store; logs will not persist across restarts.",
             path.display()
         );
         SqliteLogStore::open(":memory:").expect("in-memory SQLite should always open")
-    }))
+    }));
+
+    // Auto-migrate any legacy text log files into SQLite on first access.
+    // This runs once per process startup and is idempotent.
+    if let Err(e) = auto_migrate_legacy_logs(&store) {
+        warn!("legacy log auto-migration failed: {e}");
+    }
+
+    store
 });
 
-/// Check if any legacy text-based log files still exist under the logs directory.
-/// Excludes the supervisor's own log directory (`pitchfork/`).
-pub fn has_legacy_logs() -> bool {
+/// Auto-migrate legacy text log files into the SQLite log store.
+///
+/// Scans the logs directory for directories matching the new-format layout
+/// (`namespace--name/namespace--name.log`), attempts to parse the directory
+/// name as a valid safe-path daemon ID, and imports the content into SQLite.
+/// This is idempotent: re-running it on already-migrated data is a no-op
+/// because the legacy text files are deleted after successful import.
+fn auto_migrate_legacy_logs(store: &SqliteLogStore) -> Result<()> {
     let logs_dir = &*crate::env::PITCHFORK_LOGS_DIR;
     if !logs_dir.exists() {
-        return false;
+        return Ok(());
     }
+
     let Ok(entries) = std::fs::read_dir(logs_dir) else {
-        return false;
+        return Ok(());
     };
+
+    let mut total_migrated = 0u64;
+    let mut migrated_ids = Vec::new();
+
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        // Skip the supervisor's own log directory
-        if path.file_name().unwrap_or_default() == "pitchfork" {
+        // Skip the supervisor's own log directory.
+        let file_name = path
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().to_string());
+        if file_name == "pitchfork" {
             continue;
         }
-        let log_file = path.join(format!(
-            "{}.log",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        ));
-        if log_file.exists() {
-            return true;
+
+        // Only consider directories that look like new-format safe-paths
+        if !file_name.contains("--") {
+            continue;
+        }
+        let log_file = path.join(format!("{file_name}.log"));
+        if !log_file.exists() {
+            continue;
+        }
+
+        let daemon_id = match DaemonId::from_safe_path(&file_name) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+
+        // Skip the supervisor's own daemon; its log directory may be present
+        // under logs/ but should never be imported into the user-facing log store.
+        if daemon_id == DaemonId::pitchfork() {
+            continue;
+        }
+
+        match store.migrate_daemon_text_logs(&daemon_id) {
+            Ok(0) => {}
+            Ok(n) => {
+                total_migrated += n;
+                migrated_ids.push(daemon_id.qualified());
+            }
+            Err(e) => {
+                warn!(
+                    "failed to migrate text logs for {}: {e}",
+                    daemon_id.qualified()
+                );
+            }
         }
     }
-    false
+
+    if total_migrated > 0 {
+        warn!(
+            "auto-migrated {total_migrated} legacy log entries from {count} daemon(s): {ids}",
+            count = migrated_ids.len(),
+            ids = migrated_ids.join(", ")
+        );
+    }
+
+    Ok(())
 }

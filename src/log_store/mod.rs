@@ -81,6 +81,14 @@ pub trait LogStore: Send + Sync {
 
     /// List all daemon IDs that have log entries.
     fn list_daemon_ids(&self) -> Result<Vec<String>>;
+
+    /// Return the generation number for the daemon's last clear operation.
+    /// Each call to `clear` bumps the generation, so SSE streams can detect
+    /// when logs have been wiped and refresh their display.
+    fn last_clear_generation(&self, daemon_id: &DaemonId) -> Result<Option<u64>> {
+        let _ = daemon_id;
+        Ok(None)
+    }
 }
 
 pub mod sqlite;

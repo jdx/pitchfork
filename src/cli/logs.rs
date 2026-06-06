@@ -1,5 +1,5 @@
 use crate::daemon_id::DaemonId;
-use crate::log_store::sqlite::{LOG_STORE, has_legacy_logs};
+use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogQuery, LogStore};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
@@ -189,10 +189,6 @@ pub struct Logs {
     /// Output raw log lines without color or formatting
     #[clap(long)]
     raw: bool,
-
-    /// Migrate legacy text log files into the SQLite log store
-    #[clap(long)]
-    migrate: bool,
 }
 
 impl Logs {
@@ -200,19 +196,6 @@ impl Logs {
         // Migrate legacy log directories (old format: "api" → new format: "legacy--api").
         // This is idempotent and silent so it is safe to run on every invocation.
         migrate_legacy_log_dirs();
-
-        // --migrate: migrate legacy text logs into SQLite
-        if self.migrate {
-            return self.run_migrate().await;
-        }
-
-        // Warn about remaining legacy logs (not yet migrated to SQLite)
-        if has_legacy_logs() {
-            eprintln!(
-                "{}: legacy text log files detected. Run `pitchfork logs --migrate` to import them into the SQLite log store.",
-                estyle("warning")
-            );
-        }
 
         // Resolve user-provided IDs to qualified IDs
         let resolved_ids: Vec<DaemonId> = if self.id.is_empty() {
@@ -244,46 +227,6 @@ impl Logs {
             tail_logs(&resolved_ids, single_daemon, true).await?;
         }
 
-        Ok(())
-    }
-
-    /// Migrate legacy text logs into the SQLite log store.
-    async fn run_migrate(&self) -> Result<()> {
-        let ids: Vec<DaemonId> = if self.id.is_empty() {
-            // Gather all daemons that have a legacy text log file.
-            let mut ids = BTreeSet::new();
-            match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
-                Ok(state) => ids.extend(state.daemons.keys().cloned()),
-                Err(e) => warn!("Failed to read state for migration: {e}"),
-            }
-            match PitchforkToml::all_merged() {
-                Ok(config) => ids.extend(config.daemons.keys().cloned()),
-                Err(e) => warn!("Failed to read config for migration: {e}"),
-            }
-            ids.into_iter().collect()
-        } else {
-            PitchforkToml::resolve_ids(&self.id)?
-        };
-
-        if ids.is_empty() {
-            eprintln!("No daemons to migrate.");
-            return Ok(());
-        }
-
-        let mut total_migrated = 0u64;
-        for id in &ids {
-            match LOG_STORE.migrate_daemon_text_logs(id) {
-                Ok(0) => {}
-                Ok(n) => {
-                    total_migrated += n;
-                    eprintln!("Migrated {n} entries from {}", id.qualified());
-                }
-                Err(e) => {
-                    warn!("Failed to migrate text logs for {}: {e}", id.qualified());
-                }
-            }
-        }
-        eprintln!("Total migrated: {total_migrated} entries.");
         Ok(())
     }
 
@@ -335,7 +278,7 @@ impl Logs {
                 log_lines
             }
         } else {
-            log_lines
+            log_lines.into_iter().rev().collect_vec()
         };
 
         self.output_logs(
@@ -484,6 +427,10 @@ fn migrate_legacy_log_dirs() {
             Some(n) => n,
             None => continue,
         };
+        // Skip the supervisor's own log directory.
+        if name == "pitchfork" {
+            continue;
+        }
         // New-format directories usually contain "--". For safety, only treat
         // them as new-format if they match a known daemon ID safe-path.
         if name.contains("--") {

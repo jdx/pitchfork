@@ -9,6 +9,11 @@
         logSources.delete(source);
       }
     });
+    source.addEventListener("clear", function () {
+      document.querySelectorAll('[sse-connect="' + url + '"]').forEach(function (el) {
+        el.textContent = '';
+      });
+    });
     return source;
   };
 

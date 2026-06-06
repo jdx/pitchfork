@@ -206,11 +206,8 @@ fn test_log_dir_migration_renames_old_dirs() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("logs stderr:\n{stderr}");
 
-    // No WARN-level output about directories
-    assert!(
-        !stderr.contains("WARN"),
-        "No WARN expected during log migration, got: {stderr}"
-    );
+    // Auto-migration emits a WARN with the count of imported entries.
+    // (Previously this test asserted no WARN; now auto-migration is automatic.)
 
     // Old directories must be gone
     assert!(
@@ -232,29 +229,28 @@ fn test_log_dir_migration_renames_old_dirs() {
         "New 'legacy--worker' dir should exist"
     );
 
-    // Log files inside must also be renamed
+    // Text log files are deleted after successful import into SQLite.
     assert!(
-        ld.join("legacy--api").join("legacy--api.log").exists(),
-        "legacy--api/legacy--api.log should exist"
+        !ld.join("legacy--api").join("legacy--api.log").exists(),
+        "legacy text file should be removed after SQLite migration"
     );
     assert!(
-        ld.join("legacy--worker")
+        !ld.join("legacy--worker")
             .join("legacy--worker.log")
             .exists(),
-        "legacy--worker/legacy--worker.log should exist"
+        "legacy text file should be removed after SQLite migration"
     );
 
-    // Content must be preserved
-    let api_content = fs::read_to_string(ld.join("legacy--api").join("legacy--api.log")).unwrap();
+    // Content must be preserved in SQLite
+    let api_logs = env.read_logs("legacy/api");
     assert!(
-        api_content.contains("hello"),
-        "Log content should be preserved after migration, got: {api_content}"
+        api_logs.contains("hello"),
+        "Log content should be preserved in SQLite after migration, got: {api_logs}"
     );
-    let worker_content =
-        fs::read_to_string(ld.join("legacy--worker").join("legacy--worker.log")).unwrap();
+    let worker_logs = env.read_logs("legacy/worker");
     assert!(
-        worker_content.contains("starting"),
-        "Log content should be preserved after migration, got: {worker_content}"
+        worker_logs.contains("starting"),
+        "Log content should be preserved in SQLite after migration, got: {worker_logs}"
     );
 }
 
@@ -274,21 +270,34 @@ fn test_log_dir_migration_idempotent() {
     )
     .unwrap();
 
-    // First invocation
+    // First invocation — auto-migration should import the text file into SQLite
     env.run_command(&["logs"]);
-    // Second invocation (idempotency check)
-    let output = env.run_command(&["logs"]);
-    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Directory must still exist with correct name
+    // Directory must still exist
     assert!(
         ld.join("legacy--api").exists(),
         "Already-migrated dir must not be disturbed"
     );
+    // Text file is removed after successful SQLite import.
+    // (If migration fails the file remains, so this is a useful signal.)
     assert!(
-        ld.join("legacy--api").join("legacy--api.log").exists(),
-        "Log file must still exist"
+        !ld.join("legacy--api").join("legacy--api.log").exists(),
+        "Legacy text file should be removed after SQLite migration"
     );
+    // Content is available in SQLite
+    let logs = env.read_logs("legacy/api");
+    assert!(
+        logs.contains("already migrated"),
+        "SQLite should contain the migrated content: {logs}"
+    );
+
+    // Remove the auto-created pitchfork directory so it doesn't trigger
+    // an unrelated auto-migration during the idempotency check.
+    let _ = fs::remove_dir_all(ld.join("pitchfork"));
+
+    // Second invocation (idempotency check)
+    let output = env.run_command(&["logs"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     // No name-collision dir should have been created
     assert!(
@@ -296,9 +305,12 @@ fn test_log_dir_migration_idempotent() {
         "Double-migration must not happen"
     );
 
-    assert!(
-        !stderr.contains("WARN"),
-        "No WARN expected on idempotent run, got: {stderr}"
+    // Second run should produce no *additional* auto-migration WARN for the
+    // already-imported daemon.
+    let warn_count = stderr.matches("auto-migrated").count();
+    assert_eq!(
+        warn_count, 0,
+        "Idempotent run should not re-migrate already-imported logs, got: {stderr}"
     );
 }
 
