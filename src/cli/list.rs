@@ -1,5 +1,4 @@
 use crate::Result;
-use crate::daemon_id::DaemonId;
 use crate::daemon_list::get_all_daemons;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::client::IpcClient;
@@ -60,11 +59,8 @@ impl List {
         let entries = get_all_daemons(&client).await?;
         let global_slugs = PitchforkToml::read_global_slugs();
 
-        // Collect all IDs for display name resolution (clone to avoid borrow issues)
-        let all_ids: Vec<DaemonId> = entries.iter().map(|e| e.id.clone()).collect();
-
         for entry in entries {
-            let display_name = entry.id.styled_display_name(Some(all_ids.iter()));
+            let display_name = entry.id.styled_qualified();
 
             let status_text = if entry.is_available {
                 "available".to_string()

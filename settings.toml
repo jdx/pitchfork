@@ -335,9 +335,87 @@ How often the web UI checks for new log lines when streaming logs.
 Lower values provide more real-time updates but use more resources.
 """
 
+
 # =============================================================================
+# API Server Settings
+# =============================================================================
+#
+# Configure the standalone API server (JSON REST endpoints for the Vue SPA).
+# When api.bind_port is set, the API server binds independently of the
+# web UI. If both api and web are enabled, the web UI still includes
+# API routes for local convenience, but external consumers can hit the
+# dedicated API port directly.
+# =============================================================================
+
+[api]
+
+[api.auto_start]
+type = "Bool"
+env = "PITCHFORK_API_AUTO_START"
+default = "false"
+description = "Automatically start the standalone API server"
+docs = """
+When true, pitchfork starts a standalone API server on api.bind_address +
+api.bind_port when the supervisor launches. The web UI does not need to
+be enabled for this; you can run the API alone and serve the Vue SPA from
+a separate static host (e.g. nginx, Vite dev server).
+
+Default is false so the API is only available through the bundled web UI.
+"""
+
+[api.bind_address]
+type = "String"
+env = "PITCHFORK_API_BIND_ADDRESS"
+default = "127.0.0.1"
+description = "IP address the API server binds to"
+docs = """
+Use "0.0.0.0" to make the API reachable from other devices on your network.
+Keep "127.0.0.1" (default) to restrict it to localhost.
+"""
+
+[api.bind_port]
+type = "Integer"
+env = "PITCHFORK_API_BIND_PORT"
+default = "0"
+description = "Port the standalone API server listens on"
+docs = """
+Set to 0 (default) to disable the standalone API server.
+Set to any valid port number (e.g. 8081) to start the API on its own port.
+"""
+
+[api.port_attempts]
+type = "Integer"
+env = "PITCHFORK_API_PORT_ATTEMPTS"
+default = "10"
+description = "Number of consecutive ports to try if api.bind_port is in use"
+
+
+[api.token]
+type = "String"
+env = "PITCHFORK_API_TOKEN"
+default = ""
+description = "Authentication token for API access when bound to non-loopback addresses"
+docs = """
+When the API server or web UI is bound to a non-loopback address (e.g.,
+"0.0.0.0"), this token is required on every API request via the
+X-Pitchfork-Token header.
+
+If left empty and the bind address is non-loopback, a random 32-byte
+hex token is auto-generated on startup and printed to the supervisor log.
+This token is injected into the served index.html, so the bundled Vue
+SPA works without additional configuration.
+
+For external API consumers (e.g., curl, mobile apps), set this to a
+fixed value or pass it via the PITCHFORK_API_TOKEN environment variable.
+"""
+
+
+# =============================================================================
+
+
 # TUI (Terminal UI) Settings
 # =============================================================================
+
 
 [tui]
 
@@ -548,6 +626,25 @@ where PID 1 must reap zombie processes to prevent process table exhaustion.
 
 Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`.
 """
+[supervisor.cleanup_orphans]
+type = "Bool"
+env = "PITCHFORK_CLEANUP_ORPHANS"
+default = "true"
+description = "Kill orphaned daemon processes when supervisor starts"
+docs = """
+When enabled, the supervisor scans the state file on startup for daemon
+processes left behind by a previous supervisor instance that was killed
+unexpectedly (for example, with `kill -9`). Any matching live processes are
+terminated so the new supervisor starts with a clean slate.
+
+This is recommended for local development where an unclean shutdown (IDE
+restart, system crash, etc.) would otherwise leave stale processes holding
+ports and consuming resources.
+
+Disable this on long-lived servers where you want daemons to survive a
+supervisor restart without interruption.
+"""
+
 
 [supervisor.user]
 type = "String"

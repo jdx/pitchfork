@@ -248,9 +248,9 @@ run = "sleep 60"
     let _ = env.run_command_in_dir(&["stop", "web"], &project_y);
 }
 
-/// Test that list command hides namespace when there's no conflict
+/// Test that list command always shows fully-qualified daemon names.
 #[test]
-fn test_list_hides_namespace_without_conflict() {
+fn test_list_always_shows_qualified_names() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();
 
@@ -280,19 +280,14 @@ run = "sleep 60"
     let list_str = String::from_utf8_lossy(&list_output.stdout);
     println!("list output (no conflict): {list_str}");
 
-    // Should show short names (no namespace) since there's no conflict
+    // Should always show fully-qualified names
     assert!(
-        list_str.contains("unique-api"),
-        "List should contain unique-api"
+        list_str.contains("solo-project/unique-api"),
+        "List should contain fully-qualified solo-project/unique-api"
     );
     assert!(
-        list_str.contains("unique-worker"),
-        "List should contain unique-worker"
-    );
-    // Should NOT contain the namespace prefix (no conflict)
-    assert!(
-        !list_str.contains("solo-project/"),
-        "List should NOT show namespace when there's no conflict, got: {list_str}"
+        list_str.contains("solo-project/unique-worker"),
+        "List should contain fully-qualified solo-project/unique-worker"
     );
 
     // Cleanup

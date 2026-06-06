@@ -25,7 +25,11 @@ pub use crate::config_types::{
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SlugEntryRaw {
     /// Project directory containing the pitchfork.toml
-    pub dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+    /// Namespace reference (alternative to dir)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     /// Daemon name within that project (defaults to slug name if omitted)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub daemon: Option<String>,
@@ -35,9 +39,33 @@ pub struct SlugEntryRaw {
 #[derive(Debug, Clone)]
 pub struct SlugEntry {
     /// Project directory containing the pitchfork.toml
-    pub dir: PathBuf,
+    pub dir: Option<PathBuf>,
+    /// Namespace reference (alternative to dir)
+    pub namespace: Option<String>,
     /// Daemon name within that project (defaults to slug name if omitted)
     pub daemon: Option<String>,
+}
+
+impl SlugEntry {
+    /// Resolve the project directory.
+    /// If `dir` is set, use it. Otherwise look up `namespace` in the global namespace registry.
+    pub fn resolve_dir(&self) -> Option<PathBuf> {
+        self.dir.clone().or_else(|| {
+            self.namespace.as_ref().and_then(|ns| {
+                let namespaces = PitchforkToml::read_global_namespaces();
+                namespaces.get(ns).map(|entry| entry.dir.clone())
+            })
+        })
+    }
+
+    /// Resolve the namespace name.
+    /// If `namespace` is set, use it. Otherwise derive from `dir` via `namespace_for_dir`.
+    pub fn resolve_namespace(&self) -> Option<String> {
+        self.namespace.clone().or_else(|| {
+            self.resolve_dir()
+                .and_then(|dir| PitchforkToml::namespace_for_dir(&dir).ok())
+        })
+    }
 }
 
 /// Raw group entry as read from TOML.
@@ -56,6 +84,24 @@ pub struct GroupEntry {
     pub daemons: Vec<DaemonId>,
 }
 
+/// Raw namespace entry as read from TOML.
+/// ```toml
+/// [namespaces.myproject]
+/// dir = "/home/user/projects/myproject"
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NamespaceEntryRaw {
+    /// Project directory containing the pitchfork.toml
+    pub dir: String,
+}
+
+/// Resolved namespace entry with PathBuf.
+#[derive(Debug, Clone)]
+pub struct NamespaceEntry {
+    /// Project directory containing the pitchfork.toml
+    pub dir: PathBuf,
+}
+
 /// Internal structure for reading config files (uses String keys for short daemon names)
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct PitchforkTomlRaw {
@@ -72,6 +118,10 @@ struct PitchforkTomlRaw {
     /// Named groups of daemons for batch operations.
     #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
     pub groups: IndexMap<String, GroupEntryRaw>,
+    /// Namespace registry (only meaningful in global config).
+    /// Maps namespace names to their project directory.
+    #[serde(skip_serializing_if = "IndexMap::is_empty", default)]
+    pub namespaces: IndexMap<String, NamespaceEntryRaw>,
 }
 
 /// Internal daemon config for reading (uses String for depends).
@@ -185,6 +235,10 @@ pub struct PitchforkToml {
     /// Named groups of daemons for batch operations.
     #[schemars(skip)]
     pub groups: IndexMap<String, GroupEntry>,
+    /// Namespace registry (merged from global config files).
+    /// Maps namespace names to their project directory.
+    #[schemars(skip)]
+    pub namespaces: IndexMap<String, NamespaceEntry>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -368,27 +422,29 @@ impl PitchforkToml {
         if let Some(entry) = global_slugs.get(user_id) {
             // Load the project's config from the slug's dir to find the daemon ID
             let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
-            if let Ok(project_config) = Self::all_merged_from(&entry.dir) {
-                // Find daemon by short name in that project
-                let matches: Vec<DaemonId> = project_config
-                    .daemons
-                    .keys()
-                    .filter(|id| id.name() == daemon_name)
-                    .cloned()
-                    .collect();
-                match matches.as_slice() {
-                    [] => {}
-                    [id] => return Ok(vec![id.clone()]),
-                    _ => {
-                        let mut candidates: Vec<String> =
-                            matches.iter().map(|id| id.qualified()).collect();
-                        candidates.sort();
-                        return Err(miette::miette!(
-                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
-                            user_id,
-                            daemon_name,
-                            candidates.join(", ")
-                        ));
+            if let Some(dir) = entry.resolve_dir() {
+                if let Ok(project_config) = Self::all_merged_from(&dir) {
+                    // Find daemon by short name in that project
+                    let matches: Vec<DaemonId> = project_config
+                        .daemons
+                        .keys()
+                        .filter(|id| id.name() == daemon_name)
+                        .cloned()
+                        .collect();
+                    match matches.as_slice() {
+                        [] => {}
+                        [id] => return Ok(vec![id.clone()]),
+                        _ => {
+                            let mut candidates: Vec<String> =
+                                matches.iter().map(|id| id.qualified()).collect();
+                            candidates.sort();
+                            return Err(miette::miette!(
+                                "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                                user_id,
+                                daemon_name,
+                                candidates.join(", ")
+                            ));
+                        }
                     }
                 }
             }
@@ -403,10 +459,46 @@ impl PitchforkToml {
             .collect();
 
         if matches.is_empty() {
-            // No config matches. Validate short ID format and return no matches.
+            // No config matches. Search state file for any daemon with matching short name.
+            let state_matches = Self::find_in_state_file(user_id);
+            match state_matches.as_slice() {
+                [] => {}
+                [id] => return Ok(vec![id.clone()]),
+                _ => {
+                    let mut candidates: Vec<String> =
+                        state_matches.iter().map(|id| id.qualified()).collect();
+                    candidates.sort();
+                    return Err(miette::miette!(
+                        "daemon '{}' is ambiguous; matches: {}. Use a qualified daemon ID (namespace/name)",
+                        user_id,
+                        candidates.join(", ")
+                    ));
+                }
+            }
+            // No config or state matches. Validate short ID format and return no matches.
             let _ = DaemonId::try_new("global", user_id)?;
         }
         Ok(matches)
+    }
+
+    /// Finds all daemons in the persisted state file whose short name matches `short_name`.
+    ///
+    /// Logs a warning if the state file exists but cannot be read or parsed.
+    ///
+    /// Returns the matching `DaemonId`s. The caller must handle zero / one / many cases.
+    fn find_in_state_file(short_name: &str) -> Vec<DaemonId> {
+        match StateFile::read(&*env::PITCHFORK_STATE_FILE) {
+            Ok(state) => state
+                .daemons
+                .keys()
+                .filter(|id| id.name() == short_name)
+                .cloned()
+                .collect(),
+            Err(e) => {
+                warn!("cannot read state file: {e}");
+                Vec::new()
+            }
+        }
     }
 
     /// Resolves a user-provided daemon ID to a qualified DaemonId, preferring the current directory's namespace.
@@ -459,26 +551,28 @@ impl PitchforkToml {
         let global_slugs = Self::read_global_slugs();
         if let Some(entry) = global_slugs.get(user_id) {
             let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
-            if let Ok(project_config) = Self::all_merged_from(&entry.dir) {
-                let matches: Vec<DaemonId> = project_config
-                    .daemons
-                    .keys()
-                    .filter(|id| id.name() == daemon_name)
-                    .cloned()
-                    .collect();
-                match matches.as_slice() {
-                    [] => {}
-                    [id] => return Ok(id.clone()),
-                    _ => {
-                        let mut candidates: Vec<String> =
-                            matches.iter().map(|id| id.qualified()).collect();
-                        candidates.sort();
-                        return Err(miette::miette!(
-                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
-                            user_id,
-                            daemon_name,
-                            candidates.join(", ")
-                        ));
+            if let Some(dir) = entry.resolve_dir() {
+                if let Ok(project_config) = Self::all_merged_from(&dir) {
+                    let matches: Vec<DaemonId> = project_config
+                        .daemons
+                        .keys()
+                        .filter(|id| id.name() == daemon_name)
+                        .cloned()
+                        .collect();
+                    match matches.as_slice() {
+                        [] => {}
+                        [id] => return Ok(id.clone()),
+                        _ => {
+                            let mut candidates: Vec<String> =
+                                matches.iter().map(|id| id.qualified()).collect();
+                            candidates.sort();
+                            return Err(miette::miette!(
+                                "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                                user_id,
+                                daemon_name,
+                                candidates.join(", ")
+                            ));
+                        }
                     }
                 }
             }
@@ -513,15 +607,6 @@ impl PitchforkToml {
         // to global when it is explicitly configured.
         let global_id = DaemonId::try_new("global", user_id)?;
         if self.daemons.contains_key(&global_id) {
-            return Ok(global_id);
-        }
-
-        // Also allow existing ad-hoc daemons (persisted in state file) to be
-        // referenced by short ID. This keeps commands like status/restart/stop
-        // working for daemons started via `pitchfork run`.
-        if let Ok(state) = StateFile::read(&*env::PITCHFORK_STATE_FILE)
-            && state.daemons.contains_key(&global_id)
-        {
             return Ok(global_id);
         }
 
@@ -742,6 +827,39 @@ impl PitchforkToml {
     pub fn all_merged() -> Result<PitchforkToml> {
         Self::all_merged_from(&env::CWD)
     }
+    /// Load all merged config including daemons from ALL registered namespaces.
+    ///
+    /// Unlike `all_merged_from` which only merges configs from the cwd chain,
+    /// this also iterates all `[namespaces]` entries and loads their daemon configs.
+    /// Use this when you need a complete view (e.g. `start` for a daemon from
+    /// another namespace).
+    pub fn all_merged_all_namespaces() -> Result<Self> {
+        let mut pt = Self::all_merged_from(&env::CWD)?;
+
+        let namespaces = Self::read_global_namespaces();
+        for (ns_name, entry) in namespaces {
+            match Self::all_merged_from(&entry.dir) {
+                Ok(ns_config) => {
+                    for (daemon_id, daemon_config) in ns_config.daemons {
+                        if !pt.daemons.contains_key(&daemon_id) {
+                            pt.daemons.insert(daemon_id, daemon_config);
+                        }
+                    }
+                    // Merge namespace-level settings so daemon-local
+                    // overrides (e.g. hooks, env defaults) are available.
+                    pt.settings.merge_from(&ns_config.settings);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load namespace '{ns_name}' from {}: {e}",
+                        entry.dir.display()
+                    );
+                }
+            }
+        }
+
+        Ok(pt)
+    }
 
     /// Merge all configuration files starting from a given directory.
     ///
@@ -809,6 +927,7 @@ impl PitchforkToml {
             settings: SettingsPartial::default(),
             slugs: IndexMap::new(),
             groups: IndexMap::new(),
+            namespaces: IndexMap::new(),
             path: Some(path),
         }
     }
@@ -970,8 +1089,19 @@ impl PitchforkToml {
             pt.slugs.insert(
                 slug,
                 SlugEntry {
-                    dir: PathBuf::from(entry.dir),
+                    dir: entry.dir.map(PathBuf::from),
+                    namespace: entry.namespace,
                     daemon: entry.daemon,
+                },
+            );
+        }
+
+        // Copy namespaces registry (only meaningful in global config files)
+        for (name, entry) in raw_config.namespaces {
+            pt.namespaces.insert(
+                name,
+                NamespaceEntry {
+                    dir: PathBuf::from(entry.dir),
                 },
             );
         }
@@ -1116,7 +1246,8 @@ impl PitchforkToml {
                 raw.slugs.insert(
                     slug.clone(),
                     SlugEntryRaw {
-                        dir: entry.dir.to_string_lossy().to_string(),
+                        dir: entry.dir.as_ref().map(|d| d.to_string_lossy().to_string()),
+                        namespace: entry.namespace.clone(),
                         daemon: entry.daemon.clone(),
                     },
                 );
@@ -1139,6 +1270,16 @@ impl PitchforkToml {
                     name.clone(),
                     GroupEntryRaw {
                         daemons: raw_daemons,
+                    },
+                );
+            }
+
+            // Copy namespaces registry to raw format
+            for (name, entry) in &self.namespaces {
+                raw.namespaces.insert(
+                    name.clone(),
+                    NamespaceEntryRaw {
+                        dir: entry.dir.to_string_lossy().to_string(),
                     },
                 );
             }
@@ -1173,6 +1314,10 @@ impl PitchforkToml {
         for (name, group) in pt.groups {
             self.groups.insert(name, group);
         }
+        // Merge namespaces - pt's values override self's values
+        for (name, entry) in pt.namespaces {
+            self.namespaces.insert(name, entry);
+        }
         // Merge settings - pt's values override self's values
         self.settings.merge_from(&pt.settings);
     }
@@ -1201,9 +1346,9 @@ impl PitchforkToml {
                     return false;
                 }
 
-                match Self::namespace_for_dir(&entry.dir) {
-                    Ok(namespace) => daemon_id.namespace() == namespace,
-                    Err(_) => true,
+                match entry.resolve_namespace() {
+                    Some(namespace) => daemon_id.namespace() == namespace,
+                    None => false,
                 }
             })
             .map(|(slug, _)| slug.clone())
@@ -1215,10 +1360,16 @@ impl PitchforkToml {
         Self::read_global_slugs().contains_key(slug)
     }
 
-    /// Add a slug entry to the global config's `[slugs]` section.
+    /// Add a slug entry to the global config's `[slugs]` section using namespace instead of dir.
     ///
     /// Reads the global config, adds/updates the slug entry, and writes it back.
-    pub fn add_slug(slug: &str, dir: &Path, daemon: Option<&str>) -> Result<()> {
+    /// If `namespace` is provided but not yet registered in `[namespaces]`,
+    /// also registers it at `dir` (acquired via `resolve_dir()` on the slug entry).
+    pub fn add_slug_with_namespace(
+        slug: &str,
+        namespace: Option<&str>,
+        daemon: Option<&str>,
+    ) -> Result<()> {
         let global_path = &*env::PITCHFORK_GLOBAL_CONFIG_USER;
 
         // Ensure the config directory exists
@@ -1231,9 +1382,6 @@ impl PitchforkToml {
             })?;
         }
 
-        // Hold a single file lock across the entire read-modify-write cycle to
-        // prevent TOCTOU races. Without this, another process could modify the
-        // file between our read() and write() calls, and we'd overwrite its changes.
         let _lock = xx::fslock::get(global_path, false)
             .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
 
@@ -1247,10 +1395,28 @@ impl PitchforkToml {
             Self::new(global_path.to_path_buf())
         };
 
+        // If caller provided a namespace that isn't yet registered,
+        // auto-register it at the directory we can resolve.
+        // Falls back to CWD if the slug dir cannot be resolved.
+        if let Some(ns) = namespace {
+            if !pt.namespaces.contains_key(ns) {
+                let dir = pt
+                    .slugs
+                    .get(slug)
+                    .and_then(|e| e.resolve_dir())
+                    .or_else(|| namespace.and_then(|_| env::CWD.as_path().canonicalize().ok()));
+                if let Some(ref d) = dir {
+                    pt.namespaces
+                        .insert(ns.to_string(), NamespaceEntry { dir: d.clone() });
+                }
+            }
+        }
+
         pt.slugs.insert(
             slug.to_string(),
             SlugEntry {
-                dir: dir.to_path_buf(),
+                dir: None,
+                namespace: namespace.map(str::to_string),
                 daemon: daemon.map(str::to_string),
             },
         );
@@ -1279,6 +1445,80 @@ impl PitchforkToml {
         if removed {
             pt.write_unlocked()?;
             crate::proxy::hosts::sync_hosts_from_settings();
+        }
+        Ok(removed)
+    }
+    /// Returns a map of namespace → NamespaceEntry from `[namespaces]` in
+    /// `~/.config/pitchfork/config.toml`.
+    pub fn read_global_namespaces() -> IndexMap<String, NamespaceEntry> {
+        match Self::read(&*env::PITCHFORK_GLOBAL_CONFIG_USER) {
+            Ok(pt) => pt.namespaces,
+            Err(_) => IndexMap::new(),
+        }
+    }
+
+    /// Add a namespace entry to the global config's `[namespaces]` section.
+    ///
+    /// Reads the global config, adds/updates the namespace entry, and writes it back.
+    pub fn register_namespace(name: &str, dir: &str) -> crate::Result<()> {
+        let global_path = &*crate::env::PITCHFORK_GLOBAL_CONFIG_USER;
+
+        // Ensure the config directory exists
+        if let Some(parent) = global_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                miette::miette!(
+                    "Failed to create config directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+
+        let mut pt = if global_path.exists() {
+            let raw = std::fs::read_to_string(global_path).map_err(|e| {
+                crate::error::FileError::ReadError {
+                    path: global_path.to_path_buf(),
+                    source: e,
+                }
+            })?;
+            Self::parse_str(&raw, global_path)?
+        } else {
+            Self::new(global_path.to_path_buf())
+        };
+
+        pt.namespaces.insert(
+            name.to_string(),
+            NamespaceEntry {
+                dir: PathBuf::from(dir),
+            },
+        );
+        pt.write_unlocked()?;
+        Ok(())
+    }
+
+    /// Remove a namespace from the global config's `[namespaces]` section.
+    pub fn remove_namespace(name: &str) -> crate::Result<bool> {
+        let global_path = &*crate::env::PITCHFORK_GLOBAL_CONFIG_USER;
+        if !global_path.exists() {
+            return Ok(false);
+        }
+
+        let _lock = xx::fslock::get(global_path, false)
+            .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
+
+        let raw = std::fs::read_to_string(global_path).map_err(|e| {
+            crate::error::FileError::ReadError {
+                path: global_path.to_path_buf(),
+                source: e,
+            }
+        })?;
+        let mut pt = Self::parse_str(&raw, global_path)?;
+
+        let removed = pt.namespaces.shift_remove(name).is_some();
+        if removed {
+            pt.write_unlocked()?;
         }
         Ok(removed)
     }
@@ -1380,7 +1620,7 @@ impl PitchforkTomlDaemon {
                     return false;
                 }
 
-                match crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok() {
+                match entry.resolve_namespace() {
                     Some(namespace) => namespace == id.namespace(),
                     None => false,
                 }

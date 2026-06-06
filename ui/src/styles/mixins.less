@@ -1,0 +1,312 @@
+// Less Mixins — Pitchfork Web UI
+// =============================================================================
+
+@import './variables.less';
+
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+
+.flex-center() {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flex-between() {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flex-column() {
+  display: flex;
+  flex-direction: column;
+}
+
+.truncate() {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// ---------------------------------------------------------------------------
+// Interactive elements
+// ---------------------------------------------------------------------------
+
+.btn-base() {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: @tr-base;
+  border: 1px solid;
+  line-height: 1;
+  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: @r-lg;
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+.btn-neutral() {
+  background: @sf-3;
+  color: @sf-50;
+  border-color: @sf-8;
+
+  &:hover:not(:disabled) {
+    background: @sf-6;
+    color: @sf-70;
+  }
+}
+
+.btn-accent() {
+  background: @sf-danger-15;
+  color: @c-accent;
+  border-color: @sf-danger-25;
+
+  &:hover:not(:disabled) {
+    background: @sf-danger-25;
+  }
+}
+
+.ghost-btn() {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.8rem;
+  background: @sf-3;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: @sf-50;
+  border-radius: @r-md;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: @tr-base;
+
+  &:hover:not(:disabled) {
+    background: @sf-6;
+    color: @sf-80;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Badges
+// ---------------------------------------------------------------------------
+
+.badge-base() {
+  font-family: @ff-mono;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge-sm() {
+  .badge-base();
+  font-size: 0.68rem;
+  padding: 0.18rem 0.6rem;
+  border-radius: @r-md;
+}
+
+.badge-md() {
+  .badge-base();
+  font-size: 0.72rem;
+  padding: 0.14rem 0.45rem;
+  border-radius: @r-sm;
+}
+
+.badge-status(@bg; @color; @border: transparent) {
+  background: @bg;
+  color: @color;
+  & when not (@border = transparent) {
+    border: 1px solid @border;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Status variants
+// ---------------------------------------------------------------------------
+
+.status-running() { .badge-status(@sf-success-10; @c-success); }
+.status-stopped() { .badge-status(@sf-4; @sf-30); }
+.status-waiting() { .badge-status(@sf-warning-8; @c-warning); }
+.status-failed()  { .badge-status(@sf-danger-8; @c-danger); }
+.status-available() { .badge-status(@sf-info-8; @c-info); }
+
+// ---------------------------------------------------------------------------
+// Card
+// ---------------------------------------------------------------------------
+
+.card-surface() {
+  background: @sf-2;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: @r-2xl;
+  padding: @space-xl @space-2xl;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+
+  &:hover {
+    border-color: @sf-10;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Table
+// ---------------------------------------------------------------------------
+
+.table-base() {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.88rem;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: @r-lg;
+  overflow: hidden;
+  table-layout: fixed;
+
+  thead {
+    background: @sf-4;
+  }
+
+  th {
+    padding: 0.6rem 0.7rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: @sf-30;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    white-space: nowrap;
+  }
+}
+
+.table-cell() {
+  padding: 0.6rem 0.7rem;
+  vertical-align: middle;
+}
+
+// ---------------------------------------------------------------------------
+// Grid
+// ---------------------------------------------------------------------------
+
+.card-grid() {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.8rem;
+}
+
+// ---------------------------------------------------------------------------
+// Typography helpers
+// ---------------------------------------------------------------------------
+
+.font-mono(@size; @color; @weight: 500) {
+  font-family: @ff-mono;
+  font-size: @size;
+  color: @color;
+  font-weight: @weight;
+}
+
+.font-sans(@size; @color; @weight: 400) {
+  font-family: @ff-sans;
+  font-size: @size;
+  color: @color;
+  font-weight: @weight;
+}
+
+.label-micro() {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: @sf-20;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+// ---------------------------------------------------------------------------
+// Namespace group
+// ---------------------------------------------------------------------------
+
+.ns-group-surface() {
+  margin-bottom: @space-2xl;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: @r-xl;
+  overflow: hidden;
+  background: @sf-1;
+}
+
+.ns-header-surface() {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.75rem @space-xl;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.035);
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: @tr-fast;
+  font-family: inherit;
+  color: inherit;
+
+  &:hover {
+    background: @sf-6;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Alert
+// ---------------------------------------------------------------------------
+
+.alert-base() {
+  padding: 0.6rem 0.9rem;
+  border-radius: @r-lg;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.alert-error() {
+  .alert-base();
+  background: @sf-danger-6;
+  border: 1px solid @sf-danger-12;
+  color: @c-accent;
+}
+
+// ---------------------------------------------------------------------------
+// Media queries
+// ---------------------------------------------------------------------------
+
+.mobile(@rules) {
+  @media (max-width: @mobile-bp) {
+    @rules();
+  }
+}
+
+.mobile-sm(@rules) {
+  @media (max-width: @mobile-bp-sm) {
+    @rules();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Keyframes
+// ---------------------------------------------------------------------------
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

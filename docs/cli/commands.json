@@ -32,6 +32,22 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "api-schema": {
+        "full_cmd": [
+          "api-schema"
+        ],
+        "usage": "api-schema",
+        "subcommands": {},
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": true,
+        "help": "Generate JSON documentation for the web API endpoints",
+        "name": "api-schema",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "boot": {
         "full_cmd": [
           "boot"
@@ -1080,7 +1096,7 @@
               "proxy",
               "add"
             ],
-            "usage": "proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>",
+            "usage": "proxy add [FLAGS] <SLUG>",
             "subcommands": {},
             "args": [
               {
@@ -1127,6 +1143,25 @@
                 "arg": {
                   "name": "DAEMON",
                   "usage": "<DAEMON>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "namespace",
+                "usage": "--namespace <NAMESPACE>",
+                "help": "Namespace to associate with the slug. If not provided, derived from the project directory",
+                "help_first_line": "Namespace to associate with the slug. If not provided, derived from the project directory",
+                "short": [],
+                "long": [
+                  "namespace"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "NAMESPACE",
+                  "usage": "<NAMESPACE>",
                   "required": true,
                   "double_dash": "Optional",
                   "hide": false

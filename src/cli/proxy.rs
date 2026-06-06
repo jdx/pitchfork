@@ -253,8 +253,9 @@ impl ProxyStatus {
                 // Try to find the daemon in the state file, scoped to the slug's
                 // registered project directory to avoid picking the wrong daemon
                 // when multiple projects have daemons with the same short name.
-                let expected_ns =
-                    crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
+                let expected_ns = entry.resolve_dir().and_then(|dir| {
+                    crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&dir).ok()
+                });
                 let status_str = if let Some(sf) = &state_file {
                     let daemon_entry = sf.daemons.iter().find(|(id, _)| {
                         id.name() == daemon_name
@@ -283,7 +284,13 @@ impl ProxyStatus {
 
                 println!("  {slug}");
                 println!("    URL:    {url}");
-                println!("    Dir:    {}", entry.dir.display());
+                println!(
+                    "    Dir:    {}",
+                    entry
+                        .resolve_dir()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_else(|| "(unresolved)".to_string())
+                );
                 println!("    Daemon: {daemon_name}");
                 println!("    Status: {status_str}");
                 println!();
@@ -319,6 +326,9 @@ struct Add {
     /// Daemon name within the project (defaults to slug name)
     #[clap(long)]
     daemon: Option<String>,
+    /// Namespace to associate with the slug. If not provided, derived from the project directory.
+    #[clap(long)]
+    namespace: Option<String>,
 }
 
 impl Add {
@@ -352,6 +362,30 @@ impl Add {
 
         let daemon = self.daemon.as_deref();
 
+        let resolved_ns = self
+            .namespace
+            .clone()
+            .or_else(|| crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&dir).ok());
+
+        let Some(resolved_ns) = resolved_ns else {
+            miette::bail!(
+                "Cannot derive a namespace for '{}'. \
+                 Make sure the directory contains a pitchfork.toml with a valid `namespace`, \
+                 or provide an explicit `--namespace`.",
+                dir.display()
+            );
+        };
+
+        // Auto-register namespace if not already registered
+        let namespaces = crate::pitchfork_toml::PitchforkToml::read_global_namespaces();
+        if !namespaces.contains_key(&resolved_ns) {
+            crate::pitchfork_toml::PitchforkToml::register_namespace(
+                &resolved_ns,
+                &dir.to_string_lossy(),
+            )?;
+            println!("Registered namespace '{resolved_ns}' at {}", dir.display());
+        }
+
         // Don't store daemon name if it matches the slug (it defaults to slug)
         let stored_daemon = if daemon == Some(slug.as_str()) {
             None
@@ -359,7 +393,7 @@ impl Add {
             daemon
         };
 
-        PitchforkToml::add_slug(slug, &dir, stored_daemon)?;
+        PitchforkToml::add_slug_with_namespace(slug, Some(&resolved_ns), stored_daemon)?;
 
         // Notify the supervisor so it can update mDNS records.
         if let Ok(client) = crate::ipc::client::IpcClient::connect(false).await {
@@ -368,10 +402,7 @@ impl Add {
 
         let global_path = &*crate::env::PITCHFORK_GLOBAL_CONFIG_USER;
         let daemon_display = daemon.unwrap_or(slug);
-        println!(
-            "Added slug '{slug}' → {} (daemon: {daemon_display})",
-            dir.display()
-        );
+        println!("Added slug '{slug}' → namespace '{resolved_ns}' (daemon: {daemon_display})");
         println!("  Config: {}", global_path.display());
 
         let s = crate::settings::settings();

@@ -198,7 +198,7 @@ impl Daemon {
             .dir
             .as_deref()
             .and_then(|dir| crate::pitchfork_toml::PitchforkToml::all_merged_from(dir).ok())
-            .or_else(|| crate::pitchfork_toml::PitchforkToml::all_merged().ok())
+            .or_else(|| crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok())
             .and_then(|pt| {
                 pt.daemons
                     .get(&self.id)

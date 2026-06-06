@@ -26,7 +26,7 @@ Subcommands:
 
 ## Subcommands
 
-- [`pitchfork proxy add [--dir <DIR>] [--daemon <DAEMON>] <SLUG>`](/cli/proxy/add.md)
+- [`pitchfork proxy add [FLAGS] <SLUG>`](/cli/proxy/add.md)
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
 - [`pitchfork proxy status`](/cli/proxy/status.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)

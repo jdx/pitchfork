@@ -62,17 +62,17 @@ const SLUG_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Cached slug entry: pre-resolved namespace + daemon name for a slug.
 #[derive(Clone, Debug)]
-struct CachedSlugEntry {
+pub struct CachedSlugEntry {
     /// The slug key as registered in config (needed for display in auto-start pages).
-    slug: String,
-    /// Expected namespace derived from `entry.dir` (None if derivation failed).
-    namespace: Option<String>,
+    pub slug: String,
+    /// Expected namespace derived from `entry.resolve_dir()` (None if derivation failed).
+    pub namespace: Option<String>,
     /// Daemon short name (defaults to slug name when not explicitly set).
-    daemon_name: String,
+    pub daemon_name: String,
     /// Project directory for this slug (needed for auto-start).
-    dir: std::path::PathBuf,
+    pub dir: std::path::PathBuf,
     /// Worktrees (git) / workspaces (jj) discovered under this slug's project directory.
-    worktrees: Vec<crate::proxy::worktree::WorktreeEntry>,
+    pub worktrees: Vec<crate::proxy::worktree::WorktreeEntry>,
 }
 
 /// In-memory cache for the global slug registry + derived namespaces.
@@ -96,10 +96,13 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
     let mut entries = std::collections::HashMap::with_capacity(global_slugs.len());
     let worktree_enabled = crate::settings::settings().proxy.worktree;
     for (slug, entry) in &global_slugs {
-        let ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&entry.dir).ok();
+        let ns = entry.resolve_namespace();
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();
         let worktrees = if worktree_enabled {
-            let wts = crate::proxy::worktree::discover_worktrees(&entry.dir);
+            let wts = match entry.resolve_dir() {
+                Some(dir) => crate::proxy::worktree::discover_worktrees(&dir),
+                None => vec![],
+            };
             // Warn about sanitized-branch collisions and drop duplicates so that
             // unreachable entries don't waste memory in the cache.
             let mut seen = std::collections::HashMap::with_capacity(wts.len());
@@ -133,7 +136,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
                 slug: slug.clone(),
                 namespace: ns,
                 daemon_name,
-                dir: entry.dir.clone(),
+                dir: entry.resolve_dir().unwrap_or_default(),
                 worktrees,
             },
         );
@@ -146,7 +149,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
 /// The disk I/O happens *outside* the mutex to avoid blocking concurrent requests
 /// during the refresh.  A short race window exists where two threads may both
 /// refresh, but that is harmless (last writer wins with identical data).
-async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
+pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
     // Fast path: cache still valid — just clone the Arc.
     {
         let cache = SLUG_CACHE.lock().await;
@@ -1129,28 +1132,41 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         );
     }
 
-    // Resolve the target port from the host
-    let target_port = match resolve_target(&host, &state.tld).await {
-        ResolveResult::Ready(port) => port,
-        ResolveResult::Starting { slug } => {
-            return starting_html_response(&slug, &raw_host);
+    // Intercept "pitchfork.<tld>" — route to the built-in web UI
+    let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
+        if subdomain == "pitchfork" {
+            crate::web::port()
+        } else {
+            None
         }
-        ResolveResult::NotFound => {
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!(
-                    "No daemon found for host '{host}'.\n\
-                     Make sure the daemon has a slug, is running, and has a port configured.\n\
-                     Expected format: <slug>.{tld}",
-                    tld = state.tld
-                ),
-            );
-        }
-        ResolveResult::Error(msg) => {
-            return error_response(StatusCode::BAD_GATEWAY, &msg);
-        }
+    } else {
+        None
     };
 
+    let target_port = if let Some(port) = target_port {
+        port
+    } else {
+        match resolve_target(&host, &state.tld).await {
+            ResolveResult::Ready(port) => port,
+            ResolveResult::Starting { slug } => {
+                return starting_html_response(&slug, &raw_host);
+            }
+            ResolveResult::NotFound => {
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!(
+                        "No daemon found for host '{host}'.\n\
+                         Make sure the daemon has a slug, is running, and has a port configured.\n\
+                         Expected format: <slug>.{tld}",
+                        tld = state.tld
+                    ),
+                );
+            }
+            ResolveResult::Error(msg) => {
+                return error_response(StatusCode::BAD_GATEWAY, &msg);
+            }
+        }
+    };
     // Build the forwarding URI
     let path_and_query = req
         .uri()
@@ -1530,13 +1546,14 @@ async fn try_auto_start_inner(
         quiet: true,
         ..crate::ipc::batch::StartOptions::default()
     };
-    let mut run_opts = match crate::ipc::batch::build_run_options(daemon_id, daemon_config, &opts) {
-        Ok(o) => o,
-        Err(e) => {
-            log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");
-            return ResolveResult::Error(format!("Failed to build run options: {e}"));
-        }
-    };
+    let mut run_opts =
+        match crate::ipc::batch::build_run_options(daemon_id, daemon_config, Some(&opts)) {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");
+                return ResolveResult::Error(format!("Failed to build run options: {e}"));
+            }
+        };
 
     // Only set the working directory when the daemon config didn't specify one.
     // If the config has an explicit `dir`, respect it even in a worktree context.

@@ -2,6 +2,7 @@ use crate::Result;
 use clap::Parser;
 
 mod activate;
+mod api_schema;
 mod boot;
 mod cd;
 mod clean;
@@ -36,6 +37,7 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 enum Commands {
     Activate(activate::Activate),
+    ApiSchema(api_schema::ApiSchema),
     Boot(boot::Boot),
     Cd(cd::Cd),
     Clean(clean::Clean),
@@ -77,6 +79,7 @@ pub async fn run() -> Result<()> {
         Commands::Proxy(proxy) => proxy.run().await,
         Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
+        Commands::ApiSchema(api_schema) => api_schema.run().await,
         Commands::Schema(schema) => schema.run().await,
         Commands::Sponsors(_) => sponsors::Sponsors::run().await,
         Commands::Start(start) => start.run().await,
