@@ -61,32 +61,40 @@ fn base_html(title: &str, content: &str) -> String {
     )
 }
 
-fn fetch_latest_logs(daemon_id: &DaemonId) -> String {
-    let log_lines = settings().web.log_lines.max(0) as usize;
-    let entries = match LOG_STORE.query(&LogQuery {
-        daemon_ids: vec![daemon_id.qualified()],
-        from: None,
-        to: None,
-        limit: if log_lines > 0 { Some(log_lines) } else { None },
-        order_desc: true,
-        after_id: None,
-    }) {
-        Ok(e) => e,
-        Err(_) => return String::new(),
-    };
-    let mut lines: Vec<String> = entries
-        .iter()
-        .map(|e| {
-            format!(
-                "{} {}",
-                e.timestamp.format("%Y-%m-%d %H:%M:%S"),
-                e.message.as_str()
-            )
-        })
-        .collect();
-    lines.reverse();
-    let joined = lines.join("\n");
-    html_escape(&console::strip_ansi_codes(&joined))
+async fn fetch_latest_logs(daemon_id: &DaemonId) -> String {
+    let daemon_id = daemon_id.clone();
+    match tokio::task::spawn_blocking(move || {
+        let log_lines = settings().web.log_lines.max(0) as usize;
+        let entries = match LOG_STORE.query(&LogQuery {
+            daemon_ids: vec![daemon_id.qualified()],
+            from: None,
+            to: None,
+            limit: if log_lines > 0 { Some(log_lines) } else { None },
+            order_desc: true,
+            after_id: None,
+        }) {
+            Ok(e) => e,
+            Err(_) => return String::new(),
+        };
+        let mut lines: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} {}",
+                    e.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                    e.message.as_str()
+                )
+            })
+            .collect();
+        lines.reverse();
+        let joined = lines.join("\n");
+        html_escape(&console::strip_ansi_codes(&joined))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => String::new(),
+    }
 }
 
 pub async fn index() -> Html<String> {
@@ -159,7 +167,7 @@ pub async fn index() -> Html<String> {
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let initial_logs = fetch_latest_logs(&daemon_id);
+            let initial_logs = fetch_latest_logs(&daemon_id).await;
 
             tab_contents.push_str(&format!(
                 r#"
@@ -246,7 +254,7 @@ pub async fn show(Path(id): Path<String>) -> Html<String> {
 
     let safe_id = html_escape(&daemon_id.to_string());
     let url_id = url_encode(&daemon_id.to_string());
-    let initial_logs = fetch_latest_logs(&daemon_id);
+    let initial_logs = fetch_latest_logs(&daemon_id).await;
 
     let content = format!(
         r#"
@@ -277,30 +285,40 @@ pub async fn lines_partial(Path(id): Path<String>) -> Html<String> {
     };
 
     let log_lines = settings().web.log_lines.max(0) as usize;
-    let entries = match LOG_STORE.query(&LogQuery {
-        daemon_ids: vec![daemon_id.qualified()],
-        from: None,
-        to: None,
-        limit: if log_lines > 0 { Some(log_lines) } else { None },
-        order_desc: true,
-        after_id: None,
-    }) {
-        Ok(e) => e,
-        Err(_) => return Html(String::new()),
-    };
+    match tokio::task::spawn_blocking({
+        let name = daemon_id.qualified();
+        move || {
+            let entries = match LOG_STORE.query(&LogQuery {
+                daemon_ids: vec![name],
+                from: None,
+                to: None,
+                limit: if log_lines > 0 { Some(log_lines) } else { None },
+                order_desc: true,
+                after_id: None,
+            }) {
+                Ok(e) => e,
+                Err(_) => return Html(String::new()),
+            };
 
-    let mut lines: Vec<String> = entries
-        .iter()
-        .map(|e| {
-            format!(
-                "{} {}",
-                e.timestamp.format("%Y-%m-%d %H:%M:%S"),
-                e.message.as_str()
-            )
-        })
-        .collect();
-    lines.reverse();
-    Html(html_escape(&console::strip_ansi_codes(&lines.join("\n"))))
+            let mut lines: Vec<String> = entries
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{} {}",
+                        e.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                        e.message.as_str()
+                    )
+                })
+                .collect();
+            lines.reverse();
+            Html(html_escape(&console::strip_ansi_codes(&lines.join("\n"))))
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Html(String::new()),
+    }
 }
 
 pub async fn stream_sse(
@@ -323,26 +341,42 @@ pub async fn stream_sse(
         };
 
         // Track the highest row ID we've sent so we only stream new entries.
-        let mut last_id: i64 = match LOG_STORE.query(&LogQuery {
-            daemon_ids: vec![daemon_id.qualified()],
-            from: None,
-            to: None,
-            limit: Some(1),
-            order_desc: true,
-            after_id: None,
-        }) {
-            Ok(entries) => entries.last().map(|e| e.id).unwrap_or(0),
-            Err(_) => 0,
+        let mut last_id: i64 = match tokio::task::spawn_blocking({
+            let d = daemon_id.clone();
+            move || LOG_STORE.query(&LogQuery {
+                daemon_ids: vec![d.qualified()],
+                from: None,
+                to: None,
+                limit: Some(1),
+                order_desc: true,
+                after_id: None,
+            })
+        }).await {
+            Ok(Ok(entries)) => entries.first().map(|e| e.id).unwrap_or(0),
+            _ => 0,
         };
 
         // Track the clear generation so we can detect log wipes.
-        let mut last_clear_gen: u64 = LOG_STORE.last_clear_generation(&daemon_id).unwrap_or(None).unwrap_or(0);
+        let mut last_clear_gen: u64 = match tokio::task::spawn_blocking({
+            let d = daemon_id.clone();
+            move || LOG_STORE.last_clear_generation(&d)
+        }).await {
+            Ok(Ok(Some(g))) => g,
+            _ => 0,
+        };
 
         loop {
             tokio::time::sleep(sse_poll_interval).await;
 
             // Detect log clear and notify client to blank its display.
-            let current_gen = LOG_STORE.last_clear_generation(&daemon_id).unwrap_or(None).unwrap_or(0);
+            let current_gen: u64 = match tokio::task::spawn_blocking({
+                let d = daemon_id.clone();
+                move || LOG_STORE.last_clear_generation(&d)
+            }).await {
+                Ok(Ok(Some(g))) => g,
+                _ => 0,
+            };
+
             if current_gen != last_clear_gen {
                 last_clear_gen = current_gen;
                 // Reset cursor so future new entries are streamed correctly.
@@ -352,16 +386,19 @@ pub async fn stream_sse(
             }
 
             const BATCH_SIZE: usize = 500;
-            let entries = match LOG_STORE.query(&LogQuery {
-                daemon_ids: vec![daemon_id.qualified()],
-                from: None,
-                to: None,
-                limit: Some(BATCH_SIZE),
-                order_desc: false,
-                after_id: Some(last_id),
-            }) {
-                Ok(e) => e,
-                Err(_) => continue,
+            let entries = match tokio::task::spawn_blocking({
+                let d = daemon_id.clone();
+                move || LOG_STORE.query(&LogQuery {
+                    daemon_ids: vec![d.qualified()],
+                    from: None,
+                    to: None,
+                    limit: Some(BATCH_SIZE),
+                    order_desc: false,
+                    after_id: Some(last_id),
+                })
+            }).await {
+                Ok(Ok(e)) => e,
+                _ => continue,
             };
 
             for entry in entries {
@@ -384,12 +421,17 @@ pub async fn clear(Path(id): Path<String>) -> Html<String> {
     };
 
     let name = daemon_id.qualified();
-    if let Err(e) = LOG_STORE.clear(&[daemon_id]) {
-        log::warn!("Failed to clear logs for {name}: {e}");
-        return Html(r#"<div class="error">Failed to clear logs</div>"#.to_string());
+    match tokio::task::spawn_blocking(move || LOG_STORE.clear(&[daemon_id])).await {
+        Ok(Ok(())) => Html("".to_string()),
+        Ok(Err(e)) => {
+            log::warn!("Failed to clear logs for {name}: {e}");
+            Html(r#"<div class="error">Failed to clear logs</div>"#.to_string())
+        }
+        Err(e) => {
+            log::warn!("clear task panicked for {name}: {e}");
+            Html(r#"<div class="error">Failed to clear logs</div>"#.to_string())
+        }
     }
-
-    Html("".to_string())
 }
 
 /// Escape a string for use inside JavaScript single-quoted string literals.
