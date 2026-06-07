@@ -98,7 +98,7 @@ pub async fn list() -> Json<Vec<ApiProxyWorktreeEntry>> {
         } else {
             Some(ns_name.clone())
         };
-        let proxy_url = crate::proxy::build_proxy_url(Some(slug), settings);
+        let proxy_url = crate::proxy::build_proxy_url(Some(slug), &settings);
         let daemon_qualified = lookup_key;
 
         let wts = &cached_entry.worktrees;

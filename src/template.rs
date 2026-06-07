@@ -148,7 +148,7 @@ impl TemplateContext {
 
         // Always expose proxy_url so templates can distinguish an unroutable daemon
         // via a strict null value instead of an undefined-variable error.
-        let proxy_url = build_proxy_url(self.self_state.slug.as_deref(), s);
+        let proxy_url = build_proxy_url(self.self_state.slug.as_deref(), &s);
         ctx.insert("proxy_url", &proxy_url);
 
         ctx

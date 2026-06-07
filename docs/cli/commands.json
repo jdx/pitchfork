@@ -174,18 +174,18 @@
         "hidden_aliases": [],
         "examples": []
       },
-      "config": {
+      "daemons": {
         "full_cmd": [
-          "config"
+          "daemons"
         ],
-        "usage": "config <SUBCOMMAND>",
+        "usage": "daemons <SUBCOMMAND>",
         "subcommands": {
           "add": {
             "full_cmd": [
-              "config",
+              "daemons",
               "add"
             ],
-            "usage": "config add [FLAGS] <ID> [ARGS]…",
+            "usage": "daemons add [FLAGS] <ID> [ARGS]…",
             "subcommands": {},
             "args": [
               {
@@ -632,11 +632,35 @@
               {
                 "name": "cron-immediate",
                 "usage": "--cron-immediate",
-                "help": "Trigger cron immediately on first check (default: false)",
-                "help_first_line": "Trigger cron immediately on first check (default: false)",
+                "help": "Trigger cron immediately on first check (default: deferred until next scheduled time)",
+                "help_first_line": "Trigger cron immediately on first check (default: deferred until next scheduled time)",
                 "short": [],
                 "long": [
                   "cron-immediate"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "local",
+                "usage": "--local",
+                "help": "Write to pitchfork.local.toml instead of pitchfork.toml",
+                "help_first_line": "Write to pitchfork.local.toml instead of pitchfork.toml",
+                "short": [],
+                "long": [
+                  "local"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "project",
+                "usage": "--project",
+                "help": "Write to pitchfork.toml explicitly (default if no flag specified)",
+                "help_first_line": "Write to pitchfork.toml explicitly (default if no flag specified)",
+                "short": [],
+                "long": [
+                  "project"
                 ],
                 "hide": false,
                 "global": false
@@ -644,8 +668,8 @@
             ],
             "mounts": [],
             "hide": false,
-            "help": "Add a new daemon to ./pitchfork.toml",
-            "help_long": "Add a new daemon to ./pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork config add api bun run server\n                                Add daemon using positional args\n  pitchfork config add api --run 'npm start'\n                                Add daemon with explicit run command\n  pitchfork config add api -- bun run server\n                                Add daemon with explicit args after --\n  pitchfork config add api --run 'npm start' --retry 3\n                                Add with retry policy\n  pitchfork config add api --run 'npm start' --watch 'src/**/*.ts'\n                                Add with file watching\n  pitchfork config add api --run 'npm start' --autostart --autostop\n                                Add with auto start/stop hooks\n  pitchfork config add worker --run './worker' --depends api\n                                Add with daemon dependency\n",
+            "help": "Add a new daemon to pitchfork.toml",
+            "help_long": "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork daemons add api bun run server\n                                 Add daemon using positional args\n  pitchfork daemons add api --run 'npm start'\n                                 Add daemon with explicit run command\n  pitchfork daemons add api -- bun run server\n                                 Add daemon with explicit args after --\n  pitchfork daemons add api --run 'npm start' --retry 3\n                                 Add with retry policy\n  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                 Add with file watching\n  pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                 Add with auto start/stop hooks\n  pitchfork daemons add worker --run './worker' --depends api\n                                 Add with daemon dependency\n  pitchfork daemons add api --run 'npm start' --local\n                                  Add to pitchfork.local.toml instead\n  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate\n                                  Add cron daemon that triggers immediately\n",
             "name": "add",
             "aliases": [
               "a"
@@ -655,10 +679,10 @@
           },
           "remove": {
             "full_cmd": [
-              "config",
+              "daemons",
               "remove"
             ],
-            "usage": "config remove <ID>",
+            "usage": "daemons remove [--local] [--project] <ID>",
             "subcommands": {},
             "args": [
               {
@@ -671,7 +695,32 @@
                 "hide": false
               }
             ],
-            "flags": [],
+            "flags": [
+              {
+                "name": "local",
+                "usage": "--local",
+                "help": "Remove from pitchfork.local.toml instead of pitchfork.toml",
+                "help_first_line": "Remove from pitchfork.local.toml instead of pitchfork.toml",
+                "short": [],
+                "long": [
+                  "local"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "project",
+                "usage": "--project",
+                "help": "Remove from pitchfork.toml explicitly (default if no flag specified)",
+                "help_first_line": "Remove from pitchfork.toml explicitly (default if no flag specified)",
+                "short": [],
+                "long": [
+                  "project"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
             "mounts": [],
             "hide": false,
             "help": "Remove a daemon from pitchfork.toml",
@@ -687,11 +736,10 @@
         "flags": [],
         "mounts": [],
         "hide": false,
-        "help": "manage/edit pitchfork.toml files",
-        "help_long": "manage/edit pitchfork.toml files\n\nwithout a subcommand, lists all pitchfork.toml files from the current directory",
-        "name": "config",
+        "help": "List configured daemons from all merged config files.",
+        "name": "daemons",
         "aliases": [
-          "cfg"
+          "daemon"
         ],
         "hidden_aliases": [],
         "examples": []
@@ -1650,6 +1698,165 @@
         "help": "Generate JSON Schema for pitchfork.toml configuration",
         "name": "schema",
         "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
+      "settings": {
+        "full_cmd": [
+          "settings"
+        ],
+        "usage": "settings <SUBCOMMAND>",
+        "subcommands": {
+          "list": {
+            "full_cmd": [
+              "settings",
+              "list"
+            ],
+            "usage": "settings list [--group <GROUP>]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "group",
+                "usage": "--group <GROUP>",
+                "help": "Only show settings in a specific group (e.g., \"general\", \"web\", \"supervisor\")",
+                "help_first_line": "Only show settings in a specific group (e.g., \"general\", \"web\", \"supervisor\")",
+                "short": [],
+                "long": [
+                  "group"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "GROUP",
+                  "usage": "<GROUP>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "List all available settings with types and defaults",
+            "name": "list",
+            "aliases": [
+              "ls"
+            ],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "get": {
+            "full_cmd": [
+              "settings",
+              "get"
+            ],
+            "usage": "settings get <KEY>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "KEY",
+                "usage": "<KEY>",
+                "help": "Setting key in dot notation (e.g., general.log_level, web.auto_start)",
+                "help_first_line": "Setting key in dot notation (e.g., general.log_level, web.auto_start)",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [],
+            "mounts": [],
+            "hide": false,
+            "help": "Get the current value of a setting",
+            "name": "get",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "set": {
+            "full_cmd": [
+              "settings",
+              "set"
+            ],
+            "usage": "settings set [FLAGS] <KEY> <VALUE>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "KEY",
+                "usage": "<KEY>",
+                "help": "Setting key in dot notation (e.g., general.log_level, web.auto_start)",
+                "help_first_line": "Setting key in dot notation (e.g., general.log_level, web.auto_start)",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              },
+              {
+                "name": "VALUE",
+                "usage": "<VALUE>",
+                "help": "Value to set (type must match the setting: string, integer, boolean, or duration)",
+                "help_first_line": "Value to set (type must match the setting: string, integer, boolean, or duration)",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [
+              {
+                "name": "global",
+                "usage": "--global",
+                "help": "Write to the user-level global config (~/.config/pitchfork/config.toml)",
+                "help_first_line": "Write to the user-level global config (~/.config/pitchfork/config.toml)",
+                "short": [],
+                "long": [
+                  "global"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "local",
+                "usage": "--local",
+                "help": "Write to the project-level pitchfork.local.toml (overrides pitchfork.toml)",
+                "help_first_line": "Write to the project-level pitchfork.local.toml (overrides pitchfork.toml)",
+                "short": [],
+                "long": [
+                  "local"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "project",
+                "usage": "--project",
+                "help": "Write to the project-level pitchfork.toml (default if no flag specified)",
+                "help_first_line": "Write to the project-level pitchfork.toml (default if no flag specified)",
+                "short": [],
+                "long": [
+                  "project"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Set a setting value in a config file",
+            "name": "set",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "help": "View and modify pitchfork settings",
+        "help_long": "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n  list    List all available settings with types and defaults\n  get     Get the current value of a setting\n  set     Set a setting value in a config file\n\nExamples:\n  pitchfork settings                        Show all current settings\n  pitchfork settings list                   List all available settings\n  pitchfork settings get general.log_level  Get a specific setting\n  pitchfork settings set general.log_level debug\n  pitchfork settings set web.auto_start true --global\n  pitchfork settings set supervisor.stop_timeout 10s --local\n  pitchfork settings set supervisor.stop_timeout 10s --project",
+        "name": "settings",
+        "aliases": [
+          "setting"
+        ],
         "hidden_aliases": [],
         "examples": []
       },

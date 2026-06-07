@@ -6,6 +6,7 @@ use super::{SUPERVISOR, Supervisor};
 use crate::Result;
 use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
+use miette::IntoDiagnostic;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -112,6 +113,15 @@ impl Supervisor {
             IpcRequest::SyncMdns => {
                 self.sync_mdns().await;
                 IpcResponse::MdnsSynced
+            }
+            IpcRequest::ReloadConfig => {
+                tokio::task::spawn_blocking(|| {
+                    crate::settings::reload_settings();
+                    crate::logger::apply_settings();
+                })
+                .await
+                .into_diagnostic()?;
+                IpcResponse::ConfigReloaded
             }
         };
         // Ensure state is flushed to disk before returning the response

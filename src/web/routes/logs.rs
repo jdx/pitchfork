@@ -63,7 +63,7 @@ fn base_html(title: &str, content: &str) -> String {
 
 async fn fetch_latest_logs(daemon_id: &DaemonId) -> String {
     let daemon_id = daemon_id.clone();
-    match tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let log_lines = settings().web.log_lines.max(0) as usize;
         let entries = match LOG_STORE.query(&LogQuery {
             daemon_ids: vec![daemon_id.qualified()],
@@ -91,10 +91,7 @@ async fn fetch_latest_logs(daemon_id: &DaemonId) -> String {
         html_escape(&console::strip_ansi_codes(&joined))
     })
     .await
-    {
-        Ok(result) => result,
-        Err(_) => String::new(),
-    }
+    .unwrap_or_default()
 }
 
 pub async fn index() -> Html<String> {

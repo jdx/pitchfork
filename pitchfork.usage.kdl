@@ -29,12 +29,11 @@ cmd clean help="Removes stopped/failed daemons from `pitchfork list`" {
     alias c
     long_help "Removes stopped/failed daemons from `pitchfork list`\n\nCleans up the daemon list by removing entries for daemons that are no\nlonger running. Does not affect running daemons or their configurations.\n\nUse this to clear out old entries after stopping daemons manually or\nafter daemons have failed.\n\nExamples:\n  pitchfork clean                 Remove all stopped/failed entries\n  pitchfork c                     Alias for 'clean'"
 }
-cmd config help="manage/edit pitchfork.toml files" {
-    alias cfg
-    long_help "manage/edit pitchfork.toml files\n\nwithout a subcommand, lists all pitchfork.toml files from the current directory"
-    cmd add help="Add a new daemon to ./pitchfork.toml" {
+cmd daemons help="List configured daemons from all merged config files." {
+    alias daemon
+    cmd add help="Add a new daemon to pitchfork.toml" {
         alias a
-        long_help "Add a new daemon to ./pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork config add api bun run server\n                                Add daemon using positional args\n  pitchfork config add api --run 'npm start'\n                                Add daemon with explicit run command\n  pitchfork config add api -- bun run server\n                                Add daemon with explicit args after --\n  pitchfork config add api --run 'npm start' --retry 3\n                                Add with retry policy\n  pitchfork config add api --run 'npm start' --watch 'src/**/*.ts'\n                                Add with file watching\n  pitchfork config add api --run 'npm start' --autostart --autostop\n                                Add with auto start/stop hooks\n  pitchfork config add worker --run './worker' --depends api\n                                Add with daemon dependency\n"
+        long_help "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork daemons add api bun run server\n                                 Add daemon using positional args\n  pitchfork daemons add api --run 'npm start'\n                                 Add daemon with explicit run command\n  pitchfork daemons add api -- bun run server\n                                 Add daemon with explicit args after --\n  pitchfork daemons add api --run 'npm start' --retry 3\n                                 Add with retry policy\n  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                 Add with file watching\n  pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                 Add with auto start/stop hooks\n  pitchfork daemons add worker --run './worker' --depends api\n                                 Add with daemon dependency\n  pitchfork daemons add api --run 'npm start' --local\n                                  Add to pitchfork.local.toml instead\n  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate\n                                  Add cron daemon that triggers immediately\n"
         flag --run help="Command to run (can also use positional args)" {
             arg <RUN>
         }
@@ -98,12 +97,16 @@ cmd config help="manage/edit pitchfork.toml files" {
         flag --cron-retrigger help="Cron retrigger behavior: finish, always, success, fail" {
             arg <CRON_RETRIGGER>
         }
-        flag --cron-immediate help="Trigger cron immediately on first check (default: false)"
+        flag --cron-immediate help="Trigger cron immediately on first check (default: deferred until next scheduled time)"
+        flag --local help="Write to pitchfork.local.toml instead of pitchfork.toml"
+        flag --project help="Write to pitchfork.toml explicitly (default if no flag specified)"
         arg <ID> help="ID of the daemon to add (e.g., \"api\" or \"namespace/api\")"
         arg "[ARGS]…" help="Arguments to pass to the daemon (alternative to --run)" required=#false double_dash=automatic var=#true
     }
     cmd remove help="Remove a daemon from pitchfork.toml" {
         alias rm
+        flag --local help="Remove from pitchfork.local.toml instead of pitchfork.toml"
+        flag --project help="Remove from pitchfork.toml explicitly (default if no flag specified)"
         arg <ID> help="The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")"
     }
 }
@@ -246,6 +249,26 @@ cmd run help="Runs a one-off daemon" {
     arg "[-- RUN]…" help="Command and arguments to run (after --)" required=#false var=#true
 }
 cmd schema hide=#true help="Generate JSON Schema for pitchfork.toml configuration"
+cmd settings help="View and modify pitchfork settings" {
+    alias setting
+    long_help "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n  list    List all available settings with types and defaults\n  get     Get the current value of a setting\n  set     Set a setting value in a config file\n\nExamples:\n  pitchfork settings                        Show all current settings\n  pitchfork settings list                   List all available settings\n  pitchfork settings get general.log_level  Get a specific setting\n  pitchfork settings set general.log_level debug\n  pitchfork settings set web.auto_start true --global\n  pitchfork settings set supervisor.stop_timeout 10s --local\n  pitchfork settings set supervisor.stop_timeout 10s --project"
+    cmd list help="List all available settings with types and defaults" {
+        alias ls
+        flag --group help="Only show settings in a specific group (e.g., \"general\", \"web\", \"supervisor\")" {
+            arg <GROUP>
+        }
+    }
+    cmd get help="Get the current value of a setting" {
+        arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
+    }
+    cmd set help="Set a setting value in a config file" {
+        flag --global help="Write to the user-level global config (~/.config/pitchfork/config.toml)"
+        flag --local help="Write to the project-level pitchfork.local.toml (overrides pitchfork.toml)"
+        flag --project help="Write to the project-level pitchfork.toml (default if no flag specified)"
+        arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
+        arg <VALUE> help="Value to set (type must match the setting: string, integer, boolean, or duration)"
+    }
+}
 cmd sponsors help="Show the companies sponsoring pitchfork and the en.dev project family"
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s

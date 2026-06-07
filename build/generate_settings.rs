@@ -166,12 +166,39 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
             #duration_helpers
         }
 
-        /// Global settings instance
-        static SETTINGS: std::sync::OnceLock<Settings> = std::sync::OnceLock::new();
+        /// Global settings instance (RwLock<Arc> to support runtime reload)
+        static SETTINGS: std::sync::RwLock<Option<std::sync::Arc<Settings>>> = std::sync::RwLock::new(None);
 
         /// Get the global settings instance
-        pub fn settings() -> &'static Settings {
-            SETTINGS.get_or_init(Settings::load)
+        pub fn settings() -> std::sync::Arc<Settings> {
+            // Fast path: if already initialized, clone the Arc pointer.
+            {
+                let lock = SETTINGS.read().unwrap();
+                if let Some(s) = lock.as_ref() {
+                    return std::sync::Arc::clone(s);
+                }
+            }
+            // Slow path: initialize on first access
+            let mut lock = SETTINGS.write().unwrap();
+            if let Some(s) = lock.as_ref() {
+                return std::sync::Arc::clone(s);
+            }
+            let s = std::sync::Arc::new(Settings::load());
+            *lock = Some(std::sync::Arc::clone(&s));
+            s
+        }
+
+        /// Reload settings from config files.
+        ///
+        /// Called when the supervisor receives a ReloadConfig IPC request,
+        /// typically after `pitchfork settings set` modifies a config file.
+        ///
+        /// Old Arc references remain valid until all holders drop them,
+        /// so no use-after-free can occur.
+        pub fn reload_settings() {
+            let new_settings = std::sync::Arc::new(Settings::load());
+            let mut lock = SETTINGS.write().unwrap();
+            *lock = Some(new_settings);
         }
     };
 
@@ -182,7 +209,7 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
         #[allow(unused_imports)]
         use std::time::Duration;
         #[allow(unused_imports)]
-        use std::sync::OnceLock;
+        use std::sync::RwLock;
 
         #tokens
     };
@@ -572,6 +599,7 @@ fn generate_partial_struct_and_nested(
     let partial_struct_name = format!("{struct_name}Partial");
     let partial_ident = format_ident!("{}", partial_struct_name);
     let mut fields = Vec::new();
+    let mut skip_fns = Vec::new();
 
     for (key, value) in table {
         let field_ident = format_ident!("{}", key);
@@ -595,9 +623,17 @@ fn generate_partial_struct_and_nested(
                 // Nested group: non-Option field, defaults to all-None partial
                 let child_struct_name = format!("{}{}", struct_name, key.to_upper_camel_case());
                 let child_partial_ident = format_ident!("{}Partial", child_struct_name);
+                let skip_fn_name = format!("{key}_is_empty");
+                let skip_fn_lit = &skip_fn_name as &str;
                 fields.push(quote! {
-                    #[serde(default)]
+                    #[serde(default, skip_serializing_if = #skip_fn_lit)]
                     pub #field_ident: #child_partial_ident
+                });
+                let skip_fn_ident = format_ident!("{}", skip_fn_name);
+                skip_fns.push(quote! {
+                    pub fn #skip_fn_ident(v: &#child_partial_ident) -> bool {
+                        !v.has_any_set()
+                    }
                 });
             }
         }
@@ -608,6 +644,45 @@ fn generate_partial_struct_and_nested(
         #[serde(default)]
         pub struct #partial_ident {
             #(#fields),*
+        }
+
+        #(#skip_fns)*
+    });
+
+    // Generate has_any_set / is_empty for this partial struct
+    let mut has_any_set_checks = Vec::new();
+    for (key, value) in table {
+        if let Some(props) = value.as_table() {
+            let field_ident = format_ident!("{}", key);
+            if is_leaf_setting(props) {
+                has_any_set_checks.push(quote! {
+                    self.#field_ident.is_some()
+                });
+            } else {
+                has_any_set_checks.push(quote! {
+                    self.#field_ident.has_any_set()
+                });
+            }
+        }
+    }
+
+    let has_any_set_body = if has_any_set_checks.is_empty() {
+        quote! { false }
+    } else {
+        quote! { #(#has_any_set_checks)||* }
+    };
+
+    tokens.extend(quote! {
+        #[allow(dead_code)]
+        impl #partial_ident {
+            pub fn has_any_set(&self) -> bool {
+                #has_any_set_body
+            }
+
+            #[allow(dead_code)]
+            pub fn is_empty(&self) -> bool {
+                !self.has_any_set()
+            }
         }
     });
 

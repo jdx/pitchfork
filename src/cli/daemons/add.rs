@@ -1,48 +1,45 @@
 use crate::Result;
+use crate::cli::daemons::resolve_project_config_path;
 use crate::daemon_id::DaemonId;
-use crate::env;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
     PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, namespace_from_path,
 };
 use crate::settings::settings;
 use indexmap::IndexMap;
-use miette::bail;
-use std::path::{Path, PathBuf};
+use miette::{IntoDiagnostic, bail};
 
-fn is_project_config_path(path: &Path) -> bool {
-    path.file_name()
-        .map(|name| name == "pitchfork.toml" || name == "pitchfork.local.toml")
-        .unwrap_or(false)
-}
-
-/// Add a new daemon to ./pitchfork.toml
+/// Add a new daemon to pitchfork.toml
 #[derive(Debug, clap::Args)]
 #[clap(
     visible_alias = "a",
     verbatim_doc_comment,
     long_about = "\
-Add a new daemon to ./pitchfork.toml
+Add a new daemon to pitchfork.toml
 
 Creates a new daemon configuration section in the pitchfork.toml file.
 The daemon will be added to the nearest pitchfork.toml found in the
 filesystem hierarchy starting from the current directory.
 
 Examples:
-  pitchfork config add api bun run server
-                                Add daemon using positional args
-  pitchfork config add api --run 'npm start'
-                                Add daemon with explicit run command
-  pitchfork config add api -- bun run server
-                                Add daemon with explicit args after --
-  pitchfork config add api --run 'npm start' --retry 3
-                                Add with retry policy
-  pitchfork config add api --run 'npm start' --watch 'src/**/*.ts'
-                                Add with file watching
-  pitchfork config add api --run 'npm start' --autostart --autostop
-                                Add with auto start/stop hooks
-  pitchfork config add worker --run './worker' --depends api
-                                Add with daemon dependency
+  pitchfork daemons add api bun run server
+                                 Add daemon using positional args
+  pitchfork daemons add api --run 'npm start'
+                                 Add daemon with explicit run command
+  pitchfork daemons add api -- bun run server
+                                 Add daemon with explicit args after --
+  pitchfork daemons add api --run 'npm start' --retry 3
+                                 Add with retry policy
+  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'
+                                 Add with file watching
+  pitchfork daemons add api --run 'npm start' --autostart --autostop
+                                 Add with auto start/stop hooks
+  pitchfork daemons add worker --run './worker' --depends api
+                                 Add with daemon dependency
+  pitchfork daemons add api --run 'npm start' --local
+                                  Add to pitchfork.local.toml instead
+  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
+                                  Add cron daemon that triggers immediately
 "
 )]
 pub struct Add {
@@ -120,34 +117,41 @@ pub struct Add {
     /// Cron retrigger behavior: finish, always, success, fail
     #[clap(long)]
     cron_retrigger: Option<String>,
-    /// Trigger cron immediately on first check (default: false)
+    /// Trigger cron immediately on first check (default: deferred until next scheduled time)
     #[clap(long)]
     cron_immediate: bool,
+    /// Write to pitchfork.local.toml instead of pitchfork.toml
+    #[clap(long)]
+    local: bool,
+    /// Write to pitchfork.toml explicitly (default if no flag specified)
+    #[clap(long)]
+    project: bool,
 }
 
 impl Add {
     pub async fn run(&self) -> Result<()> {
-        // Find an existing project-level config or default to ./pitchfork.toml
-        let paths = PitchforkToml::list_paths();
-        let project_paths: Vec<_> = paths.iter().filter(|p| is_project_config_path(p)).collect();
-        let config_path = project_paths
-            .last()
-            .map(|p| (*p).clone())
-            .unwrap_or_else(|| PathBuf::from("pitchfork.toml"));
-        let config_path_for_write = if config_path.is_absolute() {
-            config_path.clone()
-        } else {
-            env::CWD.join(&config_path)
-        };
+        let config_path = resolve_project_config_path(self.local, self.project, false).await?;
 
-        let mut pt = if config_path.exists() {
-            PitchforkToml::read(&config_path)?
+        let mut pt = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
+            let config_path_clone = config_path.clone();
+            let result =
+                tokio::task::spawn_blocking(move || PitchforkToml::read(&config_path_clone))
+                    .await
+                    .into_diagnostic()?;
+            result.map_err(|e| miette::miette!("{e}"))?
         } else {
-            PitchforkToml::new(config_path_for_write.clone())
+            if let Some(parent) = config_path.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    miette::miette!(
+                        "Failed to create config directory {}: {e}",
+                        parent.display()
+                    )
+                })?;
+            }
+            PitchforkToml::new(config_path.clone())
         };
-        pt.path = Some(config_path_for_write.clone());
+        pt.path = Some(config_path.clone());
 
-        // Build the run command
         let run_cmd = if let Some(ref run) = self.run {
             run.clone()
         } else if !self.args.is_empty() {
@@ -156,14 +160,12 @@ impl Add {
             bail!("Either --run or command arguments must be provided");
         };
 
-        // Parse retry option
         let retry = if let Some(ref retry_str) = self.retry {
             Self::parse_retry(retry_str)?
         } else {
             Retry::default()
         };
 
-        // Parse environment variables
         let env = if self.env.is_empty() {
             None
         } else {
@@ -181,7 +183,6 @@ impl Add {
             Some(map)
         };
 
-        // Build auto vector
         let mut auto = vec![];
         if self.autostart {
             auto.push(PitchforkTomlAuto::Start);
@@ -190,7 +191,6 @@ impl Add {
             auto.push(PitchforkTomlAuto::Stop);
         }
 
-        // Build hooks if any are specified
         let hooks = if self.on_ready.is_some()
             || self.on_fail.is_some()
             || self.on_retry.is_some()
@@ -209,7 +209,6 @@ impl Add {
             None
         };
 
-        // Build cron config if schedule is specified
         let cron = if let Some(ref schedule) = self.cron_schedule {
             let retrigger = self
                 .cron_retrigger
@@ -226,15 +225,11 @@ impl Add {
             None
         };
 
-        // Build boot_start
         let boot_start = if self.boot_start { Some(true) } else { None };
 
-        // Parse the daemon ID: if qualified, use it directly; otherwise use the
-        // namespace from the config file being edited (not global resolution)
-        // Canonicalize the path first to get correct namespace (not "unknown" for relative paths)
-        let canonical_path = config_path_for_write
-            .canonicalize()
-            .unwrap_or_else(|_| config_path_for_write.clone());
+        let canonical_path = tokio::fs::canonicalize(&config_path)
+            .await
+            .unwrap_or_else(|_| config_path.clone());
         let daemon_id = if self.id.contains('/') {
             DaemonId::parse(&self.id)?
         } else {
@@ -283,12 +278,11 @@ impl Add {
                 ..PitchforkTomlDaemon::default()
             },
         );
-        pt.write()?;
-        let path_display = pt
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "pitchfork.toml".to_string());
+        tokio::task::spawn_blocking(move || pt.write())
+            .await
+            .into_diagnostic()?
+            .map_err(|e| miette::miette!("{e}"))?;
+        let path_display = config_path.display();
         println!("added {daemon_id} to {path_display}");
         Ok(())
     }

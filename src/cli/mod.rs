@@ -7,7 +7,7 @@ mod boot;
 mod cd;
 mod clean;
 mod completion;
-mod config;
+mod daemons;
 mod disable;
 mod enable;
 mod list;
@@ -17,6 +17,7 @@ mod proxy;
 mod restart;
 mod run;
 mod schema;
+mod settings;
 mod sponsors;
 mod start;
 mod status;
@@ -41,7 +42,7 @@ enum Commands {
     Boot(boot::Boot),
     Cd(cd::Cd),
     Clean(clean::Clean),
-    Config(config::Config),
+    Daemons(daemons::Daemons),
     Completion(completion::Completion),
     Disable(disable::Disable),
     Enable(enable::Enable),
@@ -52,6 +53,7 @@ enum Commands {
     Restart(restart::Restart),
     Run(run::Run),
     Schema(schema::Schema),
+    Settings(settings::Settings),
     Sponsors(sponsors::Sponsors),
     Start(start::Start),
     Status(status::Status),
@@ -69,7 +71,7 @@ pub async fn run() -> Result<()> {
         Commands::Boot(boot) => boot.run().await,
         Commands::Cd(cd) => cd.run().await,
         Commands::Clean(clean) => clean.run().await,
-        Commands::Config(config) => config.run().await,
+        Commands::Daemons(daemons) => daemons.run().await,
         Commands::Completion(completion) => completion.run().await,
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,
@@ -81,6 +83,7 @@ pub async fn run() -> Result<()> {
         Commands::Run(run) => run.run().await,
         Commands::ApiSchema(api_schema) => api_schema.run().await,
         Commands::Schema(schema) => schema.run().await,
+        Commands::Settings(settings) => settings.run().await,
         Commands::Sponsors(_) => sponsors::Sponsors::run().await,
         Commands::Start(start) => start.run().await,
         Commands::Status(status) => status.run().await,

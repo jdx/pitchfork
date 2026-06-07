@@ -321,7 +321,7 @@ pub async fn serve(
     let addr = SocketAddr::from((bind_ip, effective_port));
 
     if s.proxy.https {
-        serve_https_with_http_fallback(app, addr, s, effective_port, bind_tx, cancel).await
+        serve_https_with_http_fallback(app, addr, &s, effective_port, bind_tx, cancel).await
     } else {
         serve_http(app, addr, effective_port, bind_tx, cancel).await
     }

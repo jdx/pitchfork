@@ -118,7 +118,8 @@ fn home_dir_for_user(username: &str) -> Option<PathBuf> {
 
 #[cfg(unix)]
 fn configured_supervisor_user_home_dir() -> Option<PathBuf> {
-    let user = crate::settings::settings().supervisor.user.trim();
+    let s = crate::settings::settings();
+    let user = s.supervisor.user.trim();
     if user.is_empty() {
         return None;
     }
