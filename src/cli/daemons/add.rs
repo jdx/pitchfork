@@ -37,7 +37,9 @@ Examples:
   pitchfork daemons add worker --run './worker' --depends api
                                  Add with daemon dependency
   pitchfork daemons add api --run 'npm start' --local
-                                 Add to pitchfork.local.toml instead
+                                  Add to pitchfork.local.toml instead
+  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
+                                  Add cron daemon that triggers immediately
 "
 )]
 pub struct Add {
@@ -115,6 +117,9 @@ pub struct Add {
     /// Cron retrigger behavior: finish, always, success, fail
     #[clap(long)]
     cron_retrigger: Option<String>,
+    /// Trigger cron immediately on first check (default: deferred until next scheduled time)
+    #[clap(long)]
+    cron_immediate: bool,
     /// Write to pitchfork.local.toml instead of pitchfork.toml
     #[clap(long)]
     local: bool,
@@ -209,7 +214,7 @@ impl Add {
             Some(PitchforkTomlCron {
                 schedule: schedule.clone(),
                 retrigger,
-                immediate: false,
+                immediate: self.cron_immediate,
             })
         } else {
             None

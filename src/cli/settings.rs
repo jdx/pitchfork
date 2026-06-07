@@ -273,6 +273,7 @@ fn get_setting_value(s: &crate::settings::Settings, key: &str) -> String {
     match parts[0] {
         "general" => get_general_value(&s.general, parts[1]),
         "ipc" => get_ipc_value(&s.ipc, parts[1]),
+        "logs" => get_logs_value(&s.logs, parts[1]),
         "web" => get_web_value(&s.web, parts[1]),
         "api" => get_api_value(&s.api, parts[1]),
         "tui" => get_tui_value(&s.tui, parts[1]),
@@ -303,6 +304,14 @@ fn get_ipc_value(g: &crate::settings::SettingsIpc, field: &str) -> String {
         "request_timeout" => g.request_timeout.clone(),
         "rate_limit" => g.rate_limit.to_string(),
         "rate_limit_window" => g.rate_limit_window.clone(),
+        _ => String::new(),
+    }
+}
+
+fn get_logs_value(g: &crate::settings::SettingsLogs, field: &str) -> String {
+    match field {
+        "time_retention" => g.time_retention.clone(),
+        "line_retention" => g.line_retention.to_string(),
         _ => String::new(),
     }
 }
@@ -394,6 +403,7 @@ fn apply_setting_to_partial(partial: &mut SettingsPartial, key: &str, value: &st
     match parts[0] {
         "general" => apply_general_value(&mut partial.general, parts[1], value, info.typ)?,
         "ipc" => apply_ipc_value(&mut partial.ipc, parts[1], value, info.typ)?,
+        "logs" => apply_logs_value(&mut partial.logs, parts[1], value, info.typ)?,
         "web" => apply_web_value(&mut partial.web, parts[1], value, info.typ)?,
         "api" => apply_api_value(&mut partial.api, parts[1], value, info.typ)?,
         "tui" => apply_tui_value(&mut partial.tui, parts[1], value, info.typ)?,
@@ -453,6 +463,21 @@ fn apply_ipc_value(
         "rate_limit" => partial.rate_limit = Some(parse_int_value(value)?),
         "rate_limit_window" => partial.rate_limit_window = Some(value.to_string()),
         _ => bail!("unknown ipc setting '{field}'"),
+    }
+    let _ = typ;
+    Ok(())
+}
+
+fn apply_logs_value(
+    partial: &mut crate::settings::SettingsLogsPartial,
+    field: &str,
+    value: &str,
+    typ: &str,
+) -> Result<()> {
+    match field {
+        "time_retention" => partial.time_retention = Some(value.to_string()),
+        "line_retention" => partial.line_retention = Some(parse_int_value(value)?),
+        _ => bail!("unknown logs setting '{field}'"),
     }
     let _ = typ;
     Ok(())

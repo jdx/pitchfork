@@ -26,7 +26,9 @@ Examples:
   pitchfork daemons add worker --run './worker' --depends api
                                  Add with daemon dependency
   pitchfork daemons add api --run 'npm start' --local
-                                 Add to pitchfork.local.toml instead
+                                  Add to pitchfork.local.toml instead
+  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
+                                  Add cron daemon that triggers immediately
 
 ## Arguments
 
@@ -131,6 +133,10 @@ Cron schedule expression (6 fields: second minute hour day month weekday)
 ### `--cron-retrigger <CRON_RETRIGGER>`
 
 Cron retrigger behavior: finish, always, success, fail
+
+### `--cron-immediate`
+
+Trigger cron immediately on first check (default: deferred until next scheduled time)
 
 ### `--local`
 

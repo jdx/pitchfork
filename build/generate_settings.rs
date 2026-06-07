@@ -166,48 +166,46 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
             #duration_helpers
         }
 
-        /// Global settings instance (RwLock to support runtime reload)
-        static SETTINGS: std::sync::RwLock<Option<Settings>> = std::sync::RwLock::new(None);
+        /// Global settings instance (RwLock<Arc> to support runtime reload)
+        static SETTINGS: std::sync::RwLock<Option<&'static Settings>> = std::sync::RwLock::new(None);
 
         /// Get the global settings instance
         pub fn settings() -> &'static Settings {
             // Fast path: if already initialized, return a reference.
-            // RwLock read lock is cheap and allows concurrent readers.
             {
                 let lock = SETTINGS.read().unwrap();
-                if let Some(ref s) = *lock {
-                    // SAFETY: The Settings value is pinned behind the RwLock
-                    // and will never be moved or dropped until the process exits.
-                    // We only replace it (via reload_settings) with a new value,
-                    // never mutating in place. The reference remains valid as long
-                    // as the static lives, which is the entire program duration.
-                    unsafe {
-                        return &*(s as *const Settings);
-                    }
+                if let Some(s) = *lock {
+                    return s;
                 }
             }
             // Slow path: initialize on first access
             let mut lock = SETTINGS.write().unwrap();
-            if let Some(ref s) = *lock {
-                unsafe {
-                    return &*(s as *const Settings);
-                }
+            if let Some(s) = *lock {
+                return s;
             }
             let s = Settings::load();
-            *lock = Some(s);
-            unsafe {
-                return &*((*lock).as_ref().unwrap() as *const Settings);
-            }
+            // SAFETY: We leak the Box to obtain a &'static reference.
+            // This is acceptable because Settings is a process-lifetime singleton
+            // and the memory cost of leaking old values on reload is negligible
+            // (a few KB per reload, which happens rarely).
+            let leaked: &'static Settings = Box::leak(Box::new(s));
+            *lock = Some(leaked);
+            leaked
         }
 
         /// Reload settings from config files.
         ///
         /// Called when the supervisor receives a ReloadConfig IPC request,
         /// typically after `pitchfork settings set` modifies a config file.
+        ///
+        /// The old Settings value is intentionally leaked (never freed) to
+        /// ensure that any `&'static Settings` references already handed out
+        /// remain valid for the lifetime of the process.
         pub fn reload_settings() {
             let new_settings = Settings::load();
+            let leaked: &'static Settings = Box::leak(Box::new(new_settings));
             let mut lock = SETTINGS.write().unwrap();
-            *lock = Some(new_settings);
+            *lock = Some(leaked);
         }
     };
 
