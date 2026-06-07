@@ -3,7 +3,7 @@ mod remove;
 
 use crate::pitchfork_toml::PitchforkToml;
 use crate::{Result, env};
-use miette::bail;
+use miette::{IntoDiagnostic, bail};
 use std::path::{Path, PathBuf};
 
 pub use add::Add;
@@ -125,7 +125,9 @@ impl Daemons {
             Some(DaemonsCommand::Add(add)) => add.run().await,
             Some(DaemonsCommand::Remove(remove)) => remove.run().await,
             None => {
-                let config = PitchforkToml::all_merged()?;
+                let config = tokio::task::spawn_blocking(PitchforkToml::all_merged)
+                    .await
+                    .into_diagnostic()??;
                 if config.daemons.is_empty() {
                     println!("No daemons configured.");
                 } else {

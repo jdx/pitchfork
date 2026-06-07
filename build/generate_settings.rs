@@ -673,11 +673,17 @@ fn generate_partial_struct_and_nested(
         }
     }
 
+    let has_any_set_body = if has_any_set_checks.is_empty() {
+        quote! { false }
+    } else {
+        quote! { #(#has_any_set_checks)||* }
+    };
+
     tokens.extend(quote! {
         #[allow(dead_code)]
         impl #partial_ident {
             pub fn has_any_set(&self) -> bool {
-                #(#has_any_set_checks)||*
+                #has_any_set_body
             }
 
             #[allow(dead_code)]
