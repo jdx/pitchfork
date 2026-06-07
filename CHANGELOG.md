@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.0](https://github.com/endevco/pitchfork/compare/v2.12.1...v2.13.0) - 2026-06-07
+
+### Added
+
+- *(cli)* rename `pf config` to `pf daemons` and add `pf settings` subcommand ([#471](https://github.com/endevco/pitchfork/pull/471))
+- *(logs)* add log rotate ([#470](https://github.com/endevco/pitchfork/pull/470))
+- *(list)* always display fully-qualified daemon names ([#467](https://github.com/endevco/pitchfork/pull/467))
+- *(cron)* add `immediate` config to control the behaviour on start ([#461](https://github.com/endevco/pitchfork/pull/461))
+- add sponsors command ([#458](https://github.com/endevco/pitchfork/pull/458))
+
+### Other
+
+- *(web-ui)* refactor with Vue SPA + separate API endpoints ([#457](https://github.com/endevco/pitchfork/pull/457))
+
 ## [2.12.1](https://github.com/endevco/pitchfork/compare/v2.12.0...v2.12.1) - 2026-05-28
 
 ### Fixed
