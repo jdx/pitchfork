@@ -8,6 +8,8 @@
 use super::{SUPERVISOR, Supervisor, interval_duration};
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
+use crate::log_store::sqlite::LOG_STORE;
+use crate::log_store::{LogStore, RetentionPolicy};
 use crate::pitchfork_toml::{PitchforkToml, WatchMode};
 use crate::procs::PROCS;
 use crate::settings::settings;
@@ -16,6 +18,7 @@ use crate::{Result, env};
 use notify::RecursiveMode;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::time;
 
 type WatchConfig = (DaemonId, Vec<String>, PathBuf, WatchMode);
@@ -148,6 +151,8 @@ impl Supervisor {
             // Track consecutive CPU-over-limit samples per daemon.
             // Kept outside the state file because it is ephemeral runtime data.
             let mut cpu_violation_counts: HashMap<DaemonId, u32> = HashMap::new();
+            // Run log retention check no more than once per hour.
+            let mut last_retention_check = tokio::time::Instant::now() - Duration::from_secs(3600);
             loop {
                 interval.tick().await;
                 if SUPERVISOR.last_refreshed_at.lock().await.elapsed() > interval_duration()
@@ -161,6 +166,17 @@ impl Supervisor {
                     .await
                 {
                     error!("failed to check resource limits: {err}");
+                }
+                // Apply log retention policy if configured.
+                if last_retention_check.elapsed() >= Duration::from_secs(3600) {
+                    match SUPERVISOR.apply_log_retention().await {
+                        Ok(removed) if removed > 0 => {
+                            info!("log retention: pruned {removed} old entries")
+                        }
+                        Ok(_) => {}
+                        Err(e) => warn!("log retention: failed to prune logs: {e}"),
+                    }
+                    last_retention_check = tokio::time::Instant::now();
                 }
             }
         });
@@ -274,6 +290,136 @@ impl Supervisor {
         cpu_violation_counts.retain(|id, _| active_ids.contains(id));
 
         Ok(())
+    }
+
+    /// Apply log retention policy globally and per-daemon.
+    ///
+    /// Builds the global retention policy from settings, then iterates over all
+    /// daemons in the merged config and applies per-daemon overrides when set.
+    async fn apply_log_retention(&self) -> Result<u64> {
+        let settings = settings();
+        let (global_age, global_age_warn) = if settings.logs.time_retention.is_empty() {
+            (None, None)
+        } else {
+            match humantime::parse_duration(&settings.logs.time_retention) {
+                Ok(d) => (Some(d), None),
+                Err(_) => {
+                    let msg = format!(
+                        "invalid global logs.time_retention '{}': expected format like '7d', '24h', '30min'",
+                        settings.logs.time_retention
+                    );
+                    (None, Some(msg))
+                }
+            }
+        };
+        let global_count = if settings.logs.line_retention <= 0 {
+            None
+        } else {
+            Some(settings.logs.line_retention as u64)
+        };
+
+        let global_policy = RetentionPolicy {
+            age: global_age.and_then(|std_dur| match chrono::Duration::from_std(std_dur) {
+                Ok(d) => Some(d),
+                Err(_) => {
+                    warn!(
+                        "global logs.time_retention duration {:?} out of range; ignoring",
+                        std_dur
+                    );
+                    None
+                }
+            }),
+            count: global_count,
+        };
+
+        if let Some(w) = global_age_warn {
+            warn!("{w}");
+        }
+
+        // Collect per-daemon overrides from merged config.
+        let mut per_daemon_warns: Vec<String> = Vec::new();
+        let per_daemon_policies: Vec<(DaemonId, RetentionPolicy)> = {
+            let config = PitchforkToml::all_merged()?;
+            config
+                .daemons
+                .iter()
+                .filter_map(|(id, d)| {
+                    let age = d.time_retention.as_ref().and_then(|s| {
+                        if s.is_empty() {
+                            None
+                        } else {
+                            match humantime::parse_duration(s) {
+                                Ok(d) => Some(d),
+                                Err(_) => {
+                                    per_daemon_warns.push(format!(
+                                        "invalid time_retention '{}' for daemon {}: expected format like '7d', '24h', '30min'",
+                                        s, id
+                                    ));
+                                    None
+                                }
+                            }
+                        }
+                    });
+                    let count = d
+                        .line_retention
+                        .and_then(|n| if n > 0 { Some(n as u64) } else { None });
+                    if age.is_some() || count.is_some() {
+                        Some((
+                            id.clone(),
+                            RetentionPolicy {
+                                age: age.and_then(|std_dur| {
+                                    match chrono::Duration::from_std(std_dur) {
+                                        Ok(d) => Some(d),
+                                        Err(_) => {
+                                            warn!(
+                                                "daemon {id} time_retention duration {:?} out of range; ignoring",
+                                                std_dur
+                                            );
+                                            None
+                                        }
+                                    }
+                                }),
+                                count,
+                            },
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+
+        for w in per_daemon_warns {
+            warn!("{w}");
+        }
+
+        // Apply global policy to all daemons *except* those that have their
+        // own per-daemon overrides, so overrides are not silently overwritten.
+        let excluded: Vec<DaemonId> = per_daemon_policies
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        // Offload blocking SQLite work to a dedicated thread.
+        let total_removed = tokio::task::spawn_blocking(move || {
+            let mut total = LOG_STORE.apply_retention(&global_policy, &excluded)?;
+
+            // For daemons with per-daemon overrides, apply their specific policy,
+            // falling back to the global setting for any dimension they don't override.
+            for (id, policy) in per_daemon_policies {
+                let effective_policy = RetentionPolicy {
+                    age: policy.age.or(global_policy.age),
+                    count: policy.count.or(global_policy.count),
+                };
+                total += LOG_STORE.apply_retention_for_daemon(&id, &effective_policy)?;
+            }
+
+            Ok::<u64, miette::Error>(total)
+        })
+        .await
+        .map_err(|e| miette::miette!("retention task panicked: {e}"))??;
+
+        Ok(total_removed)
     }
 
     /// Kill a daemon due to a resource limit violation.

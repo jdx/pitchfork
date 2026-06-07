@@ -126,6 +126,48 @@ the output compact and aligned with the spinner / status icons.
 """
 
 # =============================================================================
+# Log Settings
+# =============================================================================
+
+[logs]
+
+[logs.time_retention]
+type = "Duration"
+env = "PITCHFORK_LOG_TIME_RETENTION"
+default = ""
+description = "Time-based log retention duration (e.g. '7d', '30d')"
+docs = """
+Maximum age of log entries to keep in the SQLite log store.
+
+When set, log entries older than this duration are automatically pruned.
+Examples: `"7d"` for 7 days, `"30d"` for 30 days, `"1h"` for 1 hour.
+
+When empty (default), no time-based pruning is performed. You can combine
+this with `line_retention` to enforce both a time limit and a line count limit.
+
+Logs are pruned automatically by the supervisor during its interval watcher
+cycle (no more than once per hour). No manual rotation command is needed.
+"""
+
+[logs.line_retention]
+type = "Integer"
+env = "PITCHFORK_LOG_LINE_RETENTION"
+default = "0"
+description = "Count-based log retention (e.g. 10000)"
+docs = """
+Maximum number of log entries to keep per daemon in the SQLite log store.
+
+When set, only the most recent N log entries are retained. Older entries are
+automatically pruned.
+
+When set to `0` (default), no count-based pruning is performed. You can combine
+this with `time_retention` to enforce both a time limit and a line count limit.
+
+Logs are pruned automatically by the supervisor during its interval watcher
+cycle (no more than once per hour). No manual rotation command is needed.
+"""
+
+# =============================================================================
 # IPC (Inter-Process Communication) Settings
 # =============================================================================
 

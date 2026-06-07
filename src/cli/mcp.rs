@@ -1,7 +1,9 @@
 use crate::Result;
+use crate::daemon_id::DaemonId;
 use crate::daemon_list::get_all_daemons;
 use crate::ipc::batch::StartOptions;
 use crate::ipc::client::IpcClient;
+use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::PitchforkToml;
 use rmcp::{
     RoleServer, ServiceExt,
@@ -351,38 +353,60 @@ impl PitchforkServer {
         &self,
         Parameters(params): Parameters<LogsParams>,
     ) -> std::result::Result<CallToolResult, ErrorData> {
-        let resolved_ids = if params.id.is_empty() {
-            get_all_log_daemon_ids()
-                .map_err(|e| internal_err(format!("Failed to discover daemon logs: {e}")))?
+        use crate::log_store::{LogQuery, LogStore};
+
+        let daemon_ids = if params.id.is_empty() {
+            let ids = tokio::task::spawn_blocking(|| LOG_STORE.list_daemon_ids())
+                .await
+                .map_err(|e| internal_err(format!("Failed to list daemon IDs: {e}")))?
+                .map_err(|e| internal_err(format!("Failed to list daemon IDs: {e}")))?;
+            ids.into_iter()
+                .filter_map(|id| DaemonId::parse(&id).ok())
+                .collect()
         } else {
             PitchforkToml::resolve_ids(&params.id)
                 .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?
         };
 
-        if resolved_ids.is_empty() {
+        if daemon_ids.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
                 "No daemon logs found",
             )]));
         }
 
+        let qualified: Vec<String> = daemon_ids.iter().map(|d| d.qualified()).collect();
+        let limit = params.n;
+        let entries = tokio::task::spawn_blocking(move || {
+            LOG_STORE.query(&LogQuery {
+                daemon_ids: qualified,
+                from: None,
+                to: None,
+                limit: Some(limit),
+                order_desc: true,
+                after_id: None,
+            })
+        })
+        .await
+        .map_err(|e| internal_err(format!("Failed to query logs: {e}")))?
+        .map_err(|e| internal_err(format!("Failed to query logs: {e}")))?;
+
         let mut output = String::new();
-
-        for daemon_id in &resolved_ids {
-            let log_path = daemon_id.log_path();
-            if !log_path.exists() {
+        for daemon_id in &daemon_ids {
+            let daemon_entries: Vec<_> = entries
+                .iter()
+                .filter(|e| e.daemon_id == daemon_id.qualified())
+                .collect();
+            if daemon_entries.is_empty() {
                 continue;
             }
-
-            let lines = read_last_n_lines(&log_path, params.n);
-            if lines.is_empty() {
-                continue;
-            }
-
             if !output.is_empty() {
                 output.push_str("\n\n");
             }
             output.push_str(&format!("=== {} ===\n", daemon_id.qualified()));
-            output.push_str(&lines.join("\n"));
+            for entry in daemon_entries.into_iter().rev() {
+                let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
+                output.push_str(&format!("{} {}\n", ts, entry.message));
+            }
         }
 
         if output.is_empty() {
@@ -457,43 +481,7 @@ impl Mcp {
 }
 
 // ── Log helpers ─────────────────────────────────────────────────────
-
-/// Discover all daemon IDs that have log files
-fn get_all_log_daemon_ids() -> Result<Vec<crate::daemon_id::DaemonId>> {
-    use crate::daemon_id::DaemonId;
-    use std::collections::BTreeSet;
-
-    let mut ids = BTreeSet::new();
-
-    if let Ok(state) = crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE) {
-        ids.extend(state.daemons.keys().cloned());
-    }
-
-    if let Ok(config) = PitchforkToml::all_merged() {
-        ids.extend(config.daemons.keys().cloned());
-    }
-
-    Ok(ids
-        .into_iter()
-        .filter(|id: &DaemonId| id.log_path().exists())
-        .collect())
-}
-
-/// Read the last N lines from a file using reverse reading
-fn read_last_n_lines(path: &std::path::Path, n: usize) -> Vec<String> {
-    let file = match xx::file::open(path) {
-        Ok(f) => f,
-        Err(_) => return vec![],
-    };
-
-    rev_lines::RevLines::new(file)
-        .filter_map(|r| r.ok())
-        .take(n)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
-}
+// (Legacy text log helpers removed; all log reads now go through the SQLite log store.)
 
 // ── Help text ───────────────────────────────────────────────────────
 

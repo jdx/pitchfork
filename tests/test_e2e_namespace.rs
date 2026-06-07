@@ -73,33 +73,22 @@ run = "echo 'Hello from project-b' && sleep 10"
 
     env.sleep(Duration::from_secs(1));
 
-    // Check that logs are stored in separate directories
-    let logs_dir = env
-        .home_dir()
-        .join(".local")
-        .join("state")
-        .join("pitchfork")
-        .join("logs");
-
-    // project-a's api should be in project-a--api/
-    let log_a = logs_dir.join("project-a--api").join("project-a--api.log");
-    assert!(
-        log_a.exists(),
-        "Log file for project-a/api should exist at {log_a:?}"
+    // Verify logs are stored separately via SQLite
+    let log_a_content = env.wait_for_logs(
+        "project-a/api",
+        "Hello from project-a",
+        Duration::from_secs(5),
     );
-    let log_a_content = fs::read_to_string(&log_a).unwrap();
     assert!(
         log_a_content.contains("Hello from project-a"),
         "project-a log should contain its message, got: {log_a_content}"
     );
 
-    // project-b's api should be in project-b--api/
-    let log_b = logs_dir.join("project-b--api").join("project-b--api.log");
-    assert!(
-        log_b.exists(),
-        "Log file for project-b/api should exist at {log_b:?}"
+    let log_b_content = env.wait_for_logs(
+        "project-b/api",
+        "Hello from project-b",
+        Duration::from_secs(5),
     );
-    let log_b_content = fs::read_to_string(&log_b).unwrap();
     assert!(
         log_b_content.contains("Hello from project-b"),
         "project-b log should contain its message, got: {log_b_content}"
@@ -374,31 +363,16 @@ run = "echo 'encoding test' && sleep 30"
 
     env.sleep(Duration::from_secs(2));
 
-    // Verify log path uses correct encoding
-    let logs_dir = env
-        .home_dir()
-        .join(".local")
-        .join("state")
-        .join("pitchfork")
-        .join("logs");
-
+    // Verify log path uses correct encoding via SQLite store
     // my-cool-project/my-service -> my-cool-project--my-service
-    let expected_dir = logs_dir.join("my-cool-project--my-service");
-    let expected_log = expected_dir.join("my-cool-project--my-service.log");
-
-    assert!(
-        expected_dir.exists(),
-        "Log directory should exist at {expected_dir:?}"
+    let log_content = env.wait_for_logs(
+        "my-cool-project/my-service",
+        "encoding test",
+        Duration::from_secs(5),
     );
-    assert!(
-        expected_log.exists(),
-        "Log file should exist at {expected_log:?}"
-    );
-
-    let log_content = fs::read_to_string(&expected_log).unwrap();
     assert!(
         log_content.contains("encoding test"),
-        "Log should contain test message"
+        "Log should contain test message, got: {log_content}"
     );
 
     // Cleanup

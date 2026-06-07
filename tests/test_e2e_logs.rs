@@ -1,7 +1,6 @@
 mod common;
 
 use common::{TestEnv, get_script_path};
-use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::Child;
 use std::sync::mpsc;
@@ -341,69 +340,6 @@ ready_delay = 0
     );
 
     env.run_command(&["stop", "sse_connect"]);
-}
-
-#[cfg(unix)]
-#[test]
-fn test_web_logs_sse_clears_and_restreams_after_rotation() {
-    let env = TestEnv::new();
-    env.ensure_binary_exists().unwrap();
-    env.create_toml("");
-
-    let (_supervisor, port) = start_web_supervisor(&env);
-    wait_for_supervisor_cli(&env);
-
-    let log_path = env.log_path("rotate_sse");
-    fs::create_dir_all(log_path.parent().unwrap()).unwrap();
-    fs::write(&log_path, "").unwrap();
-
-    let stream_url = format!("http://127.0.0.1:{port}/logs/project%2Frotate_sse/stream");
-    let (open_tx, open_rx) = mpsc::channel();
-    let (ready_tx, ready_rx) = mpsc::channel();
-    let reader = std::thread::spawn({
-        let stream_url = stream_url.clone();
-        move || {
-            let mut ready_tx = Some(ready_tx);
-            read_sse_until(
-                &stream_url,
-                Some(open_tx),
-                move |body| {
-                    if body.contains("ready before rotation")
-                        && let Some(tx) = ready_tx.take()
-                    {
-                        let _ = tx.send(());
-                    }
-                },
-                |body| body.contains("event: clear") && body.contains("new line after rotation"),
-            )
-        }
-    });
-
-    open_rx
-        .recv_timeout(Duration::from_secs(8))
-        .expect("SSE stream did not connect in time");
-    fs::write(&log_path, "ready before rotation\n").unwrap();
-    ready_rx
-        .recv_timeout(Duration::from_secs(8))
-        .expect("SSE stream did not observe pre-rotation content in time");
-
-    let rotated_path = log_path.with_extension("log.1");
-    fs::rename(&log_path, &rotated_path).unwrap();
-    fs::write(&log_path, "new line after rotation\n").unwrap();
-
-    let body = reader.join().unwrap();
-    assert!(
-        body.contains("event: clear"),
-        "rotation should emit a clear event: {body}"
-    );
-    assert!(
-        body.contains("ready before rotation"),
-        "expected pre-rotation content before clear event: {body}"
-    );
-    assert!(
-        body.contains("new line after rotation"),
-        "rotation should stream the new file from the beginning: {body}"
-    );
 }
 
 #[test]

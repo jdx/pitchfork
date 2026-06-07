@@ -30,6 +30,9 @@ run = "node server.js"
 autostop_delay = "5m"
 log_level = "debug"
 
+[settings.logs]
+time_retention = "7d"
+
 [settings.tui]
 refresh_rate = "1s"
 

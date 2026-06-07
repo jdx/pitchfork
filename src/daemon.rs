@@ -33,31 +33,6 @@ pub fn is_valid_daemon_id(id: &str) -> bool {
     }
 }
 
-/// Converts a daemon ID to a filesystem-safe path component.
-///
-/// Replaces `/` with `--` to avoid issues with filesystem path separators.
-///
-/// Examples:
-/// - `"api"` → `"api"`
-/// - `"global/api"` → `"global--api"`
-/// - `"project-a/api"` → `"project-a--api"`
-pub fn daemon_id_to_path(id: &str) -> String {
-    id.replace('/', "--")
-}
-
-/// Returns the main log file path for a daemon.
-///
-/// The path is computed as: `$PITCHFORK_LOGS_DIR/{safe_id}/{safe_id}.log`
-/// where `safe_id` has `/` replaced with `--` for filesystem safety.
-///
-/// Prefer using `DaemonId::log_path()` when you have a structured ID.
-pub fn daemon_log_path(id: &str) -> std::path::PathBuf {
-    let safe_id = daemon_id_to_path(id);
-    crate::env::PITCHFORK_LOGS_DIR
-        .join(&safe_id)
-        .join(format!("{safe_id}.log"))
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct Daemon {
     pub id: DaemonId,

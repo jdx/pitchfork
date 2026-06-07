@@ -128,7 +128,6 @@ impl TestEnv {
         std::thread::sleep(duration);
     }
 
-    /// Check if the pitchfork binary exists, build if necessary
     pub fn ensure_binary_exists(&self) -> Result<()> {
         if !self.pitchfork_bin.exists() {
             eprintln!("Building pitchfork binary...");
@@ -145,13 +144,53 @@ impl TestEnv {
         Ok(())
     }
 
+    /// Get the SQLite log database path for this test environment
+    pub fn log_db_path(&self) -> PathBuf {
+        self.home_dir
+            .join(".local")
+            .join("state")
+            .join("pitchfork")
+            .join("logs")
+            .join("logs.db")
+    }
+
     /// Read log file for a daemon
     ///
     /// The daemon_id can be either:
     /// - A short ID (e.g., "api") - will look for logs in the "project" namespace
     /// - A qualified ID (e.g., "project/api") - will convert to filesystem-safe path
     pub fn read_logs(&self, daemon_id: &str) -> String {
-        fs::read_to_string(self.log_path(daemon_id)).unwrap_or_default()
+        self.read_logs_from_db(daemon_id)
+            .or_else(|| fs::read_to_string(self.log_path(daemon_id)).ok())
+            .unwrap_or_default()
+    }
+
+    /// Read logs from the SQLite log store only (no legacy fallback).
+    pub fn read_logs_db_only(&self, daemon_id: &str) -> Option<String> {
+        self.read_logs_from_db(daemon_id)
+    }
+
+    /// Read logs from the SQLite log store.
+    fn read_logs_from_db(&self, daemon_id: &str) -> Option<String> {
+        let qualified_id = if daemon_id.contains('/') {
+            daemon_id.to_string()
+        } else {
+            format!("project/{daemon_id}")
+        };
+        let db_path = self.log_db_path();
+        let conn = rusqlite::Connection::open(&db_path).ok()?;
+        let mut stmt = conn
+            .prepare("SELECT message FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC, id ASC")
+            .ok()?;
+        let rows = stmt
+            .query_map([&qualified_id], |row| {
+                let msg: String = row.get(0)?;
+                Ok(msg)
+            })
+            .ok()?;
+        let msgs: Vec<String> = rows.collect::<Result<Vec<_>, _>>().ok()?;
+        let out = msgs.join("\n");
+        if out.is_empty() { None } else { Some(out) }
     }
 
     /// Poll the log file for a daemon until it contains `needle` or `timeout` elapses.

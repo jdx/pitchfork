@@ -28,6 +28,7 @@
         "api": {},
         "general": {},
         "ipc": {},
+        "logs": {},
         "proxy": {},
         "supervisor": {},
         "tui": {},
@@ -225,6 +226,14 @@
             }
           ]
         },
+        "line_retention": {
+          "description": "Maximum number of log entries to keep per daemon.\nOverrides the global `settings.logs.line_retention` when set.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "memory_limit": {
           "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nThe supervisor periodically monitors RSS and kills the process if it exceeds the limit.",
           "anyOf": [
@@ -326,6 +335,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "time_retention": {
+          "description": "Maximum age of log entries to keep (e.g. \"7d\", \"30d\").\nOverrides the global `settings.logs.time_retention` when set.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "user": {
@@ -638,6 +654,26 @@
         }
       }
     },
+    "SettingsLogsPartial": {
+      "type": "object",
+      "properties": {
+        "line_retention": {
+          "description": "Count-based log retention (e.g. 10000)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "time_retention": {
+          "description": "Time-based log retention duration (e.g. '7d', '30d')",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "SettingsPartial": {
       "type": "object",
       "properties": {
@@ -651,6 +687,10 @@
         },
         "ipc": {
           "$ref": "#/$defs/SettingsIpcPartial",
+          "default": {}
+        },
+        "logs": {
+          "$ref": "#/$defs/SettingsLogsPartial",
           "default": {}
         },
         "proxy": {

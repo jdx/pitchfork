@@ -73,22 +73,21 @@ Within a given project directory, files take precedence in this order:
 
 ### Logs
 
-Each daemon has its own log directory and file. The log path is determined by the daemon's qualified ID (namespace + name):
+Logs are stored in a single SQLite database (`logs.db`) for efficient querying, filtering, and rotation. The database uses WAL mode for concurrent readers so the CLI, TUI, and Web UI can all read logs at the same time without blocking the supervisor's writes.
 
+```text
+~/.local/state/pitchfork/logs/logs.db
 ```
-~/.local/state/pitchfork/logs/<namespace>--<daemon-name>/<namespace>--<daemon-name>.log
+
+Inside the database, each daemon is identified by its qualified ID (`namespace/name`). Log entries include a timestamp (millisecond precision) and the raw message text, so time-based filtering is fast and reliable.
+
+For backwards compatibility, the legacy log directory structure still exists but is no longer written to by the supervisor:
+
+```text
+~/.local/state/pitchfork/logs/<namespace>--<daemon-name>/
 ```
 
-The namespace is derived from top-level `namespace` in the config when present, otherwise from the project directory name (or `global` for global config files). For example:
-- Daemon `api` in project `myapp` → `logs/myapp--api/myapp--api.log`
-- Daemon `api` in project `yourapp` → `logs/yourapp--api/yourapp--api.log`
-- Daemon `postgres` in global config → `logs/global--postgres/global--postgres.log`
-
-The `--` separator is used to convert the `/` in qualified daemon IDs (e.g., `myapp/api`) to a filesystem-safe format.
-
-Because `--` is reserved for this encoding, project directory names containing `--` (or other invalid namespace characters) require a top-level `namespace` override in `pitchfork.toml`.
-
-See [Namespaces](/concepts/namespaces) for more details on how daemon IDs work across projects.
+Legacy text log files from older pitchfork versions are automatically imported into the SQLite store on first access, so no manual migration is needed.
 
 ### IPC Socket
 
