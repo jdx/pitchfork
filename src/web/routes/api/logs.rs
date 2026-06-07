@@ -66,11 +66,17 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         }
     };
 
+    // Capture cursor from initial entries before reversing.
+    let cursor_id = initial.first().map(|e| e.id).unwrap_or(0);
+
     // Reverse so oldest lines are yielded first.
     let initial: Vec<String> = initial
         .into_iter()
         .rev()
-        .map(|e| format!("{}\n", e.message))
+        .map(|e| {
+            let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S");
+            format!("{ts} {msg}\n", msg = e.message)
+        })
         .collect();
 
     let qualified_clone = qualified.clone();
@@ -80,20 +86,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
             yield Ok::<Vec<u8>, Infallible>(line.into_bytes());
         }
 
-        let mut last_id: i64 = match tokio::task::spawn_blocking({
-            let q = qualified.clone();
-            move || LOG_STORE.query(&LogQuery {
-                daemon_ids: vec![q],
-                from: None,
-                to: None,
-                limit: Some(1),
-                order_desc: true,
-                after_id: None,
-            })
-        }).await {
-            Ok(Ok(entries)) => entries.first().map(|e| e.id).unwrap_or(0),
-            _ => 0,
-        };
+        let mut last_id: i64 = cursor_id;
 
         let mut last_clear_gen: u64 = match tokio::task::spawn_blocking({
             let d = daemon_id.clone();
@@ -139,7 +132,8 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
             for entry in entries {
                 last_id = entry.id;
-                yield Ok::<Vec<u8>, Infallible>(format!("{}\n", entry.message).into_bytes());
+                let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
+                yield Ok::<Vec<u8>, Infallible>(format!("{ts} {msg}\n", msg = entry.message).into_bytes());
             }
         }
     };
