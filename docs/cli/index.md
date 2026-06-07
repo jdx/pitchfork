@@ -36,6 +36,7 @@
 - [`pitchfork settings list [--group <GROUP>]`](/cli/settings/list.md)
 - [`pitchfork settings get <KEY>`](/cli/settings/get.md)
 - [`pitchfork settings set [FLAGS] <KEY> <VALUE>`](/cli/settings/set.md)
+- [`pitchfork sponsors`](/cli/sponsors.md)
 - [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
 - [`pitchfork status <ID>`](/cli/status.md)
 - [`pitchfork stop [FLAGS] [ID]…`](/cli/stop.md)

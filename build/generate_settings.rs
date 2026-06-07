@@ -167,30 +167,25 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
         }
 
         /// Global settings instance (RwLock<Arc> to support runtime reload)
-        static SETTINGS: std::sync::RwLock<Option<&'static Settings>> = std::sync::RwLock::new(None);
+        static SETTINGS: std::sync::RwLock<Option<std::sync::Arc<Settings>>> = std::sync::RwLock::new(None);
 
         /// Get the global settings instance
-        pub fn settings() -> &'static Settings {
-            // Fast path: if already initialized, return a reference.
+        pub fn settings() -> std::sync::Arc<Settings> {
+            // Fast path: if already initialized, clone the Arc pointer.
             {
                 let lock = SETTINGS.read().unwrap();
-                if let Some(s) = *lock {
-                    return s;
+                if let Some(s) = lock.as_ref() {
+                    return std::sync::Arc::clone(s);
                 }
             }
             // Slow path: initialize on first access
             let mut lock = SETTINGS.write().unwrap();
-            if let Some(s) = *lock {
-                return s;
+            if let Some(s) = lock.as_ref() {
+                return std::sync::Arc::clone(s);
             }
-            let s = Settings::load();
-            // SAFETY: We leak the Box to obtain a &'static reference.
-            // This is acceptable because Settings is a process-lifetime singleton
-            // and the memory cost of leaking old values on reload is negligible
-            // (a few KB per reload, which happens rarely).
-            let leaked: &'static Settings = Box::leak(Box::new(s));
-            *lock = Some(leaked);
-            leaked
+            let s = std::sync::Arc::new(Settings::load());
+            *lock = Some(std::sync::Arc::clone(&s));
+            s
         }
 
         /// Reload settings from config files.
@@ -198,14 +193,12 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
         /// Called when the supervisor receives a ReloadConfig IPC request,
         /// typically after `pitchfork settings set` modifies a config file.
         ///
-        /// The old Settings value is intentionally leaked (never freed) to
-        /// ensure that any `&'static Settings` references already handed out
-        /// remain valid for the lifetime of the process.
+        /// Old Arc references remain valid until all holders drop them,
+        /// so no use-after-free can occur.
         pub fn reload_settings() {
-            let new_settings = Settings::load();
-            let leaked: &'static Settings = Box::leak(Box::new(new_settings));
+            let new_settings = std::sync::Arc::new(Settings::load());
             let mut lock = SETTINGS.write().unwrap();
-            *lock = Some(leaked);
+            *lock = Some(new_settings);
         }
     };
 

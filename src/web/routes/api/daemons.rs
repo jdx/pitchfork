@@ -221,7 +221,7 @@ async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
 
     Ok(entries
         .iter()
-        .map(|e| entry_to_api(e, &stats_map, &global_slugs, settings))
+        .map(|e| entry_to_api(e, &stats_map, &global_slugs, &settings))
         .collect())
 }
 
@@ -256,7 +256,7 @@ pub async fn show(Path(id): Path<String>) -> Result<Json<ApiDaemonEntry>, axum::
         &entry,
         &stats_map,
         &global_slugs,
-        settings,
+        &settings,
     )))
 }
 

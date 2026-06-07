@@ -101,7 +101,7 @@ impl List {
             if s.proxy.enable {
                 let slug =
                     PitchforkToml::find_slug_for_daemon_in_registry(&entry.id, &global_slugs);
-                let proxy_cell = match build_proxy_url(slug.as_deref(), s) {
+                let proxy_cell = match build_proxy_url(slug.as_deref(), &s) {
                     Some(proxy_url)
                         if entry.daemon.active_port.is_some()
                             || !entry.daemon.resolved_port.is_empty() =>

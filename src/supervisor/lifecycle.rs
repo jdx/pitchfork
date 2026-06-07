@@ -1145,7 +1145,8 @@ impl Supervisor {
 
 #[cfg(unix)]
 fn resolve_effective_run_identity(daemon_user: Option<&str>) -> Result<RunIdentity> {
-    let settings_user = settings().supervisor.user.trim();
+    let s = settings();
+    let settings_user = s.supervisor.user.trim();
     let daemon_user = daemon_user.map(str::trim).filter(|user| !user.is_empty());
     let settings_user = (!settings_user.is_empty()).then_some(settings_user);
     let configured = daemon_user.or(settings_user);
@@ -1698,7 +1699,7 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
     }
 
     // PITCHFORK_URL: the daemon's public proxy URL (only if it has a slug and proxy is enabled)
-    if let Some(url) = build_pitchfork_url(slug, s) {
+    if let Some(url) = build_pitchfork_url(slug, &s) {
         cmd.env("PITCHFORK_URL", &url);
     }
 

@@ -937,7 +937,8 @@ pub(crate) fn state_owner_ids() -> Option<(u32, u32)> {
         return None;
     }
 
-    let user = settings().supervisor.user.trim();
+    let s = settings();
+    let user = s.supervisor.user.trim();
     if !user.is_empty() {
         return resolve_supervisor_user_ids(user).or_else(|| {
             warn!(

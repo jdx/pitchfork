@@ -175,7 +175,7 @@ impl Start {
                 if s.proxy.enable && !resolved_ports.is_empty() {
                     let slug_name =
                         PitchforkToml::find_slug_for_daemon_in_registry(id, &global_slugs);
-                    if let Some(proxy_url) = build_proxy_url(slug_name.as_deref(), s) {
+                    if let Some(proxy_url) = build_proxy_url(slug_name.as_deref(), &s) {
                         let display_name =
                             id.styled_display_name(None::<std::iter::Empty<&DaemonId>>);
                         println!(

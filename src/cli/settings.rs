@@ -128,7 +128,7 @@ impl GetCmd {
         validate_setting_key(key)?;
 
         let s = settings();
-        let value = get_setting_value(s, key);
+        let value = get_setting_value(&s, key);
         println!("{value}");
         Ok(())
     }
@@ -195,7 +195,7 @@ fn show_all_settings() -> Result<()> {
         }
 
         let field_name = key.split('.').nth(1).unwrap_or(key);
-        let current = get_setting_value(s, key);
+        let current = get_setting_value(&s, key);
         let default = info.default_value.unwrap_or("");
         let is_default = current == default;
 

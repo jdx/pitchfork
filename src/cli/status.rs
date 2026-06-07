@@ -65,7 +65,7 @@ impl Status {
             {
                 let slug =
                     PitchforkToml::find_slug_for_daemon_in_registry(&qualified_id, &global_slugs);
-                if let Some(url) = build_proxy_url(slug.as_deref(), s) {
+                if let Some(url) = build_proxy_url(slug.as_deref(), &s) {
                     println!("Proxy: {url}");
                 }
             }
