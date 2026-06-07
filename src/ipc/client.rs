@@ -416,6 +416,23 @@ impl IpcClient {
         }
     }
 
+    /// Notify the supervisor that settings have changed.
+    ///
+    /// The supervisor will reload settings from config files. This is a
+    /// best-effort notification — if the supervisor is not running, the call
+    /// silently succeeds (settings will be fresh on next supervisor start).
+    pub async fn reload_config(&self) -> Result<()> {
+        let rsp = self.request(IpcRequest::ReloadConfig).await?;
+        match rsp {
+            IpcResponse::ConfigReloaded => Ok(()),
+            IpcResponse::Error(e) => {
+                debug!("config reload skipped: {e}");
+                Ok(())
+            }
+            rsp => Err(Self::unexpected_response("ConfigReloaded", &rsp).into()),
+        }
+    }
+
     /// Stop a single daemon (low-level operation)
     pub async fn stop(&self, id: DaemonId) -> Result<bool> {
         let id_str = id.qualified();

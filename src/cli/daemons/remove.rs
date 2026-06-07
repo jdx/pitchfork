@@ -1,0 +1,49 @@
+use crate::Result;
+use crate::cli::daemons::resolve_project_config_path;
+use crate::daemon_id::DaemonId;
+use crate::pitchfork_toml::{PitchforkToml, namespace_from_path};
+
+/// Remove a daemon from pitchfork.toml
+#[derive(Debug, clap::Args)]
+#[clap(visible_alias = "rm", verbatim_doc_comment)]
+pub struct Remove {
+    /// The ID of the daemon to remove (e.g., "api" or "namespace/api")
+    id: String,
+    /// Remove from pitchfork.local.toml instead of pitchfork.toml
+    #[clap(long)]
+    local: bool,
+    /// Remove from pitchfork.toml explicitly (default if no flag specified)
+    #[clap(long)]
+    project: bool,
+}
+
+impl Remove {
+    pub async fn run(&self) -> Result<()> {
+        let path = resolve_project_config_path(self.local, self.project, true)?;
+
+        if !path.exists() {
+            if self.local {
+                warn!("No pitchfork.local.toml found");
+            } else {
+                warn!("No project pitchfork.toml files found");
+            }
+            return Ok(());
+        }
+
+        let mut pt = PitchforkToml::read(&path)?;
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let daemon_id = if self.id.contains('/') {
+            DaemonId::parse(&self.id)?
+        } else {
+            let namespace = namespace_from_path(&canonical_path)?;
+            DaemonId::try_new(&namespace, &self.id)?
+        };
+        if pt.daemons.shift_remove(&daemon_id).is_some() {
+            pt.write()?;
+            println!("removed {} from {}", daemon_id, path.display());
+        } else {
+            warn!("{} not found in {}", daemon_id, path.display());
+        }
+        Ok(())
+    }
+}

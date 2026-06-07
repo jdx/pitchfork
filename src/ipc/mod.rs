@@ -55,6 +55,9 @@ pub enum IpcRequest {
     /// Notify the supervisor that the slug registry has changed (e.g. `proxy add/remove`).
     /// The supervisor should re-read slugs and update mDNS records accordingly.
     SyncMdns,
+    /// Notify the supervisor that settings have changed.
+    /// The supervisor should reload settings from config files.
+    ReloadConfig,
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -103,6 +106,8 @@ pub enum IpcResponse {
     DaemonWasNotRunning,
     /// mDNS sync completed (or was a no-op if LAN mode is disabled)
     MdnsSynced,
+    /// Settings reloaded from config files
+    ConfigReloaded,
     /// Failed to kill the process (still running)
     DaemonStopFailed {
         error: String,

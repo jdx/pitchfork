@@ -113,6 +113,11 @@ impl Supervisor {
                 self.sync_mdns().await;
                 IpcResponse::MdnsSynced
             }
+            IpcRequest::ReloadConfig => {
+                crate::settings::reload_settings();
+                crate::logger::apply_settings();
+                IpcResponse::ConfigReloaded
+            }
         };
         // Ensure state is flushed to disk before returning the response
         // so that CLI commands reading StateFile::get() see fresh data.

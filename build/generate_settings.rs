@@ -166,12 +166,48 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
             #duration_helpers
         }
 
-        /// Global settings instance
-        static SETTINGS: std::sync::OnceLock<Settings> = std::sync::OnceLock::new();
+        /// Global settings instance (RwLock to support runtime reload)
+        static SETTINGS: std::sync::RwLock<Option<Settings>> = std::sync::RwLock::new(None);
 
         /// Get the global settings instance
         pub fn settings() -> &'static Settings {
-            SETTINGS.get_or_init(Settings::load)
+            // Fast path: if already initialized, return a reference.
+            // RwLock read lock is cheap and allows concurrent readers.
+            {
+                let lock = SETTINGS.read().unwrap();
+                if let Some(ref s) = *lock {
+                    // SAFETY: The Settings value is pinned behind the RwLock
+                    // and will never be moved or dropped until the process exits.
+                    // We only replace it (via reload_settings) with a new value,
+                    // never mutating in place. The reference remains valid as long
+                    // as the static lives, which is the entire program duration.
+                    unsafe {
+                        return &*(s as *const Settings);
+                    }
+                }
+            }
+            // Slow path: initialize on first access
+            let mut lock = SETTINGS.write().unwrap();
+            if let Some(ref s) = *lock {
+                unsafe {
+                    return &*(s as *const Settings);
+                }
+            }
+            let s = Settings::load();
+            *lock = Some(s);
+            unsafe {
+                return &*((*lock).as_ref().unwrap() as *const Settings);
+            }
+        }
+
+        /// Reload settings from config files.
+        ///
+        /// Called when the supervisor receives a ReloadConfig IPC request,
+        /// typically after `pitchfork settings set` modifies a config file.
+        pub fn reload_settings() {
+            let new_settings = Settings::load();
+            let mut lock = SETTINGS.write().unwrap();
+            *lock = Some(new_settings);
         }
     };
 
@@ -182,7 +218,7 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
         #[allow(unused_imports)]
         use std::time::Duration;
         #[allow(unused_imports)]
-        use std::sync::OnceLock;
+        use std::sync::RwLock;
 
         #tokens
     };
@@ -572,6 +608,7 @@ fn generate_partial_struct_and_nested(
     let partial_struct_name = format!("{struct_name}Partial");
     let partial_ident = format_ident!("{}", partial_struct_name);
     let mut fields = Vec::new();
+    let mut skip_fns = Vec::new();
 
     for (key, value) in table {
         let field_ident = format_ident!("{}", key);
@@ -595,9 +632,17 @@ fn generate_partial_struct_and_nested(
                 // Nested group: non-Option field, defaults to all-None partial
                 let child_struct_name = format!("{}{}", struct_name, key.to_upper_camel_case());
                 let child_partial_ident = format_ident!("{}Partial", child_struct_name);
+                let skip_fn_name = format!("{key}_is_empty");
+                let skip_fn_lit = &skip_fn_name as &str;
                 fields.push(quote! {
-                    #[serde(default)]
+                    #[serde(default, skip_serializing_if = #skip_fn_lit)]
                     pub #field_ident: #child_partial_ident
+                });
+                let skip_fn_ident = format_ident!("{}", skip_fn_name);
+                skip_fns.push(quote! {
+                    pub fn #skip_fn_ident(v: &#child_partial_ident) -> bool {
+                        !v.has_any_set()
+                    }
                 });
             }
         }
@@ -609,6 +654,8 @@ fn generate_partial_struct_and_nested(
         pub struct #partial_ident {
             #(#fields),*
         }
+
+        #(#skip_fns)*
     });
 
     Ok(tokens)

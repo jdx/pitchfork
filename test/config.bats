@@ -15,7 +15,7 @@ read_toml() {
 }
 
 @test "config add with positional arguments creates correct toml" {
-  run pitchfork config add api bun run server/index.ts
+  run pitchfork daemons add api bun run server/index.ts
   assert_success
   assert_output --partial "added "
   assert_output --partial "/api to "
@@ -26,7 +26,7 @@ read_toml() {
 }
 
 @test "config add with --run flag" {
-  run pitchfork config add worker --run "npm run worker"
+  run pitchfork daemons add worker --run "npm run worker"
   assert_success
   
   run read_toml
@@ -34,7 +34,7 @@ read_toml() {
 }
 
 @test "config add with retry option" {
-  run pitchfork config add api --run "bun run server/index.ts" --retry 3
+  run pitchfork daemons add api --run "bun run server/index.ts" --retry 3
   assert_success
   
   run read_toml
@@ -45,7 +45,7 @@ read_toml() {
 }
 
 @test "config add with watch patterns" {
-  run pitchfork config add api --run "bun run server" --watch "server/**/*.ts" --watch "server/**/*.sql"
+  run pitchfork daemons add api --run "bun run server" --watch "server/**/*.ts" --watch "server/**/*.sql"
   assert_success
   
   run read_toml
@@ -53,7 +53,7 @@ read_toml() {
 }
 
 @test "config add with autostart and autostop" {
-  run pitchfork config add api --run "npm start" --autostart --autostop
+  run pitchfork daemons add api --run "npm start" --autostart --autostop
   assert_success
   
   run read_toml
@@ -64,7 +64,7 @@ read_toml() {
 }
 
 @test "config add with environment variables" {
-  run pitchfork config add api --run "npm start" --env "NODE_ENV=development" --env "PORT=3000"
+  run pitchfork daemons add api --run "npm start" --env "NODE_ENV=development" --env "PORT=3000"
   assert_success
   
   run read_toml
@@ -73,7 +73,7 @@ read_toml() {
 }
 
 @test "config add with ready checks" {
-  run pitchfork config add api --run "npm start" --ready-delay 5 --ready-output "Server ready" --ready-http "http://localhost:3000/health" --ready-port 3000
+  run pitchfork daemons add api --run "npm start" --ready-delay 5 --ready-output "Server ready" --ready-http "http://localhost:3000/health" --ready-port 3000
   assert_success
   
   run read_toml
@@ -84,7 +84,7 @@ read_toml() {
 }
 
 @test "config add with dependencies" {
-  run pitchfork config add api --run "npm start" --depends postgres --depends redis
+  run pitchfork daemons add api --run "npm start" --depends postgres --depends redis
   assert_success
   
   run read_toml
@@ -92,7 +92,7 @@ read_toml() {
 }
 
 @test "config add with hooks" {
-  run pitchfork config add api --run "npm start" --on-ready "curl -X POST http://localhost:3000/ready" --on-fail "./scripts/alert.sh" --on-retry "echo 'retrying'"
+  run pitchfork daemons add api --run "npm start" --on-ready "curl -X POST http://localhost:3000/ready" --on-fail "./scripts/alert.sh" --on-retry "echo 'retrying'"
   assert_success
   
   run read_toml
@@ -104,7 +104,7 @@ read_toml() {
 }
 
 @test "config add with cron schedule" {
-  run pitchfork config add backup --run "./scripts/backup.sh" --cron-schedule "0 0 2 * * *" --cron-retrigger always
+  run pitchfork daemons add backup --run "./scripts/backup.sh" --cron-schedule "0 0 2 * * *" --cron-retrigger always
   assert_success
   
   run read_toml
@@ -113,7 +113,7 @@ read_toml() {
 }
 
 @test "config add with all options combined" {
-  run pitchfork config add api \
+  run pitchfork daemons add api \
     --run "bun run server/index.ts" \
     --retry 3 \
     --watch "server/**/*.ts" \
@@ -145,18 +145,18 @@ read_toml() {
 }
 
 @test "config add fails without run command" {
-  run pitchfork config add api
+  run pitchfork daemons add api
   assert_failure
   assert_output --partial "--run" || assert_output --partial "arguments" || assert_output --partial "required"
 }
 
 @test "config add preserves existing daemons" {
   # First add a daemon
-  run pitchfork config add postgres --run "postgres -D data"
+  run pitchfork daemons add postgres --run "postgres -D data"
   assert_success
   
   # Then add another daemon
-  run pitchfork config add api --run "npm start"
+  run pitchfork daemons add api --run "npm start"
   assert_success
   
   run read_toml
@@ -177,7 +177,7 @@ EOF
   chmod +x server.sh
   
   # Add the daemon using config add
-  run pitchfork config add test-server --run "./server.sh" --ready-output "ready" --retry 0
+  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
   assert_success
   
   # Try to start the daemon

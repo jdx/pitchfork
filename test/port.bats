@@ -10,7 +10,7 @@ teardown() {
 }
 
 @test "config add with port and bump" {
-  run pitchfork config add api --run "python3 -m http.server 8080" --expected-port 8080 --bump
+  run pitchfork daemons add api --run "python3 -m http.server 8080" --expected-port 8080 --bump
   assert_success
 
   run cat pitchfork.toml
@@ -19,7 +19,7 @@ teardown() {
 }
 
 @test "config add with only port" {
-  run pitchfork config add api --run "python3 -m http.server 3000" --expected-port 3000
+  run pitchfork daemons add api --run "python3 -m http.server 3000" --expected-port 3000
   assert_success
   
   run cat pitchfork.toml
@@ -37,7 +37,7 @@ sleep 30
 EOF
   chmod +x server.sh
   
-  run pitchfork config add test-server --run "./server.sh" --ready-output "ready" --retry 0
+  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
   assert_success
   
   # Start with expected-port
@@ -59,7 +59,7 @@ sleep 30
 EOF
   chmod +x server.sh
   
-  run pitchfork config add test-server --run "./server.sh" --ready-output "ready" --retry 0
+  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
   assert_success
   
   # Start with both flags
@@ -101,7 +101,7 @@ sleep 30
 EOF
   chmod +x server.sh
   
-  run pitchfork config add test-server --run "./server.sh" --ready-output "ready" --retry 0
+  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
   assert_success
   
   # Try to start with the occupied port - should fail
@@ -142,7 +142,7 @@ sleep 30
 EOF
   chmod +x server.sh
   
-  run pitchfork config add test-server --run "./server.sh" --ready-output "ready" --retry 0
+  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
   assert_success
   
   # Try to start with the occupied port but with auto-bump - should succeed
@@ -168,7 +168,7 @@ sleep 30
 EOF
   chmod +x check_port.sh
   
-  run pitchfork config add port-test --run "./check_port.sh" --expected-port 7777 --ready-output "ready" --retry 0
+  run pitchfork daemons add port-test --run "./check_port.sh" --expected-port 7777 --ready-output "ready" --retry 0
   assert_success
   
   run pitchfork start port-test
