@@ -656,6 +656,37 @@ fn generate_partial_struct_and_nested(
         #(#skip_fns)*
     });
 
+    // Generate has_any_set / is_empty for this partial struct
+    let mut has_any_set_checks = Vec::new();
+    for (key, value) in table {
+        if let Some(props) = value.as_table() {
+            let field_ident = format_ident!("{}", key);
+            if is_leaf_setting(props) {
+                has_any_set_checks.push(quote! {
+                    self.#field_ident.is_some()
+                });
+            } else {
+                has_any_set_checks.push(quote! {
+                    self.#field_ident.has_any_set()
+                });
+            }
+        }
+    }
+
+    tokens.extend(quote! {
+        #[allow(dead_code)]
+        impl #partial_ident {
+            pub fn has_any_set(&self) -> bool {
+                #(#has_any_set_checks)||*
+            }
+
+            #[allow(dead_code)]
+            pub fn is_empty(&self) -> bool {
+                !self.has_any_set()
+            }
+        }
+    });
+
     Ok(tokens)
 }
 

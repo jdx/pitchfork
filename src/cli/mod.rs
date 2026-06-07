@@ -18,6 +18,7 @@ mod restart;
 mod run;
 mod schema;
 mod settings;
+mod sponsors;
 mod start;
 mod status;
 mod stop;
@@ -53,6 +54,7 @@ enum Commands {
     Run(run::Run),
     Schema(schema::Schema),
     Settings(settings::Settings),
+    Sponsors(sponsors::Sponsors),
     Start(start::Start),
     Status(status::Status),
     Stop(stop::Stop),
@@ -82,6 +84,7 @@ pub async fn run() -> Result<()> {
         Commands::ApiSchema(api_schema) => api_schema.run().await,
         Commands::Schema(schema) => schema.run().await,
         Commands::Settings(settings) => settings.run().await,
+        Commands::Sponsors(_) => sponsors::Sponsors::run().await,
         Commands::Start(start) => start.run().await,
         Commands::Status(status) => status.run().await,
         Commands::Stop(stop) => stop.run().await,

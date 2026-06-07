@@ -6,6 +6,7 @@ use super::{SUPERVISOR, Supervisor};
 use crate::Result;
 use crate::ipc::server::IpcServer;
 use crate::ipc::{IpcRequest, IpcResponse};
+use miette::IntoDiagnostic;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -114,8 +115,12 @@ impl Supervisor {
                 IpcResponse::MdnsSynced
             }
             IpcRequest::ReloadConfig => {
-                crate::settings::reload_settings();
-                crate::logger::apply_settings();
+                tokio::task::spawn_blocking(|| {
+                    crate::settings::reload_settings();
+                    crate::logger::apply_settings();
+                })
+                .await
+                .into_diagnostic()?;
                 IpcResponse::ConfigReloaded
             }
         };

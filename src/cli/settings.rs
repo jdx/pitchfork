@@ -4,7 +4,7 @@ use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::{SETTINGS_META, SettingsPartial, settings};
 use clap::Parser;
-use miette::bail;
+use miette::{IntoDiagnostic, bail};
 use std::path::PathBuf;
 
 const LOG_LEVEL_VALUES: &[&str] = &["trace", "debug", "info", "warn", "error"];
@@ -141,13 +141,18 @@ impl SetCmd {
         validate_setting_key(key)?;
         validate_setting_value(key, value)?;
 
-        let config_path = resolve_config_path(self.global, self.local, self.project)?;
+        let config_path = resolve_config_path(self.global, self.local, self.project).await?;
 
-        let mut pt = if config_path.exists() {
-            PitchforkToml::read(&config_path)?
+        let mut pt = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
+            let config_path_clone = config_path.clone();
+            let result =
+                tokio::task::spawn_blocking(move || PitchforkToml::read(&config_path_clone))
+                    .await
+                    .into_diagnostic()?;
+            result.map_err(|e| miette::miette!("{e}"))?
         } else {
             if let Some(parent) = config_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
                     miette::miette!(
                         "Failed to create config directory {}: {e}",
                         parent.display()
@@ -160,7 +165,10 @@ impl SetCmd {
 
         apply_setting_to_partial(&mut pt.settings, key, value)?;
 
-        pt.write()?;
+        tokio::task::spawn_blocking(move || pt.write())
+            .await
+            .into_diagnostic()?
+            .map_err(|e| miette::miette!("{e}"))?;
 
         let path_display = config_path.display();
         println!("set {key} = {value} in {path_display}");
@@ -595,14 +603,14 @@ fn apply_proxy_value(
     Ok(())
 }
 
-fn resolve_config_path(global: bool, local: bool, project: bool) -> Result<PathBuf> {
+async fn resolve_config_path(global: bool, local: bool, project: bool) -> Result<PathBuf> {
     if global && (local || project) {
         bail!("cannot combine --global with --local or --project");
     }
     if global {
         return Ok(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
     }
-    resolve_project_config_path(local, project, false)
+    resolve_project_config_path(local, project, false).await
 }
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {

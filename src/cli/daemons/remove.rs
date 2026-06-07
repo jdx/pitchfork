@@ -2,6 +2,7 @@ use crate::Result;
 use crate::cli::daemons::resolve_project_config_path;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::{PitchforkToml, namespace_from_path};
+use miette::IntoDiagnostic;
 
 /// Remove a daemon from pitchfork.toml
 #[derive(Debug, clap::Args)]
@@ -19,9 +20,9 @@ pub struct Remove {
 
 impl Remove {
     pub async fn run(&self) -> Result<()> {
-        let path = resolve_project_config_path(self.local, self.project, true)?;
+        let path = resolve_project_config_path(self.local, self.project, true).await?;
 
-        if !path.exists() {
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
             if self.local {
                 warn!("No pitchfork.local.toml found");
             } else {
@@ -30,8 +31,16 @@ impl Remove {
             return Ok(());
         }
 
-        let mut pt = PitchforkToml::read(&path)?;
-        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let mut pt = {
+            let path_clone = path.clone();
+            let result = tokio::task::spawn_blocking(move || PitchforkToml::read(&path_clone))
+                .await
+                .into_diagnostic()?;
+            result.map_err(|e| miette::miette!("{e}"))?
+        };
+        let canonical_path = tokio::fs::canonicalize(&path)
+            .await
+            .unwrap_or_else(|_| path.clone());
         let daemon_id = if self.id.contains('/') {
             DaemonId::parse(&self.id)?
         } else {
@@ -39,7 +48,10 @@ impl Remove {
             DaemonId::try_new(&namespace, &self.id)?
         };
         if pt.daemons.shift_remove(&daemon_id).is_some() {
-            pt.write()?;
+            tokio::task::spawn_blocking(move || pt.write())
+                .await
+                .into_diagnostic()?
+                .map_err(|e| miette::miette!("{e}"))?;
             println!("removed {} from {}", daemon_id, path.display());
         } else {
             warn!("{} not found in {}", daemon_id, path.display());

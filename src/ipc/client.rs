@@ -422,14 +422,17 @@ impl IpcClient {
     /// best-effort notification — if the supervisor is not running, the call
     /// silently succeeds (settings will be fresh on next supervisor start).
     pub async fn reload_config(&self) -> Result<()> {
-        let rsp = self.request(IpcRequest::ReloadConfig).await?;
-        match rsp {
-            IpcResponse::ConfigReloaded => Ok(()),
-            IpcResponse::Error(e) => {
+        match self.request(IpcRequest::ReloadConfig).await {
+            Ok(IpcResponse::ConfigReloaded) => Ok(()),
+            Ok(IpcResponse::Error(e)) => {
                 debug!("config reload skipped: {e}");
                 Ok(())
             }
-            rsp => Err(Self::unexpected_response("ConfigReloaded", &rsp).into()),
+            Ok(rsp) => Err(Self::unexpected_response("ConfigReloaded", &rsp).into()),
+            Err(err) => {
+                debug!("config reload skipped: {err:?}");
+                Ok(())
+            }
         }
     }
 

@@ -7,7 +7,7 @@ use crate::pitchfork_toml::{
 };
 use crate::settings::settings;
 use indexmap::IndexMap;
-use miette::bail;
+use miette::{IntoDiagnostic, bail};
 
 /// Add a new daemon to pitchfork.toml
 #[derive(Debug, clap::Args)]
@@ -130,13 +130,18 @@ pub struct Add {
 
 impl Add {
     pub async fn run(&self) -> Result<()> {
-        let config_path = resolve_project_config_path(self.local, self.project, false)?;
+        let config_path = resolve_project_config_path(self.local, self.project, false).await?;
 
-        let mut pt = if config_path.exists() {
-            PitchforkToml::read(&config_path)?
+        let mut pt = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
+            let config_path_clone = config_path.clone();
+            let result =
+                tokio::task::spawn_blocking(move || PitchforkToml::read(&config_path_clone))
+                    .await
+                    .into_diagnostic()?;
+            result.map_err(|e| miette::miette!("{e}"))?
         } else {
             if let Some(parent) = config_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
                     miette::miette!(
                         "Failed to create config directory {}: {e}",
                         parent.display()
@@ -222,8 +227,8 @@ impl Add {
 
         let boot_start = if self.boot_start { Some(true) } else { None };
 
-        let canonical_path = config_path
-            .canonicalize()
+        let canonical_path = tokio::fs::canonicalize(&config_path)
+            .await
             .unwrap_or_else(|_| config_path.clone());
         let daemon_id = if self.id.contains('/') {
             DaemonId::parse(&self.id)?
@@ -273,7 +278,10 @@ impl Add {
                 ..PitchforkTomlDaemon::default()
             },
         );
-        pt.write()?;
+        tokio::task::spawn_blocking(move || pt.write())
+            .await
+            .into_diagnostic()?
+            .map_err(|e| miette::miette!("{e}"))?;
         let path_display = config_path.display();
         println!("added {daemon_id} to {path_display}");
         Ok(())

@@ -30,7 +30,7 @@ fn is_project_config_path(path: &Path) -> bool {
 /// The `exists_filter` parameter controls whether only existing files are considered.
 /// `add` needs to be able to create new files, so it passes `false`.
 /// `remove` only operates on existing files, so it passes `true`.
-pub(crate) fn resolve_project_config_path(
+pub(crate) async fn resolve_project_config_path(
     local: bool,
     project: bool,
     exists_filter: bool,
@@ -40,16 +40,19 @@ pub(crate) fn resolve_project_config_path(
     }
 
     let paths = PitchforkToml::list_paths();
-    let project_paths: Vec<_> = paths
-        .iter()
-        .filter(|p| {
-            if exists_filter {
-                p.exists() && is_project_config_path(p)
-            } else {
-                is_project_config_path(p)
+    let mut project_paths = Vec::new();
+    for p in &paths {
+        if !is_project_config_path(p) {
+            continue;
+        }
+        if exists_filter {
+            if tokio::fs::try_exists(p).await.unwrap_or(false) {
+                project_paths.push(p.clone());
             }
-        })
-        .collect();
+        } else {
+            project_paths.push(p.clone());
+        }
+    }
 
     if local {
         if let Some(p) = project_paths
@@ -59,7 +62,7 @@ pub(crate) fn resolve_project_config_path(
                     .map(|n| n == "pitchfork.local.toml")
                     .unwrap_or(false)
             })
-            .map(|p| (*p).clone())
+            .cloned()
         {
             return Ok(p);
         }
@@ -84,7 +87,7 @@ pub(crate) fn resolve_project_config_path(
                     .map(|n| n == "pitchfork.toml")
                     .unwrap_or(false)
             })
-            .map(|p| (*p).clone())
+            .cloned()
         {
             return Ok(p);
         }
@@ -98,7 +101,7 @@ pub(crate) fn resolve_project_config_path(
                 .map(|n| n == "pitchfork.toml")
                 .unwrap_or(false)
         })
-        .map(|p| (*p).clone())
+        .cloned()
         .unwrap_or_else(|| env::CWD.join("pitchfork.toml")))
 }
 
