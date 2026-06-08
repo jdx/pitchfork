@@ -518,25 +518,12 @@ impl Procs {
 
         Some(ExtendedProcessStats {
             name: p.name().to_string_lossy().to_string(),
-            exe_path: p.exe().map(|e| e.to_string_lossy().to_string()),
-            cwd: p.cwd().map(|c| c.to_string_lossy().to_string()),
-            environ: p
-                .environ()
-                .iter()
-                .take(20)
-                .map(|s| s.to_string_lossy().to_string())
-                .collect(),
             status: format!("{:?}", p.status()),
             cpu_percent: aggregate_stats.cpu_percent,
             memory_bytes: aggregate_stats.memory_bytes,
             virtual_memory_bytes: p.virtual_memory(),
             uptime_secs: aggregate_stats.uptime_secs,
-            start_time: p.start_time(),
-            disk_read_bytes: aggregate_stats.disk_read_bytes,
-            disk_write_bytes: aggregate_stats.disk_write_bytes,
-            parent_pid: p.parent().map(|pp| pp.as_u32()),
             thread_count: p.tasks().map(|t| t.len()).unwrap_or(0),
-            user_id: p.user_id().map(|u| u.to_string()),
         })
     }
 }
@@ -572,27 +559,16 @@ impl ProcessStats {
     }
 }
 
-/// Extended process stats with more detailed information
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ExtendedProcessStats {
     pub name: String,
-    pub exe_path: Option<String>,
-    pub cwd: Option<String>,
-    pub environ: Vec<String>,
     pub status: String,
     pub cpu_percent: f32,
     pub memory_bytes: u64,
     pub virtual_memory_bytes: u64,
     pub uptime_secs: u64,
-    pub start_time: u64,
-    pub disk_read_bytes: u64,
-    pub disk_write_bytes: u64,
-    pub parent_pid: Option<u32>,
     pub thread_count: usize,
-    pub user_id: Option<String>,
 }
-
 
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
