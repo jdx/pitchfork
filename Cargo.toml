@@ -12,7 +12,7 @@ build = "build.rs"
 include = [
     "src/**/*.rs",
     "assets/**/*",
-    "src/web/assets/**/*",
+    "ui/dist/**/*",
     "/pitchfork-extras.usage.kdl",
     "/settings.toml",
     "/build.rs",
@@ -81,7 +81,6 @@ rustls-pemfile = { version = "2", optional = true }
 x509-parser = { version = "0.18", optional = true }
 tokio-stream = "0.1"
 async-stream = "0.3"
-urlencoding = "2"
 mime_guess = "2"
 rmp-serde = "1"
 schemars = { version = "1", features = ["indexmap2"] }

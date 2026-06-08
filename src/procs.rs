@@ -573,6 +573,7 @@ impl ProcessStats {
 }
 
 /// Extended process stats with more detailed information
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ExtendedProcessStats {
     pub name: String,
@@ -592,39 +593,7 @@ pub struct ExtendedProcessStats {
     pub user_id: Option<String>,
 }
 
-impl ExtendedProcessStats {
-    pub fn memory_display(&self) -> String {
-        format_bytes(self.memory_bytes)
-    }
-
-    pub fn virtual_memory_display(&self) -> String {
-        format_bytes(self.virtual_memory_bytes)
-    }
-
-    pub fn cpu_display(&self) -> String {
-        format!("{:.1}%", self.cpu_percent)
-    }
-
-    pub fn uptime_display(&self) -> String {
-        format_duration(self.uptime_secs)
-    }
-
-    pub fn start_time_display(&self) -> String {
-        use std::time::{Duration, UNIX_EPOCH};
-        let datetime = UNIX_EPOCH + Duration::from_secs(self.start_time);
-        chrono::DateTime::<chrono::Local>::from(datetime)
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string()
-    }
-
-    pub fn disk_read_display(&self) -> String {
-        format_bytes_per_sec(self.disk_read_bytes)
-    }
-
-    pub fn disk_write_display(&self) -> String {
-        format_bytes_per_sec(self.disk_write_bytes)
-    }
-}
+impl ExtendedProcessStats {}
 
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
