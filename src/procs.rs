@@ -593,7 +593,6 @@ pub struct ExtendedProcessStats {
     pub user_id: Option<String>,
 }
 
-impl ExtendedProcessStats {}
 
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
