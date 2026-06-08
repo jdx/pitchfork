@@ -1870,7 +1870,7 @@
         "flags": [],
         "mounts": [],
         "hide": false,
-        "help": "Show the companies sponsoring pitchfork and the en.dev project family",
+        "help": "Show the companies sponsoring pitchfork and the jdx project family",
         "name": "sponsors",
         "aliases": [],
         "hidden_aliases": [],
