@@ -11,14 +11,6 @@ use crate::log_store::{LogQuery, LogStore};
 use crate::settings::settings;
 use console;
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
 pub async fn stream_sse(
     Path(id): Path<String>,
 ) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
@@ -99,8 +91,7 @@ pub async fn stream_sse(
                 last_id = entry.id;
                 let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
                 let stripped = console::strip_ansi_codes(&entry.message);
-                let escaped = html_escape(&format!("{ts} {stripped}"));
-                yield Ok(Event::default().event("message").data(escaped));
+                yield Ok(Event::default().event("message").data(format!("{ts} {stripped}")));
             }
         }
     };
