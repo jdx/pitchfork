@@ -1,7 +1,20 @@
 mod common;
 
 use common::TestEnv;
+use std::path::Path;
 use std::time::Duration;
+
+fn wait_for_marker_content(path: &Path, expected: &str) -> String {
+    let mut content = String::new();
+    for _ in 0..30 {
+        content = std::fs::read_to_string(path).unwrap_or_default();
+        if content.trim() == expected {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    content
+}
 
 /// Test that the on_ready hook fires when a daemon becomes ready
 #[test]
@@ -393,19 +406,7 @@ on_stop = "sh -c 'echo $PITCHFORK_EXIT_REASON > {}'"
 
     env.run_command(&["stop", "stop_reason_test"]);
 
-    // Poll for marker file
-    for _ in 0..30 {
-        if marker.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    assert!(
-        marker.exists(),
-        "on_stop hook should have created marker file"
-    );
-
-    let content = std::fs::read_to_string(&marker).unwrap();
+    let content = wait_for_marker_content(&marker, "stop");
     assert_eq!(
         content.trim(),
         "stop",
@@ -480,19 +481,7 @@ on_exit = "sh -c 'echo $PITCHFORK_EXIT_REASON > {}'"
     let output = env.run_command(&["start", "exit_fail_test"]);
     println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
 
-    // Poll for marker file
-    for _ in 0..30 {
-        if marker.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    assert!(
-        marker.exists(),
-        "on_exit hook should fire when daemon crashes"
-    );
-
-    let content = std::fs::read_to_string(&marker).unwrap();
+    let content = wait_for_marker_content(&marker, "fail");
     assert_eq!(
         content.trim(),
         "fail",
@@ -524,19 +513,7 @@ on_exit = "sh -c 'echo $PITCHFORK_EXIT_REASON > {}'"
     let output = env.run_command(&["start", "exit_clean_test"]);
     println!("start stdout: {}", String::from_utf8_lossy(&output.stdout));
 
-    // Poll for marker file
-    for _ in 0..30 {
-        if marker.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    assert!(
-        marker.exists(),
-        "on_exit hook should fire when daemon exits cleanly on its own"
-    );
-
-    let content = std::fs::read_to_string(&marker).unwrap();
+    let content = wait_for_marker_content(&marker, "exit");
     assert_eq!(
         content.trim(),
         "exit",

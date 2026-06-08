@@ -269,7 +269,7 @@ cmd settings help="View and modify pitchfork settings" {
         arg <VALUE> help="Value to set (type must match the setting: string, integer, boolean, or duration)"
     }
 }
-cmd sponsors help="Show the companies sponsoring pitchfork and the en.dev project family"
+cmd sponsors help="Show the companies sponsoring pitchfork and the jdx project family"
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s
     long_help "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --group backend Start all daemons in the 'backend' group\n  pitchfork start -l            Start all local daemons in pitchfork.toml\n  pitchfork start -g            Start all global daemons in config.toml\n  pitchfork start -a            Start all daemons (local and global)\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening"
