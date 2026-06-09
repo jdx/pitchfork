@@ -1138,7 +1138,13 @@ impl Supervisor {
             // Determine which hooks to fire based on exit reason.
             // When stop() already ran the hooks (already_stopped = true),
             // skip on_stop + on_exit to avoid double-firing.
-            if !already_stopped {
+            //
+            // When is_stopping but !already_stopped, stop() is still in progress
+            // (kill_process_group_async hasn't returned yet). In this case, stop()
+            // will fire on_stop + on_exit after the process is fully killed, so
+            // the monitor task must skip them to avoid double-firing.
+            let hooks_fired_by_stop = already_stopped || is_stopping;
+            if !hooks_fired_by_stop {
                 match exit_reason {
                     "stop" => {
                         fire_hook(
@@ -1423,25 +1429,9 @@ impl Supervisor {
                 }
                 Ok(IpcResponse::Ok)
             } else {
-                // Daemon exists in state but has no PID — it may have already
-                // exited. Run on_exit hook for cleanup (fire-and-forget).
-                let on_exit_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                let on_exit_env = daemon.env.clone();
-                let (exit_code, exit_reason) = daemon_exit_info(&daemon);
-                fire_hook(
-                    HookType::OnExit,
-                    id.clone(),
-                    on_exit_dir,
-                    daemon.retry_count,
-                    daemon.recovery_count,
-                    on_exit_env,
-                    vec![
-                        ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
-                        ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
-                    ],
-                )
-                .await;
-
+                // Daemon exists in state but has no PID — it has already
+                // exited. The monitor task already fired on_exit when the
+                // process exited, so we must not fire it again here.
                 debug!("daemon {id} not running");
                 Ok(IpcResponse::DaemonNotRunning)
             }

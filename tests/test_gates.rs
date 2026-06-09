@@ -286,10 +286,16 @@ on_exit = "touch {}"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(
-        marker.exists(),
-        "on_exit hook should have created marker file"
-    );
+    // on_exit is fire-and-forget, so poll for the marker file
+    let mut found = false;
+    for _ in 0..30 {
+        if marker.exists() {
+            found = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(found, "on_exit hook should have created marker file");
 }
 
 /// Test that on_exit hook receives PITCHFORK_EXIT_CODE and PITCHFORK_EXIT_REASON env vars
@@ -600,5 +606,15 @@ on_exit = "touch {}"
     );
 
     assert!(pre_stop_marker.exists(), "pre_stop hook should have run");
-    assert!(on_exit_marker.exists(), "on_exit hook should have run");
+
+    // on_exit is fire-and-forget, so poll for the marker file
+    let mut on_exit_found = false;
+    for _ in 0..30 {
+        if on_exit_marker.exists() {
+            on_exit_found = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(on_exit_found, "on_exit hook should have run");
 }
