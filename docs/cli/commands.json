@@ -1965,7 +1965,7 @@
         "flags": [],
         "mounts": [],
         "hide": false,
-        "help": "Show the companies sponsoring pitchfork and the en.dev project family",
+        "help": "Show the companies sponsoring pitchfork and the jdx project family",
         "name": "sponsors",
         "aliases": [],
         "hidden_aliases": [],
@@ -2622,7 +2622,7 @@
   "config": {
     "props": {}
   },
-  "version": "2.13.0",
+  "version": "2.13.1",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {

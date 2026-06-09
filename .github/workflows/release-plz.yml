@@ -17,7 +17,7 @@ jobs:
   release-plz-release:
     name: Release
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && github.repository_owner == 'endevco' }}
+    if: ${{ github.event_name == 'push' && github.repository_owner == 'jdx' }}
     permissions:
       contents: write
       pull-requests: write
@@ -72,7 +72,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      - name: Append en.dev sponsor blurb
+      - name: Append sponsor blurb
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: |
@@ -87,9 +87,9 @@ jobs:
 
           ## 💚 Sponsor pitchfork
 
-          pitchfork is built by [@jdx](https://github.com/jdx) at [**en.dev**](https://en.dev) — an independent studio shipping developer tools like [mise](https://mise.jdx.dev/), [aube](https://aube.en.dev/), hk, pitchfork, and more. Development is sustained by sponsorships.
+          pitchfork is built by [@jdx](https://github.com/jdx), who ships developer tools like [mise](https://mise.jdx.dev/), hk, pitchfork, and more. Development is sustained by sponsorships.
 
-          If pitchfork has a place in your dev workflow, please consider [sponsoring at en.dev](https://en.dev). Individual and company sponsorships are what keep the project healthy and moving forward.
+          If pitchfork has a place in your dev workflow, please consider [sponsoring on GitHub](https://github.com/sponsors/jdx). Individual and company sponsorships are what keep the project healthy and moving forward.
           EOF
           } > /tmp/release-notes.md
           gh release edit "$TAG" --notes-file /tmp/release-notes.md
@@ -97,7 +97,7 @@ jobs:
   release-plz-pr:
     name: Release PR
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'push' && github.repository_owner == 'endevco' }}
+    if: ${{ github.event_name == 'push' && github.repository_owner == 'jdx' }}
     permissions:
       contents: write
       pull-requests: write

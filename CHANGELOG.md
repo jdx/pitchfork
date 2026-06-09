@@ -7,97 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.13.0](https://github.com/endevco/pitchfork/compare/v2.12.1...v2.13.0) - 2026-06-07
-
-### Added
-
-- *(cli)* rename `pf config` to `pf daemons` and add `pf settings` subcommand ([#471](https://github.com/endevco/pitchfork/pull/471))
-- *(logs)* add log rotate ([#470](https://github.com/endevco/pitchfork/pull/470))
-- *(list)* always display fully-qualified daemon names ([#467](https://github.com/endevco/pitchfork/pull/467))
-- *(cron)* add `immediate` config to control the behaviour on start ([#461](https://github.com/endevco/pitchfork/pull/461))
-- add sponsors command ([#458](https://github.com/endevco/pitchfork/pull/458))
+## [2.13.1](https://github.com/jdx/pitchfork/compare/v2.13.0...v2.13.1) - 2026-06-08
 
 ### Other
 
-- *(web-ui)* refactor with Vue SPA + separate API endpoints ([#457](https://github.com/endevco/pitchfork/pull/457))
+- move pitchfork back to jdx ([#474](https://github.com/jdx/pitchfork/pull/474))
 
-## [2.12.1](https://github.com/endevco/pitchfork/compare/v2.12.0...v2.12.1) - 2026-05-28
-
-### Fixed
-
-- *(procs)* show process-tree daemon metrics ([#435](https://github.com/endevco/pitchfork/pull/435))
-- get running command directly in cron/watch instead of getting from DaemonId ([#453](https://github.com/endevco/pitchfork/pull/453))
-
-## [2.12.0](https://github.com/endevco/pitchfork/compare/v2.11.0...v2.12.0) - 2026-05-27
+## [2.13.0](https://github.com/jdx/pitchfork/compare/v2.12.1...v2.13.0) - 2026-06-07
 
 ### Added
 
-- *(proxy)* support worktree ([#448](https://github.com/endevco/pitchfork/pull/448))
-- *(cli)* stream output on CLI command start ([#444](https://github.com/endevco/pitchfork/pull/444))
-
-### Fixed
-
-- *(web)* close web log SSE streams on navigation ([#447](https://github.com/endevco/pitchfork/pull/447))
+- *(cli)* rename `pf config` to `pf daemons` and add `pf settings` subcommand ([#471](https://github.com/jdx/pitchfork/pull/471))
+- *(logs)* add log rotate ([#470](https://github.com/jdx/pitchfork/pull/470))
+- *(list)* always display fully-qualified daemon names ([#467](https://github.com/jdx/pitchfork/pull/467))
+- *(cron)* add `immediate` config to control the behaviour on start ([#461](https://github.com/jdx/pitchfork/pull/461))
+- add sponsors command ([#458](https://github.com/jdx/pitchfork/pull/458))
 
 ### Other
 
-- avoid state file frequently write to disk ([#446](https://github.com/endevco/pitchfork/pull/446))
+- *(web-ui)* refactor with Vue SPA + separate API endpoints ([#457](https://github.com/jdx/pitchfork/pull/457))
 
-## [2.11.0](https://github.com/endevco/pitchfork/compare/v2.10.0...v2.11.0) - 2026-05-17
+## [2.12.1](https://github.com/jdx/pitchfork/compare/v2.12.0...v2.12.1) - 2026-05-28
+
+### Fixed
+
+- *(procs)* show process-tree daemon metrics ([#435](https://github.com/jdx/pitchfork/pull/435))
+- get running command directly in cron/watch instead of getting from DaemonId ([#453](https://github.com/jdx/pitchfork/pull/453))
+
+## [2.12.0](https://github.com/jdx/pitchfork/compare/v2.11.0...v2.12.0) - 2026-05-27
 
 ### Added
 
-- *(config)* support ready_http status codes ([#437](https://github.com/endevco/pitchfork/pull/437))
-- *(config)* impl daemon group ([#442](https://github.com/endevco/pitchfork/pull/442))
-- *(proxy)* auto trust if possible ([#431](https://github.com/endevco/pitchfork/pull/431))
-- *(proxy)* support LAN mode with mDNS ([#430](https://github.com/endevco/pitchfork/pull/430))
-- *(proxy)* support wildcard subdomain ([#426](https://github.com/endevco/pitchfork/pull/426))
+- *(proxy)* support worktree ([#448](https://github.com/jdx/pitchfork/pull/448))
+- *(cli)* stream output on CLI command start ([#444](https://github.com/jdx/pitchfork/pull/444))
+
+### Fixed
+
+- *(web)* close web log SSE streams on navigation ([#447](https://github.com/jdx/pitchfork/pull/447))
 
 ### Other
 
-- avoid refresh full pid tree when Procs::new() ([#441](https://github.com/endevco/pitchfork/pull/441))
-- *(build)* suit for non-Windows/MacOS/Linux build ([#429](https://github.com/endevco/pitchfork/pull/429))
+- avoid state file frequently write to disk ([#446](https://github.com/jdx/pitchfork/pull/446))
 
-## [2.10.0](https://github.com/endevco/pitchfork/compare/v2.9.1...v2.10.0) - 2026-05-05
+## [2.11.0](https://github.com/jdx/pitchfork/compare/v2.10.0...v2.11.0) - 2026-05-17
 
 ### Added
 
-- refine startup / tailing logs display ([#420](https://github.com/endevco/pitchfork/pull/420))
-- *(proxy)* sync slug hosts ([#418](https://github.com/endevco/pitchfork/pull/418))
-- inject daemon running info to tera template ([#419](https://github.com/endevco/pitchfork/pull/419))
-
-### Fixed
-
-- *(boot-start)* use LaunchDaemon on MacOS ([#423](https://github.com/endevco/pitchfork/pull/423))
+- *(config)* support ready_http status codes ([#437](https://github.com/jdx/pitchfork/pull/437))
+- *(config)* impl daemon group ([#442](https://github.com/jdx/pitchfork/pull/442))
+- *(proxy)* auto trust if possible ([#431](https://github.com/jdx/pitchfork/pull/431))
+- *(proxy)* support LAN mode with mDNS ([#430](https://github.com/jdx/pitchfork/pull/430))
+- *(proxy)* support wildcard subdomain ([#426](https://github.com/jdx/pitchfork/pull/426))
 
 ### Other
 
-- *(build)* use serious profile to eliminate binary size ([#424](https://github.com/endevco/pitchfork/pull/424))
-- set dev profile debug to 1 ([#415](https://github.com/endevco/pitchfork/pull/415))
+- avoid refresh full pid tree when Procs::new() ([#441](https://github.com/jdx/pitchfork/pull/441))
+- *(build)* suit for non-Windows/MacOS/Linux build ([#429](https://github.com/jdx/pitchfork/pull/429))
 
-## [2.9.1](https://github.com/endevco/pitchfork/compare/v2.9.0...v2.9.1) - 2026-05-03
-
-### Fixed
-
-- *(build)* restore Windows compile and add windows CI job ([#410](https://github.com/endevco/pitchfork/pull/410))
-
-## [2.9.0](https://github.com/endevco/pitchfork/compare/v2.8.0...v2.9.0) - 2026-05-03
+## [2.10.0](https://github.com/jdx/pitchfork/compare/v2.9.1...v2.10.0) - 2026-05-05
 
 ### Added
 
-- keep ANSI by default and impl PTY mode ([#408](https://github.com/endevco/pitchfork/pull/408))
-- customize stop signal and refactor config types ([#406](https://github.com/endevco/pitchfork/pull/406))
-- add hook `on_output` ([#399](https://github.com/endevco/pitchfork/pull/399))
-
-## [2.8.0](https://github.com/endevco/pitchfork/compare/v2.7.0...v2.8.0) - 2026-04-28
-
-### Added
-
-- *(boot-start)* support system level register ([#397](https://github.com/endevco/pitchfork/pull/397))
+- refine startup / tailing logs display ([#420](https://github.com/jdx/pitchfork/pull/420))
+- *(proxy)* sync slug hosts ([#418](https://github.com/jdx/pitchfork/pull/418))
+- inject daemon running info to tera template ([#419](https://github.com/jdx/pitchfork/pull/419))
 
 ### Fixed
 
-- *(tui)* remove blocking loading ([#394](https://github.com/endevco/pitchfork/pull/394))
+- *(boot-start)* use LaunchDaemon on MacOS ([#423](https://github.com/jdx/pitchfork/pull/423))
+
+### Other
+
+- *(build)* use serious profile to eliminate binary size ([#424](https://github.com/jdx/pitchfork/pull/424))
+- set dev profile debug to 1 ([#415](https://github.com/jdx/pitchfork/pull/415))
+
+## [2.9.1](https://github.com/jdx/pitchfork/compare/v2.9.0...v2.9.1) - 2026-05-03
+
+### Fixed
+
+- *(build)* restore Windows compile and add windows CI job ([#410](https://github.com/jdx/pitchfork/pull/410))
+
+## [2.9.0](https://github.com/jdx/pitchfork/compare/v2.8.0...v2.9.0) - 2026-05-03
+
+### Added
+
+- keep ANSI by default and impl PTY mode ([#408](https://github.com/jdx/pitchfork/pull/408))
+- customize stop signal and refactor config types ([#406](https://github.com/jdx/pitchfork/pull/406))
+- add hook `on_output` ([#399](https://github.com/jdx/pitchfork/pull/399))
+
+## [2.8.0](https://github.com/jdx/pitchfork/compare/v2.7.0...v2.8.0) - 2026-04-28
+
+### Added
+
+- *(boot-start)* support system level register ([#397](https://github.com/jdx/pitchfork/pull/397))
+
+### Fixed
+
+- *(tui)* remove blocking loading ([#394](https://github.com/jdx/pitchfork/pull/394))
 
 ## [2.7.0](https://github.com/jdx/pitchfork/compare/v2.6.0...v2.7.0) - 2026-04-26
 

@@ -1,4 +1,4 @@
-#:schema https://pitchfork.en.dev/schema.json
+#:schema https://pitchfork.jdx.dev/schema.json
 
 [daemons.docs]
 run = "mise run -q docs"

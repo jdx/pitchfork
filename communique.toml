@@ -1,6 +1,6 @@
 context = "pitchfork is a daemon supervisor CLI for developers. It manages background processes with features like auto-start/stop, cron scheduling, retry logic, and HTTP ready checks."
 
-system_extra = "Do not include a 'Sponsor pitchfork' section, sponsorship blurb, or any en.dev/funding callout in the generated notes. A sponsor section is appended by a separate CI step; emitting one here causes a duplicate."
+system_extra = "Do not include a 'Sponsor pitchfork' section, sponsorship blurb, or any funding callout in the generated notes. A sponsor section is appended by a separate CI step; emitting one here causes a duplicate."
 
 [defaults]
 emoji = false
