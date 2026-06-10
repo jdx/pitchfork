@@ -911,6 +911,13 @@ impl IpcClient {
                     }
                 }
             }
+
+            // If any daemon in this level failed to stop, abort stopping
+            // dependents — their dependencies may still be running.
+            if any_failed {
+                error!("Stop failed, aborting remaining stops");
+                break;
+            }
         }
 
         Ok(StopResult { any_failed })

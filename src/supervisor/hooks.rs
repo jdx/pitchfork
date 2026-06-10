@@ -12,7 +12,7 @@
 //! | Hook | `block = true` supported? | Notes |
 //! |------|---------------------------|-------|
 //! | `pre_start` | Yes | Blocks `run()`, failure returns error |
-//! | `on_ready` | Yes (wait_ready only) | Blocks `run()` during wait_ready; fire-and-forget otherwise |
+//! | `on_ready` | Yes | Blocks `run()` during wait_ready; fire-and-forget otherwise |
 //! | `pre_stop` | Yes | Blocks `stop()`, failure returns error |
 //! | `on_stop` | Yes (explicit stop only) | Blocks `stop()`; fire-and-forget in monitor task |
 //! | `on_exit` | No | Always fire-and-forget |
@@ -24,6 +24,16 @@
 //! Hooks that run in the monitor task or interval watcher cannot block because
 //! doing so would stall those background loops. This is a known limitation —
 //! see the lifecycle hooks guide for details.
+//!
+//! ## on_ready hook behavior
+//!
+//! The `on_ready` hook fires exactly once, in the monitor task:
+//! - When `block = true`: the hook runs **before** the ready signal is sent to
+//!   `run_once()`, so `pitchfork start` blocks until the hook completes.
+//! - When `block = false`: the hook is fire-and-forget; the ready signal is sent
+//!   immediately and the hook runs concurrently.
+//! - For daemons with no readiness config, `on_ready` fires immediately after
+//!   process spawn.
 
 use crate::config_types::HookConfig;
 use crate::daemon_id::DaemonId;
@@ -113,7 +123,7 @@ pub(crate) async fn run_hook(
     daemon_env: Option<IndexMap<String, String>>,
     extra_env: Vec<(String, String)>,
 ) -> crate::Result<()> {
-    let pt = PitchforkToml::all_merged().map_err(|e| {
+    let pt = PitchforkToml::all_merged_all_namespaces().map_err(|e| {
         miette::miette!("failed to load config for {hook_type} hook of daemon {daemon_id}: {e}")
     })?;
 
@@ -181,7 +191,7 @@ async fn run_blocking_hook(
     command
         .current_dir(daemon_dir)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::piped());
 
     if let Some(ref path) = *env::ORIGINAL_PATH {
         command.env("PATH", path);
@@ -201,6 +211,11 @@ async fn run_blocking_hook(
         command.env(key, value);
     }
 
+    // Ensure the subprocess is killed if the future is dropped before completion
+    // (e.g. supervisor shutdown). Without this, dropping the Child does not send
+    // a signal, leaving an orphan process.
+    command.kill_on_drop(true);
+
     let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => {
@@ -209,6 +224,21 @@ async fn run_blocking_hook(
             ));
         }
     };
+
+    // Capture stderr in the background so we can include it in error messages.
+    let stderr_handle = child.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        if let Some(stderr) = stderr_handle {
+            let mut buf = Vec::new();
+            use tokio::io::AsyncReadExt;
+            let _ = tokio::io::BufReader::new(stderr)
+                .read_to_end(&mut buf)
+                .await;
+            String::from_utf8_lossy(&buf).trim().to_string()
+        } else {
+            String::new()
+        }
+    });
 
     let global_timeout = settings().supervisor_hook_block_timeout();
     let timeout = config.timeout_duration().or_else(|| {
@@ -219,39 +249,51 @@ async fn run_blocking_hook(
         }
     });
 
-    if let Some(timeout) = timeout {
+    let wait_result = if let Some(timeout) = timeout {
         match tokio::time::timeout(timeout, child.wait()).await {
-            Ok(Ok(status)) if status.success() => {
-                info!("{hook_type} hook for daemon {daemon_id} passed");
-                Ok(())
-            }
-            Ok(Ok(status)) => Err(miette::miette!(
-                "{hook_type} hook for daemon {daemon_id} exited with {status}"
-            )),
-            Ok(Err(e)) => Err(miette::miette!(
-                "{hook_type} hook for daemon {daemon_id} failed: {e}"
-            )),
+            Ok(result) => result,
             Err(_) => {
+                // Timeout: kill the process and wait for it to exit.
+                // kill_on_drop(true) ensures the process is killed even if
+                // kill() fails, but we still try explicitly for a clean shutdown.
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                Err(miette::miette!(
-                    "{hook_type} hook for daemon {daemon_id} timed out after {timeout:?}"
-                ))
+                let stderr_output = stderr_task.await.unwrap_or_default();
+                return Err(miette::miette!(
+                    "{hook_type} hook for daemon {daemon_id} timed out after {timeout:?}{stderr_suffix}",
+                    stderr_suffix = if stderr_output.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {stderr_output}")
+                    }
+                ));
             }
         }
     } else {
-        match child.wait().await {
-            Ok(status) if status.success() => {
-                info!("{hook_type} hook for daemon {daemon_id} passed");
-                Ok(())
-            }
-            Ok(status) => Err(miette::miette!(
-                "{hook_type} hook for daemon {daemon_id} exited with {status}"
-            )),
-            Err(e) => Err(miette::miette!(
-                "{hook_type} hook for daemon {daemon_id} failed: {e}"
-            )),
+        child.wait().await
+    };
+
+    let stderr_output = stderr_task.await.unwrap_or_default();
+
+    match wait_result {
+        Ok(status) if status.success() => {
+            info!("{hook_type} hook for daemon {daemon_id} passed");
+            Ok(())
         }
+        Ok(status) => {
+            if stderr_output.is_empty() {
+                Err(miette::miette!(
+                    "{hook_type} hook for daemon {daemon_id} exited with {status}"
+                ))
+            } else {
+                Err(miette::miette!(
+                    "{hook_type} hook for daemon {daemon_id} exited with {status}: {stderr_output}"
+                ))
+            }
+        }
+        Err(e) => Err(miette::miette!(
+            "{hook_type} hook for daemon {daemon_id} failed: {e}"
+        )),
     }
 }
 

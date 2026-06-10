@@ -569,12 +569,29 @@ impl Supervisor {
         let hook_recovery = opts.recovery;
         let hook_daemon_env = opts.env.clone();
         let on_output_hook = opts.on_output_hook.clone();
-        let on_ready_blocking = PitchforkToml::all_merged_all_namespaces()
-            .ok()
-            .and_then(|pt| pt.daemons.get(id).cloned())
-            .and_then(|d| d.hooks)
-            .and_then(|h| h.on_ready)
-            .is_some_and(|c| c.block);
+        // on_ready blocking only matters when wait_ready is true — it blocks
+        // the monitor task until the hook completes, before sending the ready
+        // signal to run_once(). When wait_ready is false, there is no caller
+        // waiting for the signal, so blocking the monitor task would only stall
+        // it for the entire hook timeout with no benefit.
+        let on_ready_blocking = match PitchforkToml::all_merged_all_namespaces() {
+            Ok(pt) => {
+                opts.wait_ready
+                    && pt
+                        .daemons
+                        .get(id)
+                        .and_then(|d| d.hooks.as_ref())
+                        .and_then(|h| h.on_ready.as_ref())
+                        .is_some_and(|c| c.block)
+            }
+            Err(e) => {
+                warn!("failed to load config for on_ready blocking check: {e}");
+                // Conservatively assume blocking so we don't silently skip a
+                // blocking hook. The actual hook execution will re-attempt
+                // config loading and handle the error properly.
+                opts.wait_ready
+            }
+        };
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
         // When the proxy is enabled, only detect active_port for daemons that are
@@ -680,11 +697,39 @@ impl Supervisor {
                 || ready_delay.is_some();
             let mut ready_notified = !has_ready_config;
             let mut ready_tx = ready_tx;
-            // For daemons with no readiness config, send the ready signal immediately
-            // so run_once() doesn't hang waiting for a readiness that will never come.
+            // For daemons with no readiness config, fire on_ready immediately and
+            // send the ready signal so run_once() doesn't hang waiting for a
+            // readiness that will never come.
             if !has_ready_config {
+                if on_ready_blocking {
+                    if let Err(e) = run_hook(
+                        HookType::OnReady,
+                        id.clone(),
+                        daemon_dir.clone(),
+                        hook_retry_count,
+                        hook_recovery_count,
+                        hook_daemon_env.clone(),
+                        vec![],
+                    )
+                    .await
+                    {
+                        warn!("on_ready hook failed: {e}");
+                    }
+                }
                 if let Some(tx) = ready_tx.take() {
                     let _ = tx.send(Ok(()));
+                }
+                if !on_ready_blocking {
+                    fire_hook(
+                        HookType::OnReady,
+                        id.clone(),
+                        daemon_dir.clone(),
+                        hook_retry_count,
+                        hook_recovery_count,
+                        hook_daemon_env.clone(),
+                        vec![],
+                    )
+                    .await;
                 }
             }
             let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
@@ -844,14 +889,7 @@ impl Supervisor {
                                 let _ = tx.send(Ok(()));
                             }
                             if !on_ready_blocking {
-                                let rid = id.clone();
-                                let rdir = daemon_dir.clone();
-                                let renv = hook_daemon_env.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) = run_hook(HookType::OnReady, rid, rdir, hook_retry_count, hook_recovery_count, renv, vec![]).await {
-                                        warn!("on_ready hook failed: {e}");
-                                    }
-                                });
+                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                             }
                             if !active_port_spawned && has_port_config {
                                 active_port_spawned = true;
@@ -926,14 +964,7 @@ impl Supervisor {
                                         let _ = tx.send(Ok(()));
                                     }
                                     if !on_ready_blocking {
-                                        let rid = id.clone();
-                                        let rdir = daemon_dir.clone();
-                                        let renv = hook_daemon_env.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = run_hook(HookType::OnReady, rid, rdir, hook_retry_count, hook_recovery_count, renv, vec![]).await {
-                                                warn!("on_ready hook failed: {e}");
-                                            }
-                                        });
+                                        fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                                     }
                                     http_check_interval = None;
                                     if !active_port_spawned && has_port_config {
@@ -971,14 +1002,7 @@ impl Supervisor {
                                         let _ = tx.send(Ok(()));
                                     }
                                     if !on_ready_blocking {
-                                        let rid = id.clone();
-                                        let rdir = daemon_dir.clone();
-                                        let renv = hook_daemon_env.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = run_hook(HookType::OnReady, rid, rdir, hook_retry_count, hook_recovery_count, renv, vec![]).await {
-                                                warn!("on_ready hook failed: {e}");
-                                            }
-                                        });
+                                        fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                                     }
                                     // Stop checking once ready
                                     port_check_interval = None;
@@ -1021,14 +1045,7 @@ impl Supervisor {
                                         let _ = tx.send(Ok(()));
                                     }
                                     if !on_ready_blocking {
-                                        let rid = id.clone();
-                                        let rdir = daemon_dir.clone();
-                                        let renv = hook_daemon_env.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = run_hook(HookType::OnReady, rid, rdir, hook_retry_count, hook_recovery_count, renv, vec![]).await {
-                                                warn!("on_ready hook failed: {e}");
-                                            }
-                                        });
+                                        fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                                     }
                                     // Stop checking once ready
                                     cmd_check_interval = None;
@@ -1065,14 +1082,7 @@ impl Supervisor {
                                 let _ = tx.send(Ok(()));
                             }
                             if !on_ready_blocking {
-                                let rid = id.clone();
-                                let rdir = daemon_dir.clone();
-                                let renv = hook_daemon_env.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) = run_hook(HookType::OnReady, rid, rdir, hook_retry_count, hook_recovery_count, renv, vec![]).await {
-                                        warn!("on_ready hook failed: {e}");
-                                    }
-                                });
+                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                             }
                         }
                         // Disable timer after it fires
@@ -1136,9 +1146,9 @@ impl Supervisor {
                 return;
             }
             // Capture the intentional-stop flag BEFORE any state changes.
-            // stop() transitions Stopping → Stopped and clears pid. If stop() wins the race
-            // and sets Stopped before this task runs, we still need to fire on_stop/on_exit.
-            // Treat both Stopping and Stopped as "intentional stop by pitchfork".
+            // stop() sets Stopped (and fires hooks) when it successfully kills
+            // the process. When stop() finds the process already dead, it sets
+            // Stopping (not Stopped) and lets the monitor task fire hooks.
             let already_stopped = current_daemon
                 .as_ref()
                 .is_some_and(|d| d.status.is_stopped());
@@ -1148,18 +1158,41 @@ impl Supervisor {
                     .is_some_and(|d| d.status.is_stopping());
 
             // --- Phase 1: Determine exit_code, exit_reason, and update daemon state ---
+            //
+            // When stop() successfully killed the process, it sets Stopped and fires
+            // on_stop + on_exit itself (already_stopped = true). When stop() found
+            // the process already dead, it sets Stopping and delegates hook firing to
+            // the monitor task. In the delegated case, the process exited on its own
+            // (possibly crashed), so we must determine the real exit reason from the
+            // actual exit status — not just assume "stop" because is_stopping is true.
             let (exit_code, exit_reason) = match (&exit_status, is_stopping) {
-                (Ok(status), true) => {
-                    // Intentional stop (by pitchfork). status.code() returns None
-                    // on Unix when killed by signal (e.g. SIGTERM); use -1 to
-                    // distinguish from a clean exit code 0.
+                (Ok(status), true) if already_stopped => {
+                    // stop() killed the process. status.code() returns None on Unix
+                    // when killed by signal (e.g. SIGTERM); use -1 to distinguish
+                    // from a clean exit code 0.
                     (status.code().unwrap_or(-1), "stop")
+                }
+                (Ok(status), true) if status.success() => {
+                    // Process exited cleanly while stop was pending (stop() found it
+                    // already dead). Treat as clean exit, not "stop" — the process
+                    // was not killed by pitchfork.
+                    (status.code().unwrap_or(-1), "exit")
+                }
+                (Ok(status), true) => {
+                    // Process crashed while stop was pending (stop() found it already
+                    // dead). Treat as failure — the crash is the real event.
+                    (status.code().unwrap_or(-1), "fail")
                 }
                 (Ok(status), false) if status.success() => (status.code().unwrap_or(-1), "exit"),
                 (Ok(status), false) => (status.code().unwrap_or(-1), "fail"),
-                (Err(_), true) => {
-                    // child.wait() error while stopping (e.g. sysinfo reaped the process)
+                (Err(_), true) if already_stopped => {
+                    // child.wait() error after stop() killed the process
                     (-1, "stop")
+                }
+                (Err(_), true) => {
+                    // child.wait() error while stop was pending — treat as failure
+                    // since we don't know the real exit status
+                    (-1, "fail")
                 }
                 (Err(_), false) => (-1, "fail"),
             };
@@ -1202,14 +1235,16 @@ impl Supervisor {
 
             // Determine which hooks to fire based on exit reason.
             // When stop() already ran the hooks (already_stopped = true),
-            // skip on_stop + on_exit to avoid double-firing.
+            // skip all hooks to avoid double-firing.
             //
-            // When is_stopping but !already_stopped, stop() is still in progress
-            // (kill_process_group_async hasn't returned yet). In this case, stop()
-            // will fire on_stop + on_exit after the process is fully killed, so
-            // the monitor task must skip them to avoid double-firing.
-            let hooks_fired_by_stop = already_stopped || is_stopping;
-            if !hooks_fired_by_stop {
+            // When is_stopping but !already_stopped, stop() found the process
+            // already dead and delegated hook firing to the monitor task. The
+            // exit_reason now reflects the actual cause (crash vs exit), so we
+            // fire the same hooks as the natural-exit branch.
+            let hooks_fired_by_stop = already_stopped;
+            if hooks_fired_by_stop {
+                // stop() already fired on_stop + on_exit — nothing to do.
+            } else {
                 match exit_reason {
                     "stop" => {
                         fire_hook(
@@ -1291,24 +1326,14 @@ impl Supervisor {
             }
         });
 
-        // If wait_ready is true, wait for readiness notification
+        // If wait_ready is true, wait for readiness notification.
+        // The on_ready hook is already fired by the monitor task (either blocking
+        // before sending the ready signal, or fire-and-forget after). We must not
+        // fire it again here to avoid double-firing.
         if let Some(ready_rx) = ready_rx {
             match ready_rx.await {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
-                    if let Err(e) = run_hook(
-                        HookType::OnReady,
-                        id.clone(),
-                        opts.dir.0.clone(),
-                        opts.retry_count,
-                        opts.recovery_count,
-                        opts.env.clone(),
-                        vec![],
-                    )
-                    .await
-                    {
-                        warn!("on_ready hook failed for daemon {id}: {e}");
-                    }
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
                 Ok(Err(exit_code)) => {
@@ -1340,6 +1365,43 @@ impl Supervisor {
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
+                // Check if the process is actually alive before running pre_stop.
+                // If the daemon has already exited, the monitor task will handle
+                // on_stop/on_exit — we must not fire pre_stop on a dead process.
+                PROCS.refresh_pids(&[pid]);
+                if !PROCS.is_running(pid) {
+                    debug!("pid {pid} not running, skipping pre_stop hook");
+
+                    // The process is already dead. The monitor task may have
+                    // already observed the exit and fired hooks. Re-read the
+                    // daemon state to check.
+                    let current = self.get_daemon(id).await;
+                    let monitor_handled_exit = current.as_ref().is_some_and(|d| {
+                        d.pid.is_none() && (d.status.is_stopped() || d.status.is_errored())
+                    });
+
+                    if monitor_handled_exit {
+                        debug!("daemon {id}: monitor task already handled exit, skipping hooks");
+                    } else {
+                        // Monitor task hasn't run yet. Set Stopping (not Stopped)
+                        // so the monitor task will fire hooks with the actual exit
+                        // reason (crash vs exit). We must not fire hooks here because
+                        // we don't know the real exit code — the monitor task will
+                        // determine the correct exit_reason from the actual exit status.
+                        self.upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = DaemonStatus::Stopping;
+                                })
+                                .build(),
+                        )
+                        .await?;
+                    }
+
+                    return Ok(IpcResponse::DaemonWasNotRunning);
+                }
+
                 // Run pre_stop hook before stopping the daemon
                 let daemon_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                 let daemon_env = daemon.env.clone();
@@ -1353,6 +1415,8 @@ impl Supervisor {
                     vec![],
                 )
                 .await?;
+                // Re-check liveness after pre_stop — the process may have exited
+                // while the hook was running.
                 trace!("killing pid: {pid}");
                 PROCS.refresh_pids(&[pid]);
                 if PROCS.is_running(pid) {
@@ -1447,51 +1511,33 @@ impl Supervisor {
                     .await;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
-                    // Process already dead, directly mark as stopped
-                    // Note that the cleanup logic is handled in monitor task
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Stopped;
-                            })
-                            .build(),
-                    )
-                    .await?;
 
-                    // Run on_stop hook (respects block config).
-                    // Hook failure does not change daemon state — only logs a warning.
-                    let hook_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-                    let hook_env = daemon.env.clone();
-                    let (exit_code, exit_reason) = daemon_exit_info(&daemon);
-                    let hook_extra = vec![
-                        ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
-                        ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
-                    ];
-                    if let Err(e) = run_hook(
-                        HookType::OnStop,
-                        id.clone(),
-                        hook_dir.clone(),
-                        daemon.retry_count,
-                        daemon.recovery_count,
-                        hook_env.clone(),
-                        hook_extra.clone(),
-                    )
-                    .await
-                    {
-                        warn!("on_stop hook failed for daemon {id}: {e}");
+                    // The process died while pre_stop was running. The monitor task
+                    // may have already observed the exit and fired hooks. Re-read
+                    // the daemon state to check.
+                    let current = self.get_daemon(id).await;
+                    let monitor_handled_exit = current.as_ref().is_some_and(|d| {
+                        d.pid.is_none() && (d.status.is_stopped() || d.status.is_errored())
+                    });
+
+                    if monitor_handled_exit {
+                        debug!("daemon {id}: monitor task already handled exit, skipping hooks");
+                    } else {
+                        // Monitor task hasn't run yet. Set Stopping (not Stopped)
+                        // so the monitor task will fire hooks with the actual exit
+                        // reason (crash vs exit). We must not fire hooks here because
+                        // the process exited on its own — the monitor task will
+                        // determine the correct exit_reason from the actual exit status.
+                        self.upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = DaemonStatus::Stopping;
+                                })
+                                .build(),
+                        )
+                        .await?;
                     }
-                    // on_exit does not support block — always fire-and-forget.
-                    fire_hook(
-                        HookType::OnExit,
-                        id.clone(),
-                        hook_dir,
-                        daemon.retry_count,
-                        daemon.recovery_count,
-                        hook_env,
-                        hook_extra,
-                    )
-                    .await;
 
                     return Ok(IpcResponse::DaemonWasNotRunning);
                 }
@@ -1507,27 +1553,6 @@ impl Supervisor {
             debug!("daemon {id} not found");
             Ok(IpcResponse::DaemonNotFound)
         }
-    }
-}
-
-/// Extract exit code and reason from a daemon's current state.
-///
-/// Used by `on_exit` hook to set `PITCHFORK_EXIT_CODE` and
-/// `PITCHFORK_EXIT_REASON` environment variables. For daemons that exited
-/// on their own (not via explicit stop), this returns the actual exit info
-/// from `DaemonStatus::Errored(code)` rather than the placeholder `-1/"stop"`.
-fn daemon_exit_info(daemon: &crate::daemon::Daemon) -> (i32, &'static str) {
-    match &daemon.status {
-        DaemonStatus::Errored(code) => (*code, "fail"),
-        DaemonStatus::Stopped => {
-            let reason = if daemon.last_exit_success.unwrap_or(true) {
-                "exit"
-            } else {
-                "fail"
-            };
-            (-1, reason)
-        }
-        _ => (-1, "stop"),
     }
 }
 

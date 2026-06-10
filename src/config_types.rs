@@ -906,9 +906,6 @@ impl StringOrStruct for HookConfig {
         if let Some(ref t) = raw.timeout {
             humantime::parse_duration(t).map_err(|e| format!("invalid hook timeout '{t}': {e}"))?;
         }
-        if raw.block && raw.timeout.is_none() {
-            // block=true without explicit timeout is fine; global default applies
-        }
         Ok(Self {
             run: raw.run,
             block: raw.block,
