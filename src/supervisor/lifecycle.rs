@@ -11,6 +11,7 @@ use crate::error::PortError;
 use crate::ipc::IpcResponse;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
+use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::shell::Shell;
@@ -112,7 +113,10 @@ impl Supervisor {
                         IpcResponse::DaemonReady { daemon } => {
                             return Ok(IpcResponse::DaemonReady { daemon });
                         }
-                        IpcResponse::DaemonFailedWithCode { exit_code } => {
+                        IpcResponse::DaemonFailedWithCode {
+                            exit_code,
+                            reason: _,
+                        } => {
                             if attempt < opts.retry.count() {
                                 let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                                 info!(
@@ -167,7 +171,10 @@ impl Supervisor {
                                     hook_extra_env,
                                 )
                                 .await;
-                                return Ok(IpcResponse::DaemonFailedWithCode { exit_code });
+                                return Ok(IpcResponse::DaemonFailedWithCode {
+                                    exit_code,
+                                    reason: None,
+                                });
                             }
                         }
                         other => return Ok(other),
@@ -176,7 +183,11 @@ impl Supervisor {
             } else {
                 // retry = 0: single attempt, fire on_fail if daemon fails
                 let result = self.run_once(opts.clone()).await?;
-                if let IpcResponse::DaemonFailedWithCode { exit_code } = &result {
+                if let IpcResponse::DaemonFailedWithCode {
+                    exit_code,
+                    reason: _,
+                } = &result
+                {
                     let hook_extra_env = vec![
                         (
                             "PITCHFORK_EXIT_CODE".to_string(),
@@ -222,7 +233,9 @@ impl Supervisor {
         let cmd = opts.cmd;
 
         // Run pre_start hook (blocks until success or failure)
-        run_hook(
+        // Convert hook failure to DaemonFailedWithCode so callers (retry loop)
+        // can fire on_fail/on_exit instead of silently aborting.
+        if let Err(e) = run_hook(
             HookType::PreStart,
             id.clone(),
             opts.dir.0.clone(),
@@ -231,7 +244,14 @@ impl Supervisor {
             opts.env.clone(),
             vec![],
         )
-        .await?;
+        .await
+        {
+            warn!("pre_start hook failed for daemon {id}: {e}");
+            return Ok(IpcResponse::DaemonFailedWithCode {
+                exit_code: None,
+                reason: Some(format!("pre_start hook failed: {e}")),
+            });
+        }
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
@@ -549,6 +569,12 @@ impl Supervisor {
         let hook_recovery = opts.recovery;
         let hook_daemon_env = opts.env.clone();
         let on_output_hook = opts.on_output_hook.clone();
+        let on_ready_blocking = PitchforkToml::all_merged_all_namespaces()
+            .ok()
+            .and_then(|pt| pt.daemons.get(id).cloned())
+            .and_then(|d| d.hooks)
+            .and_then(|h| h.on_ready)
+            .is_some_and(|c| c.block);
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
         // When the proxy is enabled, only detect active_port for daemons that are
@@ -644,9 +670,23 @@ impl Supervisor {
             // SQLite WAL mode provides automatic durability; no explicit flush needed.
 
             // Setup readiness checking
-            let mut ready_notified = false;
-            let is_wait_ready = ready_tx.is_some();
+            // If no readiness check is configured, the daemon is considered ready
+            // immediately after launch. This ensures on_crash (not on_fail) fires
+            // for runtime crashes of daemons without readiness config.
+            let has_ready_config = ready_output.is_some()
+                || ready_http.is_some()
+                || ready_port.is_some()
+                || ready_cmd.is_some()
+                || ready_delay.is_some();
+            let mut ready_notified = !has_ready_config;
             let mut ready_tx = ready_tx;
+            // For daemons with no readiness config, send the ready signal immediately
+            // so run_once() doesn't hang waiting for a readiness that will never come.
+            if !has_ready_config {
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Ok(()));
+                }
+            }
             let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
             // Track whether we've already spawned the active_port detection task
             let mut active_port_spawned = false;
@@ -795,10 +835,15 @@ impl Supervisor {
                         {
                             info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
+                            if on_ready_blocking {
+                                if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
+                                    warn!("on_ready hook failed: {e}");
+                                }
+                            }
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
-                            if !is_wait_ready {
+                            if !on_ready_blocking {
                                 let rid = id.clone();
                                 let rdir = daemon_dir.clone();
                                 let renv = hook_daemon_env.clone();
@@ -872,10 +917,15 @@ impl Supervisor {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
+                                    if on_ready_blocking {
+                                        if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
+                                            warn!("on_ready hook failed: {e}");
+                                        }
+                                    }
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    if !is_wait_ready {
+                                    if !on_ready_blocking {
                                         let rid = id.clone();
                                         let rdir = daemon_dir.clone();
                                         let renv = hook_daemon_env.clone();
@@ -912,10 +962,15 @@ impl Supervisor {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
+                                    if on_ready_blocking {
+                                        if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
+                                            warn!("on_ready hook failed: {e}");
+                                        }
+                                    }
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    if !is_wait_ready {
+                                    if !on_ready_blocking {
                                         let rid = id.clone();
                                         let rdir = daemon_dir.clone();
                                         let renv = hook_daemon_env.clone();
@@ -957,10 +1012,15 @@ impl Supervisor {
                                 Ok(status) if status.success() => {
                                     info!("daemon {id} ready: readiness command succeeded");
                                     ready_notified = true;
+                                    if on_ready_blocking {
+                                        if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
+                                            warn!("on_ready hook failed: {e}");
+                                        }
+                                    }
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    if !is_wait_ready {
+                                    if !on_ready_blocking {
                                         let rid = id.clone();
                                         let rdir = daemon_dir.clone();
                                         let renv = hook_daemon_env.clone();
@@ -996,10 +1056,15 @@ impl Supervisor {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
+                            if on_ready_blocking {
+                                if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
+                                    warn!("on_ready hook failed: {e}");
+                                }
+                            }
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
-                            if !is_wait_ready {
+                            if !on_ready_blocking {
                                 let rid = id.clone();
                                 let rdir = daemon_dir.clone();
                                 let renv = hook_daemon_env.clone();
@@ -1248,7 +1313,10 @@ impl Supervisor {
                 }
                 Ok(Err(exit_code)) => {
                     error!("daemon {id} failed before becoming ready");
-                    Ok(IpcResponse::DaemonFailedWithCode { exit_code })
+                    Ok(IpcResponse::DaemonFailedWithCode {
+                        exit_code,
+                        reason: None,
+                    })
                 }
                 Err(_) => {
                     error!("readiness channel closed unexpectedly for daemon {id}");

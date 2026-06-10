@@ -290,17 +290,17 @@ impl IpcClient {
                     error_message: None,
                 })
             }
-            IpcResponse::DaemonFailedWithCode { exit_code } => {
+            IpcResponse::DaemonFailedWithCode { exit_code, reason } => {
                 let code = exit_code.unwrap_or(1);
+                let error_message = reason.filter(|r| !r.is_empty()).unwrap_or_else(|| {
+                    format!("Daemon {} failed with exit code {}", opts.id, code)
+                });
                 Ok(RunResult {
                     started: false,
                     exit_code: Some(code),
                     start_time,
                     resolved_ports: Vec::new(),
-                    error_message: Some(format!(
-                        "Daemon {} failed with exit code {}",
-                        opts.id, code
-                    )),
+                    error_message: Some(error_message),
                 })
             }
             IpcResponse::DaemonAlreadyRunning => {

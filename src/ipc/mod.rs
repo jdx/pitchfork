@@ -101,6 +101,7 @@ pub enum IpcResponse {
     },
     DaemonFailedWithCode {
         exit_code: Option<i32>,
+        reason: Option<String>,
     },
     /// Process was not running but had a PID record (unexpected exit)
     DaemonWasNotRunning,

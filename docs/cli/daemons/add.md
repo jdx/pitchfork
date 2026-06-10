@@ -50,6 +50,10 @@ Command to run (can also use positional args)
 
 Number of retry attempts on failure (use \"true\" for infinite)
 
+### `--recovery <RECOVERY>`
+
+Number of recovery attempts on runtime crash (use \"true\" for infinite, defaults to retry)
+
 ### `--watch… <WATCH>`
 
 Glob patterns to watch for changes (can be specified multiple times)
@@ -106,9 +110,25 @@ Autostart the daemon when entering the directory
 
 Autostop the daemon when leaving the directory
 
+### `--pre-start <PRE_START>`
+
+Command to run before the daemon process is spawned
+
 ### `--on-ready <ON_READY>`
 
 Command to run when daemon becomes ready
+
+### `--pre-stop <PRE_STOP>`
+
+Command to run before the daemon is stopped
+
+### `--on-stop <ON_STOP>`
+
+Command to run when the daemon is explicitly stopped by pitchfork
+
+### `--on-exit <ON_EXIT>`
+
+Command to run on any daemon termination (clean exit, crash, or stop)
 
 ### `--on-fail <ON_FAIL>`
 
@@ -118,13 +138,13 @@ Command to run when daemon fails
 
 Command to run before each retry attempt
 
-### `--on-stop <ON_STOP>`
+### `--on-recover <ON_RECOVER>`
 
-Command to run when the daemon is explicitly stopped by pitchfork
+Command to run before each recovery attempt (runtime)
 
-### `--on-exit <ON_EXIT>`
+### `--on-crash <ON_CRASH>`
 
-Command to run on any daemon termination (clean exit, crash, or stop)
+Command to run when daemon crashes permanently (runtime)
 
 ### `--cron-schedule <CRON_SCHEDULE>`
 
