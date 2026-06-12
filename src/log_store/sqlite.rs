@@ -385,11 +385,16 @@ impl LogStore for SqliteLogStore {
         let mut stmt = conn
             .prepare("SELECT generation FROM log_clear_generations WHERE daemon_id = ?1")
             .into_diagnostic()?;
-        let generation: Option<u64> = stmt
+        let generation: Option<i64> = stmt
             .query_row(params![daemon_id.qualified()], |row| row.get(0))
             .optional()
             .into_diagnostic()?;
-        Ok(generation)
+        generation
+            .map(|generation| {
+                u64::try_from(generation)
+                    .map_err(|_| miette::miette!("log clear generation cannot be negative"))
+            })
+            .transpose()
     }
 }
 
