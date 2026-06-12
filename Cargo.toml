@@ -57,7 +57,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls-native-certs",
     "rustls-no-provider",
 ] }
-rusqlite = { version = "0.34", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 rev_lines = "0.3"
 rust-embed = { version = "8", features = ["axum"] }
 axum = { version = "0.8" }
@@ -123,7 +123,7 @@ indexmap = "2"
 
 [dev-dependencies]
 tempfile = "3"
-rusqlite = { version = "0.34", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 
 [profile.dev]
 debug = 1
