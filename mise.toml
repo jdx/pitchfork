@@ -2,6 +2,7 @@
 _.path = "target/debug"
 
 [tasks.test]
+depends = ["build:ui"]
 run = [
   "cargo nextest run",
   "git submodule update --init --recursive",
@@ -24,9 +25,11 @@ dir = "docs"
 run = "aube install && exec aube run docs:dev"
 
 [tasks.lint]
+depends = ["build:ui"]
 run = "hk check --all"
 
 [tasks.lint-fix]
+depends = ["build:ui"]
 run = "hk fix --all"
 
 [tasks.build]
@@ -56,6 +59,7 @@ run = [
 ]
 
 [tasks.install-dev]
+depends = ["build:ui"]
 env = { "PITCHFORK_LOG" = "debug" }
 run = [
   "cargo install --path . --debug",
