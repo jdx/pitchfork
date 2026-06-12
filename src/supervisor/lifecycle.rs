@@ -1158,41 +1158,18 @@ impl Supervisor {
                     .is_some_and(|d| d.status.is_stopping());
 
             // --- Phase 1: Determine exit_code, exit_reason, and update daemon state ---
-            //
-            // When stop() successfully killed the process, it sets Stopped and fires
-            // on_stop + on_exit itself (already_stopped = true). When stop() found
-            // the process already dead, it sets Stopping and delegates hook firing to
-            // the monitor task. In the delegated case, the process exited on its own
-            // (possibly crashed), so we must determine the real exit reason from the
-            // actual exit status — not just assume "stop" because is_stopping is true.
             let (exit_code, exit_reason) = match (&exit_status, is_stopping) {
-                (Ok(status), true) if already_stopped => {
-                    // stop() killed the process. status.code() returns None on Unix
-                    // when killed by signal (e.g. SIGTERM); use -1 to distinguish
-                    // from a clean exit code 0.
-                    (status.code().unwrap_or(-1), "stop")
-                }
-                (Ok(status), true) if status.success() => {
-                    // Process exited cleanly while stop was pending (stop() found it
-                    // already dead). Treat as clean exit, not "stop" — the process
-                    // was not killed by pitchfork.
-                    (status.code().unwrap_or(-1), "exit")
-                }
                 (Ok(status), true) => {
-                    // Process crashed while stop was pending (stop() found it already
-                    // dead). Treat as failure — the crash is the real event.
-                    (status.code().unwrap_or(-1), "fail")
+                    // Intentional stop (by pitchfork). status.code() returns None
+                    // on Unix when killed by signal (e.g. SIGTERM); use -1 to
+                    // distinguish from a clean exit code 0.
+                    (status.code().unwrap_or(-1), "stop")
                 }
                 (Ok(status), false) if status.success() => (status.code().unwrap_or(-1), "exit"),
                 (Ok(status), false) => (status.code().unwrap_or(-1), "fail"),
-                (Err(_), true) if already_stopped => {
-                    // child.wait() error after stop() killed the process
-                    (-1, "stop")
-                }
                 (Err(_), true) => {
-                    // child.wait() error while stop was pending — treat as failure
-                    // since we don't know the real exit status
-                    (-1, "fail")
+                    // child.wait() error while stopping (e.g. sysinfo reaped the process)
+                    (-1, "stop")
                 }
                 (Err(_), false) => (-1, "fail"),
             };
@@ -1235,16 +1212,14 @@ impl Supervisor {
 
             // Determine which hooks to fire based on exit reason.
             // When stop() already ran the hooks (already_stopped = true),
-            // skip all hooks to avoid double-firing.
+            // skip on_stop + on_exit to avoid double-firing.
             //
-            // When is_stopping but !already_stopped, stop() found the process
-            // already dead and delegated hook firing to the monitor task. The
-            // exit_reason now reflects the actual cause (crash vs exit), so we
-            // fire the same hooks as the natural-exit branch.
-            let hooks_fired_by_stop = already_stopped;
-            if hooks_fired_by_stop {
-                // stop() already fired on_stop + on_exit — nothing to do.
-            } else {
+            // When is_stopping but !already_stopped, stop() is still in progress
+            // (kill_process_group_async hasn't returned yet). In this case, stop()
+            // will fire on_stop + on_exit after the process is fully killed, so
+            // the monitor task must skip them to avoid double-firing.
+            let hooks_fired_by_stop = already_stopped || is_stopping;
+            if !hooks_fired_by_stop {
                 match exit_reason {
                     "stop" => {
                         fire_hook(
@@ -1383,20 +1358,49 @@ impl Supervisor {
                     if monitor_handled_exit {
                         debug!("daemon {id}: monitor task already handled exit, skipping hooks");
                     } else {
-                        // Monitor task hasn't run yet. Set Stopping (not Stopped)
-                        // so the monitor task will fire hooks with the actual exit
-                        // reason (crash vs exit). We must not fire hooks here because
-                        // we don't know the real exit code — the monitor task will
-                        // determine the correct exit_reason from the actual exit status.
+                        // Monitor task hasn't run yet. Set Stopped and fire hooks
+                        // ourselves — the process is already dead and the monitor
+                        // task may not observe the exit if we clear the PID first.
                         self.upsert_daemon(
                             UpsertDaemonOpts::builder(id.clone())
                                 .set(|o| {
                                     o.pid = None;
-                                    o.status = DaemonStatus::Stopping;
+                                    o.status = DaemonStatus::Stopped;
+                                    o.last_exit_success = Some(true);
                                 })
                                 .build(),
                         )
                         .await?;
+
+                        let hook_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                        let hook_env = daemon.env.clone();
+                        let hook_extra = vec![
+                            ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
+                            ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                        ];
+                        if let Err(e) = run_hook(
+                            HookType::OnStop,
+                            id.clone(),
+                            hook_dir.clone(),
+                            daemon.retry_count,
+                            daemon.recovery_count,
+                            hook_env.clone(),
+                            hook_extra.clone(),
+                        )
+                        .await
+                        {
+                            warn!("on_stop hook failed for daemon {id}: {e}");
+                        }
+                        fire_hook(
+                            HookType::OnExit,
+                            id.clone(),
+                            hook_dir,
+                            daemon.retry_count,
+                            daemon.recovery_count,
+                            hook_env,
+                            hook_extra,
+                        )
+                        .await;
                     }
 
                     return Ok(IpcResponse::DaemonWasNotRunning);
@@ -1523,20 +1527,48 @@ impl Supervisor {
                     if monitor_handled_exit {
                         debug!("daemon {id}: monitor task already handled exit, skipping hooks");
                     } else {
-                        // Monitor task hasn't run yet. Set Stopping (not Stopped)
-                        // so the monitor task will fire hooks with the actual exit
-                        // reason (crash vs exit). We must not fire hooks here because
-                        // the process exited on its own — the monitor task will
-                        // determine the correct exit_reason from the actual exit status.
+                        // Monitor task hasn't run yet. Set Stopped and fire hooks
+                        // ourselves — the process died while pre_stop was running.
                         self.upsert_daemon(
                             UpsertDaemonOpts::builder(id.clone())
                                 .set(|o| {
                                     o.pid = None;
-                                    o.status = DaemonStatus::Stopping;
+                                    o.status = DaemonStatus::Stopped;
+                                    o.last_exit_success = Some(true);
                                 })
                                 .build(),
                         )
                         .await?;
+
+                        let hook_dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+                        let hook_env = daemon.env.clone();
+                        let hook_extra = vec![
+                            ("PITCHFORK_EXIT_CODE".to_string(), "-1".to_string()),
+                            ("PITCHFORK_EXIT_REASON".to_string(), "stop".to_string()),
+                        ];
+                        if let Err(e) = run_hook(
+                            HookType::OnStop,
+                            id.clone(),
+                            hook_dir.clone(),
+                            daemon.retry_count,
+                            daemon.recovery_count,
+                            hook_env.clone(),
+                            hook_extra.clone(),
+                        )
+                        .await
+                        {
+                            warn!("on_stop hook failed for daemon {id}: {e}");
+                        }
+                        fire_hook(
+                            HookType::OnExit,
+                            id.clone(),
+                            hook_dir,
+                            daemon.retry_count,
+                            daemon.recovery_count,
+                            hook_env,
+                            hook_extra,
+                        )
+                        .await;
                     }
 
                     return Ok(IpcResponse::DaemonWasNotRunning);
