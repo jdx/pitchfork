@@ -42,6 +42,11 @@ async function startWebSupervisor(): Promise<WebSupervisor> {
   })
   child.stdout.resume()
 
+  const cleanup = async () => {
+    await stopProcess(child)
+    await rm(root, { recursive: true, force: true })
+  }
+
   let stderr = ''
   let port: string
   try {
@@ -57,6 +62,10 @@ async function startWebSupervisor(): Promise<WebSupervisor> {
         finish(() => reject(new Error(`web supervisor did not start in time. stderr:\n${stderr}`)))
       }, 10_000)
 
+      child.once('error', error => {
+        finish(() => reject(new Error(`failed to spawn web supervisor: ${error.message}. stderr:\n${stderr}`)))
+      })
+
       child.on('exit', (code, signal) => {
         finish(() => reject(new Error(`web supervisor exited early (${code ?? signal}). stderr:\n${stderr}`)))
       })
@@ -70,21 +79,18 @@ async function startWebSupervisor(): Promise<WebSupervisor> {
       })
     })
   } catch (error) {
-    await stopProcess(child)
-    await rm(root, { recursive: true, force: true })
+    await cleanup()
     throw error
   }
 
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    cleanup: async () => {
-      await stopProcess(child)
-      await rm(root, { recursive: true, force: true })
-    },
+    cleanup,
   }
 }
 
 async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.pid === undefined) return
   if (child.exitCode !== null || child.signalCode !== null) return
 
   await new Promise<void>((resolve) => {
