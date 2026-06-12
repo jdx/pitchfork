@@ -59,6 +59,7 @@ run = [
 ]
 
 [tasks.install-dev]
+depends = ["build:ui"]
 env = { "PITCHFORK_LOG" = "debug" }
 run = [
   "cargo install --path . --debug",
