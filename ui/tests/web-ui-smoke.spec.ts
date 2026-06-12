@@ -96,12 +96,15 @@ async function stopProcess(child: ChildProcessWithoutNullStreams): Promise<void>
   if (child.exitCode !== null || child.signalCode !== null) return
 
   await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
+    const forceKillTimeout = setTimeout(() => {
       child.kill('SIGKILL')
-      resolve()
     }, 2_000)
+    const giveUpTimeout = setTimeout(() => {
+      resolve()
+    }, 5_000)
     child.once('exit', () => {
-      clearTimeout(timeout)
+      clearTimeout(forceKillTimeout)
+      clearTimeout(giveUpTimeout)
       resolve()
     })
     child.kill('SIGTERM')
