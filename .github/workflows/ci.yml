@@ -64,7 +64,11 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: mise run build:ui
+      - name: Build UI assets
+        working-directory: ui
+        run: |
+          aube install
+          aube run build
       # `cargo check` (debug) catches the compile errors that otherwise only
       # surface in the release pipeline, without paying for an optimized link.
       # Integration tests under tests/ are Unix-only (lsof, pkill, etc.) so

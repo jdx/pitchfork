@@ -43,7 +43,10 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
       - name: Build UI assets
-        run: mise run build:ui
+        working-directory: ui
+        run: |
+          aube install
+          aube run build
       - name: Import codesign certs
         if: startsWith(matrix.os, 'macos')
         uses: apple-actions/import-codesign-certs@5142e029c445c10ffc7149d172e540235a065466 # v7

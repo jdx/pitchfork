@@ -32,7 +32,10 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
       - name: Build UI assets
-        run: mise run build:ui
+        working-directory: ui
+        run: |
+          aube install
+          aube run build
       - name: Run release-plz
         id: release-plz
         uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
@@ -116,6 +119,13 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Install mise
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+      - name: Build UI assets
+        working-directory: ui
+        run: |
+          aube install
+          aube run build
       - name: Run release-plz
         id: release-plz
         uses: release-plz/action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
@@ -123,8 +133,6 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-      - name: Install mise
-        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
       - name: Squash generated docs into release PR
         run: |
           PR_BRANCH=$(echo "${STEPS_RELEASE_PLZ_OUTPUTS_PR}" | jq -r '.head_branch // empty')
