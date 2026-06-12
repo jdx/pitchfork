@@ -36,6 +36,8 @@ async function startWebSupervisor(): Promise<WebSupervisor> {
       XDG_CONFIG_HOME: path.join(home, '.config'),
       XDG_STATE_HOME: path.join(home, '.local/state'),
       PITCHFORK_LOG: 'debug',
+      PITCHFORK_WEB_BIND_ADDRESS: '127.0.0.1',
+      PITCHFORK_WEB_PATH: '',
       PITCHFORK_WATCH_INTERVAL: '100ms',
       PITCHFORK_WATCH_POLL_INTERVAL: '100ms',
     },
