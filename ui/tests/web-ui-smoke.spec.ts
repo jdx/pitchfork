@@ -40,27 +40,40 @@ async function startWebSupervisor(): Promise<WebSupervisor> {
       PITCHFORK_WATCH_POLL_INTERVAL: '100ms',
     },
   })
+  child.stdout.resume()
 
   let stderr = ''
-  const port = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`web supervisor did not start in time. stderr:\n${stderr}`))
-    }, 10_000)
-
-    child.on('exit', (code, signal) => {
-      clearTimeout(timeout)
-      reject(new Error(`web supervisor exited early (${code ?? signal}). stderr:\n${stderr}`))
-    })
-
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-      const match = stderr.match(/Web UI listening on http:\/\/127\.0\.0\.1:(\d+)/)
-      if (match) {
+  let port: string
+  try {
+    port = await new Promise<string>((resolve, reject) => {
+      let settled = false
+      const finish = (callback: () => void) => {
+        if (settled) return
+        settled = true
         clearTimeout(timeout)
-        resolve(match[1])
+        callback()
       }
+      const timeout = setTimeout(() => {
+        finish(() => reject(new Error(`web supervisor did not start in time. stderr:\n${stderr}`)))
+      }, 10_000)
+
+      child.on('exit', (code, signal) => {
+        finish(() => reject(new Error(`web supervisor exited early (${code ?? signal}). stderr:\n${stderr}`)))
+      })
+
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString()
+        const match = stderr.match(/Web UI listening on http:\/\/127\.0\.0\.1:(\d+)/)
+        if (match) {
+          finish(() => resolve(match[1]))
+        }
+      })
     })
-  })
+  } catch (error) {
+    await stopProcess(child)
+    await rm(root, { recursive: true, force: true })
+    throw error
+  }
 
   return {
     baseUrl: `http://127.0.0.1:${port}`,
