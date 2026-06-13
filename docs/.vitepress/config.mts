@@ -57,6 +57,7 @@ export default defineConfig({
           { text: "Quick Start", link: "/quickstart" },
           { text: "Installation", link: "/installation" },
           { text: "Your First Project", link: "/first-daemon" },
+          { text: "Contributing", link: "/contributing" },
         ],
       },
       {
