@@ -223,7 +223,43 @@ impl Supervisor {
         }
 
         // No retry or wait_ready is false
-        self.run_once(opts).await
+        let result = self.run_once(opts.clone()).await?;
+        if let IpcResponse::DaemonFailedWithCode {
+            exit_code,
+            reason: _,
+        } = &result
+        {
+            let hook_extra_env = vec![
+                (
+                    "PITCHFORK_EXIT_CODE".to_string(),
+                    exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "-1".to_string()),
+                ),
+                ("PITCHFORK_EXIT_REASON".to_string(), "fail".to_string()),
+            ];
+            fire_hook(
+                HookType::OnFail,
+                id.clone(),
+                opts.dir.0.clone(),
+                opts.retry_count,
+                opts.recovery_count,
+                opts.env.clone(),
+                hook_extra_env.clone(),
+            )
+            .await;
+            fire_hook(
+                HookType::OnExit,
+                id.clone(),
+                opts.dir.0.clone(),
+                opts.retry_count,
+                opts.recovery_count,
+                opts.env.clone(),
+                hook_extra_env,
+            )
+            .await;
+        }
+        Ok(result)
     }
 
     /// Run a daemon once (single attempt)
