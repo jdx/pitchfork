@@ -569,6 +569,7 @@ impl Supervisor {
         let hook_recovery = opts.recovery;
         let hook_daemon_env = opts.env.clone();
         let on_output_hook = opts.on_output_hook.clone();
+        let wait_ready = opts.wait_ready;
         // on_ready blocking only matters when wait_ready is true — it blocks
         // the monitor task until the hook completes, before sending the ready
         // signal to run_once(). When wait_ready is false, there is no caller
@@ -1218,8 +1219,15 @@ impl Supervisor {
             // (kill_process_group_async hasn't returned yet). In this case, stop()
             // will fire on_stop + on_exit after the process is fully killed, so
             // the monitor task must skip them to avoid double-firing.
+            //
+            // When wait_ready is true and the daemon failed before becoming ready,
+            // run() fires on_fail + on_exit after run_once() returns
+            // DaemonFailedWithCode, so the monitor task must skip them to avoid
+            // double-firing.
             let hooks_fired_by_stop = already_stopped || is_stopping;
-            if !hooks_fired_by_stop {
+            let hooks_fired_by_run =
+                wait_ready && !ready_notified && exit_reason != "stop" && exit_reason != "exit";
+            if !hooks_fired_by_stop && !hooks_fired_by_run {
                 match exit_reason {
                     "stop" => {
                         fire_hook(
