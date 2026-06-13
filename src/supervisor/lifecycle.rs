@@ -232,6 +232,15 @@ impl Supervisor {
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
         let cmd = opts.cmd;
 
+        // Warn about block = true on hook types that don't support blocking.
+        if let Ok(pt) = PitchforkToml::all_merged_all_namespaces() {
+            if let Some(daemon) = pt.daemons.get(id) {
+                if let Some(ref hooks) = daemon.hooks {
+                    hooks.warn_unsupported_block(&id.qualified());
+                }
+            }
+        }
+
         // Run pre_start hook (blocks until success or failure)
         // Convert hook failure to DaemonFailedWithCode so callers (retry loop)
         // can fire on_fail/on_exit instead of silently aborting.

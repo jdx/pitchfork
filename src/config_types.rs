@@ -969,7 +969,7 @@ pub struct PitchforkTomlHooks {
     /// Hook that runs when the daemon is explicitly stopped by pitchfork
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub on_stop: Option<HookConfig>,
-    /// Hook that runs after the daemon has stopped (blocking capable)
+    /// Hook that runs after the daemon has stopped (always fire-and-forget)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub on_exit: Option<HookConfig>,
     /// Hook that runs when the daemon fails and all retries are exhausted
@@ -987,6 +987,25 @@ pub struct PitchforkTomlHooks {
     /// Hook triggered when the daemon produces matching output
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub on_output: Option<OnOutputHook>,
+}
+
+impl PitchforkTomlHooks {
+    /// Warn about `block = true` on hook types that don't support blocking.
+    pub fn warn_unsupported_block(&self, daemon_id: &str) {
+        for (name, config) in [
+            ("on_exit", &self.on_exit),
+            ("on_fail", &self.on_fail),
+            ("on_crash", &self.on_crash),
+            ("on_recover", &self.on_recover),
+        ] {
+            if config.as_ref().is_some_and(|c| c.block) {
+                warn!(
+                    "daemon {daemon_id}: {name} hook has block = true, but this hook type \
+                     is always fire-and-forget; block will be ignored"
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
