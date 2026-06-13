@@ -1220,6 +1220,12 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         req.headers_mut().remove(&key);
     }
 
+    // Downgrade the forwarded request to HTTP/1.1. TLS connections negotiate
+    // HTTP/2 inbound via ALPN, but the upstream forward client speaks HTTP/1 to
+    // the daemon. Without this, the still-h2-tagged request is rejected by the
+    // client with `UserUnsupportedVersion`, surfacing as a 502 to the browser.
+    *req.version_mut() = axum::http::Version::HTTP_11;
+
     // Extract the client-side OnUpgrade handle *before* consuming req
     let client_upgrade = hyper::upgrade::on(&mut req);
 
