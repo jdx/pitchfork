@@ -158,12 +158,12 @@ on_ready = { run = "exit 1", block = true }
     .to_string();
     env.create_toml(&toml_content);
 
-    // on_ready hook failure does not change daemon state — only logs a warning.
-    // The start should succeed (daemon is still running).
+    // on_ready hook with block=true failure means the daemon is not ready,
+    // so start should fail (returns DaemonFailedWithCode).
     let output = env.run_command(&["start", "on_ready_fail_test"]);
     assert!(
-        output.status.success(),
-        "Start should succeed even when on_ready hook fails (daemon is still running)"
+        !output.status.success(),
+        "Start should fail when blocking on_ready hook fails (daemon not ready)"
     );
 }
 

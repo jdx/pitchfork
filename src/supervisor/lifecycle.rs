@@ -747,6 +747,7 @@ impl Supervisor {
             // send the ready signal so run_once() doesn't hang waiting for a
             // readiness that will never come.
             if !has_ready_config {
+                let mut on_ready_failed = false;
                 if on_ready_blocking {
                     if let Err(e) = run_hook(
                         HookType::OnReady,
@@ -760,10 +761,15 @@ impl Supervisor {
                     .await
                     {
                         warn!("on_ready hook failed: {e}");
+                        on_ready_failed = true;
                     }
                 }
                 if let Some(tx) = ready_tx.take() {
-                    let _ = tx.send(Ok(()));
+                    if on_ready_failed {
+                        let _ = tx.send(Err(None));
+                    } else {
+                        let _ = tx.send(Ok(()));
+                    }
                 }
                 if !on_ready_blocking {
                     fire_hook(
@@ -926,18 +932,24 @@ impl Supervisor {
                         {
                             info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
+                            let mut on_ready_failed = false;
                             if on_ready_blocking {
                                 if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
                                     warn!("on_ready hook failed: {e}");
+                                    on_ready_failed = true;
                                 }
                             }
                             if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
+                                if on_ready_failed {
+                                    let _ = tx.send(Err(None));
+                                } else {
+                                    let _ = tx.send(Ok(()));
+                                }
                             }
-                            if !on_ready_blocking {
+                            if !on_ready_blocking && !on_ready_failed {
                                 fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                             }
-                            if !active_port_spawned && has_port_config {
+                            if !on_ready_failed && !active_port_spawned && has_port_config {
                                 active_port_spawned = true;
                                 detect_and_store_active_port(id.clone(), daemon_pid);
                             }
@@ -1001,19 +1013,25 @@ impl Supervisor {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
+                                    let mut on_ready_failed = false;
                                     if on_ready_blocking {
                                         if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
                                             warn!("on_ready hook failed: {e}");
+                                            on_ready_failed = true;
                                         }
                                     }
                                     if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                        if on_ready_failed {
+                                            let _ = tx.send(Err(None));
+                                        } else {
+                                            let _ = tx.send(Ok(()));
+                                        }
                                     }
-                                    if !on_ready_blocking {
+                                    if !on_ready_blocking && !on_ready_failed {
                                         fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                                     }
                                     http_check_interval = None;
-                                    if !active_port_spawned && has_port_config {
+                                    if !on_ready_failed && !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
                                     }
@@ -1039,20 +1057,26 @@ impl Supervisor {
                                 Ok(_) => {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
+                                    let mut on_ready_failed = false;
                                     if on_ready_blocking {
                                         if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
                                             warn!("on_ready hook failed: {e}");
+                                            on_ready_failed = true;
                                         }
                                     }
                                     if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                        if on_ready_failed {
+                                            let _ = tx.send(Err(None));
+                                        } else {
+                                            let _ = tx.send(Ok(()));
+                                        }
                                     }
-                                    if !on_ready_blocking {
+                                    if !on_ready_blocking && !on_ready_failed {
                                         fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                                     }
                                     // Stop checking once ready
                                     port_check_interval = None;
-                                    if !active_port_spawned && has_port_config {
+                                    if !on_ready_failed && !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
                                     }
@@ -1082,20 +1106,26 @@ impl Supervisor {
                                 Ok(status) if status.success() => {
                                     info!("daemon {id} ready: readiness command succeeded");
                                     ready_notified = true;
+                                    let mut on_ready_failed = false;
                                     if on_ready_blocking {
                                         if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
                                             warn!("on_ready hook failed: {e}");
+                                            on_ready_failed = true;
                                         }
                                     }
                                     if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                        if on_ready_failed {
+                                            let _ = tx.send(Err(None));
+                                        } else {
+                                            let _ = tx.send(Ok(()));
+                                        }
                                     }
-                                    if !on_ready_blocking {
+                                    if !on_ready_blocking && !on_ready_failed {
                                         fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                                     }
                                     // Stop checking once ready
                                     cmd_check_interval = None;
-                                    if !active_port_spawned && has_port_config {
+                                    if !on_ready_failed && !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
                                     }
@@ -1116,24 +1146,30 @@ impl Supervisor {
                             std::future::pending::<()>().await;
                         }
                     } => {
+                        let mut on_ready_failed = false;
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
                             info!("daemon {id} ready: delay elapsed");
                             ready_notified = true;
                             if on_ready_blocking {
                                 if let Err(e) = run_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await {
                                     warn!("on_ready hook failed: {e}");
+                                    on_ready_failed = true;
                                 }
                             }
                             if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
+                                if on_ready_failed {
+                                    let _ = tx.send(Err(None));
+                                } else {
+                                    let _ = tx.send(Ok(()));
+                                }
                             }
-                            if !on_ready_blocking {
+                            if !on_ready_blocking && !on_ready_failed {
                                 fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_recovery_count, hook_daemon_env.clone(), vec![]).await;
                             }
                         }
                         // Disable timer after it fires
                         delay_timer = None;
-                        if !active_port_spawned && has_port_config {
+                        if !on_ready_failed && !active_port_spawned && has_port_config {
                             active_port_spawned = true;
                             detect_and_store_active_port(id.clone(), daemon_pid);
                         }
