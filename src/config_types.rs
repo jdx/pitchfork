@@ -990,7 +990,12 @@ pub struct PitchforkTomlHooks {
 }
 
 impl PitchforkTomlHooks {
-    /// Warn about `block = true` on hook types that don't support blocking.
+    /// Warn about hook `block` settings that contradict hook-type semantics.
+    ///
+    /// - `block = true` on fire-and-forget-only types (on_exit, on_fail,
+    ///   on_crash, on_recover) is silently ignored.
+    /// - `block = false` on always-blocking types (pre_start, pre_stop) is
+    ///   silently ignored — these hooks always block regardless of the flag.
     pub fn warn_unsupported_block(&self, daemon_id: &str) {
         for (name, config) in [
             ("on_exit", &self.on_exit),
@@ -1002,6 +1007,14 @@ impl PitchforkTomlHooks {
                 warn!(
                     "daemon {daemon_id}: {name} hook has block = true, but this hook type \
                      is always fire-and-forget; block will be ignored"
+                );
+            }
+        }
+        for (name, config) in [("pre_start", &self.pre_start), ("pre_stop", &self.pre_stop)] {
+            if config.as_ref().is_some_and(|c| !c.block) {
+                warn!(
+                    "daemon {daemon_id}: {name} hook has block = false, but this hook type \
+                     always blocks; block = false will be ignored"
                 );
             }
         }

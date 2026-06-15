@@ -9,17 +9,17 @@
 //!
 //! ## Block support by hook type
 //!
-//! | Hook | `block = true` supported? | Notes |
-//! |------|---------------------------|-------|
-//! | `pre_start` | Yes | Blocks `run()`, failure returns error |
-//! | `on_ready` | Yes | Blocks `run()` during wait_ready; fire-and-forget otherwise |
-//! | `pre_stop` | Yes | Blocks `stop()`, failure returns error |
-//! | `on_stop` | Yes (explicit stop only) | Blocks `stop()`; fire-and-forget in monitor task |
-//! | `on_exit` | No | Always fire-and-forget |
-//! | `on_fail` | No | Always fire-and-forget |
-//! | `on_retry` | Yes (startup only) | Blocks during startup retry loop; fire-and-forget in interval watcher |
-//! | `on_crash` | No | Always fire-and-forget (runtime only) |
-//! | `on_recover` | No | Always fire-and-forget (runtime only) |
+//! | Hook | `block` config | Actual behavior | Notes |
+//! |------|---------------|-----------------|-------|
+//! | `pre_start` | Ignored | Always blocks | Must complete before spawn |
+//! | `on_ready` | Honored | Blocks if `block = true` | Blocks during wait_ready; fire-and-forget otherwise |
+//! | `pre_stop` | Ignored | Always blocks | Must complete before kill |
+//! | `on_stop` | Honored | Blocks if `block = true` | Fire-and-forget in monitor task |
+//! | `on_exit` | Ignored | Always fire-and-forget | |
+//! | `on_fail` | Ignored | Always fire-and-forget | |
+//! | `on_retry` | Honored | Blocks if `block = true` | Blocks during startup retry; fire-and-forget in interval watcher |
+//! | `on_crash` | Ignored | Always fire-and-forget | Runtime only |
+//! | `on_recover` | Ignored | Always fire-and-forget | Runtime only |
 //!
 //! Hooks that run in the monitor task or interval watcher cannot block because
 //! doing so would stall those background loops. This is a known limitation —
@@ -100,10 +100,16 @@ fn get_hook_config<'a>(
 // run_hook — blocking hook execution
 // ---------------------------------------------------------------------------
 
-/// Run a hook, respecting the `block` config.
+/// Run a hook, respecting the `block` config and hook-type semantics.
 ///
-/// For `block = true` hooks, the lifecycle pauses until the command exits with
-/// code 0. Returns `Ok(())` on success, `Err` on failure or timeout.
+/// **`pre_start` and `pre_stop` always block**, regardless of the `block` config
+/// flag. These are "pre-" hooks that must complete before the lifecycle action
+/// (spawn / kill) proceeds. The `block` flag only affects `on_ready`, `on_stop`,
+/// and `on_retry`.
+///
+/// For other hook types with `block = true`, the lifecycle pauses until the
+/// command exits with code 0. Returns `Ok(())` on success, `Err` on failure
+/// or timeout.
 ///
 /// For `block = false` hooks, this is equivalent to `fire_hook` — the command
 /// is spawned in the background and errors are logged.
@@ -136,7 +142,8 @@ pub(crate) async fn run_hook(
         return Ok(());
     };
 
-    if config.block {
+    let must_block = matches!(hook_type, HookType::PreStart | HookType::PreStop);
+    if config.block || must_block {
         run_blocking_hook(
             &hook_type,
             &daemon_id,
