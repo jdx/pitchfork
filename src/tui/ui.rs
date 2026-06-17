@@ -347,11 +347,13 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
                 .title_style(Style::default().fg(RED).bold())
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(RED)),
-        )
-        .row_highlight_style(Style::default().bg(Color::Rgb(50, 20, 20)));
+        );
 
     // Use a stateful render so ratatui scrolls the viewport to keep the
     // selected row visible (a stateless render always starts at row 0).
+    // The cursor row is highlighted via each row's own `row_style`, so no
+    // `row_highlight_style` is set here — it would otherwise override the
+    // multi-select background on a row that is both selected and the cursor.
     let mut table_state = TableState::default().with_selected(Some(app.selected));
     f.render_stateful_widget(table, table_area, &mut table_state);
 
