@@ -10,7 +10,7 @@ use ratatui::{
     symbols,
     widgets::{
         Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, Paragraph, Row, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Table, Wrap,
+        ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
     },
 };
 
@@ -339,18 +339,21 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         " Daemons ".to_string()
     };
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .title(title)
-                .title_style(Style::default().fg(RED).bold())
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
-        )
-        .row_highlight_style(Style::default().bg(Color::Rgb(50, 20, 20)));
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .title(title)
+            .title_style(Style::default().fg(RED).bold())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(RED)),
+    );
 
-    f.render_widget(table, table_area);
+    // Use a stateful render so ratatui scrolls the viewport to keep the
+    // selected row visible (a stateless render always starts at row 0).
+    // The cursor row is highlighted via each row's own `row_style`, so no
+    // `row_highlight_style` is set here — it would otherwise override the
+    // multi-select background on a row that is both selected and the cursor.
+    let mut table_state = TableState::default().with_selected(Some(app.selected));
+    f.render_stateful_widget(table, table_area, &mut table_state);
 
     // Render scrollbar if there are more items than visible
     let visible_rows = table_area.height.saturating_sub(3) as usize; // -3 for borders and header
