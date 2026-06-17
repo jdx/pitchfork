@@ -10,7 +10,7 @@ use ratatui::{
     symbols,
     widgets::{
         Axis, Block, Borders, Cell, Chart, Clear, Dataset, GraphType, Paragraph, Row, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Table, Wrap,
+        ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
     },
 };
 
@@ -350,7 +350,10 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         )
         .row_highlight_style(Style::default().bg(Color::Rgb(50, 20, 20)));
 
-    f.render_widget(table, table_area);
+    // Use a stateful render so ratatui scrolls the viewport to keep the
+    // selected row visible (a stateless render always starts at row 0).
+    let mut table_state = TableState::default().with_selected(Some(app.selected));
+    f.render_stateful_widget(table, table_area, &mut table_state);
 
     // Render scrollbar if there are more items than visible
     let visible_rows = table_area.height.saturating_sub(3) as usize; // -3 for borders and header
