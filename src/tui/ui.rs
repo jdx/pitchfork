@@ -339,15 +339,13 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
         " Daemons ".to_string()
     };
 
-    let table = Table::new(rows, widths)
-        .header(header)
-        .block(
-            Block::default()
-                .title(title)
-                .title_style(Style::default().fg(RED).bold())
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(RED)),
-        );
+    let table = Table::new(rows, widths).header(header).block(
+        Block::default()
+            .title(title)
+            .title_style(Style::default().fg(RED).bold())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(RED)),
+    );
 
     // Use a stateful render so ratatui scrolls the viewport to keep the
     // selected row visible (a stateless render always starts at row 0).
