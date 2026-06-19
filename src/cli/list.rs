@@ -82,6 +82,7 @@ impl List {
                         available: entry.is_available,
                         proxy_url,
                         error: entry.daemon.status.error_message(),
+                        active_port: entry.daemon.active_port,
                         port: entry.daemon.resolved_port.clone(),
                     }
                 })

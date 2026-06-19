@@ -11,6 +11,8 @@ pub struct JsonListEntry {
     pub available: bool,
     pub proxy_url: Option<String>,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_port: Option<u16>,
     pub port: Vec<u16>,
 }
 
@@ -21,6 +23,8 @@ pub struct JsonStatusEntry {
     pub name: String,
     pub pid: Option<u32>,
     pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_port: Option<u16>,
     pub port: Vec<u16>,
     pub proxy_url: Option<String>,
 }

@@ -114,7 +114,7 @@ pub struct Daemons {
     command: Option<DaemonsCommand>,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[clap(long, conflicts_with = "command")]
     json: bool,
 }
 

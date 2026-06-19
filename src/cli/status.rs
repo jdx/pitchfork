@@ -62,6 +62,7 @@ impl Status {
                     name: qualified_id.name().to_string(),
                     pid: daemon.pid,
                     status: daemon.status.to_string(),
+                    active_port: daemon.active_port,
                     port: daemon.resolved_port.clone(),
                     proxy_url,
                 };

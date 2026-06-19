@@ -116,6 +116,7 @@ impl Settings {
 
 impl ListCmd {
     fn run(&self) -> Result<()> {
+        let s = settings();
         let meta = &*SETTINGS_META;
         if self.json {
             let entries: Vec<JsonSettingEntry> = meta
@@ -127,12 +128,15 @@ impl ListCmd {
                         true
                     }
                 })
-                .map(|(key, info)| JsonSettingEntry {
-                    key: key.to_string(),
-                    value: info.default_value.unwrap_or("(none)").to_string(),
-                    default: info.default_value,
-                    r#type: Some(info.typ),
-                    env_var: info.env_var,
+                .map(|(key, info)| {
+                    let current = get_setting_value(&s, key);
+                    JsonSettingEntry {
+                        key: key.to_string(),
+                        value: current,
+                        default: info.default_value,
+                        r#type: Some(info.typ),
+                        env_var: info.env_var,
+                    }
                 })
                 .collect();
             return print_json(&entries);
