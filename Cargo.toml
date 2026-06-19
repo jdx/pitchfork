@@ -104,7 +104,7 @@ glob = "0.3"
 globset = "0.4"
 humanbyte = { version = "0.2", features = ["serde", "derive"] }
 humantime = "2"
-listeners = "0.5"
+listeners = "0.6"
 derive_more = { version = "2.1.1", features = ["into", "display", "from", "deref", "as_ref"] }
 vte = { version = "0.15.0", default-features = false }
 
