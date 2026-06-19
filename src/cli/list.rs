@@ -60,7 +60,10 @@ impl List {
                     } else {
                         entry.daemon.status.to_string()
                     };
-                    let proxy_url = if s.proxy.enable {
+                    let proxy_url = if s.proxy.enable
+                        && (entry.daemon.active_port.is_some()
+                            || !entry.daemon.resolved_port.is_empty())
+                    {
                         let slug = PitchforkToml::find_slug_for_daemon_in_registry(
                             &entry.id,
                             &global_slugs,
