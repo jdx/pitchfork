@@ -1,6 +1,7 @@
 mod add;
 mod remove;
 
+use crate::cli::json_output::{JsonDaemonConfigEntry, print_json};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::{Result, env};
 use miette::{IntoDiagnostic, bail};
@@ -111,6 +112,10 @@ pub(crate) async fn resolve_project_config_path(
 pub struct Daemons {
     #[clap(subcommand)]
     command: Option<DaemonsCommand>,
+
+    /// Output in JSON format
+    #[clap(long)]
+    json: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -128,14 +133,25 @@ impl Daemons {
                 let config = tokio::task::spawn_blocking(PitchforkToml::all_merged)
                     .await
                     .into_diagnostic()??;
-                if config.daemons.is_empty() {
+                if self.json {
+                    let entries: Vec<JsonDaemonConfigEntry> = config
+                        .daemons
+                        .iter()
+                        .map(|(id, daemon)| JsonDaemonConfigEntry {
+                            id: id.qualified(),
+                            run: daemon.run.clone(),
+                        })
+                        .collect();
+                    print_json(&entries)
+                } else if config.daemons.is_empty() {
                     println!("No daemons configured.");
+                    Ok(())
                 } else {
                     for (id, daemon) in &config.daemons {
                         println!("{id}\t{}", daemon.run);
                     }
+                    Ok(())
                 }
-                Ok(())
             }
         }
     }

@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::cli::daemons::resolve_project_config_path;
+use crate::cli::json_output::{JsonSettingEntry, print_json};
 use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::{SETTINGS_META, SettingsPartial, settings};
@@ -41,6 +42,10 @@ Examples:
 pub struct Settings {
     #[clap(subcommand)]
     command: Option<Commands>,
+
+    /// Output in JSON format
+    #[clap(long)]
+    json: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -61,6 +66,10 @@ pub struct ListCmd {
     /// Only show settings in a specific group (e.g., "general", "web", "supervisor")
     #[clap(long)]
     group: Option<String>,
+
+    /// Output in JSON format
+    #[clap(long)]
+    json: bool,
 }
 
 /// Get the current value of a setting
@@ -69,6 +78,10 @@ pub struct ListCmd {
 pub struct GetCmd {
     /// Setting key in dot notation (e.g., general.log_level, web.auto_start)
     key: String,
+
+    /// Output in JSON format
+    #[clap(long)]
+    json: bool,
 }
 
 /// Set a setting value in a config file
@@ -96,7 +109,7 @@ impl Settings {
             Some(Commands::List(cmd)) => cmd.run(),
             Some(Commands::Get(cmd)) => cmd.run(),
             Some(Commands::Set(cmd)) => cmd.run().await,
-            None => show_all_settings(),
+            None => show_all_settings(self.json),
         }
     }
 }
@@ -104,6 +117,26 @@ impl Settings {
 impl ListCmd {
     fn run(&self) -> Result<()> {
         let meta = &*SETTINGS_META;
+        if self.json {
+            let entries: Vec<JsonSettingEntry> = meta
+                .iter()
+                .filter(|(key, _)| {
+                    if let Some(ref group) = self.group {
+                        key.starts_with(&format!("{group}.")) || *key == group
+                    } else {
+                        true
+                    }
+                })
+                .map(|(key, info)| JsonSettingEntry {
+                    key: key.to_string(),
+                    value: info.default_value.unwrap_or("(none)").to_string(),
+                    default: info.default_value,
+                    r#type: Some(info.typ),
+                    env_var: info.env_var,
+                })
+                .collect();
+            return print_json(&entries);
+        }
         for (key, info) in meta.iter() {
             if let Some(ref group) = self.group {
                 if !key.starts_with(&format!("{group}.")) && key != group {
@@ -129,6 +162,17 @@ impl GetCmd {
 
         let s = settings();
         let value = get_setting_value(&s, key);
+        if self.json {
+            let meta = &*SETTINGS_META;
+            let info = meta.get(key.as_str());
+            return print_json(&JsonSettingEntry {
+                key: key.clone(),
+                value,
+                default: info.and_then(|i| i.default_value),
+                r#type: info.map(|i| i.typ),
+                env_var: info.and_then(|i| i.env_var),
+            });
+        }
         println!("{value}");
         Ok(())
     }
@@ -179,9 +223,26 @@ impl SetCmd {
     }
 }
 
-fn show_all_settings() -> Result<()> {
+fn show_all_settings(json: bool) -> Result<()> {
     let s = settings();
     let meta = &*SETTINGS_META;
+
+    if json {
+        let entries: Vec<JsonSettingEntry> = meta
+            .iter()
+            .map(|(key, info)| {
+                let current = get_setting_value(&s, key);
+                JsonSettingEntry {
+                    key: key.to_string(),
+                    value: current,
+                    default: info.default_value,
+                    r#type: Some(info.typ),
+                    env_var: info.env_var,
+                }
+            })
+            .collect();
+        return print_json(&entries);
+    }
 
     let mut current_group = String::new();
     for (key, info) in meta.iter() {

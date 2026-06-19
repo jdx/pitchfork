@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::cli::json_output::{JsonListEntry, print_json};
 use crate::daemon_list::get_all_daemons;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::client::IpcClient;
@@ -37,6 +38,9 @@ pub struct List {
     /// Hide the table header row
     #[clap(long)]
     hide_header: bool,
+    /// Output in JSON format
+    #[clap(long)]
+    json: bool,
 }
 
 impl List {
@@ -44,6 +48,44 @@ impl List {
         let client = IpcClient::connect(true).await?;
 
         let s = settings();
+        let entries = get_all_daemons(&client).await?;
+        let global_slugs = PitchforkToml::read_global_slugs();
+
+        if self.json {
+            let json_entries: Vec<JsonListEntry> = entries
+                .iter()
+                .map(|entry| {
+                    let status_text = if entry.is_available {
+                        "available".to_string()
+                    } else {
+                        entry.daemon.status.to_string()
+                    };
+                    let proxy_url = if s.proxy.enable {
+                        let slug = PitchforkToml::find_slug_for_daemon_in_registry(
+                            &entry.id,
+                            &global_slugs,
+                        );
+                        build_proxy_url(slug.as_deref(), &s)
+                    } else {
+                        None
+                    };
+                    JsonListEntry {
+                        id: entry.id.qualified(),
+                        namespace: entry.id.namespace().to_string(),
+                        name: entry.id.name().to_string(),
+                        pid: entry.daemon.pid,
+                        status: status_text,
+                        disabled: entry.is_disabled,
+                        available: entry.is_available,
+                        proxy_url,
+                        error: entry.daemon.status.error_message(),
+                        port: entry.daemon.resolved_port.clone(),
+                    }
+                })
+                .collect();
+            return print_json(&json_entries);
+        }
+
         let mut table = Table::new();
         table
             .load_preset(comfy_table::presets::NOTHING)
@@ -55,9 +97,6 @@ impl List {
                 table.set_header(vec!["Name", "PID", "Status", "", "Error"]);
             }
         }
-
-        let entries = get_all_daemons(&client).await?;
-        let global_slugs = PitchforkToml::read_global_slugs();
 
         for entry in entries {
             let display_name = entry.id.styled_qualified();

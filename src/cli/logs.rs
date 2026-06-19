@@ -1,3 +1,4 @@
+use crate::cli::json_output::{JsonLogEntry, print_json};
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogQuery, LogStore};
@@ -189,17 +190,17 @@ pub struct Logs {
     /// Output raw log lines without color or formatting
     #[clap(long)]
     raw: bool,
+
+    /// Output in JSON format
+    #[clap(long, conflicts_with = "raw")]
+    json: bool,
 }
 
 impl Logs {
     pub async fn run(&self) -> Result<()> {
-        // Migrate legacy log directories (old format: "api" → new format: "legacy--api").
-        // This is idempotent and silent so it is safe to run on every invocation.
         migrate_legacy_log_dirs();
 
-        // Resolve user-provided IDs to qualified IDs
         let resolved_ids: Vec<DaemonId> = if self.id.is_empty() {
-            // When no IDs provided, use all daemon IDs
             get_all_daemon_ids()?
         } else {
             PitchforkToml::resolve_ids(&self.id)?
@@ -221,6 +222,10 @@ impl Logs {
             None
         };
 
+        if self.json {
+            return self.output_json(&resolved_ids, from, to);
+        }
+
         let single_daemon = resolved_ids.len() == 1;
         self.print_existing_logs(&resolved_ids, from, to, single_daemon, self.tail)?;
         if self.tail {
@@ -228,6 +233,66 @@ impl Logs {
         }
 
         Ok(())
+    }
+
+    fn output_json(
+        &self,
+        resolved_ids: &[DaemonId],
+        from: Option<DateTime<Local>>,
+        to: Option<DateTime<Local>>,
+    ) -> Result<()> {
+        let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
+        let has_time_filter = from.is_some() || to.is_some();
+
+        let opts = LogQuery {
+            daemon_ids: daemon_ids.clone(),
+            from,
+            to,
+            limit: if !has_time_filter { self.n } else { None },
+            order_desc: !has_time_filter,
+            after_id: None,
+        };
+        let entries = LOG_STORE.query(&opts)?;
+        let log_lines: Vec<(String, String, String)> = entries
+            .into_iter()
+            .map(|e| {
+                let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+                (ts, e.daemon_id, e.message)
+            })
+            .collect();
+
+        let log_lines = if has_time_filter {
+            if let Some(n) = self.n {
+                let len = log_lines.len();
+                if len > n {
+                    log_lines.into_iter().skip(len - n).collect_vec()
+                } else {
+                    log_lines
+                }
+            } else {
+                log_lines
+            }
+        } else if let Some(n) = self.n {
+            let len = log_lines.len();
+            if len > n {
+                log_lines.into_iter().skip(len - n).rev().collect_vec()
+            } else {
+                log_lines.into_iter().rev().collect_vec()
+            }
+        } else {
+            log_lines.into_iter().rev().collect_vec()
+        };
+
+        let json_entries: Vec<JsonLogEntry> = log_lines
+            .into_iter()
+            .map(|(timestamp, daemon_id, message)| JsonLogEntry {
+                timestamp,
+                daemon_id,
+                message: console::strip_ansi_codes(&message).to_string(),
+            })
+            .collect();
+
+        print_json(&json_entries)
     }
 
     fn print_existing_logs(
