@@ -9,6 +9,7 @@ fn main() {
     // Tell Cargo to rerun this script when settings.toml changes
     println!("cargo:rerun-if-changed=settings.toml");
     println!("cargo:rerun-if-changed=build/generate_settings.rs");
+    println!("cargo:rerun-if-changed=ui/dist");
 
     // Generate the settings module
     if let Err(e) = generate_settings::generate() {

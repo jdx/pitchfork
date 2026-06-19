@@ -47,7 +47,7 @@ indexmap = { version = "2", features = ["serde"] }
 interprocess = { version = "2", features = ["tokio"] }
 itertools = "0.14"
 log = { version = "0.4", features = ["serde"] }
-mdns-sd = "0.13"
+mdns-sd = "0.20"
 miette = { version = "7", features = ["fancy"] }
 notify = { version = "8" }
 notify-debouncer-full = "0.7"
@@ -57,7 +57,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls-native-certs",
     "rustls-no-provider",
 ] }
-rusqlite = { version = "0.34", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 rev_lines = "0.3"
 rust-embed = { version = "8", features = ["axum"] }
 axum = { version = "0.8" }
@@ -89,7 +89,7 @@ serde_json = { version = "1", features = ["indexmap"] }
 shell-words = "1.1.0"
 strum = { version = "0.28", features = ["derive"] }
 tera = "1"
-sysinfo = "0.38"
+sysinfo = "0.39"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -104,7 +104,7 @@ glob = "0.3"
 globset = "0.4"
 humanbyte = { version = "0.2", features = ["serde", "derive"] }
 humantime = "2"
-listeners = "0.5"
+listeners = "0.6"
 derive_more = { version = "2.1.1", features = ["into", "display", "from", "deref", "as_ref"] }
 vte = { version = "0.15.0", default-features = false }
 
@@ -123,7 +123,7 @@ indexmap = "2"
 
 [dev-dependencies]
 tempfile = "3"
-rusqlite = { version = "0.34", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
 
 [profile.dev]
 debug = 1

@@ -2,6 +2,7 @@
 _.path = "target/debug"
 
 [tasks.test]
+depends = ["build:ui"]
 run = [
   "cargo nextest run",
   "git submodule update --init --recursive",
@@ -14,24 +15,35 @@ depends = ["build"]
 run = "pitchfork sup start -f"
 
 [tasks.ci]
-depends = ["lint", "build", "build:docs", "test"]
+depends = ["lint", "build", "build:docs", "test", "test:web-ui"]
 
 [tasks.ci-dev]
-depends = ["lint-fix", "build", "build:docs", "test"]
+depends = ["lint-fix", "build", "build:docs", "test", "test:web-ui"]
 
 [tasks.docs]
 dir = "docs"
 run = "aube install && exec aube run docs:dev"
 
 [tasks.lint]
+depends = ["build:ui"]
 run = "hk check --all"
 
 [tasks.lint-fix]
+depends = ["build:ui"]
 run = "hk fix --all"
 
 [tasks.build]
 depends = ["build:ui"]
 run = ["cargo build"]
+
+[tasks."test:web-ui"]
+depends = ["build"]
+dir = "ui"
+run = [
+  "aube install",
+  "if [ \"$(uname -s)\" = \"Linux\" ]; then node_modules/.bin/playwright install --with-deps chromium; else node_modules/.bin/playwright install chromium; fi",
+  "node_modules/.bin/playwright test",
+]
 
 [tasks."build:ui"]
 dir = "ui"
@@ -56,6 +68,7 @@ run = [
 ]
 
 [tasks.install-dev]
+depends = ["build:ui"]
 env = { "PITCHFORK_LOG" = "debug" }
 run = [
   "cargo install --path . --debug",
