@@ -15,6 +15,7 @@ const LOG_LEVEL_VALUES: &[&str] = &["trace", "debug", "info", "warn", "error"];
 #[clap(
     visible_alias = "setting",
     verbatim_doc_comment,
+    args_conflicts_with_subcommands = true,
     long_about = "\
 View and modify pitchfork settings
 
@@ -44,7 +45,7 @@ pub struct Settings {
     command: Option<Commands>,
 
     /// Output in JSON format
-    #[clap(long, conflicts_with = "command")]
+    #[clap(long)]
     json: bool,
 }
 

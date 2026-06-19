@@ -108,13 +108,17 @@ pub(crate) async fn resolve_project_config_path(
 
 /// List configured daemons from all merged config files.
 #[derive(Debug, clap::Args)]
-#[clap(visible_alias = "daemon", verbatim_doc_comment)]
+#[clap(
+    visible_alias = "daemon",
+    verbatim_doc_comment,
+    args_conflicts_with_subcommands = true
+)]
 pub struct Daemons {
     #[clap(subcommand)]
     command: Option<DaemonsCommand>,
 
     /// Output in JSON format
-    #[clap(long, conflicts_with = "command")]
+    #[clap(long)]
     json: bool,
 }
 
