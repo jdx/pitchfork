@@ -44,7 +44,7 @@ pub struct Settings {
     command: Option<Commands>,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[clap(long, conflicts_with = "command")]
     json: bool,
 }
 
