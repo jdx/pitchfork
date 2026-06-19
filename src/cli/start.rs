@@ -31,6 +31,8 @@ Examples:
   pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
   pitchfork start api --output 'Listening on'
                                 Wait for output pattern before ready
+  pitchfork start api --output 'Listening on' --fail-output 'EADDRINUSE|failed'
+                                Fail startup if bad output appears before ready
   pitchfork start api --http http://localhost:8080/health
                                 Wait for HTTP endpoint to return 2xx
   pitchfork start api --port 8080
@@ -85,6 +87,9 @@ pub struct Start {
     /// Wait until output matches this regex pattern before considering daemon ready
     #[clap(long)]
     output: Option<String>,
+    /// Fail startup if output matches this regex pattern before readiness
+    #[clap(long = "fail-output")]
+    fail_output: Option<String>,
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
     #[clap(long)]
     http: Option<String>,
@@ -135,6 +140,7 @@ impl Start {
             shell_pid: self.shell_pid,
             delay: self.delay,
             output: self.output.clone(),
+            fail_output: self.fail_output.clone(),
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),

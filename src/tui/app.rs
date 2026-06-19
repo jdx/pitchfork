@@ -415,6 +415,11 @@ impl EditorState {
                 "Regex pattern in ANSI-stripped stdout/stderr indicating readiness.",
             ),
             FormField::optional_text(
+                "fail_output",
+                "Fail Output Pattern",
+                "Regex pattern in ANSI-stripped stdout/stderr that fails readiness before the daemon is ready.",
+            ),
+            FormField::optional_text(
                 "ready_http",
                 "Ready HTTP URL",
                 "HTTP URL to poll for readiness (expects 2xx).",
@@ -478,6 +483,9 @@ impl EditorState {
                 "ready_delay" => field.value = FormFieldValue::OptionalNumber(config.ready_delay),
                 "ready_output" => {
                     field.value = FormFieldValue::OptionalText(config.ready_output.clone())
+                }
+                "fail_output" => {
+                    field.value = FormFieldValue::OptionalText(config.fail_output.clone())
                 }
                 "ready_http" => {
                     field.value = FormFieldValue::OptionalText(
@@ -555,6 +563,7 @@ impl EditorState {
                 ("ready_output", FormFieldValue::OptionalText(s)) => {
                     config.ready_output = s.clone()
                 }
+                ("fail_output", FormFieldValue::OptionalText(s)) => config.fail_output = s.clone(),
                 ("ready_http", FormFieldValue::OptionalText(s)) => {
                     config.ready_http = s.clone().map(|url| ReadyHttp {
                         url,

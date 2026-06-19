@@ -345,6 +345,25 @@
                 }
               },
               {
+                "name": "fail-output",
+                "usage": "--fail-output <FAIL_OUTPUT>",
+                "help": "Regex pattern to match in output to fail readiness before the daemon becomes ready",
+                "help_first_line": "Regex pattern to match in output to fail readiness before the daemon becomes ready",
+                "short": [],
+                "long": [
+                  "fail-output"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "FAIL_OUTPUT",
+                  "usage": "<FAIL_OUTPUT>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "ready-http",
                 "usage": "--ready-http <READY_HTTP>",
                 "help": "HTTP endpoint URL to poll for readiness",
@@ -1377,6 +1396,25 @@
             }
           },
           {
+            "name": "fail-output",
+            "usage": "--fail-output <FAIL_OUTPUT>",
+            "help": "Fail startup if output matches this regex pattern before readiness",
+            "help_first_line": "Fail startup if output matches this regex pattern before readiness",
+            "short": [],
+            "long": [
+              "fail-output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "FAIL_OUTPUT",
+              "usage": "<FAIL_OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "http",
             "usage": "--http <HTTP>",
             "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
@@ -1564,6 +1602,25 @@
             }
           },
           {
+            "name": "fail-output",
+            "usage": "--fail-output <FAIL_OUTPUT>",
+            "help": "Fail startup if output matches this regex pattern before readiness",
+            "help_first_line": "Fail startup if output matches this regex pattern before readiness",
+            "short": [],
+            "long": [
+              "fail-output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "FAIL_OUTPUT",
+              "usage": "<FAIL_OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "http",
             "usage": "--http <HTTP>",
             "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
@@ -1677,7 +1734,7 @@
         "mounts": [],
         "hide": false,
         "help": "Runs a one-off daemon",
-        "help_long": "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork run api --port 8080 -- ./server\n                                Wait for TCP port to be listening",
+        "help_long": "Runs a one-off daemon\n\nRuns a command as a managed daemon without needing a pitchfork.toml.\nThe daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.\n\nExamples:\n  pitchfork run api -- npm run dev\n                                Run npm as daemon named 'api'\n  pitchfork run api -f -- npm run dev\n                                Force restart if 'api' is running\n  pitchfork run api --retry 3 -- ./server\n                                Restart up to 3 times on failure\n  pitchfork run api -d 5 -- ./server\n                                Wait 5 seconds for ready check\n  pitchfork run api -o 'Listening' -- ./server\n                                Wait for output pattern before ready\n  pitchfork run api -o 'Listening' --fail-output 'EADDRINUSE|failed' -- ./server\n                                  Fail startup if bad output appears before ready\n  pitchfork run api --http http://localhost:8080/health -- ./server\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork run api --port 8080 -- ./server\n                                Wait for TCP port to be listening",
         "name": "run",
         "aliases": [
           "r"
@@ -2028,6 +2085,25 @@
             }
           },
           {
+            "name": "fail-output",
+            "usage": "--fail-output <FAIL_OUTPUT>",
+            "help": "Fail startup if output matches this regex pattern before readiness",
+            "help_first_line": "Fail startup if output matches this regex pattern before readiness",
+            "short": [],
+            "long": [
+              "fail-output"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "FAIL_OUTPUT",
+              "usage": "<FAIL_OUTPUT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "http",
             "usage": "--http <HTTP>",
             "help": "Wait until HTTP endpoint returns 2xx status before considering daemon ready",
@@ -2141,7 +2217,7 @@
         "mounts": [],
         "hide": false,
         "help": "Starts a daemon from a pitchfork.toml file",
-        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --group backend Start all daemons in the 'backend' group\n  pitchfork start -l            Start all local daemons in pitchfork.toml\n  pitchfork start -g            Start all global daemons in config.toml\n  pitchfork start -a            Start all daemons (local and global)\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening",
+        "help_long": "Starts a daemon from a pitchfork.toml file\n\nDaemons are defined in pitchfork.toml with a `[daemons.<name>]` section.\nThe command waits for the daemon to be ready before returning.\n\nExamples:\n  pitchfork start api           Start a single daemon\n  pitchfork start api worker    Start multiple daemons\n  pitchfork start --group backend Start all daemons in the 'backend' group\n  pitchfork start -l            Start all local daemons in pitchfork.toml\n  pitchfork start -g            Start all global daemons in config.toml\n  pitchfork start -a            Start all daemons (local and global)\n  pitchfork start api -f        Restart daemon if already running\n  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready\n  pitchfork start api --output 'Listening on'\n                                Wait for output pattern before ready\n  pitchfork start api --output 'Listening on' --fail-output 'EADDRINUSE|failed'\n                                Fail startup if bad output appears before ready\n  pitchfork start api --http http://localhost:8080/health\n                                Wait for HTTP endpoint to return 2xx\n  pitchfork start api --port 8080\n                                Wait for TCP port to be listening",
         "name": "start",
         "aliases": [
           "s"

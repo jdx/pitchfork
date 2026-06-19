@@ -48,6 +48,30 @@ ready_output = "Serving HTTP on"
 
 **Best for:** Services that print a specific message when ready.
 
+## Failure Output Check
+
+Fail startup if a pattern appears in the daemon's output before the daemon becomes ready. This uses regular expressions and matches ANSI-stripped stdout/stderr, like `ready_output`.
+
+**CLI:**
+```bash
+pitchfork run myapp --output "Server listening" --fail-output "EADDRINUSE|migration failed" -- node server.js
+pitchfork start myapp --fail-output "panic|address already in use"
+```
+
+**Config:**
+```toml
+[daemons.api]
+run = "node server.js"
+ready_output = "Server listening"
+fail_output = "EADDRINUSE|migration failed"
+```
+
+**Best for:** Services that can print a known fatal startup message before exiting or while continuing to run in a broken state.
+
+::: tip
+`fail_output` is checked before `ready_output`. If one line matches both patterns, startup fails.
+:::
+
 ## HTTP Check
 
 Wait until an HTTP endpoint returns a 2xx status code, or a configured exact
@@ -142,6 +166,7 @@ The command check polls every 500ms. Use this when you need more complex readine
 |------------|-----------|
 | Delay | Daemon runs for N seconds without crashing |
 | Output | Pattern matches stdout/stderr |
+| Failure output | Startup fails when pattern matches stdout/stderr before ready |
 | HTTP | Endpoint returns 2xx status, or a configured exact status |
 | Port | TCP connection to port succeeds |
 | Command | Shell command returns exit code 0 |
@@ -149,6 +174,9 @@ The command check polls every 500ms. Use this when you need more complex readine
 - If multiple checks are configured (HTTP, port, command), the first one to succeed marks the daemon as ready
 - **Delay check** only fires when no other check type (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`) is configured. It acts as the fallback default.
 - If the daemon exits with a non-zero code before becoming ready, `pitchfork start/run` exits with that same code
+- `fail_output` only applies before the daemon becomes ready. After readiness, use `on_output` or normal process supervision for runtime failures.
+- If `fail_output` is configured without another ready check, the default delay still marks the daemon ready if no failure output appears.
+- If one output line matches both `fail_output` and `ready_output`, `fail_output` wins.
 
 ## Common Patterns
 

@@ -63,6 +63,8 @@ pub struct Daemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub fail_output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<u16>,
@@ -137,6 +139,7 @@ pub struct RunOptions {
     pub retry_count: u32,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
+    pub fail_output: Option<String>,
     pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
@@ -220,6 +223,7 @@ impl Daemon {
             retry_count: self.retry_count,
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
+            fail_output: self.fail_output.clone(),
             ready_http: self.ready_http.clone(),
             ready_port: self.ready_port,
             ready_cmd: self.ready_cmd.clone(),

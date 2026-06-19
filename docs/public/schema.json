@@ -206,6 +206,13 @@
             "type": "string"
           }
         },
+        "fail_output": {
+          "description": "Regex pattern to match in ANSI-stripped stdout/stderr to fail readiness before the daemon becomes ready",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "hooks": {
           "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
           "anyOf": [

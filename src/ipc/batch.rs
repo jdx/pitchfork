@@ -78,6 +78,8 @@ pub struct StartOptions {
     pub delay: Option<u64>,
     /// Override ready output pattern
     pub output: Option<String>,
+    /// Override fail output pattern
+    pub fail_output: Option<String>,
     /// Override ready HTTP endpoint
     pub http: Option<String>,
     /// Override ready port
@@ -118,6 +120,7 @@ pub fn build_run_options(
         run_opts.force = opts.force;
         run_opts.ready_delay = opts.delay.or(run_opts.ready_delay);
         run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
+        run_opts.fail_output = opts.fail_output.clone().or(run_opts.fail_output);
         run_opts.ready_http = merge_ready_http_override(run_opts.ready_http, opts.http.clone());
         run_opts.ready_port = opts.port.or(run_opts.ready_port);
         run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
@@ -734,6 +737,7 @@ impl IpcClient {
         let force = opts.force && is_explicitly_requested;
         let delay = opts.delay;
         let output = opts.output.clone();
+        let fail_output = opts.fail_output.clone();
         let http = merge_ready_http_override(ready_http, opts.http.clone());
         let port = opts.port;
         let ready_cmd = opts.cmd.clone();
@@ -753,6 +757,7 @@ impl IpcClient {
                 retry,
                 ready_delay: delay.or(Some(3)),
                 ready_output: output,
+                fail_output,
                 ready_http: http,
                 ready_port: port,
                 ready_cmd,
@@ -962,6 +967,7 @@ impl IpcClient {
             retry: opts.retry.unwrap_or_default(),
             ready_delay: opts.delay.or(Some(3)),
             ready_output: opts.output,
+            fail_output: opts.fail_output,
             ready_http: merge_ready_http_override(None, opts.http),
             ready_port: opts.port,
             ready_cmd: opts.cmd.clone(),
@@ -1056,6 +1062,24 @@ mod tests {
 
         assert_eq!(ready_http.url, "http://localhost:3000/health");
         assert_eq!(ready_http.status, vec![401]);
+    }
+
+    #[test]
+    fn build_run_options_merges_fail_output_override() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            fail_output: Some("configured failure".to_string()),
+            ..PitchforkTomlDaemon::default()
+        };
+        let opts = StartOptions {
+            fail_output: Some("override failure".to_string()),
+            ..StartOptions::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
+
+        assert_eq!(run_opts.fail_output.as_deref(), Some("override failure"));
     }
 
     #[test]

@@ -57,6 +57,44 @@ retry = 3
     Ok(())
 }
 
+#[test]
+fn test_fail_output_round_trips_config() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.api]
+run = "npm run dev"
+ready_output = "ready"
+fail_output = "EADDRINUSE|migration failed"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "api").unwrap();
+    assert_eq!(
+        daemon.fail_output.as_deref(),
+        Some("EADDRINUSE|migration failed")
+    );
+
+    pt.write()?;
+    let raw = fs::read_to_string(&toml_path).unwrap();
+    assert!(
+        raw.contains("fail_output = \"EADDRINUSE|migration failed\""),
+        "written config should preserve fail_output, got:\n{raw}"
+    );
+
+    let pt_read = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon_read = get_daemon_by_name(&pt_read, "api").unwrap();
+    assert_eq!(
+        daemon_read.fail_output.as_deref(),
+        Some("EADDRINUSE|migration failed")
+    );
+
+    Ok(())
+}
+
 /// Test reading a non-existent file creates an empty PitchforkToml
 #[test]
 fn test_read_nonexistent_file() -> Result<()> {

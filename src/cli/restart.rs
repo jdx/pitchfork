@@ -69,6 +69,9 @@ pub struct Restart {
     /// Wait until output matches this regex pattern before considering daemon ready
     #[clap(long)]
     output: Option<String>,
+    /// Fail startup if output matches this regex pattern before readiness
+    #[clap(long = "fail-output")]
+    fail_output: Option<String>,
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
     #[clap(long)]
     http: Option<String>,
@@ -109,6 +112,7 @@ impl Restart {
             force: true, // restart always forces
             delay: self.delay,
             output: self.output.clone(),
+            fail_output: self.fail_output.clone(),
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),

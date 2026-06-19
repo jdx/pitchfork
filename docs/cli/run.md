@@ -20,6 +20,8 @@ Examples:
                                 Wait 5 seconds for ready check
   pitchfork run api -o 'Listening' -- ./server
                                 Wait for output pattern before ready
+  pitchfork run api -o 'Listening' --fail-output 'EADDRINUSE|failed' -- ./server
+                                  Fail startup if bad output appears before ready
   pitchfork run api --http http://localhost:8080/health -- ./server
                                 Wait for HTTP endpoint to return 2xx
   pitchfork run api --port 8080 -- ./server
@@ -54,6 +56,10 @@ Delay in seconds before considering daemon ready (default: 3 seconds)
 ### `-o --output <OUTPUT>`
 
 Wait until output matches this regex pattern before considering daemon ready
+
+### `--fail-output <FAIL_OUTPUT>`
+
+Fail startup if output matches this regex pattern before readiness
 
 ### `--http <HTTP>`
 

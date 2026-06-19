@@ -189,6 +189,10 @@ async function onToggle() {
           <div class="info-label">Ready Output</div>
           <div class="info-value">{{ daemon.ready_output }}</div>
         </div>
+        <div class="info-card" v-if="daemon.ready_fail_output">
+          <div class="info-label">Fail Output</div>
+          <div class="info-value">{{ daemon.ready_fail_output }}</div>
+        </div>
         <div class="info-card" v-if="daemon.ready_http_url">
           <div class="info-label">Ready HTTP</div>
           <div class="info-value">{{ daemon.ready_http_url }}</div>

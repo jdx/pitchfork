@@ -49,6 +49,10 @@ Delay in seconds before considering daemon ready (default: 3 seconds)
 
 Wait until output matches this regex pattern before considering daemon ready
 
+### `--fail-output <FAIL_OUTPUT>`
+
+Fail startup if output matches this regex pattern before readiness
+
 ### `--http <HTTP>`
 
 Wait until HTTP endpoint returns 2xx status before considering daemon ready

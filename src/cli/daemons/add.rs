@@ -69,6 +69,9 @@ pub struct Add {
     /// Regex pattern to match in output for readiness
     #[clap(long)]
     ready_output: Option<String>,
+    /// Regex pattern to match in output to fail readiness before the daemon becomes ready
+    #[clap(long)]
+    fail_output: Option<String>,
     /// HTTP endpoint URL to poll for readiness
     #[clap(long)]
     ready_http: Option<String>,
@@ -245,6 +248,7 @@ impl Add {
                 retry,
                 ready_delay: self.ready_delay,
                 ready_output: self.ready_output.clone(),
+                fail_output: self.fail_output.clone(),
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),
                 ready_port: self.ready_port,
                 ready_cmd: self.ready_cmd.clone(),

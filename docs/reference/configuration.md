@@ -216,6 +216,17 @@ run = "postgres -D /var/lib/pgsql/data"
 ready_output = "ready to accept connections"
 ```
 
+### `fail_output`
+
+Regex pattern to match in output for startup failure. The pattern is matched against ANSI-stripped stdout and stderr before the daemon becomes ready. If it matches, the startup attempt fails and the daemon's retry policy applies.
+
+```toml
+[daemons.api]
+run = "npm run server"
+ready_output = "Server listening"
+fail_output = "EADDRINUSE|migration failed"
+```
+
 ### `ready_http`
 
 HTTP endpoint URL to poll for readiness. By default, any 2xx response is ready.

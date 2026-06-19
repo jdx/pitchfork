@@ -1657,6 +1657,13 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
             ]));
         }
 
+        if let Some(output) = &cfg.fail_output {
+            lines.push(Line::from(vec![
+                Span::styled("Fail Output: ", Style::default().fg(GRAY)),
+                Span::styled(output.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
+
         if let Some(http) = &cfg.ready_http {
             lines.push(Line::from(vec![
                 Span::styled("Ready HTTP: ", Style::default().fg(GRAY)),

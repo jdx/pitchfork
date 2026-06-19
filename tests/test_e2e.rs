@@ -1,7 +1,36 @@
 mod common;
 
 use common::{TestEnv, get_script_path};
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::time::Duration;
+
+fn run_command_exits_before_marker(
+    env: &TestEnv,
+    args: &[&str],
+    marker: &Path,
+    timeout: Duration,
+    message: &str,
+) -> std::process::Output {
+    let mut child = env.run_background(args);
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            assert!(!marker.exists(), "{message}");
+            return child.wait_with_output().unwrap();
+        }
+
+        assert!(!marker.exists(), "{message}");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pitchfork command did not exit before timeout: {message}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 #[test]
 
@@ -641,6 +670,383 @@ ready_output = "NEVER_APPEARS"
     );
 
     let _ = env.run_command(&["stop", "ready_no_match"]);
+}
+
+#[test]
+fn test_fail_output_before_ready_fails_startup() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker_file = env.marker_path("fail_output_before_ready_marker");
+    let marker_path = marker_file.display().to_string();
+
+    let toml_content = r#"
+[daemons.fail_output_before_ready]
+run = "sh -c 'echo Starting && sleep 1 && echo migration failed && sleep 2 && touch {marker_path} && sleep 30'"
+ready_output = "READY"
+fail_output = "migration failed"
+retry = 0
+"#;
+    env.create_toml(&toml_content.replace("{marker_path}", &marker_path));
+
+    let output = run_command_exits_before_marker(
+        &env,
+        &["start", "fail_output_before_ready"],
+        &marker_file,
+        Duration::from_secs(30),
+        "start returned before failure marker",
+    );
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!("exit code: {:?}", output.status.code());
+
+    assert!(
+        !output.status.success(),
+        "Start command should fail when fail_output matches before ready"
+    );
+
+    let logs = env.wait_for_logs(
+        "fail_output_before_ready",
+        "migration failed",
+        Duration::from_secs(5),
+    );
+    assert!(
+        logs.contains("migration failed"),
+        "Logs should include the failure output"
+    );
+    env.wait_for_status("fail_output_before_ready", "errored");
+}
+
+#[test]
+fn test_fail_output_wins_over_ready_output_on_same_line() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker_file = env.marker_path("fail_output_priority_marker");
+    let marker_path = marker_file.display().to_string();
+
+    let toml_content = r#"
+[daemons.fail_output_priority]
+run = "sh -c 'echo READY but migration failed && sleep 2 && touch {marker_path} && sleep 30'"
+ready_output = "READY"
+fail_output = "migration failed"
+retry = 0
+"#;
+    env.create_toml(&toml_content.replace("{marker_path}", &marker_path));
+
+    let output = run_command_exits_before_marker(
+        &env,
+        &["start", "fail_output_priority"],
+        &marker_file,
+        Duration::from_secs(30),
+        "fail_output was not reported before marker file was created",
+    );
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(
+        !output.status.success(),
+        "fail_output should take precedence over ready_output on the same line"
+    );
+
+    let logs = env.wait_for_logs(
+        "fail_output_priority",
+        "READY but migration failed",
+        Duration::from_secs(5),
+    );
+    assert!(logs.contains("READY but migration failed"));
+    env.wait_for_status("fail_output_priority", "errored");
+}
+
+#[test]
+fn test_fail_output_ignored_after_ready() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker_file = env.marker_path("fail_output_after_ready_runtime");
+    let marker_path = marker_file.display().to_string();
+
+    let toml_content = format!(
+        r#"
+[daemons.fail_output_after_ready]
+run = "sh -c 'echo READY && sleep 1 && echo runtime failed && touch {marker_path} && sleep 30'"
+ready_output = "READY"
+fail_output = "runtime failed"
+retry = 0
+"#
+    );
+    env.create_toml(&toml_content);
+    let output = run_command_exits_before_marker(
+        &env,
+        &["start", "fail_output_after_ready"],
+        &marker_file,
+        Duration::from_secs(30),
+        "start command did not exit before runtime fail marker",
+    );
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "Start command should succeed once ready_output matches"
+    );
+
+    let logs = env.wait_for_logs(
+        "fail_output_after_ready",
+        "runtime failed",
+        Duration::from_secs(5),
+    );
+    assert!(logs.contains("runtime failed"));
+    env.wait_for_status("fail_output_after_ready", "running");
+
+    let _ = env.run_command(&["stop", "fail_output_after_ready"]);
+}
+
+#[test]
+fn test_fail_output_triggers_retry() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.fail_output_retry]
+run = "sh -c 'echo fatal boot && sleep 30'"
+ready_output = "READY"
+fail_output = "fatal boot"
+retry = 1
+"#;
+    env.create_toml(toml_content);
+
+    let start_time = std::time::Instant::now();
+    let output = env.run_command(&["start", "fail_output_retry"]);
+    let elapsed = start_time.elapsed();
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!("elapsed: {elapsed:?}");
+
+    assert!(
+        !output.status.success(),
+        "Start command should fail after fail_output exhausts retries"
+    );
+    assert!(
+        elapsed >= Duration::from_secs(1),
+        "Retry backoff should run after the first fail_output match"
+    );
+
+    let logs = env.wait_for_logs("fail_output_retry", "fatal boot", Duration::from_secs(5));
+    let attempt_count = logs.matches("fatal boot").count();
+    assert_eq!(
+        attempt_count, 2,
+        "Should run original attempt plus one retry, logs:\n{logs}"
+    );
+    env.wait_for_status("fail_output_retry", "errored");
+}
+
+#[test]
+fn test_fail_output_retry_waits_for_stop_before_next_attempt() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+    let project_dir = env.create_project_dir();
+
+    let lock_dir = project_dir.join("fail_output_retry_lock");
+    let script_path = project_dir.join("fail-output-retry.sh");
+    let script = format!(
+        r#"#!/bin/sh
+set -eu
+
+trap 'echo "[trap] term"; sleep 2; rmdir "{lock_dir}"; echo "[trap] done"; exit 0' HUP INT QUIT TERM USR1 USR2
+
+if mkdir "{lock_dir}"; then
+    echo "fatal boot"
+    while :; do :; done
+else
+    echo "overlap detected"
+    echo "fatal boot"
+    while :; do :; done
+fi
+"#,
+        lock_dir = lock_dir.display()
+    );
+    fs::write(&script_path, script).unwrap();
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions).unwrap();
+    }
+
+    let toml_content = format!(
+        r#"
+[daemons.fail_output_retry_waits]
+run = "{}"
+ready_output = "READY"
+fail_output = "fatal boot"
+retry = 1
+stop_signal = {{ signal = "SIGTERM", timeout = "5s" }}
+env = {{ LOCKDIR = "{}" }}
+"#,
+        script_path.display(),
+        lock_dir.display()
+    );
+    env.create_toml(&toml_content);
+
+    let output = env.run_command(&["start", "fail_output_retry_waits"]);
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!("exit code: {:?}", output.status.code());
+
+    assert!(
+        !output.status.success(),
+        "Start command should fail when all retry attempts are exhausted"
+    );
+
+    let logs = env.wait_for_logs(
+        "fail_output_retry_waits",
+        "fatal boot",
+        Duration::from_secs(5),
+    );
+    let attempt_count = logs.matches("fatal boot").count();
+    assert_eq!(
+        attempt_count, 2,
+        "Should run two attempts: one retry and one final, logs:\n{logs}"
+    );
+    assert!(
+        !logs.contains("overlap detected"),
+        "Retry should wait for previous attempt to stop before next start"
+    );
+    env.wait_for_status("fail_output_retry_waits", "errored");
+}
+
+#[test]
+fn test_fail_output_reports_before_stop_timeout() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let marker_file = env.marker_path("fail_output_stop_timeout_cleanup");
+    let marker_path = marker_file.display().to_string();
+
+    let toml_content = format!(
+        r#"
+[daemons.fail_output_stop_timeout]
+run = "sh -c 'trap \"sleep 2; touch {marker_path}; exit 0\" TERM; echo fatal boot; while :; do sleep 1; done'"
+ready_output = "READY"
+fail_output = "fatal boot"
+retry = 0
+stop_signal = {{ signal = "SIGTERM", timeout = "5s" }}
+"#
+    );
+    env.create_toml(&toml_content);
+
+    let output = run_command_exits_before_marker(
+        &env,
+        &["start", "fail_output_stop_timeout"],
+        &marker_file,
+        Duration::from_secs(30),
+        "fail_output should be reported before cleanup marker is created",
+    );
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(
+        !output.status.success(),
+        "Start command should fail when fail_output matches before ready"
+    );
+
+    let logs = env.wait_for_logs(
+        "fail_output_stop_timeout",
+        "fatal boot",
+        Duration::from_secs(5),
+    );
+    assert!(logs.contains("fatal boot"));
+    env.wait_for_status("fail_output_stop_timeout", "errored");
+}
+
+#[test]
+fn test_fail_output_persisted_in_state_after_start() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_content = r#"
+[daemons.fail_output_state_persist]
+run = "sh -c 'echo READY && sleep 30'"
+ready_output = "READY"
+fail_output = "fatal boot"
+retry = 0
+"#;
+    env.create_toml(toml_content);
+
+    let output = env.run_command(&["start", "fail_output_state_persist"]);
+    assert!(
+        output.status.success(),
+        "Start command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env.wait_for_status("fail_output_state_persist", "running");
+
+    let state_contents = std::fs::read_to_string(env.state_file_path()).unwrap();
+    assert!(
+        state_contents.contains("fail_output = \"fatal boot\""),
+        "State file should include fail_output config after start"
+    );
+
+    let output = env.run_command(&["stop", "fail_output_state_persist"]);
+    assert!(
+        output.status.success(),
+        "Stop command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn test_run_fail_output_override() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+    let _ = env.create_project_dir();
+
+    let marker_file = env.marker_path("fail_output_run_override");
+    let marker_path = marker_file.display().to_string();
+    let script = format!(
+        "echo Output 1/5; sleep 1; echo Output 2/5; sleep 2; touch {marker_path}; sleep 30"
+    );
+
+    let output = run_command_exits_before_marker(
+        &env,
+        &[
+            "run",
+            "fail_output_run",
+            "--output",
+            "NEVER_APPEARS",
+            "--fail-output",
+            "Output 2/5",
+            "--",
+            "sh",
+            "-c",
+            script.as_str(),
+        ],
+        &marker_file,
+        Duration::from_secs(30),
+        "run command should fail before marker is created",
+    );
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(
+        !output.status.success(),
+        "run --fail-output should fail when the output pattern appears"
+    );
+
+    let logs = env.wait_for_logs(
+        "global/fail_output_run",
+        "Output 2/5",
+        Duration::from_secs(5),
+    );
+    assert!(logs.contains("Output 2/5"));
+    env.wait_for_status("global/fail_output_run", "errored");
 }
 
 #[test]

@@ -39,6 +39,7 @@ export interface DaemonEntry {
   watch_mode: string | null
   ready_delay: number | null
   ready_output: string | null
+  ready_fail_output: string | null
   ready_http_url: string | null
   ready_port: number | null
   ready_cmd: string | null

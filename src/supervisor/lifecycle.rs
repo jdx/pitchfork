@@ -35,6 +35,13 @@ use tokio::time;
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
 
+#[derive(Debug)]
+enum ReadinessSignal {
+    Ready,
+    Failed(Option<i32>),
+    Error(String),
+}
+
 #[cfg(unix)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RunIdentity {
@@ -153,7 +160,7 @@ impl Supervisor {
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
-            let (tx, rx) = oneshot::channel();
+            let (tx, rx) = oneshot::channel::<ReadinessSignal>();
             (Some(tx), Some(rx))
         } else {
             (None, None)
@@ -428,6 +435,7 @@ impl Supervisor {
                         o.retry_count = Some(opts.retry_count);
                         o.ready_delay = opts.ready_delay;
                         o.ready_output = opts.ready_output.clone();
+                        o.fail_output = opts.fail_output.clone();
                         o.ready_http = opts.ready_http.clone();
                         o.ready_port = effective_ready_port;
                         o.ready_cmd = opts.ready_cmd.clone();
@@ -455,6 +463,7 @@ impl Supervisor {
         let id_clone = id.clone();
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
+        let fail_output = opts.fail_output.clone();
         let ready_http = opts.ready_http.clone();
         let ready_port = effective_ready_port;
         let ready_cmd = opts.ready_cmd.clone();
@@ -463,6 +472,9 @@ impl Supervisor {
         let hook_retry = opts.retry;
         let hook_daemon_env = opts.env.clone();
         let on_output_hook = opts.on_output_hook.clone();
+        let fail_stop_cfg = opts.stop_signal.unwrap_or_default();
+        let fail_stop_signal: i32 = fail_stop_cfg.signal.into();
+        let fail_stop_timeout = fail_stop_cfg.timeout;
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
         // When the proxy is enabled, only detect active_port for daemons that are
@@ -561,6 +573,8 @@ impl Supervisor {
             let mut ready_notified = false;
             let mut ready_tx = ready_tx;
             let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
+            let fail_pattern = fail_output.as_ref().and_then(|p| get_or_compile_regex(p));
+            let mut readiness_failed = false;
             // Track whether we've already spawned the active_port detection task
             let mut active_port_spawned = false;
 
@@ -701,6 +715,54 @@ impl Supervisor {
                         // work regardless of whether the process emits color codes.
                         let line_clean = console::strip_ansi_codes(&line).to_string();
 
+                        // Check fail_output before ready_output so failure wins
+                        // when both patterns match the same pre-ready line.
+                        if !ready_notified
+                            && let Some(ref pattern) = fail_pattern
+                            && pattern.is_match(&line_clean)
+                        {
+                            error!("daemon {id} failed readiness: output matched fail_output pattern");
+                            readiness_failed = true;
+
+                            let is_retrying_attempt = opts.retry_count < opts.retry.count();
+                            if !is_retrying_attempt {
+                                // Keep prompt-first behavior on final attempt:
+                                // surface startup failure immediately, then stop process group.
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(ReadinessSignal::Failed(Some(1)));
+                                }
+                                if let Err(e) = PROCS
+                                    .kill_process_group_async(
+                                        daemon_pid,
+                                        fail_stop_signal,
+                                        fail_stop_timeout,
+                                    )
+                                    .await
+                                {
+                                    error!("daemon {id}: failed to stop after fail_output match: {e}");
+                                }
+                            } else {
+                                if let Err(e) = PROCS
+                                    .kill_process_group_async(
+                                        daemon_pid,
+                                        fail_stop_signal,
+                                        fail_stop_timeout,
+                                    )
+                                    .await
+                                {
+                                    error!("daemon {id}: failed to stop after fail_output match: {e}");
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(ReadinessSignal::Error(format!(
+                                            "failed to stop daemon {id} after fail_output match: {e}"
+                                        )));
+                                    }
+                                } else if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(ReadinessSignal::Failed(Some(1)));
+                                }
+                            }
+                            break;
+                        }
+
                         // Check if output matches ready pattern
                         if !ready_notified
                             && let Some(ref pattern) = ready_pattern
@@ -709,7 +771,7 @@ impl Supervisor {
                             info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
                             if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
+                                let _ = tx.send(ReadinessSignal::Ready);
                             }
                             fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                             if !active_port_spawned && has_port_config {
@@ -749,13 +811,13 @@ impl Supervisor {
 
                                 if is_success {
                                     debug!("daemon {id} exited successfully before ready check, sending success notification");
-                                    let _ = tx.send(Ok(()));
+                                    let _ = tx.send(ReadinessSignal::Ready);
                                 } else {
                                     let exit_code = exit_status.as_ref()
                                         .and_then(|r| r.as_ref().ok())
                                         .and_then(|s| s.code());
                                     debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
-                                    let _ = tx.send(Err(exit_code));
+                                    let _ = tx.send(ReadinessSignal::Failed(exit_code));
                                 }
                             }
                         } else {
@@ -776,7 +838,7 @@ impl Supervisor {
                                     info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                        let _ = tx.send(ReadinessSignal::Ready);
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     http_check_interval = None;
@@ -807,7 +869,7 @@ impl Supervisor {
                                     info!("daemon {id} ready: TCP port {port} is listening");
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                        let _ = tx.send(ReadinessSignal::Ready);
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
@@ -843,7 +905,7 @@ impl Supervisor {
                                     info!("daemon {id} ready: readiness command succeeded");
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
+                                        let _ = tx.send(ReadinessSignal::Ready);
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
@@ -869,12 +931,12 @@ impl Supervisor {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
-                            info!("daemon {id} ready: delay elapsed");
-                            ready_notified = true;
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
-                            }
+                            if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
+                                info!("daemon {id} ready: delay elapsed");
+                                ready_notified = true;
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(ReadinessSignal::Ready);
+                                }
                             fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                         }
                         // Disable timer after it fires
@@ -950,20 +1012,26 @@ impl Supervisor {
                     .is_some_and(|d| d.status.is_stopping());
 
             // --- Phase 1: Determine exit_code, exit_reason, and update daemon state ---
-            let (exit_code, exit_reason) = match (&exit_status, is_stopping) {
-                (Ok(status), true) => {
-                    // Intentional stop (by pitchfork). status.code() returns None
-                    // on Unix when killed by signal (e.g. SIGTERM); use -1 to
-                    // distinguish from a clean exit code 0.
-                    (status.code().unwrap_or(-1), "stop")
+            let (exit_code, exit_reason) = if readiness_failed {
+                (1, "fail")
+            } else {
+                match (&exit_status, is_stopping) {
+                    (Ok(status), true) => {
+                        // Intentional stop (by pitchfork). status.code() returns None
+                        // on Unix when killed by signal (e.g. SIGTERM); use -1 to
+                        // distinguish from a clean exit code 0.
+                        (status.code().unwrap_or(-1), "stop")
+                    }
+                    (Ok(status), false) if status.success() => {
+                        (status.code().unwrap_or(-1), "exit")
+                    }
+                    (Ok(status), false) => (status.code().unwrap_or(-1), "fail"),
+                    (Err(_), true) => {
+                        // child.wait() error while stopping (e.g. sysinfo reaped the process)
+                        (-1, "stop")
+                    }
+                    (Err(_), false) => (-1, "fail"),
                 }
-                (Ok(status), false) if status.success() => (status.code().unwrap_or(-1), "exit"),
-                (Ok(status), false) => (status.code().unwrap_or(-1), "fail"),
-                (Err(_), true) => {
-                    // child.wait() error while stopping (e.g. sysinfo reaped the process)
-                    (-1, "stop")
-                }
-                (Err(_), false) => (-1, "fail"),
             };
 
             // Update daemon state unless stop() already did it (won the race).
@@ -1027,13 +1095,17 @@ impl Supervisor {
         // If wait_ready is true, wait for readiness notification
         if let Some(ready_rx) = ready_rx {
             match ready_rx.await {
-                Ok(Ok(())) => {
+                Ok(ReadinessSignal::Ready) => {
                     info!("daemon {id} is ready");
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
-                Ok(Err(exit_code)) => {
+                Ok(ReadinessSignal::Failed(exit_code)) => {
                     error!("daemon {id} failed before becoming ready");
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })
+                }
+                Ok(ReadinessSignal::Error(error)) => {
+                    error!("daemon {id} failed before becoming ready: {error}");
+                    Ok(IpcResponse::Error(error))
                 }
                 Err(_) => {
                     error!("readiness channel closed unexpectedly for daemon {id}");

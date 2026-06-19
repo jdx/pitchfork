@@ -70,6 +70,10 @@ Delay in seconds before considering daemon ready
 
 Regex pattern to match in output for readiness
 
+### `--fail-output <FAIL_OUTPUT>`
+
+Regex pattern to match in output to fail readiness before the daemon becomes ready
+
 ### `--ready-http <READY_HTTP>`
 
 HTTP endpoint URL to poll for readiness

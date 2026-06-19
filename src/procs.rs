@@ -176,10 +176,9 @@ impl Procs {
 
         for sleep_duration in fast_checks.chain(slow_checks) {
             std::thread::sleep(sleep_duration);
-            self.refresh_pids(&[pid]);
             elapsed_ms += sleep_duration.as_millis() as u64;
-            if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
-                debug!("process group {pgid} terminated after {signal_name} ({elapsed_ms} ms)",);
+            if !self.has_live_non_zombie_process_in_group(pgid) {
+                debug!("process group {pgid} terminated after {signal_name} ({elapsed_ms} ms)");
                 return Ok(true);
             }
         }
@@ -197,9 +196,32 @@ impl Procs {
             }
         }
 
-        // Brief wait for SIGKILL to take effect
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let sigkill_deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while self.has_live_non_zombie_process_in_group(pgid) {
+            if std::time::Instant::now() >= sigkill_deadline {
+                return Err(miette::miette!(
+                    "process group {pgid} still has live members after SIGKILL"
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         Ok(true)
+    }
+
+    #[cfg(unix)]
+    fn has_live_non_zombie_process_in_group(&self, pgid: i32) -> bool {
+        self.refresh_processes();
+        let system = self.lock_system();
+        for (pid, process) in system.processes() {
+            if process.status() == sysinfo::ProcessStatus::Zombie {
+                continue;
+            }
+            let process_pgid = unsafe { libc::getpgid(pid.as_u32() as i32) };
+            if process_pgid == pgid {
+                return true;
+            }
+        }
+        false
     }
 
     #[cfg(not(unix))]
@@ -717,6 +739,86 @@ mod tests {
              descendants: {child_pids:?}, direct RSS: {direct_memory}, \
              descendant RSS: {descendant_memory}, reported RSS: {}",
             stats.memory_bytes
+        );
+    }
+
+    #[test]
+    fn kill_process_group_waits_for_live_child_after_leader_exits() {
+        let state_file = std::env::temp_dir().join(format!(
+            "pitchfork-procs-kill-group-test-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        let _ = std::fs::remove_file(&state_file);
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                r#"trap 'exit 0' TERM; sh -c 'trap "" TERM; while :; do sleep 1; done' & echo "$!" > "$1"; while :; do sleep 1; done"#,
+                "--",
+                state_file.to_str().expect("state file path should be valid utf-8"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let parent = command.spawn().expect("failed to spawn process tree");
+        let parent_pid = parent.id();
+        let _parent = ChildGuard(parent);
+
+        let mut child_pid = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Ok(raw_child_pid) = std::fs::read_to_string(&state_file) {
+                if let Ok(parsed_child_pid) = raw_child_pid.trim().parse::<u32>() {
+                    if parsed_child_pid != 0 {
+                        child_pid = Some(parsed_child_pid);
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let child_pid = child_pid.expect("test child pid should be written");
+        let child_system_pid = sysinfo::Pid::from_u32(child_pid);
+
+        let procs = Procs::new();
+        assert!(
+            procs.has_live_non_zombie_process_in_group(parent_pid as i32),
+            "parent process group should be alive before kill"
+        );
+        assert!(
+            procs.lock_system().process(child_system_pid).is_some(),
+            "test child process should exist before kill"
+        );
+        assert!(
+            child_pid != parent_pid,
+            "the child process should be distinct from the parent"
+        );
+
+        let stop_timeout = Duration::from_millis(200);
+        let start = Instant::now();
+        let _ = procs
+            .kill_process_group(parent_pid, libc::SIGTERM, Some(stop_timeout))
+            .expect("process group stop should not fail");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "kill_process_group returned too quickly ({elapsed:?}) while child remained in group"
+        );
+
+        assert!(
+            !procs.has_live_non_zombie_process_in_group(parent_pid as i32),
+            "process group should have no live non-zombie members after stop"
         );
     }
 }

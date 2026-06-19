@@ -144,6 +144,8 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub fail_output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<u16>,
@@ -1055,6 +1057,7 @@ impl PitchforkToml {
                 retry: raw_daemon.retry,
                 ready_delay: raw_daemon.ready_delay,
                 ready_output: raw_daemon.ready_output,
+                fail_output: raw_daemon.fail_output,
                 ready_http: raw_daemon.ready_http,
                 ready_port: raw_daemon.ready_port,
                 ready_cmd: raw_daemon.ready_cmd,
@@ -1197,6 +1200,7 @@ impl PitchforkToml {
                     retry: daemon.retry,
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
+                    fail_output: daemon.fail_output.clone(),
                     ready_http: daemon.ready_http.clone(),
                     ready_port: daemon.ready_port,
                     ready_cmd: daemon.ready_cmd.clone(),
@@ -1543,6 +1547,8 @@ pub struct PitchforkTomlDaemon {
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
     pub ready_output: Option<String>,
+    /// Regex pattern to match in ANSI-stripped stdout/stderr to fail readiness before the daemon becomes ready
+    pub fail_output: Option<String>,
     /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
     pub ready_http: Option<ReadyHttp>,
     /// TCP port to check for readiness (connection success = ready)
@@ -1641,6 +1647,7 @@ impl PitchforkTomlDaemon {
             retry_count: 0,
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
+            fail_output: self.fail_output.clone(),
             ready_http: self.ready_http.clone(),
             ready_port: self.ready_port,
             ready_cmd: self.ready_cmd.clone(),

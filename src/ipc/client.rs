@@ -21,6 +21,30 @@ pub struct IpcClient {
     send: Mutex<SendHalf>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_error_response_surfaces_message() {
+        let opts = RunOptions {
+            id: DaemonId::new("project", "api"),
+            ..Default::default()
+        };
+        let start_time = chrono::Local::now();
+
+        let result = IpcClient::run_result_from_response(
+            opts,
+            start_time,
+            IpcResponse::Error("cleanup failed".into()),
+        );
+
+        let err = result.expect_err("run should return Err for Error response");
+        assert!(err.to_string().contains("cleanup failed"));
+        assert!(!err.to_string().contains("unexpected response"));
+    }
+}
+
 impl IpcClient {
     pub async fn connect(autostart: bool) -> Result<Self> {
         if autostart {
@@ -269,6 +293,14 @@ impl IpcClient {
             .request_with_timeout(IpcRequest::Run(opts.clone()), timeout)
             .await?;
 
+        Self::run_result_from_response(opts, start_time, rsp)
+    }
+
+    fn run_result_from_response(
+        opts: RunOptions,
+        start_time: chrono::DateTime<chrono::Local>,
+        rsp: IpcResponse,
+    ) -> Result<RunResult> {
         match rsp {
             IpcResponse::DaemonStart { daemon } => {
                 debug!("Started {}", daemon.id);
@@ -343,6 +375,7 @@ impl IpcClient {
                     opts.id, attempts, start_port
                 )),
             }),
+            IpcResponse::Error(error) => Err(miette::miette!(error)),
             rsp => Err(Self::unexpected_response("DaemonStart or DaemonReady", &rsp).into()),
         }
     }
