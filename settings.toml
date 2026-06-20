@@ -129,7 +129,7 @@ chaining (`&&`) all work as expected.
 
 **Common configurations:**
 - `"sh -c"` — Default, POSIX shell
-- `"sh -c -o errexit -o pipefail"` — Exit on error, fail on pipe failure
+- `"sh -o errexit -o pipefail -c"` — Exit on error, fail on pipe failure
 - `"bash -c"` — Use bash instead of sh
 
 When `mise = true` is enabled for a daemon, the shell wraps inside

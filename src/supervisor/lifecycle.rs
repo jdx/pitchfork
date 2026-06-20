@@ -268,6 +268,8 @@ impl Supervisor {
 
         // Use the original run string verbatim; fall back to joining cmd for
         // ad-hoc commands (e.g. `pitchfork run -- cmd args`) that have no run string.
+        // We don't prepend `exec` because it breaks compound commands (e.g. `exec a && b`
+        // silently drops `b`). Users can add `exec` themselves in the run string.
         let run_script = opts
             .run
             .clone()
