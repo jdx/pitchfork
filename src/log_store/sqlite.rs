@@ -255,6 +255,33 @@ impl LogStore for SqliteLogStore {
         Ok(())
     }
 
+    fn append_batch(&self, daemon_id: &DaemonId, messages: &[String]) -> Result<()> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let base_ts = Local::now().timestamp_millis();
+        let id = daemon_id.qualified();
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().into_diagnostic()?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO log_entries (daemon_id, timestamp, message) VALUES (?1, ?2, ?3)",
+                )
+                .into_diagnostic()?;
+            for (idx, msg) in messages.iter().enumerate() {
+                // Slightly stagger timestamps within a batch so ordering by
+                // (timestamp, id) preserves insertion order without paying for
+                // a separate per-row clock read.
+                let ts = base_ts + idx as i64;
+                stmt.execute(params![id, ts, msg]).into_diagnostic()?;
+            }
+        }
+        tx.commit().into_diagnostic()?;
+        Ok(())
+    }
+
     fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut conditions = Vec::new();

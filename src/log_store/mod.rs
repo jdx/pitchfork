@@ -90,6 +90,16 @@ pub trait LogStore: Send + Sync {
     /// Append a single log line.
     fn append(&self, daemon_id: &DaemonId, message: &str) -> Result<()>;
 
+    /// Append multiple log lines in a single transaction.
+    ///
+    /// The default implementation falls back to calling `append` for each line.
+    fn append_batch(&self, daemon_id: &DaemonId, messages: &[String]) -> Result<()> {
+        for msg in messages {
+            self.append(daemon_id, msg)?;
+        }
+        Ok(())
+    }
+
     /// Query logs according to the given options.
     fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>>;
 
