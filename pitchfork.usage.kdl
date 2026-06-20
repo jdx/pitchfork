@@ -148,6 +148,14 @@ cmd logs help="Displays logs for daemon(s)" {
     }
     flag --no-pager help="Disable pager even in interactive terminal"
     flag --raw help="Output raw log lines without color or formatting"
+    flag --grep help="Filter logs by case-insensitive substring (can be repeated)" var=#true {
+        long_help "Filter logs by case-insensitive substring (can be repeated)\n\nMultiple --grep options are combined with OR."
+        arg <GREP>
+    }
+    flag --regex help="Filter logs by regular expression" {
+        arg <REGEX>
+    }
+    flag --case-sensitive help="Make --grep matching case-sensitive"
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }
 cmd mcp help="Runs a Model Context Protocol (MCP) server over stdin/stdout" {

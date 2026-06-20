@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::log_store::{LogEntry, LogQuery, LogStore};
+use crate::log_store::{LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern};
 use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
@@ -9,6 +9,45 @@ use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+/// Registers a `regexp` SQL function backed by the `regex` crate.
+///
+/// SQLite does not ship a REGEXP implementation by default. This function
+/// is registered on every new connection so that `message REGEXP ?` works
+/// consistently across queries.
+fn add_regexp_function(conn: &Connection) -> Result<()> {
+    use std::cell::RefCell;
+
+    // Cache compiled regexes per connection to avoid recompiling the same
+    // pattern on every row evaluation. The cache is small and thread-local
+    // because scalar functions are invoked on the connection's thread.
+    let cache: RefCell<lru::LruCache<String, regex::Regex>> =
+        RefCell::new(lru::LruCache::new(std::num::NonZeroUsize::new(32).unwrap()));
+
+    conn.create_scalar_function(
+        "regexp",
+        2,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            let pattern: String = ctx.get(0)?;
+            let text: String = ctx.get(1)?;
+
+            let mut cache = cache.borrow_mut();
+            let re = match cache.get(&pattern) {
+                Some(re) => re.clone(),
+                None => {
+                    let re = regex::Regex::new(&pattern)
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.to_string().into()))?;
+                    cache.put(pattern.clone(), re.clone());
+                    re
+                }
+            };
+            Ok(re.is_match(&text))
+        },
+    )
+    .into_diagnostic()
+}
 
 /// SQLite-backed log store with WAL mode for concurrent readers.
 pub struct SqliteLogStore {
@@ -23,6 +62,7 @@ impl SqliteLogStore {
             std::fs::create_dir_all(parent).into_diagnostic()?;
         }
         let conn = Connection::open(&path).into_diagnostic()?;
+        add_regexp_function(&conn)?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;",
@@ -245,6 +285,40 @@ impl LogStore for SqliteLogStore {
             query_params.push(Box::new(after_id));
         }
 
+        let mut message_conditions = Vec::new();
+        for filter in &opts.message_filters {
+            match filter {
+                MessageFilter::Contains {
+                    pattern,
+                    case_sensitive,
+                } => {
+                    let escaped = escape_like_pattern(pattern);
+                    let param = format!("%{}%", escaped);
+                    let param_index = query_params.len() + 1;
+                    if *case_sensitive {
+                        message_conditions.push(format!(
+                            "message LIKE ?{idx} ESCAPE '\\'",
+                            idx = param_index
+                        ));
+                    } else {
+                        message_conditions.push(format!(
+                            "LOWER(message) LIKE LOWER(?{idx}) ESCAPE '\\'",
+                            idx = param_index
+                        ));
+                    }
+                    query_params.push(Box::new(param));
+                }
+                MessageFilter::Regex { pattern } => {
+                    let param_index = query_params.len() + 1;
+                    message_conditions.push(format!("message REGEXP ?{param_index}"));
+                    query_params.push(Box::new(pattern.clone()));
+                }
+            }
+        }
+        if !message_conditions.is_empty() {
+            conditions.push(format!("({})", message_conditions.join(" OR ")));
+        }
+
         let where_clause = if conditions.is_empty() {
             String::new()
         } else {
@@ -300,6 +374,7 @@ impl LogStore for SqliteLogStore {
             limit: None,
             order_desc: false,
             after_id,
+            message_filters: Vec::new(),
         })
     }
 

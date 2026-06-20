@@ -1,6 +1,6 @@
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
-use crate::log_store::{LogQuery, LogStore};
+use crate::log_store::{LogQuery, LogStore, MessageFilter};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::state_file::StateFile;
 use crate::ui::style::{edim, estyle, ndim};
@@ -189,6 +189,20 @@ pub struct Logs {
     /// Output raw log lines without color or formatting
     #[clap(long)]
     raw: bool,
+
+    /// Filter logs by case-insensitive substring (can be repeated)
+    ///
+    /// Multiple --grep options are combined with OR.
+    #[clap(long)]
+    grep: Vec<String>,
+
+    /// Filter logs by regular expression
+    #[clap(long)]
+    regex: Option<String>,
+
+    /// Make --grep matching case-sensitive
+    #[clap(long)]
+    case_sensitive: bool,
 }
 
 impl Logs {
@@ -221,13 +235,43 @@ impl Logs {
             None
         };
 
+        let message_filters = self.build_message_filters()?;
+
         let single_daemon = resolved_ids.len() == 1;
-        self.print_existing_logs(&resolved_ids, from, to, single_daemon, self.tail)?;
+        self.print_existing_logs(
+            &resolved_ids,
+            from,
+            to,
+            single_daemon,
+            self.tail,
+            message_filters.clone(),
+        )?;
         if self.tail {
-            tail_logs(&resolved_ids, single_daemon, true).await?;
+            tail_logs(&resolved_ids, single_daemon, true, message_filters).await?;
         }
 
         Ok(())
+    }
+
+    fn build_message_filters(&self) -> Result<Vec<MessageFilter>> {
+        let mut filters = Vec::new();
+        for pattern in &self.grep {
+            filters.push(MessageFilter::Contains {
+                pattern: pattern.clone(),
+                case_sensitive: self.case_sensitive,
+            });
+        }
+        if let Some(pattern) = self.regex.as_ref() {
+            // Validate the regex early so the user gets a clear CLI error
+            // instead of a SQLite user-function failure at query time.
+            let _ = regex::Regex::new(pattern)
+                .into_diagnostic()
+                .map_err(|e| miette::miette!("invalid regex pattern: {e}"))?;
+            filters.push(MessageFilter::Regex {
+                pattern: pattern.clone(),
+            });
+        }
+        Ok(filters)
     }
 
     fn print_existing_logs(
@@ -237,6 +281,7 @@ impl Logs {
         to: Option<DateTime<Local>>,
         single_daemon: bool,
         force_no_pager: bool,
+        message_filters: Vec<MessageFilter>,
     ) -> Result<()> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
         let id_width = daemon_ids.iter().map(|id| id.len()).max().unwrap_or(0);
@@ -250,6 +295,7 @@ impl Logs {
             limit: if !has_time_filter { self.n } else { None },
             order_desc: !has_time_filter,
             after_id: None,
+            message_filters,
         };
         let entries = LOG_STORE.query(&opts)?;
         let log_lines: Vec<(String, String, String)> = entries
@@ -536,6 +582,7 @@ pub async fn tail_logs(
     names: &[DaemonId],
     single_daemon: bool,
     start_from_end: bool,
+    message_filters: Vec<MessageFilter>,
 ) -> Result<()> {
     // Poll SQLite log store for new entries since last known row id.
     let id_width = names
@@ -557,6 +604,7 @@ pub async fn tail_logs(
                     limit: Some(1),
                     order_desc: true,
                     after_id: None,
+                    message_filters: message_filters.clone(),
                 }) {
                     Ok(entries) => entries.first().map(|e| e.id).unwrap_or(0),
                     Err(_) => 0,
@@ -577,7 +625,15 @@ pub async fn tail_logs(
         let mut out = vec![];
         for id in names {
             let after_id = states.get(&id.qualified()).copied();
-            match LOG_STORE.tail(id, after_id) {
+            match LOG_STORE.query(&LogQuery {
+                daemon_ids: vec![id.qualified()],
+                from: None,
+                to: None,
+                limit: None,
+                order_desc: false,
+                after_id,
+                message_filters: message_filters.clone(),
+            }) {
                 Ok(entries) => {
                     for entry in &entries {
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -823,6 +879,7 @@ pub fn collect_startup_logs(
         limit: None,
         order_desc: false,
         after_id: None,
+        message_filters: Vec::new(),
     })?;
     let log_lines = entries
         .into_iter()
@@ -873,6 +930,7 @@ pub fn stream_startup_logs(
             limit: None,
             order_desc: false,
             after_id: None,
+            message_filters: Vec::new(),
         });
 
         if let Ok(entries) = initial_entries {

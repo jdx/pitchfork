@@ -39,6 +39,7 @@ pub async fn stream_sse(
                 limit: Some(1),
                 order_desc: true,
                 after_id: None,
+                message_filters: Vec::new(),
             })
         }).await {
             Ok(Ok(entries)) => entries.first().map(|e| e.id).unwrap_or(0),
@@ -81,6 +82,7 @@ pub async fn stream_sse(
                     limit: Some(BATCH_SIZE),
                     order_desc: false,
                     after_id: Some(last_id),
+                    message_filters: Vec::new(),
                 })
             }).await {
                 Ok(Ok(e)) => e,

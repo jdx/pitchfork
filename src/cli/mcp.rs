@@ -384,6 +384,7 @@ impl PitchforkServer {
                 limit: Some(limit),
                 order_desc: true,
                 after_id: None,
+                message_filters: Vec::new(),
             })
         })
         .await

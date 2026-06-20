@@ -45,7 +45,7 @@ impl Wait {
 
         let tail_names = vec![qualified_id.clone()];
         tokio::spawn(async move {
-            logs::tail_logs(&tail_names, true, false)
+            logs::tail_logs(&tail_names, true, false, Vec::new())
                 .await
                 .unwrap_or_default();
         });
