@@ -587,6 +587,13 @@
             "null"
           ]
         },
+        "shell": {
+          "description": "Shell command used to execute daemon run scripts",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "startup_log_timestamps": {
           "description": "Show timestamps in startup log output",
           "type": [
