@@ -846,7 +846,7 @@
         "full_cmd": [
           "list"
         ],
-        "usage": "list [--hide-header] [--json]",
+        "usage": "list [FLAGS]",
         "subcommands": {},
         "args": [],
         "flags": [
@@ -873,12 +873,45 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "status",
+            "usage": "--status… <STATUS>",
+            "help": "Filter daemons by status (repeatable for OR logic)",
+            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, available, disabled",
+            "help_first_line": "Filter daemons by status (repeatable for OR logic)",
+            "short": [],
+            "long": [
+              "status"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "STATUS",
+              "usage": "<STATUS>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false,
+              "choices": {
+                "choices": [
+                  "running",
+                  "stopped",
+                  "waiting",
+                  "stopping",
+                  "failed",
+                  "errored",
+                  "available",
+                  "disabled"
+                ]
+              }
+            }
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "List all daemons",
-        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status     Error\n  api     12345  running\n  worker         available\n  db             errored    exit code 127",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n  pitchfork list --status running  Show only running daemons\n  pitchfork ls --status available --status stopped\n                                  Show daemons that are available OR stopped\n\nOutput:\n  Name    Status\n  api     running    https://api.localhost\n  worker  available\n  db      errored    exit code 127",
         "name": "list",
         "aliases": [
           "ls"
@@ -2633,7 +2666,7 @@
   "complete": {
     "id": {
       "name": "id",
-      "run": "pitchfork ls | awk '{print $1}'"
+      "run": "case \"{{words[1]}}\" in\n  stop|wait)\n    pitchfork ls --hide-header --status running | awk '{print $1}'\n    ;;\n  restart)\n    pitchfork ls --hide-header --status running --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  start)\n    pitchfork ls --hide-header --status available --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  enable)\n    pitchfork ls --hide-header --status disabled | awk '{print $1}'\n    ;;\n  disable)\n    pitchfork ls --hide-header --status running --status available | awk '{print $1}'\n    ;;\n  *)\n    pitchfork ls --hide-header | awk '{print $1}'\n    ;;\nesac"
     }
   },
   "about": "Daemons with DX"
