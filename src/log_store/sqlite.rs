@@ -139,21 +139,27 @@ impl SqliteLogStore {
 
     /// Delete rows matching the given IDs, returning the number of rows deleted.
     ///
-    /// Acquires the mutex, builds a `DELETE … WHERE id IN (?,?,…)`, and releases.
+    /// Chunks at 999 to stay within SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
+    /// limit on versions ≤ 3.31 (e.g. Ubuntu 20.04 LTS).
     fn delete_by_ids(&self, ids: &[i64]) -> Result<u64> {
-        if ids.is_empty() {
-            return Ok(0);
-        }
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "DELETE FROM log_entries WHERE id IN ({})",
-            placeholders.join(", ")
-        );
+        const SQLITE_MAX_VARS: usize = 999;
+
+        let mut total = 0u64;
         let conn = self.conn.lock().unwrap();
-        let rows = conn
-            .execute(&sql, rusqlite::params_from_iter(ids.iter()))
-            .into_diagnostic()?;
-        Ok(rows as u64)
+        for chunk in ids.chunks(SQLITE_MAX_VARS) {
+            if chunk.is_empty() {
+                continue;
+            }
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "DELETE FROM log_entries WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            total += conn
+                .execute(&sql, rusqlite::params_from_iter(chunk.iter()))
+                .into_diagnostic()? as u64;
+        }
+        Ok(total)
     }
 
     /// Rotate (delete) old log entries for a specific daemon based on retention policy.
