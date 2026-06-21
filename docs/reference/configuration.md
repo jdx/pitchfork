@@ -101,6 +101,22 @@ The command to execute.
 run = "npm run server"
 ```
 
+::: tip
+Pitchfork wraps the `run` string in a shell (`sh -c "<run>"` by default), so the tracked PID is the shell process, not the daemon itself. To make the tracked PID match the actual daemon binary, prefix the command with `exec`:
+
+```toml
+[daemons.api]
+run = "exec node server.js"
+```
+
+For compound commands, place `exec` before the final command so the shell replaces itself at the right point:
+
+```toml
+[daemons.api]
+run = "cd /app && exec node server.js"
+```
+:::
+
 ### `dir`
 
 Working directory for the daemon. Relative paths are resolved from the `pitchfork.toml` file location. If not set, defaults to the directory containing the `pitchfork.toml` file.

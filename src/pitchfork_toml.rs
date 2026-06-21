@@ -1630,6 +1630,7 @@ impl PitchforkTomlDaemon {
         RunOptions {
             id: id.clone(),
             cmd,
+            run: Some(self.run.clone()),
             force: false,
             shell_pid: None,
             dir: Dir(dir),

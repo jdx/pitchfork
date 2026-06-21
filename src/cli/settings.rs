@@ -299,6 +299,7 @@ fn get_general_value(g: &crate::settings::SettingsGeneral, field: &str) -> Strin
         "log_file_level" => g.log_file_level.clone(),
         "mise" => g.mise.to_string(),
         "mise_bin" => g.mise_bin.clone(),
+        "shell" => g.shell.clone(),
         "startup_log_timestamps" => g.startup_log_timestamps.to_string(),
         _ => String::new(),
     }
@@ -450,6 +451,7 @@ fn apply_general_value(
         "log_file_level" => partial.log_file_level = Some(value.to_string()),
         "mise" => partial.mise = Some(parse_bool_value(value)?),
         "mise_bin" => partial.mise_bin = Some(value.to_string()),
+        "shell" => partial.shell = Some(value.to_string()),
         "startup_log_timestamps" => partial.startup_log_timestamps = Some(parse_bool_value(value)?),
         _ => bail!("unknown general setting '{field}'"),
     }
