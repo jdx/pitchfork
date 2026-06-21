@@ -137,7 +137,31 @@ impl SqliteLogStore {
         Ok(())
     }
 
+    /// Delete rows matching the given IDs, returning the number of rows deleted.
+    ///
+    /// Acquires the mutex, builds a `DELETE … WHERE id IN (?,?,…)`, and releases.
+    fn delete_by_ids(&self, ids: &[i64]) -> Result<u64> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "DELETE FROM log_entries WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let conn = self.conn.lock().unwrap();
+        let rows = conn
+            .execute(&sql, rusqlite::params_from_iter(ids.iter()))
+            .into_diagnostic()?;
+        Ok(rows as u64)
+    }
+
     /// Rotate (delete) old log entries for a specific daemon based on retention policy.
+    ///
+    /// When an archive hook is configured, entries are fetched in batches of
+    /// `batch_size`, the hook is invoked *without* holding the SQLite mutex
+    /// (so concurrent log appends are not blocked), and then deleted by ID.
+    /// Row-read errors are propagated rather than silently dropped.
     pub fn rotate_by_age(
         &self,
         daemon_id: &DaemonId,
@@ -145,88 +169,144 @@ impl SqliteLogStore {
         archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
         let cutoff = (Local::now() - max_age).timestamp_millis();
-        let conn = self.conn.lock().unwrap();
+        let hook = archive_hook.filter(|h| h.is_enabled());
 
-        if let Some(hook) = archive_hook.filter(|h| h.is_enabled()) {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, daemon_id, timestamp, message FROM log_entries
-                     WHERE daemon_id = ?1 AND timestamp < ?2
-                     ORDER BY timestamp ASC, id ASC",
+        if let Some(hook) = hook {
+            let mut total_deleted = 0u64;
+            loop {
+                // Fetch one batch under lock, then release.
+                let entries: Vec<LogEntry> = {
+                    let conn = self.conn.lock().unwrap();
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, daemon_id, timestamp, message FROM log_entries
+                             WHERE daemon_id = ?1 AND timestamp < ?2
+                             ORDER BY timestamp ASC, id ASC
+                             LIMIT ?3",
+                        )
+                        .into_diagnostic()?;
+                    stmt.query_map(
+                        params![daemon_id.qualified(), cutoff, hook.batch_size as i64],
+                        Self::row_to_entry,
+                    )
+                    .into_diagnostic()?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .into_diagnostic()?
+                };
+
+                if entries.is_empty() {
+                    break;
+                }
+
+                let batch_ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
+
+                // Run the hook without holding the mutex.
+                self.archive_entries(&entries, hook, daemon_id, "age")?;
+
+                // Re-acquire lock and delete exactly the archived IDs.
+                let deleted = self.delete_by_ids(&batch_ids)?;
+                total_deleted += deleted;
+            }
+            Ok(total_deleted)
+        } else {
+            let conn = self.conn.lock().unwrap();
+            let rows = conn
+                .execute(
+                    "DELETE FROM log_entries WHERE daemon_id = ?1 AND timestamp < ?2",
+                    params![daemon_id.qualified(), cutoff],
                 )
                 .into_diagnostic()?;
-            let entries: Vec<LogEntry> = stmt
-                .query_map(params![daemon_id.qualified(), cutoff], Self::row_to_entry)
-                .into_diagnostic()?
-                .filter_map(|r| r.ok())
-                .collect();
-            drop(stmt);
-            self.archive_entries(&entries, hook, daemon_id, "age")?;
+            Ok(rows as u64)
         }
-
-        let rows = conn
-            .execute(
-                "DELETE FROM log_entries WHERE daemon_id = ?1 AND timestamp < ?2",
-                params![daemon_id.qualified(), cutoff],
-            )
-            .into_diagnostic()?;
-        Ok(rows as u64)
     }
 
     /// Rotate (delete) old log entries keeping only the most recent `max_count` rows
     /// for a specific daemon.
+    ///
+    /// When an archive hook is configured, entries are fetched in batches of
+    /// `batch_size`, the hook is invoked *without* holding the SQLite mutex
+    /// (so concurrent log appends are not blocked), and then deleted by ID.
+    /// Row-read errors are propagated rather than silently dropped.
     pub fn rotate_by_count(
         &self,
         daemon_id: &DaemonId,
         max_count: u64,
         archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().into_diagnostic()?;
-        let count: i64 = tx
-            .query_row(
-                "SELECT COUNT(*) FROM log_entries WHERE daemon_id = ?1",
-                [daemon_id.qualified()],
-                |row| row.get(0),
-            )
-            .into_diagnostic()?;
-        let to_delete = count.saturating_sub(max_count as i64);
-        let total_deleted = if to_delete > 0 {
-            if let Some(hook) = archive_hook.filter(|h| h.is_enabled()) {
-                let mut stmt = tx
-                    .prepare(
-                        "SELECT id, daemon_id, timestamp, message FROM log_entries
-                         WHERE daemon_id = ?1
-                         ORDER BY timestamp ASC, id ASC
-                         LIMIT ?2",
-                    )
-                    .into_diagnostic()?;
-                let entries: Vec<LogEntry> = stmt
-                    .query_map(
-                        params![daemon_id.qualified(), to_delete],
+        let hook = archive_hook.filter(|h| h.is_enabled());
+
+        // Determine how many entries to delete.
+        let to_delete: i64 = {
+            let conn = self.conn.lock().unwrap();
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM log_entries WHERE daemon_id = ?1",
+                    [daemon_id.qualified()],
+                    |row| row.get(0),
+                )
+                .into_diagnostic()?;
+            count.saturating_sub(max_count as i64)
+        };
+
+        if to_delete <= 0 {
+            return Ok(0);
+        }
+
+        if let Some(hook) = hook {
+            let mut total_deleted = 0u64;
+            let mut remaining = to_delete;
+            loop {
+                let batch_len = remaining.min(hook.batch_size as i64);
+
+                // Fetch one batch under lock, then release.
+                let entries: Vec<LogEntry> = {
+                    let conn = self.conn.lock().unwrap();
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT id, daemon_id, timestamp, message FROM log_entries
+                             WHERE daemon_id = ?1
+                             ORDER BY timestamp ASC, id ASC
+                             LIMIT ?2",
+                        )
+                        .into_diagnostic()?;
+                    stmt.query_map(
+                        params![daemon_id.qualified(), batch_len],
                         Self::row_to_entry,
                     )
                     .into_diagnostic()?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                drop(stmt);
-                self.archive_entries(&entries, hook, daemon_id, "count")?;
-            }
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .into_diagnostic()?
+                };
 
-            let rows = tx
+                if entries.is_empty() {
+                    break;
+                }
+
+                let fetched = entries.len() as i64;
+                let batch_ids: Vec<i64> = entries.iter().map(|e| e.id).collect();
+
+                // Run the hook without holding the mutex.
+                self.archive_entries(&entries, hook, daemon_id, "count")?;
+
+                // Re-acquire lock and delete exactly the archived IDs.
+                let deleted = self.delete_by_ids(&batch_ids)?;
+                total_deleted += deleted;
+                remaining -= fetched;
+            }
+            Ok(total_deleted)
+        } else {
+            let conn = self.conn.lock().unwrap();
+            let rows = conn
                 .execute(
                     "DELETE FROM log_entries WHERE id IN (
-                        SELECT id FROM log_entries WHERE daemon_id = ?1 ORDER BY timestamp ASC, id ASC LIMIT ?2
+                        SELECT id FROM log_entries WHERE daemon_id = ?1
+                        ORDER BY timestamp ASC, id ASC LIMIT ?2
                     )",
                     params![daemon_id.qualified(), to_delete],
                 )
                 .into_diagnostic()?;
-            rows as u64
-        } else {
-            0
-        };
-        tx.commit().into_diagnostic()?;
-        Ok(total_deleted)
+            Ok(rows as u64)
+        }
     }
 
     /// Migrate existing text logs for a daemon into SQLite.

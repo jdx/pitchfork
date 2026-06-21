@@ -377,15 +377,15 @@ impl Supervisor {
                     let count = d
                         .line_retention
                         .and_then(|n| if n > 0 { Some(n as u64) } else { None });
-                    if age.is_some() || count.is_some() {
-                        let hook = d
-                            .archive_hook
-                            .as_ref()
-                            .filter(|cmd| !cmd.trim().is_empty())
-                            .map(|cmd| ArchiveHook {
-                                command: cmd.clone(),
-                                batch_size: settings.logs.archive_hook.batch_size.max(1) as usize,
-                            });
+                    let hook = d
+                        .archive_hook
+                        .as_ref()
+                        .filter(|cmd| !cmd.trim().is_empty())
+                        .map(|cmd| ArchiveHook {
+                            command: cmd.clone(),
+                            batch_size: settings.logs.archive_hook.batch_size.max(1) as usize,
+                        });
+                    if age.is_some() || count.is_some() || hook.is_some() {
                         Some((
                             id.clone(),
                             RetentionPolicy {
