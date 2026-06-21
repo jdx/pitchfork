@@ -323,10 +323,10 @@ impl LogStore for SqliteLogStore {
                     let param = format!("%{}%", escaped);
                     let param_index = query_params.len() + 1;
                     if *case_sensitive {
-                        message_conditions.push(format!(
-                            "message LIKE ?{idx} ESCAPE '\\'",
-                            idx = param_index
-                        ));
+                        // SQLite LIKE is ASCII-case-insensitive by default, so use
+                        // INSTR to enforce literal case-sensitive substring matches.
+                        message_conditions
+                            .push(format!("INSTR(message, ?{idx}) > 0", idx = param_index));
                     } else {
                         message_conditions.push(format!(
                             "LOWER(message) LIKE LOWER(?{idx}) ESCAPE '\\'",
