@@ -41,7 +41,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub retry_count: Option<u32>,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<String>,
-    pub fail_output: Option<String>,
+    /// None preserves existing state; Some(None) clears; Some(Some(_)) sets.
+    pub fail_output: Option<Option<String>>,
     pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<u16>,
     pub ready_cmd: Option<String>,
@@ -157,9 +158,10 @@ impl Supervisor {
             ready_output: opts
                 .ready_output
                 .or(existing.and_then(|d| d.ready_output.clone())),
-            fail_output: opts
-                .fail_output
-                .or(existing.and_then(|d| d.fail_output.clone())),
+            fail_output: match opts.fail_output {
+                Some(v) => v,
+                None => existing.and_then(|d| d.fail_output.clone()),
+            },
             ready_http: opts
                 .ready_http
                 .or(existing.and_then(|d| d.ready_http.clone())),

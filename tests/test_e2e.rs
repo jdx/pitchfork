@@ -1002,6 +1002,60 @@ retry = 0
 }
 
 #[test]
+fn test_fail_output_removed_from_config_clears_state_after_start() {
+    let env = TestEnv::new();
+    env.ensure_binary_exists().unwrap();
+
+    let toml_with_fail_output = r#"
+[daemons.fail_output_state_clear]
+run = "sh -c 'echo READY && sleep 30'"
+ready_output = "READY"
+fail_output = "fatal boot"
+retry = 0
+"#;
+    env.create_toml(toml_with_fail_output);
+
+    let output = env.run_command(&["start", "fail_output_state_clear"]);
+    assert!(
+        output.status.success(),
+        "Initial start command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env.wait_for_status("fail_output_state_clear", "running");
+
+    let output = env.run_command(&["stop", "fail_output_state_clear"]);
+    assert!(
+        output.status.success(),
+        "Stop command should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let toml_without_fail_output = r#"
+[daemons.fail_output_state_clear]
+run = "sh -c 'echo READY && sleep 30'"
+ready_output = "READY"
+retry = 0
+"#;
+    env.create_toml(toml_without_fail_output);
+
+    let output = env.run_command(&["start", "fail_output_state_clear"]);
+    assert!(
+        output.status.success(),
+        "Restart after removing fail_output should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    env.wait_for_status("fail_output_state_clear", "running");
+
+    let state_contents = std::fs::read_to_string(env.state_file_path()).unwrap();
+    assert!(
+        !state_contents.contains("fail_output = \"fatal boot\""),
+        "State file should clear removed fail_output config, got:\n{state_contents}"
+    );
+
+    let _ = env.run_command(&["stop", "fail_output_state_clear"]);
+}
+
+#[test]
 fn test_run_fail_output_override() {
     let env = TestEnv::new();
     env.ensure_binary_exists().unwrap();

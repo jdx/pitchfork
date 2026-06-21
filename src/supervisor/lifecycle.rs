@@ -435,7 +435,7 @@ impl Supervisor {
                         o.retry_count = Some(opts.retry_count);
                         o.ready_delay = opts.ready_delay;
                         o.ready_output = opts.ready_output.clone();
-                        o.fail_output = opts.fail_output.clone();
+                        o.fail_output = Some(opts.fail_output.clone());
                         o.ready_http = opts.ready_http.clone();
                         o.ready_port = effective_ready_port;
                         o.ready_cmd = opts.ready_cmd.clone();
