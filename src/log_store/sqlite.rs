@@ -319,21 +319,24 @@ impl LogStore for SqliteLogStore {
                     pattern,
                     case_sensitive,
                 } => {
-                    let escaped = escape_like_pattern(pattern);
-                    let param = format!("%{}%", escaped);
                     let param_index = query_params.len() + 1;
                     if *case_sensitive {
                         // SQLite LIKE is ASCII-case-insensitive by default, so use
                         // INSTR to enforce literal case-sensitive substring matches.
+                        // INSTR performs a plain byte-level substring search, so no
+                        // LIKE escaping or % delimiters should be added.
                         message_conditions
                             .push(format!("INSTR(message, ?{idx}) > 0", idx = param_index));
+                        query_params.push(Box::new(pattern.clone()));
                     } else {
+                        let escaped = escape_like_pattern(pattern);
+                        let param = format!("%{}%", escaped);
                         message_conditions.push(format!(
                             "LOWER(message) LIKE LOWER(?{idx}) ESCAPE '\\'",
                             idx = param_index
                         ));
+                        query_params.push(Box::new(param));
                     }
-                    query_params.push(Box::new(param));
                 }
                 MessageFilter::Regex { pattern } => {
                     let param_index = query_params.len() + 1;

@@ -2,6 +2,48 @@
 
 Pitchfork includes a built-in web interface for monitoring and managing daemons. The web UI is served as a single-page application (SPA) that communicates with the supervisor via a REST API.
 
+<div class="webui-screenshots">
+  <img src="/img/webui-pc.png" alt="Web UI dashboard on desktop" />
+  <img src="/img/webui-phone.png" alt="Web UI on mobile" />
+</div>
+
+<style scoped>
+/* Side-by-side screenshots at equal visual height.
+   flex-grow ratios match each image's aspect ratio, so when both
+   scale to `height: auto` they render at exactly the same height
+   while always filling the content width. */
+.webui-screenshots {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: center;
+  margin: 1.5rem 0;
+}
+.webui-screenshots img {
+  height: auto;
+  min-width: 0;
+  display: block;
+  border-radius: 8px;
+  border: 1px solid var(--vp-c-divider);
+}
+.webui-screenshots img:first-child {
+  flex: 1.1297 1 0%;
+}
+.webui-screenshots img:last-child {
+  flex: 0.5184 1 0%;
+}
+@media (max-width: 480px) {
+  .webui-screenshots {
+    flex-direction: column;
+  }
+  .webui-screenshots img:first-child,
+  .webui-screenshots img:last-child {
+    flex: none;
+    width: 100%;
+  }
+}
+</style>
+
 ## Enable the Web UI
 
 The web UI is disabled by default. There are several ways to enable it:

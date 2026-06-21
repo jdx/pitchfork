@@ -178,7 +178,7 @@
         "full_cmd": [
           "daemons"
         ],
-        "usage": "daemons <SUBCOMMAND>",
+        "usage": "daemons [--json] <SUBCOMMAND>",
         "subcommands": {
           "add": {
             "full_cmd": [
@@ -733,7 +733,20 @@
           }
         },
         "args": [],
-        "flags": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "List configured daemons from all merged config files.",
@@ -833,7 +846,7 @@
         "full_cmd": [
           "list"
         ],
-        "usage": "list [--hide-header]",
+        "usage": "list [--hide-header] [--json]",
         "subcommands": {},
         "args": [],
         "flags": [
@@ -845,6 +858,18 @@
             "short": [],
             "long": [
               "hide-header"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
             ],
             "hide": false,
             "global": false
@@ -993,6 +1018,18 @@
             "short": [],
             "long": [
               "raw"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
             ],
             "hide": false,
             "global": false
@@ -1166,10 +1203,23 @@
               "proxy",
               "status"
             ],
-            "usage": "proxy status",
+            "usage": "proxy status [--json]",
             "subcommands": {},
             "args": [],
-            "flags": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
             "mounts": [],
             "hide": false,
             "help": "Show all registered slugs and their current state",
@@ -1757,14 +1807,14 @@
         "full_cmd": [
           "settings"
         ],
-        "usage": "settings <SUBCOMMAND>",
+        "usage": "settings [--json] <SUBCOMMAND>",
         "subcommands": {
           "list": {
             "full_cmd": [
               "settings",
               "list"
             ],
-            "usage": "settings list [--group <GROUP>]",
+            "usage": "settings list [--group <GROUP>] [--json]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -1786,6 +1836,18 @@
                   "double_dash": "Optional",
                   "hide": false
                 }
+              },
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
               }
             ],
             "mounts": [],
@@ -1803,7 +1865,7 @@
               "settings",
               "get"
             ],
-            "usage": "settings get <KEY>",
+            "usage": "settings get [--json] <KEY>",
             "subcommands": {},
             "args": [
               {
@@ -1816,7 +1878,20 @@
                 "hide": false
               }
             ],
-            "flags": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
             "mounts": [],
             "hide": false,
             "help": "Get the current value of a setting",
@@ -1900,7 +1975,20 @@
           }
         },
         "args": [],
-        "flags": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "View and modify pitchfork settings",
@@ -2205,7 +2293,7 @@
         "full_cmd": [
           "status"
         ],
-        "usage": "status <ID>",
+        "usage": "status [--json] <ID>",
         "subcommands": {},
         "args": [
           {
@@ -2218,7 +2306,20 @@
             "hide": false
           }
         ],
-        "flags": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "Display the status of a daemon",

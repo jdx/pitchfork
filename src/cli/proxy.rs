@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::cli::json_output::{JsonLanInfo, JsonProxyStatus, JsonSlugEntry, print_json};
 
 /// Manage the pitchfork reverse proxy
 #[derive(Debug, clap::Args)]
@@ -151,7 +152,11 @@ impl Untrust {
 /// with their project directory, daemon name, and current status (running/stopped, port).
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment)]
-struct ProxyStatus {}
+struct ProxyStatus {
+    /// Output in JSON format
+    #[clap(long)]
+    json: bool,
+}
 
 impl ProxyStatus {
     async fn run(&self) -> Result<()> {
@@ -160,6 +165,18 @@ impl ProxyStatus {
         let s = settings();
 
         if !s.proxy.enable {
+            if self.json {
+                return print_json(&JsonProxyStatus {
+                    enabled: false,
+                    scheme: None,
+                    tld: None,
+                    port: None,
+                    lan: None,
+                    tls_cert: None,
+                    trusted: None,
+                    slugs: vec![],
+                });
+            }
             println!("Proxy: disabled");
             println!();
             println!("Enable with:");
@@ -169,6 +186,18 @@ impl ProxyStatus {
         }
 
         let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
+            if self.json {
+                return print_json(&JsonProxyStatus {
+                    enabled: true,
+                    scheme: None,
+                    tld: None,
+                    port: None,
+                    lan: None,
+                    tls_cert: None,
+                    trusted: None,
+                    slugs: vec![],
+                });
+            }
             println!("Proxy: enabled");
             println!(
                 "  proxy.port {} is out of valid port range (1-65535)",
@@ -180,19 +209,21 @@ impl ProxyStatus {
         let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
         let tld = if lan_enabled { "local" } else { &s.proxy.tld };
 
-        println!("Proxy: enabled");
-        println!("  Scheme:  {scheme}");
-        println!("  TLD:     {tld}");
-        println!("  Port:    {effective_port}");
-        if lan_enabled {
+        let lan_info = if lan_enabled {
             let lan_ip = if !s.proxy.lan_ip.is_empty() {
                 s.proxy.lan_ip.clone()
             } else {
                 "auto-detect".to_string()
             };
-            println!("  LAN:     enabled (IP: {lan_ip})");
-        }
-        if s.proxy.https {
+            Some(JsonLanInfo {
+                enabled: true,
+                ip: lan_ip,
+            })
+        } else {
+            None
+        };
+
+        let (tls_cert, trusted) = if s.proxy.https {
             let cert = if s.proxy.tls_cert.is_empty() {
                 format!(
                     "{} (auto-generated)",
@@ -204,15 +235,96 @@ impl ProxyStatus {
             } else {
                 s.proxy.tls_cert.clone()
             };
-            println!("  TLS cert: {cert}");
-
-            // Show trust status
             let cert_path = if s.proxy.tls_cert.is_empty() {
                 crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem")
             } else {
                 std::path::PathBuf::from(&s.proxy.tls_cert)
             };
             let trusted = crate::proxy::trust::is_ca_trusted(&cert_path);
+            (Some(cert), Some(trusted))
+        } else {
+            (None, None)
+        };
+
+        let slugs = PitchforkToml::read_global_slugs();
+        let state_file =
+            crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE).ok();
+        let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
+
+        let slug_entries: Vec<JsonSlugEntry> = slugs
+            .iter()
+            .map(|(slug, entry)| {
+                let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
+                let url = if effective_port == standard_port {
+                    format!("{scheme}://{slug}.{tld}")
+                } else {
+                    format!("{scheme}://{slug}.{tld}:{effective_port}")
+                };
+                let expected_ns = entry.resolve_dir().and_then(|dir| {
+                    crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&dir).ok()
+                });
+                let (status_str, port) = if let Some(sf) = &state_file {
+                    let daemon_entry = sf.daemons.iter().find(|(id, _)| {
+                        id.name() == daemon_name
+                            && match &expected_ns {
+                                Some(ns) => id.namespace() == ns,
+                                None => true,
+                            }
+                    });
+                    if let Some((_, daemon)) = daemon_entry {
+                        let port = daemon
+                            .active_port
+                            .or_else(|| daemon.resolved_port.first().copied());
+                        let status = if daemon.status.is_running() {
+                            "running".to_string()
+                        } else {
+                            daemon.status.to_string()
+                        };
+                        (status, port)
+                    } else {
+                        ("not started".to_string(), None)
+                    }
+                } else {
+                    ("unknown".to_string(), None)
+                };
+                JsonSlugEntry {
+                    slug: slug.clone(),
+                    url,
+                    dir: entry
+                        .resolve_dir()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_else(|| "(unresolved)".to_string()),
+                    daemon: daemon_name.to_string(),
+                    status: status_str,
+                    port,
+                }
+            })
+            .collect();
+
+        if self.json {
+            return print_json(&JsonProxyStatus {
+                enabled: true,
+                scheme: Some(scheme.to_string()),
+                tld: Some(tld.to_string()),
+                port: Some(effective_port),
+                lan: lan_info,
+                tls_cert,
+                trusted,
+                slugs: slug_entries,
+            });
+        }
+
+        println!("Proxy: enabled");
+        println!("  Scheme:  {scheme}");
+        println!("  TLD:     {tld}");
+        println!("  Port:    {effective_port}");
+        if let Some(ref lan) = lan_info {
+            println!("  LAN:     enabled (IP: {})", lan.ip);
+        }
+        if let Some(ref cert) = tls_cert {
+            println!("  TLS cert: {cert}");
+        }
+        if let Some(trusted) = trusted {
             println!(
                 "  Trusted: {}",
                 if trusted {
@@ -224,9 +336,7 @@ impl ProxyStatus {
         }
         println!();
 
-        // Show all registered slugs from global config
-        let slugs = PitchforkToml::read_global_slugs();
-        if slugs.is_empty() {
+        if slug_entries.is_empty() {
             println!("No slugs registered.");
             println!();
             println!("Add a slug with:");
@@ -235,64 +345,16 @@ impl ProxyStatus {
         } else {
             println!("Registered slugs:");
             println!();
-
-            // Read state file for daemon status
-            let state_file =
-                crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE).ok();
-
-            let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
-
-            for (slug, entry) in &slugs {
-                let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
-                let url = if effective_port == standard_port {
-                    format!("{scheme}://{slug}.{tld}")
-                } else {
-                    format!("{scheme}://{slug}.{tld}:{effective_port}")
-                };
-
-                // Try to find the daemon in the state file, scoped to the slug's
-                // registered project directory to avoid picking the wrong daemon
-                // when multiple projects have daemons with the same short name.
-                let expected_ns = entry.resolve_dir().and_then(|dir| {
-                    crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&dir).ok()
-                });
-                let status_str = if let Some(sf) = &state_file {
-                    let daemon_entry = sf.daemons.iter().find(|(id, _)| {
-                        id.name() == daemon_name
-                            && match &expected_ns {
-                                Some(ns) => id.namespace() == ns,
-                                None => true,
-                            }
-                    });
-                    if let Some((_, daemon)) = daemon_entry {
-                        let port_str = daemon
-                            .active_port
-                            .or_else(|| daemon.resolved_port.first().copied())
-                            .map(|p| format!(" (port {p})"))
-                            .unwrap_or_default();
-                        if daemon.status.is_running() {
-                            format!("running{port_str}")
-                        } else {
-                            format!("{}", daemon.status)
-                        }
-                    } else {
-                        "not started".to_string()
-                    }
-                } else {
-                    "unknown".to_string()
-                };
-
-                println!("  {slug}");
-                println!("    URL:    {url}");
-                println!(
-                    "    Dir:    {}",
-                    entry
-                        .resolve_dir()
-                        .map(|d| d.display().to_string())
-                        .unwrap_or_else(|| "(unresolved)".to_string())
-                );
-                println!("    Daemon: {daemon_name}");
-                println!("    Status: {status_str}");
+            for entry in &slug_entries {
+                println!("  {}", entry.slug);
+                println!("    URL:    {}", entry.url);
+                println!("    Dir:    {}", entry.dir);
+                println!("    Daemon: {}", entry.daemon);
+                let port_str = entry
+                    .port
+                    .map(|p| format!(" (port {p})"))
+                    .unwrap_or_default();
+                println!("    Status: {}{port_str}", entry.status);
                 println!();
             }
         }

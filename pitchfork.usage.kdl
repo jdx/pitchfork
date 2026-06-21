@@ -31,6 +31,7 @@ cmd clean help="Removes stopped/failed daemons from `pitchfork list`" {
 }
 cmd daemons help="List configured daemons from all merged config files." {
     alias daemon
+    flag --json help="Output in JSON format"
     cmd add help="Add a new daemon to pitchfork.toml" {
         alias a
         long_help "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork daemons add api bun run server\n                                 Add daemon using positional args\n  pitchfork daemons add api --run 'npm start'\n                                 Add daemon with explicit run command\n  pitchfork daemons add api -- bun run server\n                                 Add daemon with explicit args after --\n  pitchfork daemons add api --run 'npm start' --retry 3\n                                 Add with retry policy\n  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                 Add with file watching\n  pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                 Add with auto start/stop hooks\n  pitchfork daemons add worker --run './worker' --depends api\n                                 Add with daemon dependency\n  pitchfork daemons add api --run 'npm start' --local\n                                  Add to pitchfork.local.toml instead\n  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate\n                                  Add cron daemon that triggers immediately\n"
@@ -128,6 +129,7 @@ cmd list help="List all daemons" {
     alias ls
     long_help "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status     Error\n  api     12345  running\n  worker         available\n  db             errored    exit code 127"
     flag --hide-header help="Hide the table header row"
+    flag --json help="Output in JSON format"
 }
 cmd logs help="Displays logs for daemon(s)" {
     alias l
@@ -148,6 +150,7 @@ cmd logs help="Displays logs for daemon(s)" {
     }
     flag --no-pager help="Disable pager even in interactive terminal"
     flag --raw help="Output raw log lines without color or formatting"
+    flag --json help="Output in JSON format"
     flag --grep help="Filter logs by case-insensitive substring (can be repeated)" var=#true {
         long_help "Filter logs by case-insensitive substring (can be repeated)\n\nMultiple --grep options are combined with OR."
         arg <GREP>
@@ -178,6 +181,7 @@ cmd proxy subcommand_required=#true help="Manage the pitchfork reverse proxy" {
     }
     cmd status help="Show all registered slugs and their current state" {
         long_help "Show all registered slugs and their current state\n\nDisplays the proxy configuration and lists all slugs from the global config\nwith their project directory, daemon name, and current status (running/stopped, port)."
+        flag --json help="Output in JSON format"
     }
     cmd add help="Add a slug mapping to the global config" {
         long_help "Add a slug mapping to the global config\n\nRegisters a slug in ~/.config/pitchfork/config.toml that maps to a project\ndirectory and daemon name. The proxy uses this to route requests.\n\nIf --dir is not specified, uses the current directory.\nIf --daemon is not specified, defaults to the slug name.\n\nExample:\n  pitchfork proxy add api\n  pitchfork proxy add api --daemon server\n  pitchfork proxy add api --dir /home/user/my-api --daemon server"
@@ -260,13 +264,16 @@ cmd schema hide=#true help="Generate JSON Schema for pitchfork.toml configuratio
 cmd settings help="View and modify pitchfork settings" {
     alias setting
     long_help "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n  list    List all available settings with types and defaults\n  get     Get the current value of a setting\n  set     Set a setting value in a config file\n\nExamples:\n  pitchfork settings                        Show all current settings\n  pitchfork settings list                   List all available settings\n  pitchfork settings get general.log_level  Get a specific setting\n  pitchfork settings set general.log_level debug\n  pitchfork settings set web.auto_start true --global\n  pitchfork settings set supervisor.stop_timeout 10s --local\n  pitchfork settings set supervisor.stop_timeout 10s --project"
+    flag --json help="Output in JSON format"
     cmd list help="List all available settings with types and defaults" {
         alias ls
         flag --group help="Only show settings in a specific group (e.g., \"general\", \"web\", \"supervisor\")" {
             arg <GROUP>
         }
+        flag --json help="Output in JSON format"
     }
     cmd get help="Get the current value of a setting" {
+        flag --json help="Output in JSON format"
         arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
     }
     cmd set help="Set a setting value in a config file" {
@@ -318,6 +325,7 @@ cmd start help="Starts a daemon from a pitchfork.toml file" {
 cmd status help="Display the status of a daemon" {
     alias stat
     long_help "Display the status of a daemon\n\nShows detailed information about a single daemon including its PID and\ncurrent status (running, stopped, failed, etc.).\n\nExample:\n  pitchfork status api\n\nOutput:\n  Name: api\n  PID: 12345\n  Status: running"
+    flag --json help="Output in JSON format"
     arg <ID> help="Name of the daemon to check"
 }
 cmd stop help="Sends a stop signal to a daemon" {

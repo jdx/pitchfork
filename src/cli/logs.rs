@@ -1,3 +1,4 @@
+use crate::cli::json_output::{JsonLogEntry, print_json};
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogQuery, LogStore, MessageFilter};
@@ -190,6 +191,10 @@ pub struct Logs {
     #[clap(long)]
     raw: bool,
 
+    /// Output in JSON format
+    #[clap(long, conflicts_with = "raw", conflicts_with = "tail")]
+    json: bool,
+
     /// Filter logs by case-insensitive substring (can be repeated)
     ///
     /// Multiple --grep options are combined with OR.
@@ -207,13 +212,9 @@ pub struct Logs {
 
 impl Logs {
     pub async fn run(&self) -> Result<()> {
-        // Migrate legacy log directories (old format: "api" → new format: "legacy--api").
-        // This is idempotent and silent so it is safe to run on every invocation.
         migrate_legacy_log_dirs();
 
-        // Resolve user-provided IDs to qualified IDs
         let resolved_ids: Vec<DaemonId> = if self.id.is_empty() {
-            // When no IDs provided, use all daemon IDs
             get_all_daemon_ids()?
         } else {
             PitchforkToml::resolve_ids(&self.id)?
@@ -237,15 +238,14 @@ impl Logs {
 
         let message_filters = self.build_message_filters()?;
 
+        if self.json {
+            return self.output_json(&resolved_ids, from, to, message_filters);
+        }
+
         let single_daemon = resolved_ids.len() == 1;
-        self.print_existing_logs(
-            &resolved_ids,
-            from,
-            to,
-            single_daemon,
-            self.tail,
-            message_filters.clone(),
-        )?;
+        let log_lines = self.fetch_log_lines(&resolved_ids, from, to, message_filters.clone())?;
+        let has_time_filter = from.is_some() || to.is_some();
+        self.output_logs(log_lines, single_daemon, has_time_filter, self.tail)?;
         if self.tail {
             tail_logs(&resolved_ids, single_daemon, true, message_filters).await?;
         }
@@ -274,18 +274,14 @@ impl Logs {
         Ok(filters)
     }
 
-    fn print_existing_logs(
+    fn fetch_log_lines(
         &self,
         resolved_ids: &[DaemonId],
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
-        single_daemon: bool,
-        force_no_pager: bool,
         message_filters: Vec<MessageFilter>,
-    ) -> Result<()> {
+    ) -> Result<Vec<(String, String, String)>> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
-        let id_width = daemon_ids.iter().map(|id| id.len()).max().unwrap_or(0);
-        trace!("log query for: {}", daemon_ids.iter().join(", "));
         let has_time_filter = from.is_some() || to.is_some();
 
         let opts = LogQuery {
@@ -328,34 +324,49 @@ impl Logs {
             log_lines.into_iter().rev().collect_vec()
         };
 
-        self.output_logs(
-            log_lines,
-            single_daemon,
-            id_width,
-            has_time_filter,
-            self.raw,
-            force_no_pager,
-        )?;
-        Ok(())
+        Ok(log_lines)
+    }
+
+    fn output_json(
+        &self,
+        resolved_ids: &[DaemonId],
+        from: Option<DateTime<Local>>,
+        to: Option<DateTime<Local>>,
+        message_filters: Vec<MessageFilter>,
+    ) -> Result<()> {
+        let log_lines = self.fetch_log_lines(resolved_ids, from, to, message_filters)?;
+
+        let json_entries: Vec<JsonLogEntry> = log_lines
+            .into_iter()
+            .map(|(timestamp, daemon_id, message)| JsonLogEntry {
+                timestamp,
+                daemon_id,
+                message: console::strip_ansi_codes(&message).to_string(),
+            })
+            .collect();
+
+        print_json(&json_entries)
     }
 
     fn output_logs(
         &self,
         log_lines: Vec<(String, String, String)>,
         single_daemon: bool,
-        id_width: usize,
         has_time_filter: bool,
-        raw: bool,
         force_no_pager: bool,
     ) -> Result<()> {
         if log_lines.is_empty() {
             return Ok(());
         }
 
-        let strip_ansi = raw || !console::colors_enabled();
+        let id_width = log_lines
+            .iter()
+            .map(|(_, id, _)| id.len())
+            .max()
+            .unwrap_or(0);
+        let strip_ansi = self.raw || !console::colors_enabled();
 
-        // Raw mode: output without formatting and without pager
-        if raw {
+        if self.raw {
             for (date, id, msg) in log_lines {
                 let line = format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi);
                 println!("{line}");

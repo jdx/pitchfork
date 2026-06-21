@@ -10,6 +10,7 @@ mod completion;
 mod daemons;
 mod disable;
 mod enable;
+mod json_output;
 mod list;
 pub mod logs;
 mod mcp;
