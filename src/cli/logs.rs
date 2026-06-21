@@ -597,6 +597,9 @@ pub async fn tail_logs(
         .iter()
         .map(|id| {
             let since = if start_from_end {
+                // Anchor to the last entry overall, not the last filtered entry,
+                // so --tail combined with a filter does not rescan from row 1
+                // on every poll when no message matches yet.
                 match LOG_STORE.query(&LogQuery {
                     daemon_ids: vec![id.qualified()],
                     from: None,
@@ -604,7 +607,7 @@ pub async fn tail_logs(
                     limit: Some(1),
                     order_desc: true,
                     after_id: None,
-                    message_filters: message_filters.clone(),
+                    message_filters: Vec::new(),
                 }) {
                     Ok(entries) => entries.first().map(|e| e.id).unwrap_or(0),
                     Err(_) => 0,
