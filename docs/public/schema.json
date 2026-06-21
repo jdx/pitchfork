@@ -669,6 +669,13 @@
             "string",
             "null"
           ]
+        },
+        "timestamp": {
+          "description": "Show timestamps in log output",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },

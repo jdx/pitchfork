@@ -1033,6 +1033,18 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "no-timestamp",
+            "usage": "--no-timestamp",
+            "help": "Omit timestamps from log output",
+            "help_first_line": "Omit timestamps from log output",
+            "short": [],
+            "long": [
+              "no-timestamp"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
