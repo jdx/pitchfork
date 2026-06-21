@@ -217,7 +217,12 @@ impl Procs {
                 continue;
             }
             let process_pgid = unsafe { libc::getpgid(pid.as_u32() as i32) };
-            if process_pgid == pgid {
+            let pgid_error = if process_pgid == -1 {
+                std::io::Error::last_os_error().raw_os_error()
+            } else {
+                None
+            };
+            if process_pgid_matches_group(pid.as_u32(), pgid, process_pgid, pgid_error) {
                 return true;
             }
         }
@@ -646,6 +651,36 @@ fn signal_name(sig: i32) -> &'static str {
     }
 }
 
+#[cfg(unix)]
+fn process_pgid_matches_group(
+    pid: u32,
+    pgid: i32,
+    process_pgid: i32,
+    raw_error: Option<i32>,
+) -> bool {
+    if process_pgid == pgid {
+        return true;
+    }
+    if process_pgid != -1 {
+        return false;
+    }
+
+    match raw_error {
+        Some(libc::ESRCH) => false,
+        Some(libc::EPERM) => {
+            debug!(
+                "cannot query process group for pid {pid}: permission denied; treating it as live while waiting for group {pgid}"
+            );
+            true
+        }
+        Some(err) => {
+            debug!("cannot query process group for pid {pid}: os error {err}");
+            false
+        }
+        None => false,
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -819,6 +854,26 @@ mod tests {
         assert!(
             !procs.has_live_non_zombie_process_in_group(parent_pid as i32),
             "process group should have no live non-zombie members after stop"
+        );
+    }
+
+    #[test]
+    fn getpgid_eperm_counts_as_live_group_member() {
+        assert!(
+            process_pgid_matches_group(1234, 1234, -1, Some(libc::EPERM)),
+            "EPERM means the process exists but its group is inaccessible, so it must not be treated as absent"
+        );
+        assert!(
+            !process_pgid_matches_group(1234, 1234, -1, Some(libc::ESRCH)),
+            "ESRCH means the process is gone"
+        );
+        assert!(
+            !process_pgid_matches_group(1234, 1234, 5678, None),
+            "known different PGID should not match"
+        );
+        assert!(
+            process_pgid_matches_group(1234, 1234, 1234, None),
+            "known matching PGID should match"
         );
     }
 }
