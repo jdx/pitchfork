@@ -7,3 +7,7 @@ git_release_enable = true
 git_release_draft = true
 # Skip semver check (this is a CLI binary, not a library)
 semver_check = false
+# UI assets in ui/dist/ are gitignored build artifacts but included in the
+# published crate via Cargo.toml's `include` field. Allow dirty publish so
+# cargo publish doesn't fail on the generated files.
+publish_allow_dirty = true
