@@ -1,12 +1,12 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::log_store::{LogEntry, LogQuery, LogStore};
+use crate::log_store::{ArchiveHook, LogEntry, LogQuery, LogStore};
 use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -66,10 +66,104 @@ impl SqliteLogStore {
         })
     }
 
+    fn row_to_entry(row: &rusqlite::Row) -> rusqlite::Result<LogEntry> {
+        let id: i64 = row.get(0)?;
+        let daemon_id: String = row.get(1)?;
+        let ts_millis: i64 = row.get(2)?;
+        let message: String = row.get(3)?;
+        let timestamp = Local
+            .timestamp_millis_opt(ts_millis)
+            .single()
+            .unwrap_or_else(Local::now);
+        Ok(LogEntry {
+            id,
+            daemon_id,
+            timestamp,
+            message,
+        })
+    }
+
+    fn archive_entries(
+        &self,
+        entries: &[LogEntry],
+        archive_hook: &ArchiveHook,
+        daemon_id: &DaemonId,
+        reason: &str,
+    ) -> Result<()> {
+        use std::process::{Command, Stdio};
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        for chunk in entries.chunks(archive_hook.batch_size.max(1)) {
+            let mut child = Command::new("sh")
+                .arg("-c")
+                .arg(&archive_hook.command)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
+                .env("PITCHFORK_ARCHIVE_REASON", reason)
+                .spawn()
+                .into_diagnostic()
+                .map_err(|e| miette::miette!("failed to spawn archive hook: {e}"))?;
+
+            {
+                let stdin = child.stdin.take().expect("piped stdin should be available");
+                let mut stdin = std::io::BufWriter::new(stdin);
+                for entry in chunk {
+                    let line = serde_json::json!({
+                        "id": entry.id,
+                        "daemon_id": entry.daemon_id,
+                        "timestamp": entry.timestamp.to_rfc3339(),
+                        "message": entry.message,
+                    });
+                    writeln!(stdin, "{}", line).into_diagnostic()?;
+                }
+                // Closing stdin signals EOF to the hook.
+            }
+
+            let output = child.wait_with_output().into_diagnostic()?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(miette::miette!(
+                    "archive hook failed with status {}: {stderr}",
+                    output.status
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Rotate (delete) old log entries for a specific daemon based on retention policy.
-    pub fn rotate_by_age(&self, daemon_id: &DaemonId, max_age: chrono::Duration) -> Result<u64> {
+    pub fn rotate_by_age(
+        &self,
+        daemon_id: &DaemonId,
+        max_age: chrono::Duration,
+        archive_hook: Option<&ArchiveHook>,
+    ) -> Result<u64> {
         let cutoff = (Local::now() - max_age).timestamp_millis();
         let conn = self.conn.lock().unwrap();
+
+        if let Some(hook) = archive_hook.filter(|h| h.is_enabled()) {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, daemon_id, timestamp, message FROM log_entries
+                     WHERE daemon_id = ?1 AND timestamp < ?2
+                     ORDER BY timestamp ASC, id ASC",
+                )
+                .into_diagnostic()?;
+            let entries: Vec<LogEntry> = stmt
+                .query_map(params![daemon_id.qualified(), cutoff], Self::row_to_entry)
+                .into_diagnostic()?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(stmt);
+            self.archive_entries(&entries, hook, daemon_id, "age")?;
+        }
+
         let rows = conn
             .execute(
                 "DELETE FROM log_entries WHERE daemon_id = ?1 AND timestamp < ?2",
@@ -81,7 +175,12 @@ impl SqliteLogStore {
 
     /// Rotate (delete) old log entries keeping only the most recent `max_count` rows
     /// for a specific daemon.
-    pub fn rotate_by_count(&self, daemon_id: &DaemonId, max_count: u64) -> Result<u64> {
+    pub fn rotate_by_count(
+        &self,
+        daemon_id: &DaemonId,
+        max_count: u64,
+        archive_hook: Option<&ArchiveHook>,
+    ) -> Result<u64> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().into_diagnostic()?;
         let count: i64 = tx
@@ -93,6 +192,27 @@ impl SqliteLogStore {
             .into_diagnostic()?;
         let to_delete = count.saturating_sub(max_count as i64);
         let total_deleted = if to_delete > 0 {
+            if let Some(hook) = archive_hook.filter(|h| h.is_enabled()) {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT id, daemon_id, timestamp, message FROM log_entries
+                         WHERE daemon_id = ?1
+                         ORDER BY timestamp ASC, id ASC
+                         LIMIT ?2",
+                    )
+                    .into_diagnostic()?;
+                let entries: Vec<LogEntry> = stmt
+                    .query_map(
+                        params![daemon_id.qualified(), to_delete],
+                        Self::row_to_entry,
+                    )
+                    .into_diagnostic()?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                drop(stmt);
+                self.archive_entries(&entries, hook, daemon_id, "count")?;
+            }
+
             let rows = tx
                 .execute(
                     "DELETE FROM log_entries WHERE id IN (
@@ -344,6 +464,7 @@ impl LogStore for SqliteLogStore {
         &self,
         policy: &super::RetentionPolicy,
         excluded_daemon_ids: &[DaemonId],
+        archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
         let daemon_ids = self.list_daemon_ids()?;
         let excluded: HashSet<String> = excluded_daemon_ids.iter().map(|d| d.qualified()).collect();
@@ -356,10 +477,10 @@ impl LogStore for SqliteLogStore {
                 DaemonId::try_new("global", &id_str).unwrap_or_else(|_| DaemonId::pitchfork())
             });
             if let Some(dur) = policy.age {
-                total += self.rotate_by_age(&id, dur)?;
+                total += self.rotate_by_age(&id, dur, archive_hook)?;
             }
             if let Some(n) = policy.count {
-                total += self.rotate_by_count(&id, n)?;
+                total += self.rotate_by_count(&id, n, archive_hook)?;
             }
         }
         Ok(total)
@@ -369,13 +490,14 @@ impl LogStore for SqliteLogStore {
         &self,
         daemon_id: &DaemonId,
         policy: &super::RetentionPolicy,
+        archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
         let mut total = 0u64;
         if let Some(dur) = policy.age {
-            total += self.rotate_by_age(daemon_id, dur)?;
+            total += self.rotate_by_age(daemon_id, dur, archive_hook)?;
         }
         if let Some(n) = policy.count {
-            total += self.rotate_by_count(daemon_id, n)?;
+            total += self.rotate_by_count(daemon_id, n, archive_hook)?;
         }
         Ok(total)
     }

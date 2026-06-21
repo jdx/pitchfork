@@ -446,6 +446,7 @@ impl Supervisor {
                         o.memory_limit = opts.memory_limit;
                         o.cpu_limit = opts.cpu_limit;
                         o.stop_signal = opts.stop_signal;
+                        o.archive_hook = opts.archive_hook.clone();
                         o.pty = opts.pty;
                     })
                     .build(),
