@@ -21,7 +21,7 @@
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork disable <ID>`](/cli/disable.md)
 - [`pitchfork enable <ID>`](/cli/enable.md)
-- [`pitchfork list [--hide-header] [--json]`](/cli/list.md)
+- [`pitchfork list [FLAGS]`](/cli/list.md)
 - [`pitchfork logs [FLAGS] [ID]…`](/cli/logs.md)
 - [`pitchfork mcp`](/cli/mcp.md)
 - [`pitchfork proxy <SUBCOMMAND>`](/cli/proxy.md)
