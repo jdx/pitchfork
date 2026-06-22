@@ -22,7 +22,7 @@ use regex::Regex;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::CString;
-use std::sync::atomic;
+use std::sync::{Arc, atomic};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::select;
@@ -580,8 +580,28 @@ impl Supervisor {
                 // Drop the last sender so the channel closes when all readers finish.
                 drop(output_tx);
             }
-            let log_store = &*LOG_STORE;
+            let log_store = Arc::clone(&LOG_STORE);
             let format_line = |line: String| line;
+
+            const LOG_BATCH_SIZE: usize = 100;
+            const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+            let mut log_buffer: Vec<String> = Vec::with_capacity(LOG_BATCH_SIZE);
+            let mut log_flush_interval = tokio::time::interval(LOG_FLUSH_INTERVAL);
+            log_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            let flush_logs = |buffer: &mut Vec<String>| {
+                if buffer.is_empty() {
+                    return;
+                }
+                let store = Arc::clone(&log_store);
+                let id = id.clone();
+                let batch = std::mem::take(buffer);
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = store.append_batch(&id, &batch) {
+                        error!("Failed to write batch to log for daemon {id}: {e}");
+                    }
+                });
+            };
 
             // SQLite WAL mode provides automatic durability; no explicit flush needed.
 
@@ -720,8 +740,9 @@ impl Supervisor {
                 select! {
                     Some(line) = output_rx.recv() => {
                         let formatted = format_line(line.clone());
-                        if let Err(e) = log_store.append(&id, &formatted) {
-                            error!("Failed to write to log for daemon {id}: {e}");
+                        log_buffer.push(formatted.clone());
+                        if log_buffer.len() >= LOG_BATCH_SIZE {
+                            flush_logs(&mut log_buffer);
                         }
                         trace!("output: {id} {formatted}");
 
@@ -912,8 +933,14 @@ impl Supervisor {
                             detect_and_store_active_port(id.clone(), daemon_pid);
                         }
                     }
+                    _ = log_flush_interval.tick() => {
+                        flush_logs(&mut log_buffer);
+                    }
                 }
             }
+
+            // Flush any remaining log lines before the process exits.
+            flush_logs(&mut log_buffer);
 
             // Clear active_port since the process is no longer running
             {

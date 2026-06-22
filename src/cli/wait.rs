@@ -46,9 +46,15 @@ impl Wait {
 
         let tail_names = vec![qualified_id.clone()];
         tokio::spawn(async move {
-            logs::tail_logs(&tail_names, true, false, Vec::new(), settings().logs.timestamp)
-                .await
-                .unwrap_or_default();
+            logs::tail_logs(
+                &tail_names,
+                true,
+                false,
+                Vec::new(),
+                settings().logs.timestamp,
+            )
+            .await
+            .unwrap_or_default();
         });
 
         let mut interval = time::interval(time::Duration::from_millis(100));

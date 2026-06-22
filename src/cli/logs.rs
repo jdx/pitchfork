@@ -268,7 +268,14 @@ impl Logs {
             show_timestamp,
         )?;
         if self.tail {
-            tail_logs(&resolved_ids, single_daemon, true, message_filters, show_timestamp).await?;
+            tail_logs(
+                &resolved_ids,
+                single_daemon,
+                true,
+                message_filters,
+                show_timestamp,
+            )
+            .await?;
         }
 
         Ok(())
