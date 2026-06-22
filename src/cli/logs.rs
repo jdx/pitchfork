@@ -3,6 +3,7 @@ use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogQuery, LogStore, MessageFilter};
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::ui::style::{edim, estyle, ndim};
 use crate::{Result, env};
@@ -62,6 +63,7 @@ fn format_log_line(
     single_daemon: bool,
     id_width: usize,
     strip_ansi: bool,
+    show_timestamp: bool,
 ) -> String {
     let msg = if strip_ansi {
         console::strip_ansi_codes(msg).to_string()
@@ -69,12 +71,20 @@ fn format_log_line(
         msg.to_string()
     };
     if single_daemon {
-        format!("{} {}", ndim(date), msg)
+        if show_timestamp {
+            format!("{} {}", ndim(date), msg)
+        } else {
+            msg
+        }
     } else {
         let colors_on = !strip_ansi && console::colors_enabled();
         let colored = dimmed_id(id, colors_on);
         let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
-        format!("{}  {} {}", padded, ndim(date), msg)
+        if show_timestamp {
+            format!("{}  {} {}", padded, ndim(date), msg)
+        } else {
+            format!("{}  {}", padded, msg)
+        }
     }
 }
 
@@ -208,6 +218,10 @@ pub struct Logs {
     /// Make --grep matching case-sensitive
     #[clap(long)]
     case_sensitive: bool,
+
+    /// Omit timestamps from log output
+    #[clap(long)]
+    no_timestamp: bool,
 }
 
 impl Logs {
@@ -243,11 +257,18 @@ impl Logs {
         }
 
         let single_daemon = resolved_ids.len() == 1;
+        let show_timestamp = settings().logs.timestamp && !self.no_timestamp;
         let log_lines = self.fetch_log_lines(&resolved_ids, from, to, message_filters.clone())?;
         let has_time_filter = from.is_some() || to.is_some();
-        self.output_logs(log_lines, single_daemon, has_time_filter, self.tail)?;
+        self.output_logs(
+            log_lines,
+            single_daemon,
+            has_time_filter,
+            self.tail,
+            show_timestamp,
+        )?;
         if self.tail {
-            tail_logs(&resolved_ids, single_daemon, true, message_filters).await?;
+            tail_logs(&resolved_ids, single_daemon, true, message_filters, show_timestamp).await?;
         }
 
         Ok(())
@@ -354,6 +375,7 @@ impl Logs {
         single_daemon: bool,
         has_time_filter: bool,
         force_no_pager: bool,
+        show_timestamp: bool,
     ) -> Result<()> {
         if log_lines.is_empty() {
             return Ok(());
@@ -368,7 +390,15 @@ impl Logs {
 
         if self.raw {
             for (date, id, msg) in log_lines {
-                let line = format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi);
+                let line = format_log_line(
+                    &date,
+                    &id,
+                    &msg,
+                    single_daemon,
+                    id_width,
+                    strip_ansi,
+                    show_timestamp,
+                );
                 println!("{line}");
             }
             return Ok(());
@@ -383,12 +413,21 @@ impl Logs {
                 id_width,
                 has_time_filter,
                 strip_ansi,
+                show_timestamp,
             )?;
         } else {
             for (date, id, msg) in log_lines {
                 println!(
                     "{}",
-                    format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
+                    format_log_line(
+                        &date,
+                        &id,
+                        &msg,
+                        single_daemon,
+                        id_width,
+                        strip_ansi,
+                        show_timestamp,
+                    )
                 );
             }
         }
@@ -403,6 +442,7 @@ impl Logs {
         id_width: usize,
         has_time_filter: bool,
         strip_ansi: bool,
+        show_timestamp: bool,
     ) -> Result<()> {
         // When time filter is used, start at top; otherwise start at end
         let pager_config = PagerConfig::new(!has_time_filter);
@@ -413,7 +453,15 @@ impl Logs {
                     for (date, id, msg) in log_lines {
                         let line = format!(
                             "{}\n",
-                            format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
+                            format_log_line(
+                                &date,
+                                &id,
+                                &msg,
+                                single_daemon,
+                                id_width,
+                                strip_ansi,
+                                show_timestamp,
+                            )
                         );
                         if stdin.write_all(line.as_bytes()).is_err() {
                             break;
@@ -425,7 +473,15 @@ impl Logs {
                     for (date, id, msg) in log_lines {
                         println!(
                             "{}",
-                            format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
+                            format_log_line(
+                                &date,
+                                &id,
+                                &msg,
+                                single_daemon,
+                                id_width,
+                                strip_ansi,
+                                show_timestamp,
+                            )
                         );
                     }
                 }
@@ -435,7 +491,15 @@ impl Logs {
                 for (date, id, msg) in log_lines {
                     println!(
                         "{}",
-                        format_log_line(&date, &id, &msg, single_daemon, id_width, strip_ansi)
+                        format_log_line(
+                            &date,
+                            &id,
+                            &msg,
+                            single_daemon,
+                            id_width,
+                            strip_ansi,
+                            show_timestamp,
+                        )
                     );
                 }
             }
@@ -594,6 +658,7 @@ pub async fn tail_logs(
     single_daemon: bool,
     start_from_end: bool,
     message_filters: Vec<MessageFilter>,
+    show_timestamp: bool,
 ) -> Result<()> {
     // Poll SQLite log store for new entries since last known row id.
     let id_width = names
@@ -671,7 +736,15 @@ pub async fn tail_logs(
             for (date, name, msg) in out {
                 println!(
                     "{}",
-                    format_log_line(&date, &name, &msg, single_daemon, id_width, strip_ansi)
+                    format_log_line(
+                        &date,
+                        &name,
+                        &msg,
+                        single_daemon,
+                        id_width,
+                        strip_ansi,
+                        show_timestamp,
+                    )
                 );
             }
         }

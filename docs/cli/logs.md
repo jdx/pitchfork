@@ -86,3 +86,7 @@ Filter logs by regular expression
 ### `--case-sensitive`
 
 Make --grep matching case-sensitive
+
+### `--no-timestamp`
+
+Omit timestamps from log output

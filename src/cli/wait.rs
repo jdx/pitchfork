@@ -2,6 +2,7 @@ use crate::Result;
 use crate::cli::logs;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::procs::PROCS;
+use crate::settings::settings;
 use crate::state_file::StateFile;
 use tokio::time;
 
@@ -45,7 +46,7 @@ impl Wait {
 
         let tail_names = vec![qualified_id.clone()];
         tokio::spawn(async move {
-            logs::tail_logs(&tail_names, true, false, Vec::new())
+            logs::tail_logs(&tail_names, true, false, Vec::new(), settings().logs.timestamp)
                 .await
                 .unwrap_or_default();
         });
