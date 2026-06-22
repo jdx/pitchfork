@@ -594,6 +594,13 @@
             "null"
           ]
         },
+        "shell": {
+          "description": "Shell command used to execute daemon run scripts",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "startup_log_timestamps": {
           "description": "Show timestamps in startup log output",
           "type": [
@@ -690,6 +697,13 @@
           "description": "Time-based log retention duration (e.g. '7d', '30d')",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "timestamp": {
+          "description": "Show timestamps in log output",
+          "type": [
+            "boolean",
             "null"
           ]
         }

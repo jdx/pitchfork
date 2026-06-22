@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.0](https://github.com/jdx/pitchfork/compare/v2.13.1...v2.14.0) - 2026-06-21
+
+### Added
+
+- *(cli)* add `list --status` and optimize shell completion ([#529](https://github.com/jdx/pitchfork/pull/529))
+- *(logs)* add --no-timestamp flag and logs.timestamp setting ([#526](https://github.com/jdx/pitchfork/pull/526))
+- *(cli)* add --json flag to display commands ([#527](https://github.com/jdx/pitchfork/pull/527))
+- *(supervisor)* support configurable shell for daemon run commands ([#531](https://github.com/jdx/pitchfork/pull/531))
+
+### Fixed
+
+- *(deps)* update rust crate listeners to 0.6 ([#525](https://github.com/jdx/pitchfork/pull/525))
+- *(tui)* scroll daemon list to keep selection visible ([#519](https://github.com/jdx/pitchfork/pull/519))
+- *(proxy)* downgrade forwarded requests to HTTP/1.1 ([#515](https://github.com/jdx/pitchfork/pull/515))
+- *(deps)* update dependency vue-router to v5 ([#506](https://github.com/jdx/pitchfork/pull/506))
+- *(deps)* update rust crate sysinfo to 0.39 ([#500](https://github.com/jdx/pitchfork/pull/500))
+- *(deps)* update rust crate rusqlite to 0.40 ([#498](https://github.com/jdx/pitchfork/pull/498))
+- *(deps)* update rust crate mdns-sd to 0.20 ([#497](https://github.com/jdx/pitchfork/pull/497))
+
+### Other
+
+- *(deps)* update rust crate xx to v2.6.0 ([#530](https://github.com/jdx/pitchfork/pull/530))
+- *(deps)* update rust crate uuid to v1.23.3 ([#523](https://github.com/jdx/pitchfork/pull/523))
+- *(deps)* update rust crate regex to v1.12.4 ([#522](https://github.com/jdx/pitchfork/pull/522))
+- link to all sponsors ([#513](https://github.com/jdx/pitchfork/pull/513))
+- *(ui)* stop committing compiled assets ([#511](https://github.com/jdx/pitchfork/pull/511))
+- *(deps)* update dependency typescript to v6 ([#503](https://github.com/jdx/pitchfork/pull/503))
+- *(deps)* update rust crate xx to v2.5.4 ([#494](https://github.com/jdx/pitchfork/pull/494))
+
 ## [2.13.1](https://github.com/jdx/pitchfork/compare/v2.13.0...v2.13.1) - 2026-06-08
 
 ### Other

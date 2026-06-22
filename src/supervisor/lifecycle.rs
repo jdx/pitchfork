@@ -16,14 +16,12 @@ use crate::settings::settings;
 use crate::shell::Shell;
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
-use itertools::Itertools;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::CString;
-use std::iter::once;
 use std::sync::atomic;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
@@ -149,7 +147,6 @@ impl Supervisor {
     pub(crate) async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
-        let cmd = opts.cmd;
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
@@ -250,27 +247,57 @@ impl Supervisor {
             (Vec::new(), opts.ready_port)
         };
 
-        let cmd: Vec<String> = if opts.mise.unwrap_or(settings().general.mise) {
+        // Parse the configured shell (default "sh -c") into program + args.
+        // The run script is passed verbatim as the final argument, avoiding the
+        // lossy split->join round-trip that previously mangled $VAR/glob expansion.
+        let shell_setting = settings().general.shell.clone();
+        let shell_parts = match shell_words::split(&shell_setting) {
+            Ok(parts) if !parts.is_empty() => parts,
+            Ok(_) => {
+                return Ok(IpcResponse::DaemonFailed {
+                    error: "general.shell setting is empty".to_string(),
+                });
+            }
+            Err(e) => {
+                return Ok(IpcResponse::DaemonFailed {
+                    error: format!("failed to parse general.shell setting {shell_setting:?}: {e}"),
+                });
+            }
+        };
+        let (shell_program, shell_args) = shell_parts.split_first().unwrap();
+
+        // Use the original run string verbatim; fall back to joining cmd for
+        // ad-hoc commands (e.g. `pitchfork run -- cmd args`) that have no run string.
+        // We don't prepend `exec` because it breaks compound commands (e.g. `exec a && b`
+        // silently drops `b`). Users can add `exec` themselves in the run string.
+        let run_script = opts
+            .run
+            .clone()
+            .unwrap_or_else(|| shell_words::join(&original_cmd));
+
+        let (program, args) = if opts.mise.unwrap_or(settings().general.mise) {
             match settings().resolve_mise_bin() {
                 Some(mise_bin) => {
                     let mise_bin_str = mise_bin.to_string_lossy().to_string();
                     info!("daemon {id}: wrapping command with mise ({mise_bin_str})");
-                    once("exec".to_string())
-                        .chain(once(mise_bin_str))
-                        .chain(once("x".to_string()))
-                        .chain(once("--".to_string()))
-                        .chain(cmd)
-                        .collect_vec()
+                    let mut args = vec!["x".to_string(), "--".to_string()];
+                    args.push(shell_program.clone());
+                    args.extend(shell_args.iter().cloned());
+                    args.push(run_script);
+                    (mise_bin_str, args)
                 }
                 None => {
                     warn!("daemon {id}: mise=true but mise binary not found, running without mise");
-                    once("exec".to_string()).chain(cmd).collect_vec()
+                    let mut args: Vec<String> = shell_args.to_vec();
+                    args.push(run_script);
+                    (shell_program.clone(), args)
                 }
             }
         } else {
-            once("exec".to_string()).chain(cmd).collect_vec()
+            let mut args: Vec<String> = shell_args.to_vec();
+            args.push(run_script);
+            (shell_program.clone(), args)
         };
-        let args = vec!["-c".to_string(), shell_words::join(&cmd)];
         #[cfg(unix)]
         let run_identity = match resolve_effective_run_identity(opts.user.as_deref()) {
             Ok(identity) => identity,
@@ -280,7 +307,7 @@ impl Supervisor {
                 });
             }
         };
-        info!("run: spawning daemon {id} with args: {args:?}");
+        info!("run: spawning daemon {id} with {program} {args:?}");
 
         // Allocate PTY if configured
         #[cfg(unix)]
@@ -299,7 +326,7 @@ impl Supervisor {
             None
         };
 
-        let mut cmd = tokio::process::Command::new("sh");
+        let mut cmd = tokio::process::Command::new(&program);
 
         #[cfg(unix)]
         if let Some(ref pair) = pty_pair {
@@ -420,6 +447,7 @@ impl Supervisor {
                         o.shell_pid = opts.shell_pid;
                         o.dir = Some(opts.dir.0.clone());
                         o.cmd = Some(original_cmd);
+                        o.run = opts.run.clone();
                         o.autostop = opts.autostop;
                         o.cron_schedule = opts.cron_schedule.clone();
                         o.cron_retrigger = opts.cron_retrigger;

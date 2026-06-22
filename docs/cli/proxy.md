@@ -28,6 +28,6 @@ Subcommands:
 
 - [`pitchfork proxy add [FLAGS] <SLUG>`](/cli/proxy/add.md)
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
-- [`pitchfork proxy status`](/cli/proxy/status.md)
+- [`pitchfork proxy status [--json]`](/cli/proxy/status.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
 - [`pitchfork proxy untrust [--cert <CERT>]`](/cli/proxy/untrust.md)

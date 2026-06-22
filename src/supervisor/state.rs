@@ -32,6 +32,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub shell_pid: Option<u32>,
     pub dir: Option<PathBuf>,
     pub cmd: Option<Vec<String>>,
+    pub run: Option<String>,
     pub autostop: bool,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
@@ -135,6 +136,7 @@ impl Supervisor {
             autostop: opts.autostop || existing.is_some_and(|d| d.autostop),
             dir: opts.dir.or(existing.and_then(|d| d.dir.clone())),
             cmd: opts.cmd.or(existing.and_then(|d| d.cmd.clone())),
+            run: opts.run.or(existing.and_then(|d| d.run.clone())),
             cron_schedule: opts
                 .cron_schedule
                 .or(existing.and_then(|d| d.cron_schedule.clone())),

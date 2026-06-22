@@ -3,7 +3,7 @@
 
 **Usage**: `pitchfork <SUBCOMMAND>`
 
-**Version**: 2.13.1
+**Version**: 2.14.0
 
 - **Usage**: `pitchfork <SUBCOMMAND>`
 
@@ -15,30 +15,30 @@
 - [`pitchfork boot disable`](/cli/boot/disable.md)
 - [`pitchfork boot status`](/cli/boot/status.md)
 - [`pitchfork clean`](/cli/clean.md)
-- [`pitchfork daemons <SUBCOMMAND>`](/cli/daemons.md)
+- [`pitchfork daemons [--json] <SUBCOMMAND>`](/cli/daemons.md)
 - [`pitchfork daemons add [FLAGS] <ID> [ARGS]…`](/cli/daemons/add.md)
 - [`pitchfork daemons remove [--local] [--project] <ID>`](/cli/daemons/remove.md)
 - [`pitchfork completion <SHELL>`](/cli/completion.md)
 - [`pitchfork disable <ID>`](/cli/disable.md)
 - [`pitchfork enable <ID>`](/cli/enable.md)
-- [`pitchfork list [--hide-header]`](/cli/list.md)
+- [`pitchfork list [FLAGS]`](/cli/list.md)
 - [`pitchfork logs [FLAGS] [ID]…`](/cli/logs.md)
 - [`pitchfork mcp`](/cli/mcp.md)
 - [`pitchfork proxy <SUBCOMMAND>`](/cli/proxy.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
 - [`pitchfork proxy untrust [--cert <CERT>]`](/cli/proxy/untrust.md)
-- [`pitchfork proxy status`](/cli/proxy/status.md)
+- [`pitchfork proxy status [--json]`](/cli/proxy/status.md)
 - [`pitchfork proxy add [FLAGS] <SLUG>`](/cli/proxy/add.md)
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
 - [`pitchfork restart [FLAGS] [ID]…`](/cli/restart.md)
 - [`pitchfork run [FLAGS] <ID> [-- RUN]…`](/cli/run.md)
-- [`pitchfork settings <SUBCOMMAND>`](/cli/settings.md)
-- [`pitchfork settings list [--group <GROUP>]`](/cli/settings/list.md)
-- [`pitchfork settings get <KEY>`](/cli/settings/get.md)
+- [`pitchfork settings [--json] <SUBCOMMAND>`](/cli/settings.md)
+- [`pitchfork settings list [--group <GROUP>] [--json]`](/cli/settings/list.md)
+- [`pitchfork settings get [--json] <KEY>`](/cli/settings/get.md)
 - [`pitchfork settings set [FLAGS] <KEY> <VALUE>`](/cli/settings/set.md)
 - [`pitchfork sponsors`](/cli/sponsors.md)
 - [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
-- [`pitchfork status <ID>`](/cli/status.md)
+- [`pitchfork status [--json] <ID>`](/cli/status.md)
 - [`pitchfork stop [FLAGS] [ID]…`](/cli/stop.md)
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
 - [`pitchfork supervisor run [FLAGS]`](/cli/supervisor/run.md)

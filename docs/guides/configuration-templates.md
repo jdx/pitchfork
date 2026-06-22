@@ -1,6 +1,6 @@
 # Configuration Templates
 
-Use [Tera](https://tera.netlify.app/) templates in configuration fields to reference values from other daemons, settings, and runtime state.
+Use [Tera](https://keats.github.io/tera/) templates in configuration fields to reference values from other daemons, settings, and runtime state.
 
 ## Why Templates?
 

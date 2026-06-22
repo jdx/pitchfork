@@ -178,7 +178,7 @@
         "full_cmd": [
           "daemons"
         ],
-        "usage": "daemons <SUBCOMMAND>",
+        "usage": "daemons [--json] <SUBCOMMAND>",
         "subcommands": {
           "add": {
             "full_cmd": [
@@ -733,7 +733,20 @@
           }
         },
         "args": [],
-        "flags": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "List configured daemons from all merged config files.",
@@ -833,7 +846,7 @@
         "full_cmd": [
           "list"
         ],
-        "usage": "list [--hide-header]",
+        "usage": "list [FLAGS]",
         "subcommands": {},
         "args": [],
         "flags": [
@@ -848,12 +861,57 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "status",
+            "usage": "--status… <STATUS>",
+            "help": "Filter daemons by status (repeatable for OR logic)",
+            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, available, disabled",
+            "help_first_line": "Filter daemons by status (repeatable for OR logic)",
+            "short": [],
+            "long": [
+              "status"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "STATUS",
+              "usage": "<STATUS>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false,
+              "choices": {
+                "choices": [
+                  "running",
+                  "stopped",
+                  "waiting",
+                  "stopping",
+                  "failed",
+                  "errored",
+                  "available",
+                  "disabled"
+                ]
+              }
+            }
           }
         ],
         "mounts": [],
         "hide": false,
         "help": "List all daemons",
-        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n\nOutput:\n  Name    PID    Status     Error\n  api     12345  running\n  worker         available\n  db             errored    exit code 127",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n  pitchfork list --status running  Show only running daemons\n  pitchfork ls --status available --status stopped\n                                  Show daemons that are available OR stopped\n\nOutput:\n  Name    Status\n  api     running    https://api.localhost\n  worker  available\n  db      errored    exit code 127",
         "name": "list",
         "aliases": [
           "ls"
@@ -996,6 +1054,30 @@
             ],
             "hide": false,
             "global": false
+          },
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "no-timestamp",
+            "usage": "--no-timestamp",
+            "help": "Omit timestamps from log output",
+            "help_first_line": "Omit timestamps from log output",
+            "short": [],
+            "long": [
+              "no-timestamp"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
@@ -1114,10 +1196,23 @@
               "proxy",
               "status"
             ],
-            "usage": "proxy status",
+            "usage": "proxy status [--json]",
             "subcommands": {},
             "args": [],
-            "flags": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
             "mounts": [],
             "hide": false,
             "help": "Show all registered slugs and their current state",
@@ -1705,14 +1800,14 @@
         "full_cmd": [
           "settings"
         ],
-        "usage": "settings <SUBCOMMAND>",
+        "usage": "settings [--json] <SUBCOMMAND>",
         "subcommands": {
           "list": {
             "full_cmd": [
               "settings",
               "list"
             ],
-            "usage": "settings list [--group <GROUP>]",
+            "usage": "settings list [--group <GROUP>] [--json]",
             "subcommands": {},
             "args": [],
             "flags": [
@@ -1734,6 +1829,18 @@
                   "double_dash": "Optional",
                   "hide": false
                 }
+              },
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
               }
             ],
             "mounts": [],
@@ -1751,7 +1858,7 @@
               "settings",
               "get"
             ],
-            "usage": "settings get <KEY>",
+            "usage": "settings get [--json] <KEY>",
             "subcommands": {},
             "args": [
               {
@@ -1764,7 +1871,20 @@
                 "hide": false
               }
             ],
-            "flags": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
             "mounts": [],
             "hide": false,
             "help": "Get the current value of a setting",
@@ -1848,7 +1968,20 @@
           }
         },
         "args": [],
-        "flags": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "View and modify pitchfork settings",
@@ -2153,7 +2286,7 @@
         "full_cmd": [
           "status"
         ],
-        "usage": "status <ID>",
+        "usage": "status [--json] <ID>",
         "subcommands": {},
         "args": [
           {
@@ -2166,7 +2299,20 @@
             "hide": false
           }
         ],
-        "flags": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "help": "Output in JSON format",
+            "help_first_line": "Output in JSON format",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "Display the status of a daemon",
@@ -2527,12 +2673,12 @@
   "config": {
     "props": {}
   },
-  "version": "2.13.1",
+  "version": "2.14.0",
   "usage": "Usage: pitchfork <COMMAND>",
   "complete": {
     "id": {
       "name": "id",
-      "run": "pitchfork ls | awk '{print $1}'"
+      "run": "case \"{{words[1]}}\" in\n  stop|wait)\n    pitchfork ls --hide-header --status running | awk '{print $1}'\n    ;;\n  restart)\n    pitchfork ls --hide-header --status running --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  start)\n    pitchfork ls --hide-header --status available --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  enable)\n    pitchfork ls --hide-header --status disabled | awk '{print $1}'\n    ;;\n  disable)\n    pitchfork ls --hide-header --status running --status available | awk '{print $1}'\n    ;;\n  *)\n    pitchfork ls --hide-header | awk '{print $1}'\n    ;;\nesac"
     }
   },
   "about": "Daemons with DX"

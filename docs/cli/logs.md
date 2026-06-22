@@ -68,3 +68,11 @@ Disable pager even in interactive terminal
 ### `--raw`
 
 Output raw log lines without color or formatting
+
+### `--json`
+
+Output in JSON format
+
+### `--no-timestamp`
+
+Omit timestamps from log output

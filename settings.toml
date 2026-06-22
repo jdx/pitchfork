@@ -111,6 +111,31 @@ By default, pitchfork searches well-known locations for the mise binary:
 Set this to an absolute path if mise is installed elsewhere.
 """
 
+[general.shell]
+type = "String"
+env = "PITCHFORK_SHELL"
+default = "sh -c"
+description = "Shell command used to execute daemon run scripts"
+docs = """
+Controls the shell used to execute daemon `run` commands.
+
+The value is split with `shell_words::split` into a program and arguments,
+then the daemon's `run` string is appended verbatim as the final argument
+(passed to the shell's command flag, e.g. `sh -c "<run>"`).
+
+This means the `run` string is interpreted directly by the shell, so
+variable expansion (`$VAR`), globs (`*.txt`), pipes (`|`), and command
+chaining (`&&`) all work as expected.
+
+**Common configurations:**
+- `"sh -c"` — Default, POSIX shell
+- `"sh -o errexit -o pipefail -c"` — Exit on error, fail on pipe failure
+- `"bash -c"` — Use bash instead of sh
+
+When `mise = true` is enabled for a daemon, the shell wraps inside
+`mise x --`, e.g. `mise x -- sh -c "<run>"`.
+"""
+
 [general.startup_log_timestamps]
 type = "Bool"
 env = "PITCHFORK_STARTUP_LOG_TIMESTAMPS"
@@ -197,6 +222,22 @@ docs = """
 Log entries selected for pruning are passed to the archive hook in batches of
 this size. Smaller batches use less memory and are easier to retry, while larger
 batches reduce hook invocation overhead.
+"""
+
+[logs.timestamp]
+type = "Bool"
+env = "PITCHFORK_LOG_TIMESTAMP"
+default = "true"
+description = "Show timestamps in log output"
+docs = """
+When enabled (default), pitchfork prefixes each log line with a timestamp
+(e.g. `2024-01-15 10:30:00`).
+
+When disabled, timestamps are omitted from `pitchfork logs` output. This is
+useful when piping logs to tools like `lnav` that expect raw JSON or when
+you want to process log output without the timestamp prefix.
+
+Can be overridden per-invocation with `pitchfork logs --no-timestamp`.
 """
 
 [logs.line_retention]
