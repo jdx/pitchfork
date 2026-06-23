@@ -282,6 +282,9 @@ impl Logs {
     }
 
     fn build_message_filters(&self) -> Result<Vec<MessageFilter>> {
+        if self.case_sensitive && self.grep.is_empty() {
+            warn!("--case-sensitive has no effect without --grep");
+        }
         let mut filters = Vec::new();
         for pattern in &self.grep {
             filters.push(MessageFilter::Contains {
