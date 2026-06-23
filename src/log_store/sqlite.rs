@@ -109,9 +109,13 @@ impl SqliteLogStore {
                 .into_diagnostic()
                 .map_err(|e| miette::miette!("failed to spawn archive hook: {e}"))?;
 
-            {
+            // Write entries to stdin. On error, kill and reap the child
+            // before propagating — Child::drop does not call wait(), so
+            // without this a crashed hook would leave a zombie process.
+            let write_result = {
                 let stdin = child.stdin.take().expect("piped stdin should be available");
                 let mut stdin = std::io::BufWriter::new(stdin);
+                let mut result = Ok(());
                 for entry in chunk {
                     let line = serde_json::json!({
                         "id": entry.id,
@@ -119,9 +123,21 @@ impl SqliteLogStore {
                         "timestamp": entry.timestamp.to_rfc3339(),
                         "message": entry.message,
                     });
-                    writeln!(stdin, "{}", line).into_diagnostic()?;
+                    if let Err(e) = writeln!(stdin, "{}", line) {
+                        result = Err(miette::miette!(
+                            "failed to write to archive hook stdin: {e}"
+                        ));
+                        break;
+                    }
                 }
-                // Closing stdin signals EOF to the hook.
+                result
+                // BufWriter + ChildStdin drop here, closing stdin (EOF signal).
+            };
+
+            if let Err(e) = write_result {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
             }
 
             let output = child.wait_with_output().into_diagnostic()?;
