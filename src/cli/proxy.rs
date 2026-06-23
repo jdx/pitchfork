@@ -282,7 +282,7 @@ impl ProxyStatus {
                         };
                         (status, port)
                     } else {
-                        ("not started".to_string(), None)
+                        ("available".to_string(), None)
                     }
                 } else {
                     ("unknown".to_string(), None)

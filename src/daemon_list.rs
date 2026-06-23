@@ -130,7 +130,7 @@ pub async fn get_daemon_direct(
 }
 
 /// Build a placeholder Daemon from config for daemons that exist in config but not state.
-fn build_placeholder_daemon(
+pub fn build_placeholder_daemon(
     id: &DaemonId,
     daemon_config: &crate::pitchfork_toml::PitchforkTomlDaemon,
 ) -> Daemon {

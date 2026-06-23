@@ -5,8 +5,9 @@
 //! - Cron scheduling
 //! - File watching for daemon auto-restart
 
-use super::{SUPERVISOR, Supervisor, interval_duration};
+use super::{SUPERVISOR, Supervisor, UpsertDaemonOpts, interval_duration};
 use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogStore, RetentionPolicy};
@@ -459,10 +460,55 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Register config-only cron daemons into state.
+    ///
+    /// Daemons defined in config with `cron` but never started are not in
+    /// `state_file.daemons`, so the cron watcher cannot see them. This method
+    /// scans the merged config and upserts any cron daemons that are missing
+    /// from state, using `Stopped` status with no PID. Once registered, the
+    /// cron watcher picks them up on subsequent ticks.
+    async fn register_config_cron_daemons(&self) -> Result<()> {
+        let config = PitchforkToml::all_merged_all_namespaces()?;
+
+        // Find config-only cron daemons not yet in state.
+        let to_register: Vec<_> = {
+            let state = self.state_file.lock().await;
+            config
+                .daemons
+                .iter()
+                .filter(|(id, d)| d.cron.is_some() && !state.daemons.contains_key(*id))
+                .collect()
+        };
+
+        for (id, d) in to_register {
+            let cmd = match shell_words::split(&d.run) {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    error!("failed to parse command for cron daemon {id}: {e}");
+                    continue;
+                }
+            };
+            let run_opts = d.to_run_options(id, cmd);
+            self.upsert_daemon(
+                UpsertDaemonOpts::from_run_options(&run_opts, DaemonStatus::Stopped).build(),
+            )
+            .await?;
+            info!("registered config-only cron daemon {id} into state");
+        }
+
+        Ok(())
+    }
+
     /// Check cron schedules and trigger daemons as needed
     pub(crate) async fn check_cron_schedules(&self) -> Result<()> {
         use cron::Schedule;
         use std::str::FromStr;
+
+        // Register config-only cron daemons into state so the cron watcher
+        // can see them. Without this, daemons defined in config with `cron`
+        // but never started (no `boot_start`, no manual `pitchfork start`)
+        // are invisible to the cron checker.
+        self.register_config_cron_daemons().await?;
 
         let now = chrono::Local::now();
 

@@ -12,6 +12,7 @@ pub struct ApiStats {
     running: usize,
     stopped: usize,
     errored: usize,
+    available: usize,
 }
 
 pub async fn stats() -> Json<ApiStats> {
@@ -28,6 +29,7 @@ pub async fn stats() -> Json<ApiStats> {
                 running: 0,
                 stopped: 0,
                 errored: 0,
+                available: 0,
             });
         }
     };
@@ -52,6 +54,15 @@ pub async fn stats() -> Json<ApiStats> {
         .filter(|(_, d)| d.status.is_errored())
         .count();
 
+    // Config-only daemons (in config but not in state) are "available".
+    let state_ids: std::collections::HashSet<&DaemonId> =
+        user_daemons.iter().map(|(id, _)| *id).collect();
+    let available = pt
+        .daemons
+        .keys()
+        .filter(|id| **id != pitchfork_id && !state_ids.contains(id))
+        .count();
+
     let mut all_ids = std::collections::HashSet::new();
     for (id, _) in user_daemons {
         all_ids.insert(id.clone());
@@ -66,5 +77,6 @@ pub async fn stats() -> Json<ApiStats> {
         running,
         stopped,
         errored,
+        available,
     })
 }
