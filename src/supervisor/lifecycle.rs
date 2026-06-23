@@ -915,6 +915,31 @@ impl Supervisor {
                 }
             }
 
+            // Drain any in-flight output lines that were still in the mpsc
+            // channel or the OS pipe buffer when the child exited. Without
+            // this, trailing log lines from short-lived daemons get dropped.
+            // The reader tasks drop their senders on EOF, so recv() returns
+            // None when all data has been consumed. A total deadline of 5 s
+            // guards against a stuck reader (e.g. PTY master FD not closing)
+            // while ensuring drain doesn't block post-exit cleanup indefinitely.
+            let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= drain_deadline {
+                    break;
+                }
+                let Ok(Some(line)) =
+                    tokio::time::timeout(drain_deadline - now, output_rx.recv()).await
+                else {
+                    break;
+                };
+                let formatted = format_line(line);
+                if let Err(e) = log_store.append(&id, &formatted) {
+                    error!("Failed to write to log for daemon {id}: {e}");
+                }
+                trace!("output (drain): {id} {formatted}");
+            }
+
             // Clear active_port since the process is no longer running
             {
                 let mut state_file = SUPERVISOR.state_file.lock().await;
