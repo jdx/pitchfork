@@ -460,17 +460,42 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Register config-only cron daemons into state.
+    /// Register config-only cron daemons into state and remove stale entries.
     ///
     /// Daemons defined in config with `cron` but never started are not in
     /// `state_file.daemons`, so the cron watcher cannot see them. This method
     /// scans the merged config and upserts any cron daemons that are missing
-    /// from state, using `Stopped` status with no PID. Once registered, the
-    /// cron watcher picks them up on subsequent ticks.
+    /// from state, marking them with `config_registered = true` so that
+    /// list/status/stats treat them as "available" rather than "stopped".
+    ///
+    /// Also removes stale `config_registered` entries for daemons whose cron
+    /// config has been removed, so they stop firing.
     async fn register_config_cron_daemons(&self) -> Result<()> {
         let config = PitchforkToml::all_merged_all_namespaces()?;
 
-        // Find config-only cron daemons not yet in state.
+        let config_cron_ids: HashSet<&DaemonId> = config
+            .daemons
+            .iter()
+            .filter(|(_, d)| d.cron.is_some())
+            .map(|(id, _)| id)
+            .collect();
+
+        // Remove stale config_registered entries no longer in config.
+        let stale_ids: Vec<DaemonId> = {
+            let state = self.state_file.lock().await;
+            state
+                .daemons
+                .iter()
+                .filter(|(id, d)| d.config_registered && !config_cron_ids.contains(*id))
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for id in &stale_ids {
+            self.remove_daemon(id).await?;
+            info!("removed stale config-only cron daemon {id} from state");
+        }
+
+        // Register config-only cron daemons not yet in state.
         let to_register: Vec<_> = {
             let state = self.state_file.lock().await;
             config
@@ -490,7 +515,11 @@ impl Supervisor {
             };
             let run_opts = d.to_run_options(id, cmd);
             self.upsert_daemon(
-                UpsertDaemonOpts::from_run_options(&run_opts, DaemonStatus::Stopped).build(),
+                UpsertDaemonOpts::from_run_options(&run_opts, DaemonStatus::Stopped)
+                    .set(|o| {
+                        o.config_registered = true;
+                    })
+                    .build(),
             )
             .await?;
             info!("registered config-only cron daemon {id} into state");

@@ -72,6 +72,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub stop_signal: Option<StopConfig>,
     /// Allocate a pseudo-terminal for the daemon process
     pub pty: Option<bool>,
+    /// True for config-only cron daemons auto-registered into state.
+    pub config_registered: bool,
 }
 
 /// Builder for UpsertDaemonOpts - ensures daemon ID is always provided.
@@ -240,6 +242,7 @@ impl Supervisor {
             cpu_limit: opts.cpu_limit.or(existing.and_then(|d| d.cpu_limit)),
             stop_signal: opts.stop_signal.or(existing.and_then(|d| d.stop_signal)),
             pty: opts.pty.or(existing.and_then(|d| d.pty)),
+            config_registered: opts.config_registered,
         };
         state_file.insert_daemon(&opts.id, daemon.clone());
         Ok(daemon)
@@ -341,7 +344,7 @@ impl Supervisor {
     /// Clean up daemons that have no PID
     pub(crate) async fn clean(&self) -> Result<()> {
         let mut state_file = self.state_file.lock().await;
-        state_file.retain_daemons(|_id, d| d.pid.is_some() || d.cron_schedule.is_some());
+        state_file.retain_daemons(|_id, d| d.pid.is_some());
         Ok(())
     }
 }

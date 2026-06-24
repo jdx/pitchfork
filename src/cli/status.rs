@@ -46,7 +46,7 @@ impl Status {
         // Try state file first, then fall back to config for "available" daemons.
         let (daemon, is_available): (Daemon, bool) =
             match StateFile::get().daemons.get(&qualified_id) {
-                Some(d) => (d.clone(), false),
+                Some(d) => (d.clone(), d.config_registered),
                 None => {
                     let config = PitchforkToml::all_merged_all_namespaces()?;
                     match config.daemons.get(&qualified_id) {

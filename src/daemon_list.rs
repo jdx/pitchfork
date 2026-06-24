@@ -87,9 +87,9 @@ pub async fn get_daemon_direct(
         drop(state_file);
         return Ok(Some(DaemonListEntry {
             id: id.clone(),
+            is_available: daemon.config_registered,
             daemon,
             is_disabled,
-            is_available: false,
         }));
     }
     let is_disabled = state_file.disabled.contains(id);
@@ -180,7 +180,7 @@ fn build_daemon_list(
         entries.push(DaemonListEntry {
             id: daemon.id.clone(),
             is_disabled: disabled_set.contains(&daemon.id),
-            is_available: false,
+            is_available: daemon.config_registered,
             daemon,
         });
     }
