@@ -130,6 +130,18 @@ impl SqliteLogStore {
                         break;
                     }
                 }
+                // Explicitly flush so a buffer-drain failure (e.g. the hook
+                // exited early and closed stdin) is surfaced as an error
+                // rather than being silently swallowed by BufWriter::drop.
+                // On a small batch where all data fits in the 8 KB buffer no
+                // individual writeln! has touched the underlying pipe yet, so
+                // without this flush the failure would be lost and the entries
+                // deleted without ever being delivered to the hook.
+                if result.is_ok() {
+                    if let Err(e) = stdin.flush() {
+                        result = Err(miette::miette!("failed to flush archive hook stdin: {e}"));
+                    }
+                }
                 result
                 // BufWriter + ChildStdin drop here, closing stdin (EOF signal).
             };
