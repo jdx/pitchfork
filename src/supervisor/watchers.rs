@@ -634,12 +634,16 @@ impl Supervisor {
                             true
                         }
                         crate::pitchfork_toml::CronRetrigger::Success => {
-                            // Run only if previous command succeeded
-                            daemon.pid.is_none() && daemon.last_exit_success.unwrap_or(false)
+                            // Run if not currently running and the previous run
+                            // succeeded. A never-started daemon (None) is allowed
+                            // to fire its first run.
+                            daemon.pid.is_none() && daemon.last_exit_success.unwrap_or(true)
                         }
                         crate::pitchfork_toml::CronRetrigger::Fail => {
-                            // Run only if previous command failed
-                            daemon.pid.is_none() && !daemon.last_exit_success.unwrap_or(true)
+                            // Run if not currently running and the previous run
+                            // failed. A never-started daemon (None) is allowed
+                            // to fire its first run.
+                            daemon.pid.is_none() && !daemon.last_exit_success.unwrap_or(false)
                         }
                     };
 
