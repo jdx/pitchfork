@@ -15,10 +15,10 @@ depends = ["build"]
 run = "pitchfork sup start -f"
 
 [tasks.ci]
-depends = ["lint", "build", "build:docs", "test", "test:web-ui"]
+depends = ["lint", "build", "build:docs", "test", "test:web-ui", "test:package"]
 
 [tasks.ci-dev]
-depends = ["lint-fix", "build", "build:docs", "test", "test:web-ui"]
+depends = ["lint-fix", "build", "build:docs", "test", "test:web-ui", "test:package"]
 
 [tasks.docs]
 dir = "docs"
@@ -44,6 +44,17 @@ run = [
   "if [ \"$(uname -s)\" = \"Linux\" ]; then node_modules/.bin/playwright install --with-deps chromium; else node_modules/.bin/playwright install chromium; fi",
   "node_modules/.bin/playwright test",
 ]
+
+[tasks."test:package"]
+depends = ["build:ui"]
+run = '''
+rm -f target/package/pitchfork-cli-*.crate
+cargo package --allow-dirty --no-verify
+crate=$(find target/package -maxdepth 1 -type f -name 'pitchfork-cli-*.crate' -print -quit)
+test -n "$crate"
+tar -tf "$crate" | grep -q '/ui/dist/index.html$'
+tar -tf "$crate" | grep -q '/ui/dist/assets/'
+'''
 
 [tasks."build:ui"]
 dir = "ui"

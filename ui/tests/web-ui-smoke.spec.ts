@@ -17,7 +17,8 @@ type WebSupervisor = {
 }
 
 async function startWebSupervisor(): Promise<WebSupervisor> {
-  const root = await mkdtemp(path.join(tmpdir(), 'pitchfork-web-ui-'))
+  const tmpRoot = process.platform === 'win32' ? tmpdir() : '/tmp'
+  const root = await mkdtemp(path.join(tmpRoot, 'pitchfork-web-ui-'))
   const home = path.join(root, 'home')
   const project = path.join(root, 'project')
   await mkdir(path.join(home, '.config'), { recursive: true })
