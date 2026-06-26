@@ -12,6 +12,7 @@ pub struct ApiStats {
     running: usize,
     stopped: usize,
     errored: usize,
+    available: usize,
 }
 
 pub async fn stats() -> Json<ApiStats> {
@@ -28,6 +29,7 @@ pub async fn stats() -> Json<ApiStats> {
                 running: 0,
                 stopped: 0,
                 errored: 0,
+                available: 0,
             });
         }
     };
@@ -41,16 +43,30 @@ pub async fn stats() -> Json<ApiStats> {
 
     let running = user_daemons
         .iter()
-        .filter(|(_, d)| d.status.is_running())
+        .filter(|(_, d)| d.status.is_running() && !d.config_registered)
         .count();
     let stopped = user_daemons
         .iter()
-        .filter(|(_, d)| d.status.is_stopped())
+        .filter(|(_, d)| d.status.is_stopped() && !d.config_registered)
         .count();
     let errored = user_daemons
         .iter()
-        .filter(|(_, d)| d.status.is_errored())
+        .filter(|(_, d)| d.status.is_errored() && !d.config_registered)
         .count();
+
+    // Available: config-only daemons not in state, plus config_registered
+    // daemons in state (registered by cron watcher but never started).
+    let state_ids: std::collections::HashSet<&DaemonId> =
+        user_daemons.iter().map(|(id, _)| *id).collect();
+    let available = pt
+        .daemons
+        .keys()
+        .filter(|id| **id != pitchfork_id && !state_ids.contains(id))
+        .count()
+        + user_daemons
+            .iter()
+            .filter(|(_, d)| d.config_registered)
+            .count();
 
     let mut all_ids = std::collections::HashSet::new();
     for (id, _) in user_daemons {
@@ -66,5 +82,6 @@ pub async fn stats() -> Json<ApiStats> {
         running,
         stopped,
         errored,
+        available,
     })
 }

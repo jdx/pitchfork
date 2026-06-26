@@ -440,42 +440,16 @@ impl Supervisor {
         PROCS.refresh_pids(&[pid]);
         let daemon = self
             .upsert_daemon(
-                UpsertDaemonOpts::builder(id.clone())
+                UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
                     .set(|o| {
                         o.pid = Some(pid);
-                        o.status = DaemonStatus::Running;
-                        o.shell_pid = opts.shell_pid;
-                        o.dir = Some(opts.dir.0.clone());
                         o.cmd = Some(original_cmd);
-                        o.run = opts.run.clone();
-                        o.autostop = opts.autostop;
-                        o.cron_schedule = opts.cron_schedule.clone();
-                        o.cron_retrigger = opts.cron_retrigger;
-                        o.cron_immediate = opts.cron_immediate;
-                        o.retry = Some(opts.retry);
-                        o.retry_count = Some(opts.retry_count);
-                        o.ready_delay = opts.ready_delay;
-                        o.ready_output = opts.ready_output.clone();
-                        o.ready_http = opts.ready_http.clone();
                         o.ready_port = effective_ready_port;
-                        o.ready_cmd = opts.ready_cmd.clone();
                         o.port = crate::config_types::PortConfig::from_parts(
                             expected_ports,
                             opts.port.as_ref().map(|p| p.bump).unwrap_or_default(),
                         );
                         o.resolved_port = resolved_ports;
-                        o.depends = Some(opts.depends.clone());
-                        o.env = opts.env.clone();
-                        o.watch = Some(opts.watch.clone());
-                        o.watch_mode = Some(opts.watch_mode);
-                        o.watch_base_dir = opts.watch_base_dir.clone();
-                        o.mise = opts.mise;
-                        o.user = opts.user.clone();
-                        o.memory_limit = opts.memory_limit;
-                        o.cpu_limit = opts.cpu_limit;
-                        o.stop_signal = opts.stop_signal;
-                        o.archive_hook = opts.archive_hook.clone();
-                        o.pty = opts.pty;
                     })
                     .build(),
             )
@@ -914,6 +888,31 @@ impl Supervisor {
                         }
                     }
                 }
+            }
+
+            // Drain any in-flight output lines that were still in the mpsc
+            // channel or the OS pipe buffer when the child exited. Without
+            // this, trailing log lines from short-lived daemons get dropped.
+            // The reader tasks drop their senders on EOF, so recv() returns
+            // None when all data has been consumed. A total deadline of 5 s
+            // guards against a stuck reader (e.g. PTY master FD not closing)
+            // while ensuring drain doesn't block post-exit cleanup indefinitely.
+            let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= drain_deadline {
+                    break;
+                }
+                let Ok(Some(line)) =
+                    tokio::time::timeout(drain_deadline - now, output_rx.recv()).await
+                else {
+                    break;
+                };
+                let formatted = format_line(line);
+                if let Err(e) = log_store.append(&id, &formatted) {
+                    error!("Failed to write to log for daemon {id}: {e}");
+                }
+                trace!("output (drain): {id} {formatted}");
             }
 
             // Clear active_port since the process is no longer running

@@ -126,6 +126,10 @@ pub struct Daemon {
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
+    /// True for daemons auto-registered from config by the cron watcher,
+    /// not yet started. Treated as "available" by list/status/stats.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub config_registered: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
