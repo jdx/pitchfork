@@ -440,41 +440,16 @@ impl Supervisor {
         PROCS.refresh_pids(&[pid]);
         let daemon = self
             .upsert_daemon(
-                UpsertDaemonOpts::builder(id.clone())
+                UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
                     .set(|o| {
                         o.pid = Some(pid);
-                        o.status = DaemonStatus::Running;
-                        o.shell_pid = opts.shell_pid;
-                        o.dir = Some(opts.dir.0.clone());
                         o.cmd = Some(original_cmd);
-                        o.run = opts.run.clone();
-                        o.autostop = opts.autostop;
-                        o.cron_schedule = opts.cron_schedule.clone();
-                        o.cron_retrigger = opts.cron_retrigger;
-                        o.cron_immediate = opts.cron_immediate;
-                        o.retry = Some(opts.retry);
-                        o.retry_count = Some(opts.retry_count);
-                        o.ready_delay = opts.ready_delay;
-                        o.ready_output = opts.ready_output.clone();
-                        o.ready_http = opts.ready_http.clone();
                         o.ready_port = effective_ready_port;
-                        o.ready_cmd = opts.ready_cmd.clone();
                         o.port = crate::config_types::PortConfig::from_parts(
                             expected_ports,
                             opts.port.as_ref().map(|p| p.bump).unwrap_or_default(),
                         );
                         o.resolved_port = resolved_ports;
-                        o.depends = Some(opts.depends.clone());
-                        o.env = opts.env.clone();
-                        o.watch = Some(opts.watch.clone());
-                        o.watch_mode = Some(opts.watch_mode);
-                        o.watch_base_dir = opts.watch_base_dir.clone();
-                        o.mise = opts.mise;
-                        o.user = opts.user.clone();
-                        o.memory_limit = opts.memory_limit;
-                        o.cpu_limit = opts.cpu_limit;
-                        o.stop_signal = opts.stop_signal;
-                        o.pty = opts.pty;
                     })
                     .build(),
             )
@@ -589,18 +564,18 @@ impl Supervisor {
             let mut log_flush_interval = tokio::time::interval(LOG_FLUSH_INTERVAL);
             log_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            let flush_logs = |buffer: &mut Vec<String>| {
+            let flush_logs = |buffer: &mut Vec<String>| -> Option<tokio::task::JoinHandle<()>> {
                 if buffer.is_empty() {
-                    return;
+                    return None;
                 }
                 let store = Arc::clone(&log_store);
                 let id = id.clone();
                 let batch = std::mem::take(buffer);
-                tokio::task::spawn_blocking(move || {
+                Some(tokio::task::spawn_blocking(move || {
                     if let Err(e) = store.append_batch(&id, &batch) {
                         error!("Failed to write batch to log for daemon {id}: {e}");
                     }
-                });
+                }))
             };
 
             // SQLite WAL mode provides automatic durability; no explicit flush needed.
@@ -742,7 +717,7 @@ impl Supervisor {
                         let formatted = format_line(line.clone());
                         log_buffer.push(formatted.clone());
                         if log_buffer.len() >= LOG_BATCH_SIZE {
-                            flush_logs(&mut log_buffer);
+                            let _ = flush_logs(&mut log_buffer);
                         }
                         trace!("output: {id} {formatted}");
 
@@ -755,6 +730,13 @@ impl Supervisor {
                             && let Some(ref pattern) = ready_pattern
                             && pattern.is_match(&line_clean)
                         {
+                            // Flush buffered logs synchronously before signalling
+                            // readiness, so collect_startup_logs sees the line
+                            // that triggered the match (and any co-buffered lines)
+                            // in SQLite.
+                            if let Some(handle) = flush_logs(&mut log_buffer) {
+                                let _ = handle.await;
+                            }
                             info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
                             if let Some(tx) = ready_tx.take() {
@@ -934,7 +916,7 @@ impl Supervisor {
                         }
                     }
                     _ = log_flush_interval.tick() => {
-                        flush_logs(&mut log_buffer);
+                        let _ = flush_logs(&mut log_buffer);
                     }
                 }
             }
@@ -960,7 +942,10 @@ impl Supervisor {
                 log_buffer.push(format_line(line));
             }
             // Flush any remaining log lines (including drained) before the process exits.
-            flush_logs(&mut log_buffer);
+            // Await the flush to guarantee all buffered logs are persisted before cleanup.
+            if let Some(handle) = flush_logs(&mut log_buffer) {
+                let _ = handle.await;
+            }
 
             // Clear active_port since the process is no longer running
             {
