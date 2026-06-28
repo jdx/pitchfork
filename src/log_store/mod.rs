@@ -136,6 +136,22 @@ pub trait LogStore: Send + Sync {
         Ok(0)
     }
 
+    /// Return the highest row id for the given daemon, or `None` if no
+    /// entries exist. Used by tailing loops to advance the cursor past
+    /// non-matching rows without re-scanning them on every poll.
+    fn last_id(&self, daemon_id: &DaemonId) -> Result<Option<i64>> {
+        let entries = self.query(&LogQuery {
+            daemon_ids: vec![daemon_id.qualified()],
+            from: None,
+            to: None,
+            limit: Some(1),
+            order_desc: true,
+            after_id: None,
+            message_filters: Vec::new(),
+        })?;
+        Ok(entries.first().map(|e| e.id))
+    }
+
     /// List all daemon IDs that have log entries.
     fn list_daemon_ids(&self) -> Result<Vec<String>>;
 

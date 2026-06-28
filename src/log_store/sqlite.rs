@@ -429,6 +429,20 @@ impl LogStore for SqliteLogStore {
         Ok(())
     }
 
+    fn last_id(&self, daemon_id: &DaemonId) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+        // MAX(id) returns NULL when no rows exist for the daemon; the
+        // Option<i64> decode maps NULL to None automatically.
+        let id: Option<i64> = conn
+            .query_row(
+                "SELECT MAX(id) FROM log_entries WHERE daemon_id = ?1",
+                params![daemon_id.qualified()],
+                |row| row.get(0),
+            )
+            .into_diagnostic()?;
+        Ok(id)
+    }
+
     fn list_daemon_ids(&self) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn

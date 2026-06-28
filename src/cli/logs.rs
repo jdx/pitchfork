@@ -686,18 +686,7 @@ pub async fn tail_logs(
                 // Anchor to the last entry overall, not the last filtered entry,
                 // so --tail combined with a filter does not rescan from row 1
                 // on every poll when no message matches yet.
-                match LOG_STORE.query(&LogQuery {
-                    daemon_ids: vec![id.qualified()],
-                    from: None,
-                    to: None,
-                    limit: Some(1),
-                    order_desc: true,
-                    after_id: None,
-                    message_filters: Vec::new(),
-                }) {
-                    Ok(entries) => entries.first().map(|e| e.id).unwrap_or(0),
-                    Err(_) => 0,
-                }
+                LOG_STORE.last_id(id).unwrap_or(None).unwrap_or(0)
             } else {
                 0
             };
@@ -728,8 +717,11 @@ pub async fn tail_logs(
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
                         out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
                     }
-                    if let Some(last) = entries.last() {
-                        states.insert(id.qualified(), last.id);
+                    // Advance the cursor to the overall last row id, not just
+                    // the last matching entry, so non-matching rows are not
+                    // re-evaluated on every poll when the filter is selective.
+                    if let Ok(Some(last_id)) = LOG_STORE.last_id(id) {
+                        states.insert(id.qualified(), last_id);
                     }
                 }
                 Err(e) => {
