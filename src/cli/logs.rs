@@ -717,19 +717,24 @@ pub async fn tail_logs(
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
                         out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
                     }
-                    // Advance the cursor past all rows seen so far.
+                    // Advance the cursor past rows already evaluated.
                     //
-                    // Without a filter the query returns every row in order,
-                    // so entries.last().id is the true last row id and can be
-                    // used directly (no extra lock acquisition, no race window
-                    // with concurrent append_batch).
+                    // When the query returned entries, entries.last().id is the
+                    // highest row id examined (within the same lock hold as the
+                    // query, so no race with concurrent append_batch). Using it
+                    // directly avoids a separate last_id call that could skip
+                    // matching rows written between the two lock acquisitions.
                     //
-                    // With an active filter the query may skip non-matching
-                    // rows, so entries.last().id would lag behind and cause
-                    // those rows to be re-evaluated on every poll. In that case
-                    // fetch the overall last id via a separate call.
-                    let new_cursor = if message_filters.is_empty() {
+                    // When the filter is active and no entries matched, fall
+                    // back to last_id to advance past non-matching rows so they
+                    // are not re-evaluated on every poll. The narrow race here
+                    // (a matching row written between query and last_id) is
+                    // accepted as the cost of bounded re-scanning.
+                    let new_cursor = if !entries.is_empty() {
                         entries.last().map(|e| e.id)
+                    } else if message_filters.is_empty() {
+                        // No filter and no entries: nothing to advance past.
+                        None
                     } else {
                         LOG_STORE.last_id(id).ok().flatten()
                     };
