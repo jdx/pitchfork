@@ -717,10 +717,23 @@ pub async fn tail_logs(
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
                         out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
                     }
-                    // Advance the cursor to the overall last row id, not just
-                    // the last matching entry, so non-matching rows are not
-                    // re-evaluated on every poll when the filter is selective.
-                    if let Ok(Some(last_id)) = LOG_STORE.last_id(id) {
+                    // Advance the cursor past all rows seen so far.
+                    //
+                    // Without a filter the query returns every row in order,
+                    // so entries.last().id is the true last row id and can be
+                    // used directly (no extra lock acquisition, no race window
+                    // with concurrent append_batch).
+                    //
+                    // With an active filter the query may skip non-matching
+                    // rows, so entries.last().id would lag behind and cause
+                    // those rows to be re-evaluated on every poll. In that case
+                    // fetch the overall last id via a separate call.
+                    let new_cursor = if message_filters.is_empty() {
+                        entries.last().map(|e| e.id)
+                    } else {
+                        LOG_STORE.last_id(id).ok().flatten()
+                    };
+                    if let Some(last_id) = new_cursor {
                         states.insert(id.qualified(), last_id);
                     }
                 }
