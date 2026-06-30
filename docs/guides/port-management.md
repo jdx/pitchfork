@@ -20,7 +20,7 @@ run = "./start.sh"
 port = [8080, 8443]
 ```
 
-Pitchfork checks if the port is available before starting, injects `PORT=3000` into the daemon's environment, and fails with a clear error if the port is already in use.
+Pitchfork checks if the port is available before starting, injects it into the daemon's environment, and fails with a clear error if the port is already in use.
 
 ### Auto Port Bumping
 
@@ -40,7 +40,24 @@ run = "node server.js"
 port = { expect = [3000], bump = true }
 ```
 
-The daemon receives the actual allocated port via `$PORT`.
+The daemon receives the actual allocated port via the following environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `$PORT` | First resolved port (alias for `$PORT0`) |
+| `$PORT0` | First resolved port |
+| `$PORT1` | Second resolved port |
+| `$PORTN` | Nth resolved port (0-indexed) |
+
+When a single port is configured, both `$PORT` and `$PORT0` are set to the same value. For multiple ports, each port is available at its corresponding index:
+
+```toml
+[daemons.multi]
+run = "./start.sh --http-port $PORT0 --grpc-port $PORT1"
+port = [8080, 8443]
+```
+
+These environment variables reflect the **resolved** port, so they work correctly with auto-bumping.
 
 ### Active Port Tracking
 
