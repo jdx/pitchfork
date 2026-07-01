@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.15.0](https://github.com/jdx/pitchfork/compare/v2.14.0...v2.15.0) - 2026-07-01
+
+### Added
+
+- *(logs)* add archive hook before retention pruning ([#534](https://github.com/jdx/pitchfork/pull/534))
+
+### Fixed
+
+- *(logs)* anchor startup log stream to max id instead of timestamp ([#560](https://github.com/jdx/pitchfork/pull/560))
+- *(deps)* update rust crate tower-http to 0.7 ([#558](https://github.com/jdx/pitchfork/pull/558))
+- *(deps)* update rust crate cron to 0.17 ([#556](https://github.com/jdx/pitchfork/pull/556))
+- *(deps)* update rust crate itertools to 0.15 ([#557](https://github.com/jdx/pitchfork/pull/557))
+- *(cron)* fire config-only cron daemons without boot_start ([#548](https://github.com/jdx/pitchfork/pull/548))
+- *(supervisor)* drain output channel on daemon exit to prevent trailing log loss ([#540](https://github.com/jdx/pitchfork/pull/540))
+
+### Other
+
+- *(deps)* update rust crate rcgen to v0.14.8 ([#552](https://github.com/jdx/pitchfork/pull/552))
+- *(deps)* lock file maintenance ([#561](https://github.com/jdx/pitchfork/pull/561))
+- *(deps)* update rust crate xx to v2.6.1 ([#554](https://github.com/jdx/pitchfork/pull/554))
+- *(deps)* update rust crate ratatui to v0.30.2 ([#551](https://github.com/jdx/pitchfork/pull/551))
+- *(deps)* lock file maintenance lockfile maintenance ([#538](https://github.com/jdx/pitchfork/pull/538))
+
 ## [2.14.0](https://github.com/jdx/pitchfork/compare/v2.13.1...v2.14.0) - 2026-06-21
 
 ### Added
