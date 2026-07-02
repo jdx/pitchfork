@@ -94,9 +94,9 @@ jobs:
 
           ## 💚 Sponsor pitchfork
 
-          pitchfork is built by [@jdx](https://github.com/jdx), who ships developer tools like [mise](https://mise.jdx.dev/), hk, pitchfork, and more. Development is sustained by sponsorships.
+          pitchfork is maintained by [@jdx](https://github.com/jdx), an open source developer for [**entire.io**](https://entire.io), the title sponsor of the [jdx.dev](https://jdx.dev) open source tools including [mise](https://mise.jdx.dev/), [aube](https://aube.jdx.dev/), hk, and more. Development is sustained by sponsorships.
 
-          If pitchfork has a place in your dev workflow, please consider [sponsoring on GitHub](https://github.com/sponsors/jdx). Individual and company sponsorships are what keep the project healthy and moving forward.
+          If pitchfork has a place in your dev workflow, please consider [sponsoring at jdx.dev](https://jdx.dev/sponsors.html). Individual and company sponsorships are what keep the project healthy and moving forward.
           EOF
           } > /tmp/release-notes.md
           gh release edit "$TAG" --notes-file /tmp/release-notes.md
