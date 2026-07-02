@@ -123,7 +123,7 @@ Level 2: worker   (depends on api, templates can reference redis and api)
 
 - Daemons within the same level start concurrently and **cannot** reference each other's ports
 - A daemon can reference any daemon that completed successfully in a previous level
-- `port` and `ports` for the current daemon are **not** available at template rendering time (ports are resolved after the command is constructed). Use <code v-pre>{{ daemons.xxx.port }}</code> to reference dependencies' ports instead
+- `port` and `ports` for the current daemon are **not** available at template rendering time (ports are resolved after the command is constructed). Use the `$PORT` / `$PORT0`, `$PORT1`, ... environment variables to access the current daemon's own resolved ports. Use <code v-pre>{{ daemons.xxx.port }}</code> to reference **dependencies'** ports instead
 
 ## Error Handling
 

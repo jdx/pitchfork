@@ -1006,7 +1006,6 @@ pub fn collect_startup_logs(
 /// that stops the streaming when sent `true`.
 pub fn stream_startup_logs(
     daemon_id: &DaemonId,
-    from: DateTime<Local>,
     job: std::sync::Arc<clx::progress::ProgressJob>,
 ) -> (
     tokio::sync::watch::Sender<bool>,
@@ -1016,6 +1015,21 @@ pub fn stream_startup_logs(
     let id = daemon_id.clone();
 
     let show_ts = crate::settings::settings().general.startup_log_timestamps;
+
+    // Anchor to the daemon's current max log id *synchronously* before
+    // spawning the streaming task. This must happen before ipc.run() starts
+    // the daemon, otherwise early output could be written to the log store
+    // before the anchor is established and get skipped as "already seen".
+    let anchor_id: i64 = LOG_STORE
+        .query(&LogQuery {
+            daemon_ids: vec![id.qualified()],
+            limit: Some(1),
+            order_desc: true,
+            ..Default::default()
+        })
+        .ok()
+        .and_then(|entries| entries.last().map(|e| e.id))
+        .unwrap_or(0);
 
     let handle = tokio::spawn(async move {
         let is_tty = std::io::stderr().is_terminal();
@@ -1027,20 +1041,10 @@ pub fn stream_startup_logs(
             edim("•").to_string()
         };
 
-        let mut last_id: i64 = 0;
+        let mut last_id = anchor_id;
 
-        // Initial fetch: all logs since daemon start time
-        let initial_entries = LOG_STORE.query(&LogQuery {
-            daemon_ids: vec![id.qualified()],
-            from: Some(from),
-            to: None,
-            limit: None,
-            order_desc: false,
-            after_id: None,
-            message_filters: Vec::new(),
-        });
-
-        if let Ok(entries) = initial_entries {
+        // Initial fetch: catch any logs already written since the anchor.
+        if let Ok(entries) = LOG_STORE.tail(&id, Some(last_id)) {
             for entry in &entries {
                 let time = entry.timestamp.format("%H:%M:%S").to_string();
                 let msg = strip_pty_controls(&entry.message);

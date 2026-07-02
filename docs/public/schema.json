@@ -144,6 +144,13 @@
       "description": "Configuration for a single daemon (internal representation with DaemonId)",
       "type": "object",
       "properties": {
+        "archive_hook": {
+          "description": "Archive hook command invoked before retention prunes this daemon's logs.\nOverrides the global `settings.logs.archive_hook.command` when set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "auto": {
           "description": "Automatic start/stop behavior based on shell hooks",
           "type": "array",
@@ -652,9 +659,32 @@
         }
       }
     },
+    "SettingsLogsArchiveHookPartial": {
+      "type": "object",
+      "properties": {
+        "batch_size": {
+          "description": "Maximum log entries per archive hook invocation",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "command": {
+          "description": "Command to run before retention deletes old log entries",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "SettingsLogsPartial": {
       "type": "object",
       "properties": {
+        "archive_hook": {
+          "$ref": "#/$defs/SettingsLogsArchiveHookPartial"
+        },
         "line_retention": {
           "description": "Count-based log retention (e.g. 10000)",
           "type": [

@@ -70,7 +70,9 @@ pub(crate) struct UpsertDaemonOpts {
     pub cpu_limit: Option<CpuLimit>,
     /// Unix signal to send for graceful shutdown
     pub stop_signal: Option<StopConfig>,
-    /// Allocate a pseudo-terminal for the daemon process
+    /// Archive hook command invoked before retention prunes this daemon's logs.
+    pub archive_hook: Option<String>,
+    /// Allocate a pseudo-terminal for the daemon process.
     pub pty: Option<bool>,
     /// True for config-only cron daemons auto-registered into state.
     pub config_registered: bool,
@@ -139,6 +141,7 @@ impl UpsertDaemonOpts {
             o.cpu_limit = opts.cpu_limit;
             o.stop_signal = opts.stop_signal;
             o.pty = opts.pty;
+            o.archive_hook = opts.archive_hook.clone();
         })
     }
 }
@@ -241,6 +244,9 @@ impl Supervisor {
             memory_limit: opts.memory_limit.or(existing.and_then(|d| d.memory_limit)),
             cpu_limit: opts.cpu_limit.or(existing.and_then(|d| d.cpu_limit)),
             stop_signal: opts.stop_signal.or(existing.and_then(|d| d.stop_signal)),
+            archive_hook: opts
+                .archive_hook
+                .or(existing.and_then(|d| d.archive_hook.clone())),
             pty: opts.pty.or(existing.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
         };

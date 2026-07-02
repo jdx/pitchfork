@@ -85,6 +85,22 @@ impl RetentionPolicy {
     }
 }
 
+/// Hook invoked before log entries are pruned by retention.
+#[derive(Debug, Clone)]
+pub struct ArchiveHook {
+    /// Shell command to run. It should read JSONL from stdin.
+    pub command: String,
+    /// Maximum number of log entries to pass to a single hook invocation.
+    pub batch_size: usize,
+}
+
+impl ArchiveHook {
+    /// Returns true if the hook is configured with a non-empty command.
+    pub fn is_enabled(&self) -> bool {
+        !self.command.trim().is_empty()
+    }
+}
+
 /// Unified interface for log storage and retrieval.
 pub trait LogStore: Send + Sync {
     /// Append a single log line.
@@ -121,8 +137,9 @@ pub trait LogStore: Send + Sync {
         &self,
         policy: &RetentionPolicy,
         excluded_daemon_ids: &[DaemonId],
+        archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
-        let _ = (policy, excluded_daemon_ids);
+        let _ = (policy, excluded_daemon_ids, archive_hook);
         Ok(0)
     }
 
@@ -131,8 +148,9 @@ pub trait LogStore: Send + Sync {
         &self,
         daemon_id: &DaemonId,
         policy: &RetentionPolicy,
+        archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
-        let _ = (daemon_id, policy);
+        let _ = (daemon_id, policy, archive_hook);
         Ok(0)
     }
 
