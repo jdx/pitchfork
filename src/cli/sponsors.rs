@@ -12,7 +12,6 @@ impl Sponsors {
   entire.io - https://entire.io
   37signals - https://37signals.com
   CodeRabbit - https://coderabbit.link/mise
-  Supabase - https://supabase.com
 
 View all sponsors: https://jdx.dev/sponsors.html"#
         );
