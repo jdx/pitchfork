@@ -22,7 +22,7 @@ use regex::Regex;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::ffi::CString;
-use std::sync::atomic;
+use std::sync::{Arc, atomic};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::select;
@@ -555,8 +555,28 @@ impl Supervisor {
                 // Drop the last sender so the channel closes when all readers finish.
                 drop(output_tx);
             }
-            let log_store = &*LOG_STORE;
+            let log_store = Arc::clone(&LOG_STORE);
             let format_line = |line: String| line;
+
+            const LOG_BATCH_SIZE: usize = 100;
+            const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+            let mut log_buffer: Vec<String> = Vec::with_capacity(LOG_BATCH_SIZE);
+            let mut log_flush_interval = tokio::time::interval(LOG_FLUSH_INTERVAL);
+            log_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            let flush_logs = |buffer: &mut Vec<String>| -> Option<tokio::task::JoinHandle<()>> {
+                if buffer.is_empty() {
+                    return None;
+                }
+                let store = Arc::clone(&log_store);
+                let id = id.clone();
+                let batch = std::mem::take(buffer);
+                Some(tokio::task::spawn_blocking(move || {
+                    if let Err(e) = store.append_batch(&id, &batch) {
+                        error!("Failed to write batch to log for daemon {id}: {e}");
+                    }
+                }))
+            };
 
             // SQLite WAL mode provides automatic durability; no explicit flush needed.
 
@@ -695,8 +715,9 @@ impl Supervisor {
                 select! {
                     Some(line) = output_rx.recv() => {
                         let formatted = format_line(line.clone());
-                        if let Err(e) = log_store.append(&id, &formatted) {
-                            error!("Failed to write to log for daemon {id}: {e}");
+                        log_buffer.push(formatted.clone());
+                        if log_buffer.len() >= LOG_BATCH_SIZE {
+                            let _ = flush_logs(&mut log_buffer);
                         }
                         trace!("output: {id} {formatted}");
 
@@ -709,6 +730,13 @@ impl Supervisor {
                             && let Some(ref pattern) = ready_pattern
                             && pattern.is_match(&line_clean)
                         {
+                            // Flush buffered logs synchronously before signalling
+                            // readiness, so collect_startup_logs sees the line
+                            // that triggered the match (and any co-buffered lines)
+                            // in SQLite.
+                            if let Some(handle) = flush_logs(&mut log_buffer) {
+                                let _ = handle.await;
+                            }
                             info!("daemon {id} ready: output matched pattern");
                             ready_notified = true;
                             if let Some(tx) = ready_tx.take() {
@@ -887,6 +915,9 @@ impl Supervisor {
                             detect_and_store_active_port(id.clone(), daemon_pid);
                         }
                     }
+                    _ = log_flush_interval.tick() => {
+                        let _ = flush_logs(&mut log_buffer);
+                    }
                 }
             }
 
@@ -908,11 +939,12 @@ impl Supervisor {
                 else {
                     break;
                 };
-                let formatted = format_line(line);
-                if let Err(e) = log_store.append(&id, &formatted) {
-                    error!("Failed to write to log for daemon {id}: {e}");
-                }
-                trace!("output (drain): {id} {formatted}");
+                log_buffer.push(format_line(line));
+            }
+            // Flush any remaining log lines (including drained) before the process exits.
+            // Await the flush to guarantee all buffered logs are persisted before cleanup.
+            if let Some(handle) = flush_logs(&mut log_buffer) {
+                let _ = handle.await;
             }
 
             // Clear active_port since the process is no longer running

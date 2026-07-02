@@ -1068,6 +1068,58 @@
             "global": false
           },
           {
+            "name": "grep",
+            "usage": "--grep… <GREP>",
+            "help": "Filter logs by case-insensitive substring (can be repeated)",
+            "help_long": "Filter logs by case-insensitive substring (can be repeated)\n\nMultiple --grep options are combined with OR.",
+            "help_first_line": "Filter logs by case-insensitive substring (can be repeated)",
+            "short": [],
+            "long": [
+              "grep"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "GREP",
+              "usage": "<GREP>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "regex",
+            "usage": "--regex <REGEX>",
+            "help": "Filter logs by regular expression",
+            "help_first_line": "Filter logs by regular expression",
+            "short": [],
+            "long": [
+              "regex"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "REGEX",
+              "usage": "<REGEX>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "case-sensitive",
+            "usage": "--case-sensitive",
+            "help": "Make --grep matching case-sensitive",
+            "help_first_line": "Make --grep matching case-sensitive",
+            "short": [],
+            "long": [
+              "case-sensitive"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
             "name": "no-timestamp",
             "usage": "--no-timestamp",
             "help": "Omit timestamps from log output",
