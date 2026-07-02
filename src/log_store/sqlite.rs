@@ -1,6 +1,8 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::log_store::{ArchiveHook, LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern};
+use crate::log_store::{
+    ArchiveHook, LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern,
+};
 use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
