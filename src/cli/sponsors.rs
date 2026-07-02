@@ -11,7 +11,6 @@ impl Sponsors {
 
   entire.io - https://entire.io
   37signals - https://37signals.com
-  CodeRabbit - https://coderabbit.link/mise
 
 View all sponsors: https://jdx.dev/sponsors.html"#
         );
