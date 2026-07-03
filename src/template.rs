@@ -278,8 +278,24 @@ struct TemplateRenderer {
 
 impl TemplateRenderer {
     fn new(context: &TemplateContext) -> Self {
+        let mut tera = tera::Tera::default();
+        tera.register_filter(
+            "default",
+            |value: &tera::Value,
+             kwargs: tera::Kwargs,
+             _: &tera::State|
+             -> tera::TeraResult<tera::Value> {
+                let default_val = kwargs.must_get::<tera::Value>("value")?;
+                let boolean = kwargs.get::<bool>("boolean")?.unwrap_or_default();
+                if value.is_undefined() || value.is_none() || (boolean && !value.is_truthy()) {
+                    Ok(default_val)
+                } else {
+                    Ok(value.clone())
+                }
+            },
+        );
         Self {
-            tera: tera::Tera::default(),
+            tera,
             context: context.to_tera_context(),
             next_template_id: 0,
         }
