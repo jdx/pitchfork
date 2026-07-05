@@ -104,11 +104,9 @@ pub fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
     if let Some(d) = sf.daemons.get(&DaemonId::pitchfork())
         && let Some(pid) = d.pid
+        && PROCS.is_running(pid)
     {
-        PROCS.refresh_pids(&[pid]);
-        if PROCS.is_running(pid) {
-            return Ok(());
-        }
+        return Ok(());
     }
     start_in_background()
 }
@@ -526,17 +524,7 @@ impl Supervisor {
     pub(crate) async fn refresh(&self) -> Result<()> {
         trace!("refreshing");
 
-        // Collect PIDs we need to check (shell PIDs only)
-        // This is more efficient than refreshing all processes on the system
         let dirs_with_pids = self.get_dirs_with_shell_pids().await;
-        let pids_to_check: Vec<u32> = dirs_with_pids.values().flatten().copied().collect();
-
-        if pids_to_check.is_empty() {
-            // No PIDs to check, skip the expensive refresh
-            trace!("no shell PIDs to check, skipping process refresh");
-        } else {
-            PROCS.refresh_pids(&pids_to_check);
-        }
 
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
@@ -1084,8 +1072,6 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
 
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
-
-        PROCS.refresh_pids(&[pid]);
 
         if !PROCS.is_running(pid) {
             // PID already dead — just reset its state

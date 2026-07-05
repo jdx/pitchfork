@@ -1118,7 +1118,6 @@ impl Supervisor {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
                 trace!("killing pid: {pid}");
-                PROCS.refresh_pids(&[pid]);
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(
@@ -1141,7 +1140,6 @@ impl Supervisor {
                     {
                         debug!("failed to kill pid {pid}: {e}");
                         // Check if the process is actually stopped despite the error
-                        PROCS.refresh_processes();
                         if PROCS.is_running(pid) {
                             // Process still running after kill attempt - set back to Running
                             debug!("failed to stop pid {pid}: process still running after kill");
