@@ -11,6 +11,43 @@ pub struct LogEntry {
     pub message: String,
 }
 
+/// A filter applied to the message text of log entries.
+#[derive(Debug, Clone)]
+pub enum MessageFilter {
+    /// Case-insensitive substring match using SQLite LIKE.
+    Contains {
+        pattern: String,
+        case_sensitive: bool,
+    },
+    /// Regular expression match using SQLite REGEXP.
+    Regex { pattern: String },
+}
+
+impl MessageFilter {
+    #[allow(dead_code)]
+    pub fn contains(pattern: impl Into<String>) -> Self {
+        Self::Contains {
+            pattern: pattern.into(),
+            case_sensitive: false,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn contains_case_sensitive(pattern: impl Into<String>) -> Self {
+        Self::Contains {
+            pattern: pattern.into(),
+            case_sensitive: true,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn regex(pattern: impl Into<String>) -> Self {
+        Self::Regex {
+            pattern: pattern.into(),
+        }
+    }
+}
+
 /// Options for querying logs.
 #[derive(Debug, Clone, Default)]
 pub struct LogQuery {
@@ -20,6 +57,16 @@ pub struct LogQuery {
     pub limit: Option<usize>,
     pub order_desc: bool,
     pub after_id: Option<i64>,
+    /// Filters applied to the message text. Multiple filters are combined with OR.
+    pub message_filters: Vec<MessageFilter>,
+}
+
+/// Escape special LIKE wildcard characters so user-supplied substrings are matched literally.
+pub fn escape_like_pattern(pattern: &str) -> String {
+    pattern
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Parsed retention policy.
@@ -38,10 +85,36 @@ impl RetentionPolicy {
     }
 }
 
+/// Hook invoked before log entries are pruned by retention.
+#[derive(Debug, Clone)]
+pub struct ArchiveHook {
+    /// Shell command to run. It should read JSONL from stdin.
+    pub command: String,
+    /// Maximum number of log entries to pass to a single hook invocation.
+    pub batch_size: usize,
+}
+
+impl ArchiveHook {
+    /// Returns true if the hook is configured with a non-empty command.
+    pub fn is_enabled(&self) -> bool {
+        !self.command.trim().is_empty()
+    }
+}
+
 /// Unified interface for log storage and retrieval.
 pub trait LogStore: Send + Sync {
     /// Append a single log line.
     fn append(&self, daemon_id: &DaemonId, message: &str) -> Result<()>;
+
+    /// Append multiple log lines in a single transaction.
+    ///
+    /// The default implementation falls back to calling `append` for each line.
+    fn append_batch(&self, daemon_id: &DaemonId, messages: &[String]) -> Result<()> {
+        for msg in messages {
+            self.append(daemon_id, msg)?;
+        }
+        Ok(())
+    }
 
     /// Query logs according to the given options.
     fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>>;
@@ -64,8 +137,9 @@ pub trait LogStore: Send + Sync {
         &self,
         policy: &RetentionPolicy,
         excluded_daemon_ids: &[DaemonId],
+        archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
-        let _ = (policy, excluded_daemon_ids);
+        let _ = (policy, excluded_daemon_ids, archive_hook);
         Ok(0)
     }
 
@@ -74,9 +148,26 @@ pub trait LogStore: Send + Sync {
         &self,
         daemon_id: &DaemonId,
         policy: &RetentionPolicy,
+        archive_hook: Option<&ArchiveHook>,
     ) -> Result<u64> {
-        let _ = (daemon_id, policy);
+        let _ = (daemon_id, policy, archive_hook);
         Ok(0)
+    }
+
+    /// Return the highest row id for the given daemon, or `None` if no
+    /// entries exist. Used by tailing loops to advance the cursor past
+    /// non-matching rows without re-scanning them on every poll.
+    fn last_id(&self, daemon_id: &DaemonId) -> Result<Option<i64>> {
+        let entries = self.query(&LogQuery {
+            daemon_ids: vec![daemon_id.qualified()],
+            from: None,
+            to: None,
+            limit: Some(1),
+            order_desc: true,
+            after_id: None,
+            message_filters: Vec::new(),
+        })?;
+        Ok(entries.first().map(|e| e.id))
     }
 
     /// List all daemon IDs that have log entries.

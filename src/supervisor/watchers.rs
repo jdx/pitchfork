@@ -10,7 +10,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::log_store::sqlite::LOG_STORE;
-use crate::log_store::{LogStore, RetentionPolicy};
+use crate::log_store::{ArchiveHook, LogStore, RetentionPolicy};
 use crate::pitchfork_toml::{PitchforkToml, WatchMode};
 use crate::procs::PROCS;
 use crate::settings::settings;
@@ -23,6 +23,18 @@ use std::time::Duration;
 use tokio::time;
 
 type WatchConfig = (DaemonId, Vec<String>, PathBuf, WatchMode);
+
+/// Build an optional archive hook from the configured settings.
+fn build_archive_hook(config: &crate::settings::SettingsLogsArchiveHook) -> Option<ArchiveHook> {
+    let command = config.command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    Some(ArchiveHook {
+        command: command.to_string(),
+        batch_size: config.batch_size.max(1) as usize,
+    })
+}
 
 fn daemon_ids_for_dir(dir: &Path, dir_to_daemons: &HashMap<PathBuf, Vec<DaemonId>>) -> String {
     dir_to_daemons
@@ -333,13 +345,15 @@ impl Supervisor {
             count: global_count,
         };
 
+        let global_archive_hook = build_archive_hook(&settings.logs.archive_hook);
+
         if let Some(w) = global_age_warn {
             warn!("{w}");
         }
 
         // Collect per-daemon overrides from merged config.
         let mut per_daemon_warns: Vec<String> = Vec::new();
-        let per_daemon_policies: Vec<(DaemonId, RetentionPolicy)> = {
+        let per_daemon_policies: Vec<(DaemonId, RetentionPolicy, Option<ArchiveHook>)> = {
             let config = PitchforkToml::all_merged()?;
             config
                 .daemons
@@ -364,7 +378,15 @@ impl Supervisor {
                     let count = d
                         .line_retention
                         .and_then(|n| if n > 0 { Some(n as u64) } else { None });
-                    if age.is_some() || count.is_some() {
+                    let hook = d
+                        .archive_hook
+                        .as_ref()
+                        .filter(|cmd| !cmd.trim().is_empty())
+                        .map(|cmd| ArchiveHook {
+                            command: cmd.clone(),
+                            batch_size: settings.logs.archive_hook.batch_size.max(1) as usize,
+                        });
+                    if age.is_some() || count.is_some() || hook.is_some() {
                         Some((
                             id.clone(),
                             RetentionPolicy {
@@ -382,6 +404,7 @@ impl Supervisor {
                                 }),
                                 count,
                             },
+                            hook,
                         ))
                     } else {
                         None
@@ -398,21 +421,27 @@ impl Supervisor {
         // own per-daemon overrides, so overrides are not silently overwritten.
         let excluded: Vec<DaemonId> = per_daemon_policies
             .iter()
-            .map(|(id, _)| id.clone())
+            .map(|(id, _, _)| id.clone())
             .collect();
 
         // Offload blocking SQLite work to a dedicated thread.
         let total_removed = tokio::task::spawn_blocking(move || {
-            let mut total = LOG_STORE.apply_retention(&global_policy, &excluded)?;
+            let mut total = LOG_STORE.apply_retention(
+                &global_policy,
+                &excluded,
+                global_archive_hook.as_ref(),
+            )?;
 
             // For daemons with per-daemon overrides, apply their specific policy,
             // falling back to the global setting for any dimension they don't override.
-            for (id, policy) in per_daemon_policies {
+            for (id, policy, hook) in per_daemon_policies {
                 let effective_policy = RetentionPolicy {
                     age: policy.age.or(global_policy.age),
                     count: policy.count.or(global_policy.count),
                 };
-                total += LOG_STORE.apply_retention_for_daemon(&id, &effective_policy)?;
+                let effective_hook = hook.as_ref().or(global_archive_hook.as_ref());
+                total +=
+                    LOG_STORE.apply_retention_for_daemon(&id, &effective_policy, effective_hook)?;
             }
 
             Ok::<u64, miette::Error>(total)

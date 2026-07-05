@@ -1463,6 +1463,7 @@ impl App {
             limit: Some(TUI_LOG_LIMIT),
             order_desc: true,
             after_id: None,
+            message_filters: Vec::new(),
         }) {
             Ok(entries) if !entries.is_empty() => {
                 let mut lines: Vec<String> = entries

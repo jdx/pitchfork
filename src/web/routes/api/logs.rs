@@ -42,6 +42,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 limit: Some(history_lines),
                 order_desc: true,
                 after_id: None,
+                message_filters: Vec::new(),
             })
         }
     })
@@ -124,6 +125,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                     limit: Some(BATCH_SIZE),
                     order_desc: false,
                     after_id: Some(last_id),
+                    message_filters: Vec::new(),
                 })
             }).await {
                 Ok(Ok(e)) => e,

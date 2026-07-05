@@ -3,4 +3,4 @@
 
 - **Usage**: `pitchfork sponsors`
 
-Show the companies sponsoring pitchfork and the jdx project family
+Show the companies sponsoring pitchfork and the jdx.dev open source tools

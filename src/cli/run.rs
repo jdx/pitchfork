@@ -122,11 +122,9 @@ impl Run {
             None
         };
 
-        let start_time = chrono::Local::now();
-
         // Start streaming logs for this daemon
         let (log_stop_tx, log_handle) = if let Some(ref job) = job {
-            let (tx, handle) = stream_startup_logs(&daemon_id, start_time, job.clone());
+            let (tx, handle) = stream_startup_logs(&daemon_id, job.clone());
             (Some(tx), Some(handle))
         } else {
             (None, None)

@@ -2,7 +2,7 @@
 name = "pitchfork-cli"
 description = "Daemons with DX"
 license = "MIT"
-version = "2.14.0"
+version = "2.15.0"
 edition = "2024"
 rust-version = "1.87"
 homepage = "https://pitchfork.jdx.dev"
@@ -57,7 +57,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls-native-certs",
     "rustls-no-provider",
 ] }
-rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "functions"] }
 rev_lines = "0.3"
 rust-embed = { version = "8", features = ["axum"] }
 axum = { version = "0.8" }
@@ -88,7 +88,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["indexmap"] }
 shell-words = "1.1.0"
 strum = { version = "0.28", features = ["derive"] }
-tera = "1"
+tera = "2"
 sysinfo = "0.39"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -105,6 +105,7 @@ globset = "0.4"
 humanbyte = { version = "0.2", features = ["serde", "derive"] }
 humantime = "2"
 listeners = "0.6"
+lru = "0.18"
 derive_more = { version = "2.1.1", features = ["into", "display", "from", "deref", "as_ref"] }
 vte = { version = "0.15.0", default-features = false }
 
@@ -123,7 +124,8 @@ indexmap = "2"
 
 [dev-dependencies]
 tempfile = "3"
-rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.40", features = ["bundled", "chrono", "functions"] }
+
 
 [profile.dev]
 debug = 1
