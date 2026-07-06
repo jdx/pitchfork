@@ -1180,8 +1180,11 @@ impl PitchforkToml {
             };
 
             // Convert back to raw format for writing (use short names as keys)
+            // Preserve settings so read-modify-write (e.g. `settings set`, `proxy add`)
+            // doesn't drop `[settings.*]`. Gate on is_empty to avoid a bare `[settings]`.
             let mut raw = PitchforkTomlRaw {
                 namespace: self.namespace.clone(),
+                settings: (!self.settings.is_empty()).then(|| self.settings.clone()),
                 ..PitchforkTomlRaw::default()
             };
             for (id, daemon) in &self.daemons {
@@ -1731,5 +1734,67 @@ user = "postgres"
             .get(&DaemonId::new("test-project", "api"))
             .unwrap();
         assert_eq!(daemon.user.as_deref(), Some("postgres"));
+    }
+
+    #[test]
+    fn test_settings_write_roundtrip() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        let mut pt = PitchforkToml::new(path.clone());
+        pt.namespace = Some("test-project".to_string());
+        pt.settings.web.auto_start = Some(true);
+        pt.settings.general.log_level = Some("debug".to_string());
+
+        pt.write().unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("[settings.web]"),
+            "settings.web section should be written, got:\n{raw}"
+        );
+        assert!(raw.contains("auto_start = true"));
+        assert!(raw.contains("log_level = \"debug\""));
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        assert_eq!(parsed.settings.web.auto_start, Some(true));
+        assert_eq!(parsed.settings.general.log_level.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn test_settings_preserved_on_unrelated_write() {
+        // Regression test for https://github.com/jdx/pitchfork/discussions/574
+        // A read-modify-write of slugs/namespaces must not drop existing [settings].
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        std::fs::write(&path, "[settings.web]\nauto_start = true\n").unwrap();
+
+        let mut pt = PitchforkToml::read(&path).unwrap();
+        pt.slugs.insert(
+            "api".to_string(),
+            SlugEntry {
+                dir: None,
+                namespace: Some("myproject".to_string()),
+                daemon: None,
+            },
+        );
+        pt.namespaces.insert(
+            "myproject".to_string(),
+            NamespaceEntry {
+                dir: PathBuf::from("/tmp/myproject"),
+            },
+        );
+        pt.write().unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("[settings.web]"),
+            "existing settings must be preserved, got:\n{raw}"
+        );
+        assert!(raw.contains("auto_start = true"));
+        assert!(raw.contains("[slugs.api]"));
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        assert_eq!(parsed.settings.web.auto_start, Some(true));
+        assert!(parsed.slugs.contains_key("api"));
     }
 }
