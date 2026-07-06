@@ -52,7 +52,6 @@ impl Supervisor {
 ///
 /// This is a low-level helper — callers are responsible for user-facing messages.
 pub async fn kill_or_stop(existing_pid: u32, force: bool) -> Result<KillOrStopOutcome> {
-    PROCS.refresh_pids(&[existing_pid]);
     if PROCS.is_running(existing_pid) {
         if force {
             debug!("killing pid {existing_pid}");

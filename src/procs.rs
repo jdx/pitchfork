@@ -27,11 +27,21 @@ impl Default for Procs {
 
 impl Procs {
     pub fn new() -> Self {
-        let procs = Self {
-            system: Mutex::new(sysinfo::System::new_all()),
-        };
-        procs.refresh_processes();
-        procs
+        // IMPORTANT: Do NOT call refresh_processes() or System::new_all() here.
+        //
+        // Both refresh the state of every process in the system, which takes
+        // ~500ms on a typical machine. Since PROCS is a Lazy static, the first
+        // access triggers this constructor — and `pitchfork cd` (which only
+        // needs to check if the supervisor PID is alive) would block for that
+        // duration on every directory change.
+        //
+        // See https://github.com/jdx/pitchfork/discussions/439
+        //
+        // Callers that need process info must call refresh_pids() (for specific
+        // PIDs) or refresh_processes() (for full-system stats) explicitly.
+        Self {
+            system: Mutex::new(sysinfo::System::new()),
+        }
     }
 
     fn lock_system(&self) -> std::sync::MutexGuard<'_, sysinfo::System> {
@@ -48,9 +58,27 @@ impl Procs {
     }
 
     pub fn is_running(&self, pid: u32) -> bool {
-        self.lock_system()
-            .process(sysinfo::Pid::from_u32(pid))
-            .is_some()
+        // Use kill(pid, 0) on Unix for an O(1) liveness check that does not
+        // depend on the process cache being populated. This avoids the need
+        // for a full process refresh just to check a single PID.
+        // ESRCH = process does not exist; EPERM = process exists but owned
+        // by another user (still "running" from our perspective).
+        #[cfg(unix)]
+        {
+            unsafe {
+                if libc::kill(pid as i32, 0) == 0 {
+                    return true;
+                }
+                std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            self.refresh_pids(&[pid]);
+            self.lock_system()
+                .process(sysinfo::Pid::from_u32(pid))
+                .is_some()
+        }
     }
 
     /// Walk the /proc tree to find all descendant PIDs.
@@ -240,16 +268,12 @@ impl Procs {
     ) -> Result<bool> {
         let sysinfo_pid = sysinfo::Pid::from_u32(pid);
 
-        // Check if process exists or is a zombie (already terminated but not reaped)
-        if self.is_terminated_or_zombie(sysinfo_pid) {
-            return Ok(false);
-        }
-
         debug!("killing process {pid}");
 
         #[cfg(windows)]
         {
             let _ = (stop_signal, stop_timeout);
+            self.refresh_pids(&[pid]);
             if let Some(process) = self.lock_system().process(sysinfo_pid) {
                 process.kill();
                 process.wait();

@@ -31,7 +31,6 @@ impl Start {
                 let pid = existing_pid.expect("Killed implies a pid exists");
                 // Wait briefly for the old process to fully exit
                 for _ in 0..20 {
-                    PROCS.refresh_pids(&[pid]);
                     if !PROCS.is_running(pid) {
                         break;
                     }

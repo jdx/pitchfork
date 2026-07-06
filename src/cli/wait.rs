@@ -59,7 +59,6 @@ impl Wait {
 
         let mut interval = time::interval(time::Duration::from_millis(100));
         loop {
-            PROCS.refresh_pids(&[pid]);
             if !PROCS.is_running(pid) {
                 break;
             }
