@@ -11,5 +11,4 @@ passthrough = [
 image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5"
 
 [target.aarch64-unknown-linux-gnu]
-# Use newer image for aarch64 to get assembler that supports ARMv8.2-A crypto instructions
-image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"
