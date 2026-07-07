@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.16.0](https://github.com/jdx/pitchfork/compare/v2.15.0...v2.16.0) - 2026-07-07
+
+### Added
+
+- *(logs)* add message filtering with --grep, --regex ([#532](https://github.com/jdx/pitchfork/pull/532))
+
+### Fixed
+
+- *(config)* preserve settings on config write ([#575](https://github.com/jdx/pitchfork/pull/575))
+- *(deps)* update rust crate tera to v2 ([#571](https://github.com/jdx/pitchfork/pull/571))
+
+### Other
+
+- *(config)* upgrade humanbyte to 0.4, consolidate byte formatting ([#582](https://github.com/jdx/pitchfork/pull/582))
+- *(deps)* update rust crate ratatui to v0.30.2 ([#567](https://github.com/jdx/pitchfork/pull/567))
+- *(procs)* avoid full process refresh on PROCS init and is_running ([#576](https://github.com/jdx/pitchfork/pull/576))
+- *(deps)* update rust crate xx to v2.6.1 ([#570](https://github.com/jdx/pitchfork/pull/570))
+- *(deps)* lock file maintenance ([#578](https://github.com/jdx/pitchfork/pull/578))
+- Update sponsor references for jdx.dev ([#566](https://github.com/jdx/pitchfork/pull/566))
+
 ## [2.15.0](https://github.com/jdx/pitchfork/compare/v2.14.0...v2.15.0) - 2026-07-01
 
 ### Added
