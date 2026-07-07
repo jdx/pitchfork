@@ -468,13 +468,9 @@ fn render_memory_bar(bytes: u64, width: usize) -> Line<'static> {
     let empty_str: String = std::iter::repeat_n(BAR_EMPTY, empty).collect();
 
     // Format memory size
-    let size_str = if bytes < 1024 * 1024 {
-        format!("{:.0}K", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.0}M", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    };
+    let precision = if bytes >= humanbyte::GIB { 1 } else { 0 };
+    let size_str =
+        humanbyte::to_string_with_precision(bytes, humanbyte::Format::IECShort, precision);
 
     Line::from(vec![
         Span::styled(filled_str, Style::default().fg(bar_color)),
@@ -1125,26 +1121,16 @@ fn memory_color(bytes: u64) -> Color {
 
 /// Format memory in human-readable form
 fn format_memory(bytes: u64) -> String {
-    if bytes < 1024 * 1024 {
-        format!("{:.1}KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
+    let precision = if bytes >= humanbyte::GIB { 2 } else { 1 };
+    humanbyte::to_string_with_precision(bytes, humanbyte::Format::IECShort, precision)
 }
 
 /// Format bytes per second rate
 fn format_rate(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes}B/s")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1}K/s", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}M/s", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}G/s", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
+    format!(
+        "{}/s",
+        humanbyte::to_string(bytes, humanbyte::Format::IECShort)
+    )
 }
 
 fn draw_log_search_bar(f: &mut Frame, area: Rect, app: &App) {

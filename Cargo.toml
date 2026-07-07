@@ -102,7 +102,7 @@ crossterm = "0.29"
 fuzzy-matcher = "0.3.7"
 glob = "0.3"
 globset = "0.4"
-humanbyte = { version = "0.2", features = ["serde", "derive"] }
+humanbyte = { version = "0.4", features = ["serde", "derive", "schemars"] }
 humantime = "2"
 listeners = "0.6"
 lru = "0.18"

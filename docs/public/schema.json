@@ -67,8 +67,11 @@
       "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
     },
     "MemoryLimit": {
-      "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'",
-      "type": "string"
+      "description": "A byte size, as either a human-readable string (e.g. \"1.5 KiB\") or a number of bytes",
+      "type": [
+        "string",
+        "integer"
+      ]
     },
     "OnOutputHook": {
       "description": "Output hook configuration.\n\nAccepts two forms:\n```toml\non_output = \"echo matched\"                              # shorthand (run only)\non_output = { run = \"echo matched\", filter = \"ready\" }  # full\n```\n\nPattern matching (`filter` / `regex`) is performed against ANSI-stripped\noutput and covers both stdout and stderr.",

@@ -595,15 +595,7 @@ pub struct ExtendedProcessStats {
 }
 
 fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes}B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1}KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
+    humanbyte::to_string(bytes, humanbyte::Format::IEC)
 }
 
 fn format_duration(secs: u64) -> String {
@@ -623,15 +615,7 @@ fn format_duration(secs: u64) -> String {
 }
 
 fn format_bytes_per_sec(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes}B/s")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1}KB/s", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}MB/s", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}GB/s", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
+    format!("{}/s", humanbyte::to_string(bytes, humanbyte::Format::IEC))
 }
 
 #[cfg(unix)]
@@ -645,6 +629,29 @@ fn signal_name(sig: i32) -> &'static str {
         libc::SIGUSR2 => "SIGUSR2",
         libc::SIGKILL => "SIGKILL",
         _ => "UNKNOWN",
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.0 KiB");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(50 * 1024 * 1024), "50.0 MiB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
+        // rolls over past GiB instead of showing e.g. "1100.0GB"
+        assert_eq!(format_bytes(1100 * 1024 * 1024 * 1024), "1.1 TiB");
+    }
+
+    #[test]
+    fn test_format_bytes_per_sec() {
+        assert_eq!(format_bytes_per_sec(512), "512 B/s");
+        assert_eq!(format_bytes_per_sec(1536), "1.5 KiB/s");
+        assert_eq!(format_bytes_per_sec(2 * 1024 * 1024), "2.0 MiB/s");
     }
 }
 

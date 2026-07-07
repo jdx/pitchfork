@@ -130,19 +130,6 @@ pub trait BoolOrU32: Sized + Copy + From<u32> + Into<u32> {
 #[derive(Clone, Copy, PartialEq, Eq, humanbyte::HumanByte)]
 pub struct MemoryLimit(pub u64);
 
-impl JsonSchema for MemoryLimit {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("MemoryLimit")
-    }
-
-    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        schemars::json_schema!({
-            "type": "string",
-            "description": "Memory limit in human-readable format, e.g. '50MB', '1GiB', '512KB'"
-        })
-    }
-}
-
 // ---------------------------------------------------------------------------
 // CpuLimit
 // ---------------------------------------------------------------------------
