@@ -4,7 +4,9 @@ export interface ParsedLogLine {
   html: string
 }
 
-const LOG_PREFIX_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (\S+) (.+)$/
+// Strip the fixed `<ts> ` prefix prepended by the web log API
+// (src/web/routes/api/logs.rs: `{ts} {msg}`); keep the message verbatim.
+const LOG_PREFIX_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$/
 
 // Match all CSI sequences (ESC[...X)
 const CSI_PATTERN = /\x1b\[[\d;?]*[A-Za-z]/g
@@ -216,7 +218,7 @@ export function parseLogLines(lines: string[]): ParsedLogLine[] {
 export function parseLogLine(line: string): ParsedLogLine {
   const match = line.match(LOG_PREFIX_RE)
   if (match) {
-    const [, timestamp, , content] = match
+    const [, timestamp, content] = match
     const cleaned = preprocess(content)
     return {
       timestamp,
