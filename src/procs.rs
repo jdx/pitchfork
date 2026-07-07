@@ -632,6 +632,29 @@ fn signal_name(sig: i32) -> &'static str {
     }
 }
 
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1024), "1.0 KiB");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(50 * 1024 * 1024), "50.0 MiB");
+        assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GiB");
+        // rolls over past GiB instead of showing e.g. "1100.0GB"
+        assert_eq!(format_bytes(1100 * 1024 * 1024 * 1024), "1.1 TiB");
+    }
+
+    #[test]
+    fn test_format_bytes_per_sec() {
+        assert_eq!(format_bytes_per_sec(512), "512 B/s");
+        assert_eq!(format_bytes_per_sec(1536), "1.5 KiB/s");
+        assert_eq!(format_bytes_per_sec(2 * 1024 * 1024), "2.0 MiB/s");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
