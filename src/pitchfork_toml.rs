@@ -124,6 +124,27 @@ struct PitchforkTomlRaw {
     pub namespaces: IndexMap<String, NamespaceEntryRaw>,
 }
 
+/// Per-daemon log configuration sub-table `[daemons.<name>.logs]`.
+///
+/// Fields here override the top-level daemon fields (`time_retention`,
+/// `line_retention`, `archive_hook`) and the global `[settings.logs]` defaults.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct PitchforkTomlDaemonLogs {
+    /// Log line format: `json`, `logfmt`, `auto`, or `text`.
+    /// Defaults to `auto` (detect JSON/logfmt per line).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub log_format: Option<String>,
+    /// Maximum age of log entries to keep (e.g. "7d", "30d").
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub time_retention: Option<String>,
+    /// Maximum number of log entries to keep per daemon.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub line_retention: Option<i64>,
+    /// Archive hook command invoked before retention prunes this daemon's logs.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub archive_hook: Option<String>,
+}
+
 /// Internal daemon config for reading (uses String for depends).
 ///
 /// Note: This struct mirrors `PitchforkTomlDaemon` but uses `Vec<String>` for `depends`
@@ -204,6 +225,9 @@ struct PitchforkTomlDaemonRaw {
     /// Overrides the global `settings.logs.archive_hook.command` when set.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub archive_hook: Option<String>,
+    /// Per-daemon log configuration sub-table.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub logs: Option<PitchforkTomlDaemonLogs>,
 }
 
 /// Configuration schema for pitchfork.toml daemon supervisor configuration files.
@@ -1079,6 +1103,7 @@ impl PitchforkToml {
                 time_retention: raw_daemon.time_retention,
                 line_retention: raw_daemon.line_retention,
                 archive_hook: raw_daemon.archive_hook,
+                logs: raw_daemon.logs,
                 path: Some(path.to_path_buf()),
             };
             pt.daemons.insert(id, daemon);
@@ -1246,6 +1271,7 @@ impl PitchforkToml {
                     time_retention: daemon.time_retention.clone(),
                     line_retention: daemon.line_retention,
                     archive_hook: daemon.archive_hook.clone(),
+                    logs: daemon.logs.clone(),
                 };
                 raw.daemons.insert(id.name().to_string(), raw_daemon);
             }
@@ -1607,6 +1633,8 @@ pub struct PitchforkTomlDaemon {
     /// Archive hook command invoked before retention prunes this daemon's logs.
     /// Overrides the global `settings.logs.archive_hook.command` when set.
     pub archive_hook: Option<String>,
+    /// Per-daemon log configuration sub-table.
+    pub logs: Option<PitchforkTomlDaemonLogs>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
 }
@@ -1674,6 +1702,7 @@ impl PitchforkTomlDaemon {
             cpu_limit: self.cpu_limit,
             stop_signal: self.stop_signal,
             archive_hook: self.archive_hook.clone(),
+            log_format: self.logs.as_ref().and_then(|l| l.log_format.clone()),
             on_output_hook: self.hooks.as_ref().and_then(|h| h.on_output.clone()),
             pty: self.pty,
         }

@@ -72,6 +72,8 @@ pub(crate) struct UpsertDaemonOpts {
     pub stop_signal: Option<StopConfig>,
     /// Archive hook command invoked before retention prunes this daemon's logs.
     pub archive_hook: Option<String>,
+    /// Log format for this daemon.
+    pub log_format: Option<String>,
     /// Allocate a pseudo-terminal for the daemon process.
     pub pty: Option<bool>,
     /// True for config-only cron daemons auto-registered into state.
@@ -142,6 +144,7 @@ impl UpsertDaemonOpts {
             o.stop_signal = opts.stop_signal;
             o.pty = opts.pty;
             o.archive_hook = opts.archive_hook.clone();
+            o.log_format = opts.log_format.clone();
         })
     }
 }
@@ -247,6 +250,9 @@ impl Supervisor {
             archive_hook: opts
                 .archive_hook
                 .or(existing.and_then(|d| d.archive_hook.clone())),
+            log_format: opts
+                .log_format
+                .or(existing.and_then(|d| d.log_format.clone())),
             pty: opts.pty.or(existing.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
         };

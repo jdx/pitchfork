@@ -1464,6 +1464,7 @@ impl App {
             order_desc: true,
             after_id: None,
             message_filters: Vec::new(),
+            field_filters: Vec::new(),
         }) {
             Ok(entries) if !entries.is_empty() => {
                 let mut lines: Vec<String> = entries

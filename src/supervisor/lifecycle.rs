@@ -556,23 +556,29 @@ impl Supervisor {
                 drop(output_tx);
             }
             let log_store = Arc::clone(&LOG_STORE);
-            let format_line = |line: String| line;
+            let log_format = opts
+                .log_format
+                .clone()
+                .unwrap_or_else(|| crate::settings::settings().logs.log_format.clone());
+            let parse_line = move |line: &str| crate::log_parse::parse(line, &log_format);
 
             const LOG_BATCH_SIZE: usize = 100;
             const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-            let mut log_buffer: Vec<String> = Vec::with_capacity(LOG_BATCH_SIZE);
+            let mut log_buffer: Vec<crate::log_parse::ParsedLog> =
+                Vec::with_capacity(LOG_BATCH_SIZE);
             let mut log_flush_interval = tokio::time::interval(LOG_FLUSH_INTERVAL);
             log_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-            let flush_logs = |buffer: &mut Vec<String>| -> Option<tokio::task::JoinHandle<()>> {
-                if buffer.is_empty() {
-                    return None;
+            let flush_logs =
+                |buffer: &mut Vec<crate::log_parse::ParsedLog>| -> Option<tokio::task::JoinHandle<()>> {
+                    if buffer.is_empty() {
+                        return None;
                 }
                 let store = Arc::clone(&log_store);
                 let id = id.clone();
                 let batch = std::mem::take(buffer);
                 Some(tokio::task::spawn_blocking(move || {
-                    if let Err(e) = store.append_batch(&id, &batch) {
+                    if let Err(e) = store.append_structured_batch(&id, &batch) {
                         error!("Failed to write batch to log for daemon {id}: {e}");
                     }
                 }))
@@ -714,12 +720,12 @@ impl Supervisor {
             loop {
                 select! {
                     Some(line) = output_rx.recv() => {
-                        let formatted = format_line(line.clone());
-                        log_buffer.push(formatted.clone());
+                        let parsed = parse_line(&line);
+                        log_buffer.push(parsed);
                         if log_buffer.len() >= LOG_BATCH_SIZE {
                             let _ = flush_logs(&mut log_buffer);
                         }
-                        trace!("output: {id} {formatted}");
+                        trace!("output: {id} {line}");
 
                         // Strip ANSI for pattern matching so user-written patterns
                         // work regardless of whether the process emits color codes.
@@ -939,7 +945,7 @@ impl Supervisor {
                 else {
                     break;
                 };
-                log_buffer.push(format_line(line));
+                log_buffer.push(parse_line(&line));
             }
             // Flush any remaining log lines (including drained) before the process exits.
             // Await the flush to guarantee all buffered logs are persisted before cleanup.

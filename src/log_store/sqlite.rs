@@ -1,7 +1,8 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
+use crate::log_parse::ParsedLog;
 use crate::log_store::{
-    ArchiveHook, LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern,
+    ArchiveHook, FieldFilter, LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern,
 };
 use chrono::{DateTime, Local, TimeZone};
 use log::error;
@@ -75,7 +76,11 @@ impl SqliteLogStore {
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 daemon_id   TEXT    NOT NULL,
                 timestamp   INTEGER NOT NULL,
-                message     TEXT    NOT NULL
+                message     TEXT    NOT NULL,
+                level       TEXT,
+                msg         TEXT,
+                logger      TEXT,
+                fields_json TEXT
             );",
             [],
         )
@@ -96,6 +101,25 @@ impl SqliteLogStore {
         )
         .into_diagnostic()?;
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daemon_level_ts ON log_entries(daemon_id, level, timestamp);",
+            [],
+        )
+        .into_diagnostic()?;
+
+        // Migrate existing tables: add columns introduced in this version.
+        // ALTER TABLE ADD COLUMN is idempotent-safe because we catch the
+        // "duplicate column" error.
+        for col in ["level", "msg", "logger", "fields_json"] {
+            let sql = format!("ALTER TABLE log_entries ADD COLUMN {col} TEXT");
+            if let Err(e) = conn.execute(&sql, []) {
+                // "duplicate column name" means it already exists — safe to ignore.
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(e).into_diagnostic();
+                }
+            }
+        }
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS log_clear_generations (
                 daemon_id TEXT PRIMARY KEY,
                 generation INTEGER NOT NULL DEFAULT 0
@@ -113,6 +137,10 @@ impl SqliteLogStore {
         let daemon_id: String = row.get(1)?;
         let ts_millis: i64 = row.get(2)?;
         let message: String = row.get(3)?;
+        let level: Option<String> = row.get(4)?;
+        let msg: Option<String> = row.get(5)?;
+        let logger: Option<String> = row.get(6)?;
+        let fields_json: Option<String> = row.get(7)?;
         let timestamp = Local
             .timestamp_millis_opt(ts_millis)
             .single()
@@ -122,6 +150,10 @@ impl SqliteLogStore {
             daemon_id,
             timestamp,
             message,
+            level,
+            msg,
+            logger,
+            fields_json,
         })
     }
 
@@ -518,6 +550,59 @@ impl LogStore for SqliteLogStore {
         Ok(())
     }
 
+    fn append_structured(&self, daemon_id: &DaemonId, parsed: &ParsedLog) -> Result<()> {
+        let ts = Local::now().timestamp_millis();
+        let id = daemon_id.qualified();
+
+        let conn = self.conn.lock().unwrap();
+        let _ = conn
+            .execute(
+                "INSERT INTO log_entries (daemon_id, timestamp, message, level, msg, logger, fields_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, ts, parsed.message, parsed.level, parsed.msg, parsed.logger, parsed.fields_json],
+            )
+            .into_diagnostic()?;
+        Ok(())
+    }
+
+    fn append_structured_batch(
+        &self,
+        daemon_id: &DaemonId,
+        entries: &[ParsedLog],
+    ) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let base_ts = Local::now().timestamp_millis();
+        let id = daemon_id.qualified();
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().into_diagnostic()?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO log_entries (daemon_id, timestamp, message, level, msg, logger, fields_json) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                )
+                .into_diagnostic()?;
+            for (idx, entry) in entries.iter().enumerate() {
+                let ts = base_ts + idx as i64;
+                stmt.execute(params![
+                    id,
+                    ts,
+                    entry.message,
+                    entry.level,
+                    entry.msg,
+                    entry.logger,
+                    entry.fields_json
+                ])
+                .into_diagnostic()?;
+            }
+        }
+        tx.commit().into_diagnostic()?;
+        Ok(())
+    }
+
     fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut conditions = Vec::new();
@@ -585,6 +670,24 @@ impl LogStore for SqliteLogStore {
             conditions.push(format!("({})", message_conditions.join(" OR ")));
         }
 
+        // Structured field filters (combined with AND).
+        for filter in &opts.field_filters {
+            match filter {
+                FieldFilter::LevelEq(level) => {
+                    let param_index = query_params.len() + 1;
+                    conditions.push(format!("level = ?{param_index}"));
+                    query_params.push(Box::new(level.clone()));
+                }
+                FieldFilter::FieldEq { key, value } => {
+                    let param_index = query_params.len() + 1;
+                    conditions.push(format!(
+                        "json_extract(fields_json, '$.{key}') = ?{param_index}"
+                    ));
+                    query_params.push(Box::new(value.clone()));
+                }
+            }
+        }
+
         let where_clause = if conditions.is_empty() {
             String::new()
         } else {
@@ -599,7 +702,7 @@ impl LogStore for SqliteLogStore {
             .unwrap_or_default();
 
         let sql = format!(
-            "SELECT id, daemon_id, timestamp, message FROM log_entries {} ORDER BY timestamp {}, id {} {}",
+            "SELECT id, daemon_id, timestamp, message, level, msg, logger, fields_json FROM log_entries {} ORDER BY timestamp {}, id {} {}",
             where_clause, order, order, limit_clause
         );
 
@@ -607,22 +710,7 @@ impl LogStore for SqliteLogStore {
         let params_ref: Vec<&dyn rusqlite::ToSql> =
             query_params.iter().map(|p| p.as_ref()).collect();
         let rows = stmt
-            .query_map(params_ref.as_slice(), |row| {
-                let id: i64 = row.get(0)?;
-                let daemon_id: String = row.get(1)?;
-                let ts_millis: i64 = row.get(2)?;
-                let message: String = row.get(3)?;
-                let timestamp = Local
-                    .timestamp_millis_opt(ts_millis)
-                    .single()
-                    .unwrap_or_else(Local::now);
-                Ok(LogEntry {
-                    id,
-                    daemon_id,
-                    timestamp,
-                    message,
-                })
-            })
+            .query_map(params_ref.as_slice(), Self::row_to_entry)
             .into_diagnostic()?;
 
         let mut entries = Vec::new();
@@ -641,6 +729,7 @@ impl LogStore for SqliteLogStore {
             order_desc: false,
             after_id,
             message_filters: Vec::new(),
+            field_filters: Vec::new(),
         })
     }
 

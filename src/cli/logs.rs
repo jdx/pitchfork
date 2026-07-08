@@ -323,6 +323,7 @@ impl Logs {
             order_desc: !has_time_filter,
             after_id: None,
             message_filters,
+            field_filters: Vec::new(),
         };
         let entries = LOG_STORE.query(&opts)?;
         let log_lines: Vec<(String, String, String)> = entries
@@ -711,6 +712,7 @@ pub async fn tail_logs(
                 order_desc: false,
                 after_id,
                 message_filters: message_filters.clone(),
+                field_filters: Vec::new(),
             }) {
                 Ok(entries) => {
                     for entry in &entries {
@@ -987,6 +989,7 @@ pub fn collect_startup_logs(
         order_desc: false,
         after_id: None,
         message_filters: Vec::new(),
+        field_filters: Vec::new(),
     })?;
     let log_lines = entries
         .into_iter()

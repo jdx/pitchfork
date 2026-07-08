@@ -13,6 +13,7 @@ mod env;
 mod error;
 mod ipc;
 mod log_store;
+mod log_parse;
 mod logger;
 mod pitchfork_toml;
 mod procs;

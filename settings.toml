@@ -224,6 +224,12 @@ this size. Smaller batches use less memory and are easier to retry, while larger
 batches reduce hook invocation overhead.
 """
 
+[logs.log_format]
+type = "String"
+env = "PITCHFORK_LOG_FORMAT"
+default = "auto"
+description = "Default log format for daemons (json | logfmt | auto | text)"
+
 [logs.timestamp]
 type = "Bool"
 env = "PITCHFORK_LOG_TIMESTAMP"

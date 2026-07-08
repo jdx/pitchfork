@@ -13,6 +13,7 @@ pub mod env;
 pub mod error;
 pub mod ipc;
 pub mod log_store;
+pub mod log_parse;
 pub mod logger;
 pub mod pitchfork_toml;
 pub mod procs;

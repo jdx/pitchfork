@@ -387,6 +387,7 @@ fn get_logs_value(g: &crate::settings::SettingsLogs, field: &str) -> String {
     match field {
         "time_retention" => g.time_retention.clone(),
         "line_retention" => g.line_retention.to_string(),
+        "log_format" => g.log_format.clone(),
         _ => String::new(),
     }
 }
@@ -553,6 +554,7 @@ fn apply_logs_value(
     match field {
         "time_retention" => partial.time_retention = Some(value.to_string()),
         "line_retention" => partial.line_retention = Some(parse_int_value(value)?),
+        "log_format" => partial.log_format = Some(value.to_string()),
         _ => bail!("unknown logs setting '{field}'"),
     }
     let _ = typ;
