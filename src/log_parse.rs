@@ -284,7 +284,7 @@ fn normalize_level_value(val: &Value) -> Option<String> {
     }
 }
 
-fn normalize_level_str(s: &str) -> Option<String> {
+pub fn normalize_level_str(s: &str) -> Option<String> {
     let lower = s.to_ascii_lowercase();
     match lower.as_str() {
         "error" | "err" | "fatal" | "critical" | "panic" | "alert" | "emerg" => {

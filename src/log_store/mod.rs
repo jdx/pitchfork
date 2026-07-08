@@ -4,7 +4,6 @@ use crate::log_parse::ParsedLog;
 use chrono::{DateTime, Local};
 
 /// A single log entry.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub id: i64,
@@ -36,7 +35,6 @@ pub enum MessageFilter {
 }
 
 /// A filter applied to structured log fields.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum FieldFilter {
     /// Match entries with a specific normalized level.

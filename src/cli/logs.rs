@@ -1,7 +1,7 @@
 use crate::cli::json_output::{JsonLogEntry, print_json};
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
-use crate::log_store::{LogQuery, LogStore, MessageFilter};
+use crate::log_store::{FieldFilter, LogQuery, LogStore, MessageFilter};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::state_file::StateFile;
@@ -219,6 +219,20 @@ pub struct Logs {
     #[clap(long)]
     case_sensitive: bool,
 
+    /// Filter by log level (error, warn, info, debug, trace)
+    ///
+    /// Matches the normalized level extracted from structured log lines.
+    /// Only effective for daemons with log_format json or logfmt.
+    #[clap(long)]
+    level: Option<String>,
+
+    /// Filter by structured field value (KEY=VALUE, can be repeated)
+    ///
+    /// Extracts the value from fields_json using json_extract($.KEY).
+    /// Multiple --field options are combined with AND.
+    #[clap(long, value_name = "KEY=VALUE")]
+    field: Vec<String>,
+
     /// Omit timestamps from log output
     #[clap(long)]
     no_timestamp: bool,
@@ -251,14 +265,21 @@ impl Logs {
         };
 
         let message_filters = self.build_message_filters()?;
+        let field_filters = self.build_field_filters()?;
 
         if self.json {
-            return self.output_json(&resolved_ids, from, to, message_filters);
+            return self.output_json(&resolved_ids, from, to, message_filters, field_filters);
         }
 
         let single_daemon = resolved_ids.len() == 1;
         let show_timestamp = settings().logs.timestamp && !self.no_timestamp;
-        let log_lines = self.fetch_log_lines(&resolved_ids, from, to, message_filters.clone())?;
+        let log_lines = self.fetch_log_lines(
+            &resolved_ids,
+            from,
+            to,
+            message_filters.clone(),
+            field_filters.clone(),
+        )?;
         let has_time_filter = from.is_some() || to.is_some();
         self.output_logs(
             log_lines,
@@ -273,6 +294,7 @@ impl Logs {
                 single_daemon,
                 true,
                 message_filters,
+                field_filters,
                 show_timestamp,
             )
             .await?;
@@ -305,12 +327,37 @@ impl Logs {
         Ok(filters)
     }
 
+    fn build_field_filters(&self) -> Result<Vec<FieldFilter>> {
+        let mut filters = Vec::new();
+        if let Some(level) = self.level.as_ref() {
+            // Normalize the user-supplied level so "ERROR", "Error", "fatal"
+            // all match the stored canonical form.
+            let normalized = crate::log_parse::normalize_level_str(level)
+                .unwrap_or_else(|| level.to_ascii_lowercase());
+            filters.push(FieldFilter::LevelEq(normalized));
+        }
+        for pair in &self.field {
+            let (key, value) = pair
+                .split_once('=')
+                .ok_or_else(|| miette::miette!("--field expects KEY=VALUE, got: {pair}"))?;
+            if key.is_empty() {
+                miette::bail!("--field key cannot be empty: {pair}");
+            }
+            filters.push(FieldFilter::FieldEq {
+                key: key.to_string(),
+                value: value.to_string(),
+            });
+        }
+        Ok(filters)
+    }
+
     fn fetch_log_lines(
         &self,
         resolved_ids: &[DaemonId],
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
         message_filters: Vec<MessageFilter>,
+        field_filters: Vec<FieldFilter>,
     ) -> Result<Vec<(String, String, String)>> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
         let has_time_filter = from.is_some() || to.is_some();
@@ -323,7 +370,7 @@ impl Logs {
             order_desc: !has_time_filter,
             after_id: None,
             message_filters,
-            field_filters: Vec::new(),
+            field_filters,
         };
         let entries = LOG_STORE.query(&opts)?;
         let log_lines: Vec<(String, String, String)> = entries
@@ -365,15 +412,40 @@ impl Logs {
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
         message_filters: Vec<MessageFilter>,
+        field_filters: Vec<FieldFilter>,
     ) -> Result<()> {
-        let log_lines = self.fetch_log_lines(resolved_ids, from, to, message_filters)?;
+        let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
+        let has_time_filter = from.is_some() || to.is_some();
 
-        let json_entries: Vec<JsonLogEntry> = log_lines
+        let opts = LogQuery {
+            daemon_ids,
+            from,
+            to,
+            limit: if !has_time_filter { self.n } else { None },
+            order_desc: !has_time_filter,
+            after_id: None,
+            message_filters,
+            field_filters,
+        };
+        let entries = LOG_STORE.query(&opts)?;
+
+        let json_entries: Vec<JsonLogEntry> = entries
             .into_iter()
-            .map(|(timestamp, daemon_id, message)| JsonLogEntry {
-                timestamp,
-                daemon_id,
-                message: console::strip_ansi_codes(&message).to_string(),
+            .rev()
+            .map(|e| {
+                let fields = e
+                    .fields_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+                JsonLogEntry {
+                    timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    daemon_id: e.daemon_id,
+                    message: console::strip_ansi_codes(&e.message).to_string(),
+                    level: e.level,
+                    msg: e.msg,
+                    logger: e.logger,
+                    fields,
+                }
             })
             .collect();
 
@@ -669,6 +741,7 @@ pub async fn tail_logs(
     single_daemon: bool,
     start_from_end: bool,
     message_filters: Vec<MessageFilter>,
+    field_filters: Vec<FieldFilter>,
     show_timestamp: bool,
 ) -> Result<()> {
     // Poll SQLite log store for new entries since last known row id.
@@ -712,7 +785,7 @@ pub async fn tail_logs(
                 order_desc: false,
                 after_id,
                 message_filters: message_filters.clone(),
-                field_filters: Vec::new(),
+                field_filters: field_filters.clone(),
             }) {
                 Ok(entries) => {
                     for entry in &entries {
@@ -734,7 +807,7 @@ pub async fn tail_logs(
                     // accepted as the cost of bounded re-scanning.
                     let new_cursor = if !entries.is_empty() {
                         entries.last().map(|e| e.id)
-                    } else if message_filters.is_empty() {
+                    } else if message_filters.is_empty() && field_filters.is_empty() {
                         // No filter and no entries: nothing to advance past.
                         None
                     } else {
