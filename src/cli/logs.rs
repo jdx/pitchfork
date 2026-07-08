@@ -53,10 +53,10 @@ impl PagerConfig {
 
 /// Format a single log line for output.
 /// When `single_daemon` is true, omits the daemon ID from the output.
-/// `id_width` is the display width used to pad the daemon name column
-/// so messages line up vertically across different daemon names.
-/// When `strip_ansi` is true, strips ANSI escape codes from the message.
-fn format_log_line(
+/// Write a formatted log line directly to `w`, avoiding intermediate String allocation.
+#[allow(clippy::too_many_arguments)]
+fn write_log_line(
+    w: &mut dyn Write,
     date: &str,
     id: &str,
     msg: &str,
@@ -64,28 +64,29 @@ fn format_log_line(
     id_width: usize,
     strip_ansi: bool,
     show_timestamp: bool,
-) -> String {
+) -> io::Result<()> {
     let msg = if strip_ansi {
-        console::strip_ansi_codes(msg).to_string()
+        console::strip_ansi_codes(msg)
     } else {
-        msg.to_string()
+        std::borrow::Cow::Borrowed(msg)
     };
     if single_daemon {
         if show_timestamp {
-            format!("{} {}", ndim(date), msg)
+            write!(w, "{} {}", ndim(date), msg)?;
         } else {
-            msg
+            w.write_all(msg.as_bytes())?;
         }
     } else {
         let colors_on = !strip_ansi && console::colors_enabled();
         let colored = dimmed_id(id, colors_on);
         let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
         if show_timestamp {
-            format!("{}  {} {}", padded, ndim(date), msg)
+            write!(w, "{}  {} {}", padded, ndim(date), msg)?;
         } else {
-            format!("{}  {}", padded, msg)
+            write!(w, "{}  {}", padded, msg)?;
         }
     }
+    w.write_all(b"\n")
 }
 
 /// Return a dimmed, colorized daemon ID string for display.
@@ -530,17 +531,18 @@ impl Logs {
         if self.raw {
             let stdout = io::stdout();
             let mut buf = io::BufWriter::new(stdout.lock());
-            for (date, id, msg) in log_lines {
-                let line = format_log_line(
-                    &date,
-                    &id,
-                    &msg,
+            for (date, id, msg) in &log_lines {
+                write_log_line(
+                    &mut buf,
+                    date,
+                    id,
+                    msg,
                     single_daemon,
                     id_width,
                     strip_ansi,
                     show_timestamp,
-                );
-                writeln!(buf, "{line}").into_diagnostic()?;
+                )
+                .into_diagnostic()?;
             }
             return Ok(());
         }
@@ -559,20 +561,18 @@ impl Logs {
         } else {
             let stdout = io::stdout();
             let mut buf = io::BufWriter::new(stdout.lock());
-            for (date, id, msg) in log_lines {
-                writeln!(
-                    buf,
-                    "{}",
-                    format_log_line(
-                        &date,
-                        &id,
-                        &msg,
-                        single_daemon,
-                        id_width,
-                        strip_ansi,
-                        show_timestamp,
-                    )
-                ).into_diagnostic()?;
+            for (date, id, msg) in &log_lines {
+                write_log_line(
+                    &mut buf,
+                    date,
+                    id,
+                    msg,
+                    single_daemon,
+                    id_width,
+                    strip_ansi,
+                    show_timestamp,
+                )
+                .into_diagnostic()?;
             }
         }
 
@@ -594,20 +594,19 @@ impl Logs {
         match pager_config.spawn_piped() {
             Ok(mut child) => {
                 if let Some(stdin) = child.stdin.as_mut() {
-                    for (date, id, msg) in log_lines {
-                        let line = format!(
-                            "{}\n",
-                            format_log_line(
-                                &date,
-                                &id,
-                                &msg,
-                                single_daemon,
-                                id_width,
-                                strip_ansi,
-                                show_timestamp,
-                            )
-                        );
-                        if stdin.write_all(line.as_bytes()).is_err() {
+                    for (date, id, msg) in &log_lines {
+                        if write_log_line(
+                            stdin,
+                            date,
+                            id,
+                            msg,
+                            single_daemon,
+                            id_width,
+                            strip_ansi,
+                            show_timestamp,
+                        )
+                        .is_err()
+                        {
                             break;
                         }
                     }
@@ -616,20 +615,18 @@ impl Logs {
                     debug!("Failed to get pager stdin, falling back to direct output");
                     let stdout = io::stdout();
                     let mut buf = io::BufWriter::new(stdout.lock());
-                    for (date, id, msg) in log_lines {
-                        writeln!(
-                            buf,
-                            "{}",
-                            format_log_line(
-                                &date,
-                                &id,
-                                &msg,
-                                single_daemon,
-                                id_width,
-                                strip_ansi,
-                                show_timestamp,
-                            )
-                        ).into_diagnostic()?;
+                    for (date, id, msg) in &log_lines {
+                        write_log_line(
+                            &mut buf,
+                            date,
+                            id,
+                            msg,
+                            single_daemon,
+                            id_width,
+                            strip_ansi,
+                            show_timestamp,
+                        )
+                        .into_diagnostic()?;
                     }
                 }
             }
@@ -637,20 +634,18 @@ impl Logs {
                 debug!("Failed to spawn pager: {e}, falling back to direct output");
                 let stdout = io::stdout();
                 let mut buf = io::BufWriter::new(stdout.lock());
-                for (date, id, msg) in log_lines {
-                    writeln!(
-                        buf,
-                        "{}",
-                        format_log_line(
-                            &date,
-                            &id,
-                            &msg,
-                            single_daemon,
-                            id_width,
-                            strip_ansi,
-                            show_timestamp,
-                        )
-                    ).into_diagnostic()?;
+                for (date, id, msg) in &log_lines {
+                    write_log_line(
+                        &mut buf,
+                        date,
+                        id,
+                        msg,
+                        single_daemon,
+                        id_width,
+                        strip_ansi,
+                        show_timestamp,
+                    )
+                    .into_diagnostic()?;
                 }
             }
         }
@@ -905,19 +900,20 @@ pub async fn tail_logs(
                 .into_iter()
                 .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
                 .collect_vec();
-            for (date, name, msg) in out {
-                println!(
-                    "{}",
-                    format_log_line(
-                        &date,
-                        &name,
-                        &msg,
-                        single_daemon,
-                        id_width,
-                        strip_ansi,
-                        show_timestamp,
-                    )
-                );
+            let stdout = io::stdout();
+            let mut buf = io::BufWriter::new(stdout.lock());
+            for (date, name, msg) in &out {
+                write_log_line(
+                    &mut buf,
+                    date,
+                    name,
+                    msg,
+                    single_daemon,
+                    id_width,
+                    strip_ansi,
+                    show_timestamp,
+                )
+                .into_diagnostic()?;
             }
         }
     }
