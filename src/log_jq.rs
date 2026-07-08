@@ -6,8 +6,8 @@
 
 use crate::log_store::LogEntry;
 use jaq_core::load::{Arena, File, Loader};
-use jaq_core::{self, data, unwrap_valr, Ctx, Vars};
-use jaq_json::{self, read::parse_single, write, Val};
+use jaq_core::{self, Ctx, Vars, data, unwrap_valr};
+use jaq_json::{self, Val, read::parse_single, write};
 
 /// A compiled jq filter that can be applied to log entries.
 pub struct JqFilter {
@@ -29,9 +29,9 @@ impl JqFilter {
             .chain(jaq_json::funs());
         let loader = Loader::new(defs);
         let arena = Arena::default();
-        let modules = loader.load(&arena, program).map_err(|e| {
-            miette::miette!("jq parse error: {e:?}")
-        })?;
+        let modules = loader
+            .load(&arena, program)
+            .map_err(|e| miette::miette!("jq parse error: {e:?}"))?;
         let filter = jaq_core::Compiler::default()
             .with_funs(funs)
             .compile(modules)

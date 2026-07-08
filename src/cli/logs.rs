@@ -355,8 +355,14 @@ impl Logs {
         if let Some(level) = self.level.as_ref() {
             // Normalize the user-supplied level so "ERROR", "Error", "fatal"
             // all match the stored canonical form.
-            let normalized = crate::log_parse::normalize_level_str(level)
-                .unwrap_or_else(|| level.to_ascii_lowercase());
+            let normalized = crate::log_parse::normalize_level_str(level).ok_or_else(|| {
+                miette::miette!(
+                    "invalid level '{level}'; expected one of: \
+                         error, err, fatal, critical, panic, alert, emerg, \
+                         warn, warning, info, inf, information, notice, \
+                         debug, dbg, trace, trc"
+                )
+            })?;
             filters.push(FieldFilter::LevelEq(normalized));
         }
         for pair in &self.field {
@@ -365,6 +371,16 @@ impl Logs {
                 .ok_or_else(|| miette::miette!("--field expects KEY=VALUE, got: {pair}"))?;
             if key.is_empty() {
                 miette::bail!("--field key cannot be empty: {pair}");
+            }
+            // Whitelist key characters to prevent SQL injection via
+            // json_extract path interpolation.
+            if !key
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+            {
+                miette::bail!(
+                    "--field key may only contain alphanumeric, underscore, and dot; got: {key}"
+                );
             }
             filters.push(FieldFilter::FieldEq {
                 key: key.to_string(),
@@ -826,11 +842,16 @@ pub async fn tail_logs(
                 message_filters: message_filters.clone(),
                 field_filters: field_filters.clone(),
             }) {
-                Ok(entries) => {
+                Ok(raw_entries) => {
+                    // Save the max id from SQL results (before jq filtering)
+                    // so the cursor always advances past evaluated rows, even
+                    // when jq rejects all of them.
+                    let last_raw_id = raw_entries.last().map(|e| e.id);
+
                     // Apply jq filter if present.
                     let entries = match jq_filter {
-                        Some(jq) => jq.filter(entries),
-                        None => entries,
+                        Some(jq) => jq.filter(raw_entries),
+                        None => raw_entries,
                     };
                     for entry in &entries {
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -838,24 +859,22 @@ pub async fn tail_logs(
                     }
                     // Advance the cursor past rows already evaluated.
                     //
-                    // When the query returned entries, entries.last().id is the
-                    // highest row id examined (within the same lock hold as the
-                    // query, so no race with concurrent append_batch). Using it
-                    // directly avoids a separate last_id call that could skip
-                    // matching rows written between the two lock acquisitions.
+                    // Use the max id from the raw SQL result (not the jq-filtered
+                    // subset) so the cursor advances past all rows the database
+                    // returned, preventing re-evaluation on every poll.
                     //
                     // When the filter is active and no entries matched, fall
                     // back to last_id to advance past non-matching rows so they
                     // are not re-evaluated on every poll. The narrow race here
                     // (a matching row written between query and last_id) is
                     // accepted as the cost of bounded re-scanning.
-                    let new_cursor = if !entries.is_empty() {
-                        entries.last().map(|e| e.id)
-                    } else if message_filters.is_empty() && field_filters.is_empty() {
-                        // No filter and no entries: nothing to advance past.
-                        None
-                    } else {
+                    let has_sql_filter = !message_filters.is_empty() || !field_filters.is_empty();
+                    let new_cursor = if let Some(id) = last_raw_id {
+                        Some(id)
+                    } else if has_sql_filter || jq_filter.is_some() {
                         LOG_STORE.last_id(id).ok().flatten()
+                    } else {
+                        None
                     };
                     if let Some(last_id) = new_cursor {
                         states.insert(id.qualified(), last_id);

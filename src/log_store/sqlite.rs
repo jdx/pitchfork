@@ -107,16 +107,25 @@ impl SqliteLogStore {
         .into_diagnostic()?;
 
         // Migrate existing tables: add columns introduced in this version.
-        // ALTER TABLE ADD COLUMN is idempotent-safe because we catch the
-        // "duplicate column" error.
+        // Use PRAGMA table_info to check for existing columns rather than
+        // relying on SQLite error message strings (which can vary by locale
+        // or version).
+        let existing_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(log_entries)")
+                .into_diagnostic()?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .into_diagnostic()?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
         for col in ["level", "msg", "logger", "fields_json"] {
-            let sql = format!("ALTER TABLE log_entries ADD COLUMN {col} TEXT");
-            if let Err(e) = conn.execute(&sql, []) {
-                // "duplicate column name" means it already exists — safe to ignore.
-                let msg = e.to_string();
-                if !msg.contains("duplicate column name") {
-                    return Err(e).into_diagnostic();
-                }
+            if !existing_cols.iter().any(|c| c == col) {
+                conn.execute(
+                    &format!("ALTER TABLE log_entries ADD COLUMN {col} TEXT"),
+                    [],
+                )
+                .into_diagnostic()?;
             }
         }
         conn.execute(
@@ -565,11 +574,7 @@ impl LogStore for SqliteLogStore {
         Ok(())
     }
 
-    fn append_structured_batch(
-        &self,
-        daemon_id: &DaemonId,
-        entries: &[ParsedLog],
-    ) -> Result<()> {
+    fn append_structured_batch(&self, daemon_id: &DaemonId, entries: &[ParsedLog]) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }

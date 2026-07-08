@@ -37,11 +37,19 @@ impl ParsedLog {
     }
 }
 
+/// Maximum line length for structured parsing. Lines exceeding this are
+/// stored as plain text without field extraction, protecting against
+/// pathological inputs that would cause excessive memory or CPU use.
+const MAX_PARSE_LINE_LEN: usize = 65536;
+
 /// Parse a log line according to the given format string.
 ///
 /// Format values: `"json"`, `"logfmt"`, `"auto"`, `"text"` (or any other
 /// value is treated as text). Parse failures fall back to plain text.
 pub fn parse(line: &str, format: &str) -> ParsedLog {
+    if line.len() > MAX_PARSE_LINE_LEN {
+        return ParsedLog::plain(line);
+    }
     match format {
         "json" => parse_json(line).unwrap_or_else(|| ParsedLog::plain(line)),
         "logfmt" => parse_logfmt(line).unwrap_or_else(|| ParsedLog::plain(line)),
@@ -164,10 +172,7 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
 
         // Parse key: read until '=', whitespace, or end.
         let key_start = i;
-        while i < bytes.len()
-            && !bytes[i].is_ascii_whitespace()
-            && bytes[i] != b'='
-        {
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'=' {
             i += 1;
         }
         let key = &line[key_start..i];

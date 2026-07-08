@@ -139,11 +139,7 @@ pub trait LogStore: Send + Sync {
     /// Append multiple parsed log lines in a single transaction.
     ///
     /// The default implementation calls `append_structured` for each line.
-    fn append_structured_batch(
-        &self,
-        daemon_id: &DaemonId,
-        entries: &[ParsedLog],
-    ) -> Result<()> {
+    fn append_structured_batch(&self, daemon_id: &DaemonId, entries: &[ParsedLog]) -> Result<()> {
         for entry in entries {
             self.append_structured(daemon_id, entry)?;
         }
