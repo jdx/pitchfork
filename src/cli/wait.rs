@@ -52,6 +52,7 @@ impl Wait {
                 false,
                 Vec::new(),
                 Vec::new(),
+                None,
                 settings().logs.timestamp,
             )
             .await

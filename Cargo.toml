@@ -46,6 +46,9 @@ exponential-backoff = "2"
 indexmap = { version = "2", features = ["serde"] }
 interprocess = { version = "2", features = ["tokio"] }
 itertools = "0.15"
+jaq-core = "3"
+jaq-json = "2"
+jaq-std = "3"
 log = { version = "0.4", features = ["serde"] }
 mdns-sd = "0.20"
 miette = { version = "7", features = ["fancy"] }

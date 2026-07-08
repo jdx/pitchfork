@@ -233,6 +233,14 @@ pub struct Logs {
     #[clap(long, value_name = "KEY=VALUE")]
     field: Vec<String>,
 
+    /// Filter log entries with a jq expression
+    ///
+    /// Each log entry is serialized as a JSON object with fields:
+    /// timestamp, daemon_id, message, level, msg, logger, fields.
+    /// Entries for which the expression produces a truthy value are shown.
+    #[clap(long, value_name = "EXPR")]
+    jq: Option<String>,
+
     /// Omit timestamps from log output
     #[clap(long)]
     no_timestamp: bool,
@@ -267,8 +275,21 @@ impl Logs {
         let message_filters = self.build_message_filters()?;
         let field_filters = self.build_field_filters()?;
 
+        // Compile jq filter early so parse errors surface before any query.
+        let jq_filter = match self.jq.as_deref() {
+            Some(expr) => Some(crate::log_jq::JqFilter::new(expr)?),
+            None => None,
+        };
+
         if self.json {
-            return self.output_json(&resolved_ids, from, to, message_filters, field_filters);
+            return self.output_json(
+                &resolved_ids,
+                from,
+                to,
+                message_filters,
+                field_filters,
+                jq_filter.as_ref(),
+            );
         }
 
         let single_daemon = resolved_ids.len() == 1;
@@ -279,6 +300,7 @@ impl Logs {
             to,
             message_filters.clone(),
             field_filters.clone(),
+            jq_filter.as_ref(),
         )?;
         let has_time_filter = from.is_some() || to.is_some();
         self.output_logs(
@@ -295,6 +317,7 @@ impl Logs {
                 true,
                 message_filters,
                 field_filters,
+                jq_filter.as_ref(),
                 show_timestamp,
             )
             .await?;
@@ -358,6 +381,7 @@ impl Logs {
         to: Option<DateTime<Local>>,
         message_filters: Vec<MessageFilter>,
         field_filters: Vec<FieldFilter>,
+        jq_filter: Option<&crate::log_jq::JqFilter>,
     ) -> Result<Vec<(String, String, String)>> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
         let has_time_filter = from.is_some() || to.is_some();
@@ -373,6 +397,13 @@ impl Logs {
             field_filters,
         };
         let entries = LOG_STORE.query(&opts)?;
+
+        // Apply jq filter if present.
+        let entries = match jq_filter {
+            Some(jq) => jq.filter(entries),
+            None => entries,
+        };
+
         let log_lines: Vec<(String, String, String)> = entries
             .into_iter()
             .map(|e| {
@@ -413,6 +444,7 @@ impl Logs {
         to: Option<DateTime<Local>>,
         message_filters: Vec<MessageFilter>,
         field_filters: Vec<FieldFilter>,
+        jq_filter: Option<&crate::log_jq::JqFilter>,
     ) -> Result<()> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
         let has_time_filter = from.is_some() || to.is_some();
@@ -428,6 +460,12 @@ impl Logs {
             field_filters,
         };
         let entries = LOG_STORE.query(&opts)?;
+
+        // Apply jq filter if present.
+        let entries = match jq_filter {
+            Some(jq) => jq.filter(entries),
+            None => entries,
+        };
 
         let json_entries: Vec<JsonLogEntry> = entries
             .into_iter()
@@ -742,6 +780,7 @@ pub async fn tail_logs(
     start_from_end: bool,
     message_filters: Vec<MessageFilter>,
     field_filters: Vec<FieldFilter>,
+    jq_filter: Option<&crate::log_jq::JqFilter>,
     show_timestamp: bool,
 ) -> Result<()> {
     // Poll SQLite log store for new entries since last known row id.
@@ -788,6 +827,11 @@ pub async fn tail_logs(
                 field_filters: field_filters.clone(),
             }) {
                 Ok(entries) => {
+                    // Apply jq filter if present.
+                    let entries = match jq_filter {
+                        Some(jq) => jq.filter(entries),
+                        None => entries,
+                    };
                     for entry in &entries {
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
                         out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
