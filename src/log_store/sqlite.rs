@@ -68,7 +68,8 @@ impl SqliteLogStore {
         add_regexp_function(&conn)?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;",
+             PRAGMA synchronous = NORMAL;
+             PRAGMA mmap_size = 268435456;",
         )
         .into_diagnostic()?;
         conn.execute(

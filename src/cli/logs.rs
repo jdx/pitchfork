@@ -526,6 +526,8 @@ impl Logs {
         let strip_ansi = self.raw || !console::colors_enabled();
 
         if self.raw {
+            let stdout = io::stdout();
+            let mut buf = io::BufWriter::new(stdout.lock());
             for (date, id, msg) in log_lines {
                 let line = format_log_line(
                     &date,
@@ -536,7 +538,7 @@ impl Logs {
                     strip_ansi,
                     show_timestamp,
                 );
-                println!("{line}");
+                writeln!(buf, "{line}").into_diagnostic()?;
             }
             return Ok(());
         }
@@ -553,8 +555,11 @@ impl Logs {
                 show_timestamp,
             )?;
         } else {
+            let stdout = io::stdout();
+            let mut buf = io::BufWriter::new(stdout.lock());
             for (date, id, msg) in log_lines {
-                println!(
+                writeln!(
+                    buf,
                     "{}",
                     format_log_line(
                         &date,
@@ -565,7 +570,7 @@ impl Logs {
                         strip_ansi,
                         show_timestamp,
                     )
-                );
+                ).into_diagnostic()?;
             }
         }
 
@@ -607,8 +612,11 @@ impl Logs {
                     let _ = child.wait();
                 } else {
                     debug!("Failed to get pager stdin, falling back to direct output");
+                    let stdout = io::stdout();
+                    let mut buf = io::BufWriter::new(stdout.lock());
                     for (date, id, msg) in log_lines {
-                        println!(
+                        writeln!(
+                            buf,
                             "{}",
                             format_log_line(
                                 &date,
@@ -619,14 +627,17 @@ impl Logs {
                                 strip_ansi,
                                 show_timestamp,
                             )
-                        );
+                        ).into_diagnostic()?;
                     }
                 }
             }
             Err(e) => {
                 debug!("Failed to spawn pager: {e}, falling back to direct output");
+                let stdout = io::stdout();
+                let mut buf = io::BufWriter::new(stdout.lock());
                 for (date, id, msg) in log_lines {
-                    println!(
+                    writeln!(
+                        buf,
                         "{}",
                         format_log_line(
                             &date,
@@ -637,7 +648,7 @@ impl Logs {
                             strip_ansi,
                             show_timestamp,
                         )
-                    );
+                    ).into_diagnostic()?;
                 }
             }
         }
