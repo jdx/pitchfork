@@ -72,7 +72,6 @@ export default defineConfig({
           { text: "Cron Scheduling", link: "/guides/scheduling" },
           { text: "Start on Boot", link: "/guides/boot-start" },
           { text: "Log Management", link: "/guides/logs" },
-          { text: "Structured Log Performance", link: "/guides/structured-log-performance" },
           { text: "TUI Dashboard", link: "/guides/tui" },
           { text: "Web UI & API", link: "/guides/web-ui" },
         ],

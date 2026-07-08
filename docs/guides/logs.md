@@ -271,3 +271,16 @@ You can also view logs in real-time through the [TUI](/guides/tui) (`pitchfork t
 ## Log Storage Location
 
 Logs are stored in a single SQLite database at `~/.local/state/pitchfork/logs/logs.db`. Each daemon has its own table partition identified by its qualified ID (`namespace/name`). See [File Locations](/reference/file-locations#logs) for details on the state directory resolution.
+
+## Performance
+
+Structured logs are parsed once at ingestion time and stored as indexed columns (`level`, `msg`, `logger`, `fields_json`) in SQLite. Queries read these columns directly without re-parsing the original log line.
+
+Benchmarked against [hl](https://github.com/pamburus/hl) (a multi-core terminal log viewer that parses JSON on every read) on 100,000 JSON log lines (~300 bytes each, 8 fields):
+
+| Scenario | pitchfork (single-core) | hl (single-core) | hl (16-core) |
+|---|---|---|---|
+| Full retrieval | 135ms | 117ms | 20ms |
+| Level filter (`--level error`) | 40ms | 75ms | 15ms |
+
+On a single core, pitchfork is competitive on full retrieval and significantly faster on filtered queries thanks to SQLite's `idx_daemon_level_ts` index. hl's multi-core advantage comes from its striped reader/worker/writer pipeline, which is suited for one-off streaming inspection rather than persistent storage and repeated queries.
