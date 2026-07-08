@@ -12,6 +12,7 @@ use console;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -295,22 +296,20 @@ impl Logs {
 
         let single_daemon = resolved_ids.len() == 1;
         let show_timestamp = settings().logs.timestamp && !self.no_timestamp;
-        let log_lines = self.fetch_log_lines(
+        let has_time_filter = from.is_some() || to.is_some();
+
+        self.query_and_output(
             &resolved_ids,
             from,
             to,
             message_filters.clone(),
             field_filters.clone(),
             jq_filter.as_ref(),
-        )?;
-        let has_time_filter = from.is_some() || to.is_some();
-        self.output_logs(
-            log_lines,
             single_daemon,
             has_time_filter,
-            self.tail,
             show_timestamp,
         )?;
+
         if self.tail {
             tail_logs(
                 &resolved_ids,
@@ -391,7 +390,13 @@ impl Logs {
         Ok(filters)
     }
 
-    fn fetch_log_lines(
+    /// Query log entries and stream them directly to output, bypassing the
+    /// intermediate `Vec<(String, String, String)>` layer. This eliminates
+    /// 3 String allocations per row (timestamp format, daemon_id clone,
+    /// message clone) by borrowing directly from `LogEntry` and reusing a
+    /// single date buffer.
+    #[allow(clippy::too_many_arguments)]
+    fn query_and_output(
         &self,
         resolved_ids: &[DaemonId],
         from: Option<DateTime<Local>>,
@@ -399,12 +404,14 @@ impl Logs {
         message_filters: Vec<MessageFilter>,
         field_filters: Vec<FieldFilter>,
         jq_filter: Option<&crate::log_jq::JqFilter>,
-    ) -> Result<Vec<(String, String, String)>> {
+        single_daemon: bool,
+        has_time_filter: bool,
+        show_timestamp: bool,
+    ) -> Result<()> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
-        let has_time_filter = from.is_some() || to.is_some();
 
         let opts = LogQuery {
-            daemon_ids: daemon_ids.clone(),
+            daemon_ids,
             from,
             to,
             limit: if !has_time_filter { self.n } else { None },
@@ -414,45 +421,95 @@ impl Logs {
             field_filters,
             include_structured: jq_filter.is_some(),
         };
-        let entries = LOG_STORE.query(&opts)?;
+        let mut entries = LOG_STORE.query(&opts)?;
 
         // Apply jq filter if present.
-        let entries = match jq_filter {
-            Some(jq) => jq.filter(entries),
-            None => entries,
-        };
+        if let Some(jq) = jq_filter {
+            entries = jq.filter(entries);
+        }
 
-        let log_lines: Vec<(String, String, String)> = entries
-            .into_iter()
-            .map(|e| {
-                let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
-                (ts, e.daemon_id, e.message)
-            })
-            .collect();
-
-        let log_lines = if has_time_filter {
+        // Apply time-filter take-last-N or reverse for chronological display.
+        if has_time_filter {
             if let Some(n) = self.n {
-                let len = log_lines.len();
+                let len = entries.len();
                 if len > n {
-                    log_lines.into_iter().skip(len - n).collect_vec()
-                } else {
-                    log_lines
+                    entries = entries.split_off(len - n);
                 }
-            } else {
-                log_lines
-            }
-        } else if let Some(n) = self.n {
-            let len = log_lines.len();
-            if len > n {
-                log_lines.into_iter().skip(len - n).rev().collect_vec()
-            } else {
-                log_lines.into_iter().rev().collect_vec()
             }
         } else {
-            log_lines.into_iter().rev().collect_vec()
+            entries.reverse();
+        }
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let id_width = entries
+            .iter()
+            .map(|e| e.daemon_id.len())
+            .max()
+            .unwrap_or(0);
+        let strip_ansi = self.raw || !console::colors_enabled();
+        let use_pager = !self.tail
+            && !self.no_pager
+            && should_use_pager(entries.len());
+
+        // Reusable buffer for timestamp formatting — avoids N allocations.
+        let mut date_buf = String::with_capacity(19);
+
+        let mut write_entries = |w: &mut dyn Write| -> io::Result<()> {
+            for entry in &entries {
+                date_buf.clear();
+                write!(
+                    date_buf,
+                    "{}",
+                    entry.timestamp.format("%Y-%m-%d %H:%M:%S")
+                )
+                .map_err(io::Error::other)?;
+                write_log_line(
+                    w,
+                    &date_buf,
+                    &entry.daemon_id,
+                    &entry.message,
+                    single_daemon,
+                    id_width,
+                    strip_ansi,
+                    show_timestamp,
+                )?;
+            }
+            Ok(())
         };
 
-        Ok(log_lines)
+        if use_pager {
+            let pager_config = PagerConfig::new(!has_time_filter);
+            match pager_config.spawn_piped() {
+                Ok(mut child) => {
+                    if let Some(stdin) = child.stdin.as_mut() {
+                        if let Err(e) = write_entries(stdin) {
+                            debug!("pager write error: {e}");
+                        }
+                        let _ = child.wait();
+                    } else {
+                        debug!("Failed to get pager stdin, falling back to direct output");
+                        let stdout = io::stdout();
+                        let mut buf = io::BufWriter::new(stdout.lock());
+                        write_entries(&mut buf).into_diagnostic()?;
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to spawn pager: {e}, falling back to direct output");
+                    let stdout = io::stdout();
+                    let mut buf = io::BufWriter::new(stdout.lock());
+                    write_entries(&mut buf).into_diagnostic()?;
+                }
+            }
+        } else {
+            let stdout = io::stdout();
+            let mut buf = io::BufWriter::new(stdout.lock());
+            write_entries(&mut buf).into_diagnostic()?;
+        }
+
+        Ok(())
     }
 
     fn output_json(
@@ -507,150 +564,6 @@ impl Logs {
             .collect();
 
         print_json(&json_entries)
-    }
-
-    fn output_logs(
-        &self,
-        log_lines: Vec<(String, String, String)>,
-        single_daemon: bool,
-        has_time_filter: bool,
-        force_no_pager: bool,
-        show_timestamp: bool,
-    ) -> Result<()> {
-        if log_lines.is_empty() {
-            return Ok(());
-        }
-
-        let id_width = log_lines
-            .iter()
-            .map(|(_, id, _)| id.len())
-            .max()
-            .unwrap_or(0);
-        let strip_ansi = self.raw || !console::colors_enabled();
-
-        if self.raw {
-            let stdout = io::stdout();
-            let mut buf = io::BufWriter::new(stdout.lock());
-            for (date, id, msg) in &log_lines {
-                write_log_line(
-                    &mut buf,
-                    date,
-                    id,
-                    msg,
-                    single_daemon,
-                    id_width,
-                    strip_ansi,
-                    show_timestamp,
-                )
-                .into_diagnostic()?;
-            }
-            return Ok(());
-        }
-
-        let use_pager = !force_no_pager && !self.no_pager && should_use_pager(log_lines.len());
-
-        if use_pager {
-            self.output_with_pager(
-                log_lines,
-                single_daemon,
-                id_width,
-                has_time_filter,
-                strip_ansi,
-                show_timestamp,
-            )?;
-        } else {
-            let stdout = io::stdout();
-            let mut buf = io::BufWriter::new(stdout.lock());
-            for (date, id, msg) in &log_lines {
-                write_log_line(
-                    &mut buf,
-                    date,
-                    id,
-                    msg,
-                    single_daemon,
-                    id_width,
-                    strip_ansi,
-                    show_timestamp,
-                )
-                .into_diagnostic()?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn output_with_pager(
-        &self,
-        log_lines: Vec<(String, String, String)>,
-        single_daemon: bool,
-        id_width: usize,
-        has_time_filter: bool,
-        strip_ansi: bool,
-        show_timestamp: bool,
-    ) -> Result<()> {
-        // When time filter is used, start at top; otherwise start at end
-        let pager_config = PagerConfig::new(!has_time_filter);
-
-        match pager_config.spawn_piped() {
-            Ok(mut child) => {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    for (date, id, msg) in &log_lines {
-                        if write_log_line(
-                            stdin,
-                            date,
-                            id,
-                            msg,
-                            single_daemon,
-                            id_width,
-                            strip_ansi,
-                            show_timestamp,
-                        )
-                        .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    let _ = child.wait();
-                } else {
-                    debug!("Failed to get pager stdin, falling back to direct output");
-                    let stdout = io::stdout();
-                    let mut buf = io::BufWriter::new(stdout.lock());
-                    for (date, id, msg) in &log_lines {
-                        write_log_line(
-                            &mut buf,
-                            date,
-                            id,
-                            msg,
-                            single_daemon,
-                            id_width,
-                            strip_ansi,
-                            show_timestamp,
-                        )
-                        .into_diagnostic()?;
-                    }
-                }
-            }
-            Err(e) => {
-                debug!("Failed to spawn pager: {e}, falling back to direct output");
-                let stdout = io::stdout();
-                let mut buf = io::BufWriter::new(stdout.lock());
-                for (date, id, msg) in &log_lines {
-                    write_log_line(
-                        &mut buf,
-                        date,
-                        id,
-                        msg,
-                        single_daemon,
-                        id_width,
-                        strip_ansi,
-                        show_timestamp,
-                    )
-                    .into_diagnostic()?;
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 
