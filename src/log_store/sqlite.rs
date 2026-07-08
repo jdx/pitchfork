@@ -59,9 +59,12 @@ pub struct SqliteLogStore {
 }
 
 /// Minimum result-set size to trigger parallel query.
-/// Below this, single-thread overhead of spawning + opening connections
-/// exceeds the savings.
-const PARALLEL_QUERY_THRESHOLD: usize = 10_000;
+///
+/// Each parallel shard opens a new read-only SQLite connection (~5-12ms
+/// overhead per connection for PRAGMA setup + regexp function registration).
+/// Below this threshold, single-threaded is faster because the connection
+/// overhead exceeds the query savings.
+const PARALLEL_QUERY_THRESHOLD: usize = 200_000;
 
 impl SqliteLogStore {
     /// Open or create the SQLite log store at the given path.
@@ -664,8 +667,13 @@ impl SqliteLogStore {
     /// shard by contiguous id ranges and merge by concatenating shards in
     /// the right order, without a global sort.
     fn query_parallel(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
+        // Cap parallelism: each shard opens a new read-only connection with
+        // PRAGMA setup + regexp function registration (~5-12ms each). Beyond
+        // 2 threads the connection overhead dominates the query savings for
+        // typical log store sizes.
+        let max_threads = 2;
         let num_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(|n| n.get().min(max_threads))
             .unwrap_or(1);
 
         let max_id: Option<i64> = {
