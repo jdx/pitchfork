@@ -44,6 +44,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 after_id: None,
                 message_filters: Vec::new(),
                 field_filters: Vec::new(),
+                include_structured: false,
             })
         }
     })
@@ -128,6 +129,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                     after_id: Some(last_id),
                     message_filters: Vec::new(),
                     field_filters: Vec::new(),
+                    include_structured: false,
                 })
             }).await {
                 Ok(Ok(e)) => e,

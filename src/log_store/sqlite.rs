@@ -707,8 +707,18 @@ impl LogStore for SqliteLogStore {
             .map(|n| format!("LIMIT {}", n))
             .unwrap_or_default();
 
+        // Select only the columns the caller needs. When include_structured
+        // is false, emit NULLs for the structured columns so row_to_entry
+        // (which reads all 8 columns by index) works unchanged and the
+        // structured fields come back as None without allocating.
+        let columns = if opts.include_structured {
+            "id, daemon_id, timestamp, message, level, msg, logger, fields_json"
+        } else {
+            "id, daemon_id, timestamp, message, NULL, NULL, NULL, NULL"
+        };
+
         let sql = format!(
-            "SELECT id, daemon_id, timestamp, message, level, msg, logger, fields_json FROM log_entries {} ORDER BY timestamp {}, id {} {}",
+            "SELECT {columns} FROM log_entries {} ORDER BY timestamp {}, id {} {}",
             where_clause, order, order, limit_clause
         );
 
@@ -736,6 +746,7 @@ impl LogStore for SqliteLogStore {
             after_id,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
+            include_structured: false,
         })
     }
 

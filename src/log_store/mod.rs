@@ -81,6 +81,10 @@ pub struct LogQuery {
     pub message_filters: Vec<MessageFilter>,
     /// Filters applied to structured fields. Multiple filters are combined with AND.
     pub field_filters: Vec<FieldFilter>,
+    /// Whether to SELECT the structured columns (level, msg, logger, fields_json).
+    /// When false, those fields are NULL in the result, avoiding unnecessary
+    /// string allocations for callers that only need the raw message.
+    pub include_structured: bool,
 }
 
 /// Escape special LIKE wildcard characters so user-supplied substrings are matched literally.
@@ -208,6 +212,7 @@ pub trait LogStore: Send + Sync {
             after_id: None,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
+            include_structured: false,
         })?;
         Ok(entries.first().map(|e| e.id))
     }

@@ -411,6 +411,7 @@ impl Logs {
             after_id: None,
             message_filters,
             field_filters,
+            include_structured: jq_filter.is_some(),
         };
         let entries = LOG_STORE.query(&opts)?;
 
@@ -474,6 +475,7 @@ impl Logs {
             after_id: None,
             message_filters,
             field_filters,
+            include_structured: true,
         };
         let entries = LOG_STORE.query(&opts)?;
 
@@ -852,6 +854,7 @@ pub async fn tail_logs(
                 after_id,
                 message_filters: message_filters.clone(),
                 field_filters: field_filters.clone(),
+                include_structured: jq_filter.is_some(),
             }) {
                 Ok(raw_entries) => {
                     // Save the max id from SQL results (before jq filtering)
@@ -1137,6 +1140,7 @@ pub fn collect_startup_logs(
         after_id: None,
         message_filters: Vec::new(),
         field_filters: Vec::new(),
+        include_structured: false,
     })?;
     let log_lines = entries
         .into_iter()
