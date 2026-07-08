@@ -2,7 +2,7 @@
 //!
 //! Parses daemon stdout/stderr lines into structured fields (level, msg,
 //! logger, fields_json) based on the configured `log_format`. Supports JSON
-//! and logfmt formats with auto-detection.
+//! and logfmt formats.
 
 use serde_json::{Map, Value};
 
@@ -44,7 +44,7 @@ const MAX_PARSE_LINE_LEN: usize = 65536;
 
 /// Parse a log line according to the given format string.
 ///
-/// Format values: `"json"`, `"logfmt"`, `"auto"`, `"text"` (or any other
+/// Format values: `"json"`, `"logfmt"`, `"text"` (or any other
 /// value is treated as text). Parse failures fall back to plain text.
 pub fn parse(line: &str, format: &str) -> ParsedLog {
     if line.len() > MAX_PARSE_LINE_LEN {
@@ -53,24 +53,8 @@ pub fn parse(line: &str, format: &str) -> ParsedLog {
     match format {
         "json" => parse_json(line).unwrap_or_else(|| ParsedLog::plain(line)),
         "logfmt" => parse_logfmt(line).unwrap_or_else(|| ParsedLog::plain(line)),
-        "auto" => auto_detect(line),
         _ => ParsedLog::plain(line),
     }
-}
-
-fn auto_detect(line: &str) -> ParsedLog {
-    let trimmed = line.trim();
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        if let Some(parsed) = parse_json(line) {
-            return parsed;
-        }
-    }
-    if line.contains('=') {
-        if let Some(parsed) = parse_logfmt(line) {
-            return parsed;
-        }
-    }
-    ParsedLog::plain(line)
 }
 
 // ---------------------------------------------------------------------------
@@ -390,29 +374,6 @@ mod tests {
         let line = r#"level=error msg="connection refused: timeout""#;
         let parsed = parse(line, "logfmt");
         assert_eq!(parsed.msg.as_deref(), Some("connection refused: timeout"));
-    }
-
-    #[test]
-    fn test_auto_detect_json() {
-        let line = r#"{"level":"info","msg":"hi"}"#;
-        let parsed = parse(line, "auto");
-        assert_eq!(parsed.level.as_deref(), Some("info"));
-    }
-
-    #[test]
-    fn test_auto_detect_logfmt() {
-        let line = r#"level=info msg="hi""#;
-        let parsed = parse(line, "auto");
-        assert_eq!(parsed.level.as_deref(), Some("info"));
-    }
-
-    #[test]
-    fn test_auto_detect_plain() {
-        let line = "hello world";
-        let parsed = parse(line, "auto");
-        assert!(parsed.level.is_none());
-        assert!(parsed.fields_json.is_none());
-        assert_eq!(parsed.message, line);
     }
 
     #[test]

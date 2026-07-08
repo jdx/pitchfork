@@ -130,8 +130,8 @@ struct PitchforkTomlRaw {
 /// `line_retention`, `archive_hook`) and the global `[settings.logs]` defaults.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct PitchforkTomlDaemonLogs {
-    /// Log line format: `json`, `logfmt`, `auto`, or `text`.
-    /// Defaults to `auto` (detect JSON/logfmt per line).
+    /// Log line format: `json`, `logfmt`, or `text`.
+    /// Defaults to `text` (no parsing).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub log_format: Option<String>,
     /// Maximum age of log entries to keep (e.g. "7d", "30d").

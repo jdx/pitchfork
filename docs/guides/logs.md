@@ -109,22 +109,21 @@ Per-daemon configuration:
 run = "node server.js"
 
 [daemons.api.logs]
-log_format = "json"  # json | logfmt | auto | text
+log_format = "json"  # json | logfmt | text
 ```
 
 Global default in `[settings.logs]`:
 
 ```toml
 [settings.logs]
-log_format = "auto"
+log_format = "json"  # json | logfmt | text (default: text)
 ```
 
 | Format | Description |
 |---|---|
-| `auto` | Auto-detect JSON or logfmt per line (default) |
 | `json` | Parse as single-line JSON (NDJSON) |
 | `logfmt` | Parse as `key=value` space-delimited pairs |
-| `text` | No parsing, store as plain text |
+| `text` | No parsing, store as plain text (default) |
 
 Per-daemon `[daemons.x.logs]` subtables also support `time_retention`, `line_retention`, and `archive_hook`. These override the top-level fields of the same name for backward compatibility.
 

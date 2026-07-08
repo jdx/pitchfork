@@ -227,8 +227,8 @@ batches reduce hook invocation overhead.
 [logs.log_format]
 type = "String"
 env = "PITCHFORK_LOG_FORMAT"
-default = "auto"
-description = "Default log format for daemons (json | logfmt | auto | text)"
+default = "text"
+description = "Default log format for daemons (json | logfmt | text)"
 
 [logs.timestamp]
 type = "Bool"
