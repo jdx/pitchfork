@@ -77,7 +77,6 @@ run = [
 
 [tools]
 aube = "latest"
-bun = "latest" # for web-ui playwright tests
 cargo-binstall = "latest"
 communique = "latest"
 hk = "latest"
