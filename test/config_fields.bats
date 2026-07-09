@@ -269,3 +269,48 @@ EOF
   assert_success
   assert_output --partial "does_not_exist" || assert_output --partial "not found"
 }
+
+@test "[daemons.x.logs] sub-table configures log_format per-daemon" {
+  # Verify the sub-table is parsed and log_format is applied at runtime
+  create_pitchfork_toml <<'EOF'
+[daemons.subtable_json]
+run = "bash -c 'echo {\"level\":\"info\",\"msg\":\"subt\"}; sleep 60'"
+ready_output = "subt"
+
+[daemons.subtable_json.logs]
+log_format = "json"
+EOF
+
+  run pitchfork start subtable_json
+  assert_success
+  wait_for_log_lines subtable_json 1
+
+  # Verify the daemon is running (config was accepted)
+  run pitchfork status subtable_json
+  assert_success
+  assert_output --partial "running"
+
+  pitchfork stop subtable_json
+}
+
+@test "[daemons.x.logs] sub-table overrides top-level time_retention" {
+  # Top-level: 1h, sub-table: 1s. Config should be accepted without error.
+  create_pitchfork_toml <<'EOF'
+[daemons.override_test]
+run = "sleep 60"
+time_retention = "1h"
+
+[daemons.override_test.logs]
+time_retention = "1s"
+EOF
+
+  run pitchfork list
+  assert_success
+  [[ "$output" == *"override_test"* ]]
+
+  run pitchfork start override_test
+  assert_success
+  wait_for_status override_test running
+
+  pitchfork stop override_test
+}

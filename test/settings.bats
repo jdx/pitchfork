@@ -218,3 +218,18 @@ EOF
   assert_output --partial "invalid daemon name"
   assert_output --partial "spaces"
 }
+
+@test "settings.logs.log_format default is text" {
+  run pitchfork settings get logs.log_format
+  assert_success
+  assert_output --partial "text"
+}
+
+@test "settings.logs.log_format accepts json" {
+  run pitchfork settings set logs.log_format json
+  assert_success
+
+  run pitchfork settings get logs.log_format
+  assert_success
+  assert_output --partial "json"
+}

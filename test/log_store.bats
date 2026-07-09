@@ -300,3 +300,33 @@ EOF
   PITCHFORK_LOG=error run pitchfork logs daemon2 --raw
   assert_output ""
 }
+
+@test "SQLite log_entries has structured columns and level index" {
+  require_sqlite3
+  local slowly_output
+  slowly_output="$(script_path slowly_output.sh)"
+
+  create_pitchfork_toml <<EOF
+[daemons.schema_test]
+run = 'bash $slowly_output 1 3'
+EOF
+
+  run pitchfork start schema_test
+  assert_success
+  wait_for_log_lines schema_test 1
+
+  # Verify new columns exist
+  local cols
+  cols=$(query_logs_db "PRAGMA table_info(log_entries)" | awk -F'|' '{print $2}' | tr '\n' ',')
+  [[ "$cols" == *"level"* ]]
+  [[ "$cols" == *"msg"* ]]
+  [[ "$cols" == *"logger"* ]]
+  [[ "$cols" == *"fields_json"* ]]
+
+  # Verify level index exists
+  local idx
+  idx=$(query_logs_db "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_daemon_level_ts'")
+  [[ "$idx" == "idx_daemon_level_ts" ]]
+
+  pitchfork stop schema_test
+}
