@@ -232,6 +232,17 @@
           ],
           "format": "int64"
         },
+        "logs": {
+          "description": "Per-daemon log configuration sub-table.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PitchforkTomlDaemonLogs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "memory_limit": {
           "description": "Memory limit for the daemon process (e.g. \"50MB\", \"1GiB\").\nThe supervisor periodically monitors RSS and kills the process if it exceeds the limit.",
           "anyOf": [
@@ -366,6 +377,41 @@
       "required": [
         "run"
       ]
+    },
+    "PitchforkTomlDaemonLogs": {
+      "description": "Per-daemon log configuration sub-table `[daemons.<name>.logs]`.\n\nFields here override the top-level daemon fields (`time_retention`,\n`line_retention`, `archive_hook`) and the global `[settings.logs]` defaults.",
+      "type": "object",
+      "properties": {
+        "archive_hook": {
+          "description": "Archive hook command invoked before retention prunes this daemon's logs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line_retention": {
+          "description": "Maximum number of log entries to keep per daemon.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "log_format": {
+          "description": "Log line format: `json`, `logfmt`, or `text`.\nDefaults to `text` (no parsing).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time_retention": {
+          "description": "Maximum age of log entries to keep (e.g. \"7d\", \"30d\").",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "PitchforkTomlHooks": {
       "description": "Lifecycle hooks for a daemon",
@@ -692,6 +738,13 @@
             "null"
           ],
           "format": "int64"
+        },
+        "log_format": {
+          "description": "Default log format for daemons (json | logfmt | text)",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "time_retention": {
           "description": "Time-based log retention duration (e.g. '7d', '30d')",

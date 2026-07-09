@@ -1120,6 +1120,67 @@
             "global": false
           },
           {
+            "name": "level",
+            "usage": "--level <LEVEL>",
+            "help": "Filter by log level (error, warn, info, debug, trace)",
+            "help_long": "Filter by log level (error, warn, info, debug, trace)\n\nMatches the normalized level extracted from structured log lines. Only effective for daemons with log_format json or logfmt.",
+            "help_first_line": "Filter by log level (error, warn, info, debug, trace)",
+            "short": [],
+            "long": [
+              "level"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "LEVEL",
+              "usage": "<LEVEL>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "field",
+            "usage": "--field… <KEY=VALUE>",
+            "help": "Filter by structured field value (KEY=VALUE, can be repeated)",
+            "help_long": "Filter by structured field value (KEY=VALUE, can be repeated)\n\nExtracts the value from fields_json using json_extract($.KEY). Multiple --field options are combined with AND.",
+            "help_first_line": "Filter by structured field value (KEY=VALUE, can be repeated)",
+            "short": [],
+            "long": [
+              "field"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "KEY=VALUE",
+              "usage": "<KEY=VALUE>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "jq",
+            "usage": "--jq <EXPR>",
+            "help": "Filter log entries with a jq expression",
+            "help_long": "Filter log entries with a jq expression\n\nEach log entry is serialized as a JSON object with fields: timestamp, daemon_id, message, level, msg, logger, fields. Entries for which the expression produces a truthy value are shown.",
+            "help_first_line": "Filter log entries with a jq expression",
+            "short": [],
+            "long": [
+              "jq"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "EXPR",
+              "usage": "<EXPR>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
             "name": "no-timestamp",
             "usage": "--no-timestamp",
             "help": "Omit timestamps from log output",

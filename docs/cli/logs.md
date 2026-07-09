@@ -87,6 +87,24 @@ Filter logs by regular expression
 
 Make --grep matching case-sensitive
 
+### `--level <LEVEL>`
+
+Filter by log level (error, warn, info, debug, trace)
+
+Matches the normalized level extracted from structured log lines. Only effective for daemons with log_format json or logfmt.
+
+### `--field… <KEY=VALUE>`
+
+Filter by structured field value (KEY=VALUE, can be repeated)
+
+Extracts the value from fields_json using json_extract($.KEY). Multiple --field options are combined with AND.
+
+### `--jq <EXPR>`
+
+Filter log entries with a jq expression
+
+Each log entry is serialized as a JSON object with fields: timestamp, daemon_id, message, level, msg, logger, fields. Entries for which the expression produces a truthy value are shown.
+
 ### `--no-timestamp`
 
 Omit timestamps from log output

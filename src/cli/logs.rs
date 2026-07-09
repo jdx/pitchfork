@@ -444,15 +444,9 @@ impl Logs {
             return Ok(());
         }
 
-        let id_width = entries
-            .iter()
-            .map(|e| e.daemon_id.len())
-            .max()
-            .unwrap_or(0);
+        let id_width = entries.iter().map(|e| e.daemon_id.len()).max().unwrap_or(0);
         let strip_ansi = self.raw || !console::colors_enabled();
-        let use_pager = !self.tail
-            && !self.no_pager
-            && should_use_pager(entries.len());
+        let use_pager = !self.tail && !self.no_pager && should_use_pager(entries.len());
 
         // Reusable buffer for timestamp formatting — avoids N allocations.
         let mut date_buf = String::with_capacity(19);
@@ -460,12 +454,8 @@ impl Logs {
         let mut write_entries = |w: &mut dyn Write| -> io::Result<()> {
             for entry in &entries {
                 date_buf.clear();
-                write!(
-                    date_buf,
-                    "{}",
-                    entry.timestamp.format("%Y-%m-%d %H:%M:%S")
-                )
-                .map_err(io::Error::other)?;
+                write!(date_buf, "{}", entry.timestamp.format("%Y-%m-%d %H:%M:%S"))
+                    .map_err(io::Error::other)?;
                 write_log_line(
                     w,
                     &date_buf,
