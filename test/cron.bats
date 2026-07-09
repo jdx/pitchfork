@@ -38,7 +38,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_finish_fail --raw 2>/dev/null | grep -c "Failed after 0!")
+    count=$(pitchfork logs cron_finish_fail --raw 2>/dev/null | grep -c "Failed after 0!" || true)
     [[ "$count" -ge 2 ]] && break
     sleep 2
   done
@@ -69,7 +69,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_always_fail --raw 2>/dev/null | grep -c "Failed after 0!")
+    count=$(pitchfork logs cron_always_fail --raw 2>/dev/null | grep -c "Failed after 0!" || true)
     [[ "$count" -ge 2 ]] && break
     sleep 2
   done
@@ -100,7 +100,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_success_fail --raw 2>/dev/null | grep -c "Failed after 0!")
+    count=$(pitchfork logs cron_success_fail --raw 2>/dev/null | grep -c "Failed after 0!" || true)
     [[ "$count" -ge 1 ]] && break
     sleep 2
   done
@@ -131,7 +131,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_fail_fail --raw 2>/dev/null | grep -c "Failed after 0!")
+    count=$(pitchfork logs cron_fail_fail --raw 2>/dev/null | grep -c "Failed after 0!" || true)
     [[ "$count" -ge 2 ]] && break
     sleep 2
   done
@@ -166,7 +166,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_finish_long --raw 2>/dev/null | grep -c "Output 1/999")
+    count=$(pitchfork logs cron_finish_long --raw 2>/dev/null | grep -c "Output 1/999" || true)
     [[ "$count" -ge 1 ]] && break
     sleep 2
   done
@@ -197,7 +197,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_always_long --raw 2>/dev/null | grep -c "Output 1/999")
+    count=$(pitchfork logs cron_always_long --raw 2>/dev/null | grep -c "Output 1/999" || true)
     [[ "$count" -ge 2 ]] && break
     sleep 2
   done
@@ -228,7 +228,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_success_long --raw 2>/dev/null | grep -c "Output 1/999")
+    count=$(pitchfork logs cron_success_long --raw 2>/dev/null | grep -c "Output 1/999" || true)
     [[ "$count" -ge 1 ]] && break
     sleep 2
   done
@@ -259,7 +259,7 @@ EOF
 
   local count=0
   for _ in $(seq 1 65); do
-    count=$(pitchfork logs cron_fail_long --raw 2>/dev/null | grep -c "Output 1/999")
+    count=$(pitchfork logs cron_fail_long --raw 2>/dev/null | grep -c "Output 1/999" || true)
     [[ "$count" -ge 1 ]] && break
     sleep 2
   done

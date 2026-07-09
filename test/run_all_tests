@@ -99,6 +99,7 @@ total=${#FILES[@]}
 declare -a PIDS
 declare -a LOG_FILES
 declare -a STATUS_FILES
+declare -a FINISHED
 
 start_file() {
   local index="$1"

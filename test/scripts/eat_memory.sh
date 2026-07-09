@@ -35,6 +35,12 @@ if [[ -d /dev/shm ]]; then
     dd if=/dev/zero of="${chunk_file}_${i}" bs="$chunk_size" count=1 2>/dev/null
   done
   echo "Allocated ${target_mb}MB of memory"
+
+  cleanup_shm() {
+    rm -f "${chunk_file}"_* 2>/dev/null
+  }
+  trap cleanup_shm TERM INT EXIT
+
   # Hold the memory and stay alive
   while true; do
     sleep 1

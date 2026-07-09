@@ -9,6 +9,8 @@ teardown() {
   _common_teardown
 }
 
+require_sqlite3() { command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not available"; }
+
 strip_ansi() {
   sed -E 's/\x1b\[[0-9;]*m//g'
 }
@@ -157,6 +159,7 @@ EOF
 }
 
 @test "path encoding roundtrip uses filesystem-safe qualified IDs" {
+  require_sqlite3
   local proj="$TEST_TEMP_DIR/my-cool-project"
   mkdir -p "$proj"
   cd "$proj"

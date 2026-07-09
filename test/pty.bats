@@ -9,6 +9,8 @@ teardown() {
   _common_teardown
 }
 
+require_sqlite3() { command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not available"; }
+
 _log_messages() {
   local pattern="$1"
   sqlite3 "$PITCHFORK_LOGS_DIR/logs.db" "SELECT message FROM log_entries WHERE daemon_id LIKE '%$pattern';" 2>/dev/null
@@ -47,6 +49,7 @@ PY
 # ============================================================================
 
 @test "log preserves ANSI escape codes by default" {
+  require_sqlite3
   local ansi_script
   ansi_script="$(script_path ansi_output.sh)"
 
@@ -96,6 +99,7 @@ EOF
 }
 
 @test "pty mode preserves ANSI escape codes in logs" {
+  require_sqlite3
   local ansi_script
   ansi_script="$(script_path ansi_output.sh)"
 

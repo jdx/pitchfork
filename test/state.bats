@@ -12,6 +12,15 @@ teardown() {
 # Read state.toml directly
 read_state() { cat "$PITCHFORK_STATE_DIR/state.toml"; }
 
+# Portable file mtime (seconds since epoch)
+file_mtime() {
+  if stat --version &>/dev/null 2>&1; then
+    stat -c %Y "$1"
+  else
+    stat -f %m "$1"
+  fi
+}
+
 # Wait for a substring to appear in the persisted state file
 wait_for_state() {
   local needle="$1"
@@ -63,7 +72,7 @@ EOF
   sleep 2
 
   local mtime_before
-  mtime_before=$(stat -c %Y "$PITCHFORK_STATE_DIR/state.toml")
+  mtime_before=$(file_mtime "$PITCHFORK_STATE_DIR/state.toml")
 
   run pitchfork list
   assert_success
@@ -73,7 +82,7 @@ EOF
   assert_success
 
   local mtime_after
-  mtime_after=$(stat -c %Y "$PITCHFORK_STATE_DIR/state.toml")
+  mtime_after=$(file_mtime "$PITCHFORK_STATE_DIR/state.toml")
 
   [[ "$mtime_before" -eq "$mtime_after" ]]
 
@@ -206,6 +215,14 @@ EOF
   run read_state
   assert_output --partial "[shell_dirs]"
   assert_output --partial "$(pwd)"
+
+  # Leave the directory and verify the old directory is removed from state
+  cd /tmp
+  run pitchfork cd --shell-pid $$
+  assert_success
+
+  run read_state
+  refute_output --partial "$TEST_TEMP_DIR"
 }
 
 @test "disable and enable daemon persist in state" {

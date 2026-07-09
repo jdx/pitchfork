@@ -60,7 +60,7 @@ EOF
   run pitchfork start port_conflict 2>&1
   assert_failure
 
-  [[ "$output" == *"already in use"* ]] || [[ "$output" == *"port"* ]] || [[ "$output" == *"Port"* ]]
+  [[ "$output" == *"already in use"* ]] || [[ "$output" == *"Port"* ]]
 
   kill "$blocker_pid" 2>/dev/null || true
   wait "$blocker_pid" 2>/dev/null || true

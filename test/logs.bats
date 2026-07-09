@@ -55,7 +55,8 @@ EOF
 
   pitchfork start clear_test_1
   pitchfork start clear_test_2
-  sleep 4
+  wait_for_logs clear_test_1 "Output 1/3" 10
+  wait_for_logs clear_test_2 "Output 1/3" 10
 
   [[ -n "$(read_logs clear_test_1)" ]]
   [[ -n "$(read_logs clear_test_2)" ]]
@@ -85,7 +86,7 @@ ready_delay = 0
 EOF
 
   pitchfork start since_test
-  sleep 6
+  wait_for_logs since_test "Output 1/5" 10
 
   run pitchfork logs since_test --since 3s --raw
   assert_success
@@ -108,9 +109,9 @@ EOF
   start_time="$(date +"%Y-%m-%d %H:%M:%S")"
 
   pitchfork start range_test
-  sleep 3
+  wait_for_logs range_test "Output 2/5" 10
   mid_time="$(date +"%Y-%m-%d %H:%M:%S")"
-  sleep 3
+  wait_for_logs range_test "Output 4/5" 10
 
   run pitchfork logs range_test --since "$start_time" --until "$mid_time" --raw
   assert_success
@@ -133,7 +134,7 @@ ready_delay = 0
 EOF
 
   pitchfork start since_n_test
-  sleep 11
+  wait_for_logs since_n_test "Output 10/10" 15
 
   run pitchfork logs since_n_test --since 10s -n 3 --raw
   assert_success
@@ -160,7 +161,7 @@ ready_delay = 0
 EOF
 
   pitchfork start raw_test
-  sleep 4
+  wait_for_logs raw_test "Output 1/3" 10
 
   run pitchfork logs raw_test --raw
   assert_success
@@ -185,7 +186,7 @@ ready_delay = 0
 EOF
 
   pitchfork start n_limit_test
-  sleep 11
+  wait_for_logs n_limit_test "Output 10/10" 15
 
   run pitchfork logs n_limit_test -n 5 --raw
   assert_success
@@ -208,7 +209,7 @@ ready_delay = 0
 EOF
 
   pitchfork start pager_test
-  sleep 4
+  wait_for_logs pager_test "Output 1/3" 10
 
   run pitchfork logs pager_test
   assert_success
@@ -238,7 +239,8 @@ EOF
 
   pitchfork start multi_log_1
   pitchfork start multi_log_2
-  sleep 4
+  wait_for_logs multi_log_1 "Output 1/3" 10
+  wait_for_logs multi_log_2 "Output 1/3" 10
 
   run pitchfork logs multi_log_1 multi_log_2
   assert_success

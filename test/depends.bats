@@ -184,7 +184,7 @@ EOF
 
   run read_logs db
   local count_before
-  count_before=$(grep -c "db_started" <<< "$output")
+  count_before=$(grep -c "db_started" <<< "$output" || true)
 
   run pitchfork start -f api
   assert_success
@@ -193,12 +193,12 @@ EOF
 
   run read_logs db
   local count_after
-  count_after=$(grep -c "db_started" <<< "$output")
+  count_after=$(grep -c "db_started" <<< "$output" || true)
   [[ $count_before -eq $count_after ]]
 
   run read_logs api
   local api_count
-  api_count=$(grep -c "api_started" <<< "$output")
+  api_count=$(grep -c "api_started" <<< "$output" || true)
   [[ $api_count -eq 2 ]]
 
   pitchfork stop --all

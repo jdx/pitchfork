@@ -70,7 +70,7 @@ EOF
 
   run pitchfork logs retry_after_ready --raw
   local count
-  count=$(grep -c "Failed after 5!" <<< "$output")
+  count=$(grep -c "Failed after 5!" <<< "$output" || true)
   [[ $count -eq 2 ]]
 
   pitchfork stop retry_after_ready
@@ -99,7 +99,7 @@ EOF
     status=$(get_daemon_status mem_hog)
     if [[ "$status" == *"errored"* ]]; then
       logs=$(read_logs mem_hog)
-      count=$(grep -c "Starting memory allocation of 64MB" <<< "$logs")
+      count=$(grep -c "Starting memory allocation of 64MB" <<< "$logs" || true)
       if [[ $count -ge 2 ]]; then
         break
       fi
@@ -115,7 +115,7 @@ EOF
 
   run pitchfork logs mem_hog --raw
   local count
-  count=$(grep -c "Starting memory allocation of 64MB" <<< "$output")
+  count=$(grep -c "Starting memory allocation of 64MB" <<< "$output" || true)
   [[ $count -eq 2 ]]
 
   pitchfork stop mem_hog

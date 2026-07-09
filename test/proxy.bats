@@ -379,6 +379,7 @@ EOF
   pitchfork supervisor stop 2>/dev/null || true
 
   # Test local namespace
+  local orig_state_dir="$PITCHFORK_STATE_DIR"
   local proj_local="$TEST_TEMP_DIR/proj-local"
   mkdir -p "$proj_local"
   cd "$proj_local"
@@ -397,4 +398,7 @@ EOF
   [[ "$output" != *"Proxy:"* ]]
 
   pitchfork stop web
+  pitchfork supervisor stop 2>/dev/null || true
+  rm -rf "$PITCHFORK_STATE_DIR"
+  export PITCHFORK_STATE_DIR="$orig_state_dir"
 }

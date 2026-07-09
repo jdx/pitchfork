@@ -358,7 +358,7 @@ EOF
 
   run pitchfork start self_dep
   assert_failure
-  assert_output --partial "circular"  || assert_output --partial "cycle"  || assert_output --partial "dependency"
+  [[ "$output" == *"circular"* || "$output" == *"cycle"* || "$output" == *"dependency"* ]]
 }
 
 # ============================================================================
@@ -420,7 +420,8 @@ EOF
     wait_for_status proj2/daemon2 running
     pitchfork stop proj1/daemon1 proj2/daemon2
   else
-    assert_output --partial "not found"  || assert_output --partial "not defined"  || assert_output --partial "ambiguous"  || assert_output --partial "error"  || true
+    assert_failure
+    assert_output --partial "not found" || assert_output --partial "not defined" || assert_output --partial "ambiguous" || assert_output --partial "error"
   fi
 }
 

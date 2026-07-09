@@ -28,6 +28,9 @@ _common_setup() {
   # Isolated HOME so no user config/state leaks in
   export HOME="$TEST_TEMP_DIR"
 
+  # Isolated TMPDIR so scripts don't fall back to shared /tmp between runs
+  export TMPDIR="$TEST_TEMP_DIR"
+
   # Isolated pitchfork state/logs/config directories.
   # Use a short path to stay under the 108-byte Unix socket path limit.
   PITCHFORK_STATE_DIR="$(mktemp -d /tmp/pf-test-XXXXXX)"
