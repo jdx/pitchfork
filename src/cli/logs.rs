@@ -533,9 +533,16 @@ impl Logs {
             None => entries,
         };
 
+        // Reverse only when the SQL query returned DESC (no time filter),
+        // to produce chronological (oldest-first) output. With a time
+        // filter, the query is ASC and already chronological.
+        let entries: Vec<_> = if has_time_filter {
+            entries
+        } else {
+            entries.into_iter().rev().collect()
+        };
         let json_entries: Vec<JsonLogEntry> = entries
             .into_iter()
-            .rev()
             .map(|e| {
                 let fields = e
                     .fields_json

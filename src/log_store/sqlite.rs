@@ -650,6 +650,11 @@ impl SqliteLogStore {
         if opts.daemon_ids.len() != 1 {
             return false;
         }
+        // Skip parallel for incremental tail polls (after_id set) — they
+        // return small batches and the connection overhead dominates.
+        if opts.after_id.is_some() {
+            return false;
+        }
         let limit = opts.limit.unwrap_or(usize::MAX);
         if limit < PARALLEL_QUERY_THRESHOLD {
             return false;

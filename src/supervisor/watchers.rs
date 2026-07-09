@@ -359,31 +359,38 @@ impl Supervisor {
                 .daemons
                 .iter()
                 .filter_map(|(id, d)| {
-                    let age = d.time_retention.as_ref().and_then(|s| {
-                        if s.is_empty() {
-                            None
-                        } else {
-                            match humantime::parse_duration(s) {
-                                Ok(d) => Some(d),
-                                Err(_) => {
-                                    per_daemon_warns.push(format!(
-                                        "invalid time_retention '{}' for daemon {}: expected format like '7d', '24h', '30min'",
-                                        s, id
-                                    ));
-                                    None
+                    // Per-daemon retention: [daemons.x.logs] sub-table
+                    // overrides top-level fields for backward compatibility.
+                    let logs = d.logs.as_ref();
+                    let age = logs
+                        .and_then(|l| l.time_retention.as_deref())
+                        .or(d.time_retention.as_deref())
+                        .and_then(|s| {
+                            if s.is_empty() {
+                                None
+                            } else {
+                                match humantime::parse_duration(s) {
+                                    Ok(d) => Some(d),
+                                    Err(_) => {
+                                        per_daemon_warns.push(format!(
+                                            "invalid time_retention '{}' for daemon {}: expected format like '7d', '24h', '30min'",
+                                            s, id
+                                        ));
+                                        None
+                                    }
                                 }
                             }
-                        }
-                    });
-                    let count = d
-                        .line_retention
+                        });
+                    let count = logs
+                        .and_then(|l| l.line_retention)
+                        .or(d.line_retention)
                         .and_then(|n| if n > 0 { Some(n as u64) } else { None });
-                    let hook = d
-                        .archive_hook
-                        .as_ref()
+                    let hook = logs
+                        .and_then(|l| l.archive_hook.as_deref())
+                        .or(d.archive_hook.as_deref())
                         .filter(|cmd| !cmd.trim().is_empty())
                         .map(|cmd| ArchiveHook {
-                            command: cmd.clone(),
+                            command: cmd.to_string(),
                             batch_size: settings.logs.archive_hook.batch_size.max(1) as usize,
                         });
                     if age.is_some() || count.is_some() || hook.is_some() {

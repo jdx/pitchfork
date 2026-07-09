@@ -1701,7 +1701,11 @@ impl PitchforkTomlDaemon {
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,
             stop_signal: self.stop_signal,
-            archive_hook: self.archive_hook.clone(),
+            archive_hook: self
+                .logs
+                .as_ref()
+                .and_then(|l| l.archive_hook.clone())
+                .or_else(|| self.archive_hook.clone()),
             log_format: self.logs.as_ref().and_then(|l| l.log_format.clone()),
             on_output_hook: self.hooks.as_ref().and_then(|h| h.on_output.clone()),
             pty: self.pty,
