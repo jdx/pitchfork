@@ -125,8 +125,6 @@ log_format = "json"  # json | logfmt | text (default: text)
 | `logfmt` | Parse as `key=value` space-delimited pairs |
 | `text` | No parsing, store as plain text (default) |
 
-Per-daemon `[daemons.x.logs]` subtables also support `time_retention`, `line_retention`, and `archive_hook`. These override the top-level fields of the same name for backward compatibility.
-
 ### Filter by Level
 
 ```bash
