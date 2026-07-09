@@ -110,16 +110,9 @@ impl SqliteLogStore {
             [],
         )
         .into_diagnostic()?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_daemon_level_ts ON log_entries(daemon_id, level, timestamp);",
-            [],
-        )
-        .into_diagnostic()?;
 
         // Migrate existing tables: add columns introduced in this version.
-        // Use PRAGMA table_info to check for existing columns rather than
-        // relying on SQLite error message strings (which can vary by locale
-        // or version).
+        // Must run BEFORE creating indexes that reference the new columns.
         let existing_cols: Vec<String> = {
             let mut stmt = conn
                 .prepare("PRAGMA table_info(log_entries)")
@@ -138,6 +131,12 @@ impl SqliteLogStore {
                 .into_diagnostic()?;
             }
         }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daemon_level_ts ON log_entries(daemon_id, level, timestamp);",
+            [],
+        )
+        .into_diagnostic()?;
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS log_clear_generations (
                 daemon_id TEXT PRIMARY KEY,
@@ -307,7 +306,7 @@ impl SqliteLogStore {
                     let conn = self.conn.lock().unwrap();
                     let mut stmt = conn
                         .prepare(
-                            "SELECT id, daemon_id, timestamp, message FROM log_entries
+                            "SELECT id, daemon_id, timestamp, message, level, msg, logger, fields_json FROM log_entries
                              WHERE daemon_id = ?1 AND timestamp < ?2
                              ORDER BY timestamp ASC, id ASC
                              LIMIT ?3",
@@ -391,7 +390,7 @@ impl SqliteLogStore {
                     let conn = self.conn.lock().unwrap();
                     let mut stmt = conn
                         .prepare(
-                            "SELECT id, daemon_id, timestamp, message FROM log_entries
+                            "SELECT id, daemon_id, timestamp, message, level, msg, logger, fields_json FROM log_entries
                              WHERE daemon_id = ?1
                              ORDER BY timestamp ASC, id ASC
                              LIMIT ?2",
