@@ -232,94 +232,55 @@ EOF
 # Watch modes
 # ============================================================================
 
-@test "watch_mode = poll triggers restart on file changes" {
+@test "watch_mode poll and auto both trigger restart on file changes" {
   local http_script port
   http_script="$(script_path http_server.py)"
-  port=19194
-  kill_port "$port"
 
-  create_pitchfork_toml <<EOF
-[daemons.poll_watch_test]
+  for mode in poll auto; do
+    if [[ "$mode" == "poll" ]]; then
+      port=19194
+    else
+      port=19195
+    fi
+    kill_port "$port"
+
+    create_pitchfork_toml <<EOF
+[daemons.${mode}_watch_test]
 run = "python3 -u $http_script 0 $port"
-watch = ["poll_watch_marker.txt"]
-watch_mode = "poll"
+watch = ["${mode}_watch_marker.txt"]
+watch_mode = "$mode"
 ready_port = $port
 EOF
 
-  echo "initial" > poll_watch_marker.txt
+    echo "initial" > "${mode}_watch_marker.txt"
 
-  run pitchfork start poll_watch_test
-  assert_success
-  wait_for_status poll_watch_test running
+    run pitchfork start ${mode}_watch_test
+    assert_success
+    wait_for_status ${mode}_watch_test running
 
-  local state_file
-  state_file="$PITCHFORK_STATE_DIR/state.toml"
-  grep -F 'watch_mode = "poll"' "$state_file"
+    local state_file
+    state_file="$PITCHFORK_STATE_DIR/state.toml"
+    grep -F "watch_mode = \"$mode\"" "$state_file"
 
-  sleep 0.5
-  local original_pid new_pid current_pid
-  original_pid="$(get_daemon_pid poll_watch_test)"
-  [[ -n "$original_pid" ]]
+    sleep 0.5
+    local original_pid new_pid current_pid
+    original_pid="$(get_daemon_pid ${mode}_watch_test)"
+    [[ -n "$original_pid" ]]
 
-  echo "changed" > poll_watch_marker.txt
+    echo "changed" > "${mode}_watch_marker.txt"
 
-  new_pid="$original_pid"
-  for _ in $(seq 1 30); do
-    current_pid="$(get_daemon_pid poll_watch_test)"
-    if [[ -n "$current_pid" && "$current_pid" != "$original_pid" ]]; then
-      new_pid="$current_pid"
-      break
-    fi
-    sleep 0.3
+    new_pid="$original_pid"
+    for _ in $(seq 1 30); do
+      current_pid="$(get_daemon_pid ${mode}_watch_test)"
+      if [[ -n "$current_pid" && "$current_pid" != "$original_pid" ]]; then
+        new_pid="$current_pid"
+        break
+      fi
+      sleep 0.3
+    done
+    [[ "$new_pid" != "$original_pid" ]]
+    [[ "$(get_daemon_status ${mode}_watch_test)" == "running" ]]
+
+    pitchfork stop ${mode}_watch_test
   done
-  [[ "$new_pid" != "$original_pid" ]]
-  [[ "$(get_daemon_status poll_watch_test)" == "running" ]]
-
-  pitchfork stop poll_watch_test
-}
-
-@test "watch_mode = auto triggers restart on file changes" {
-  local http_script port
-  http_script="$(script_path http_server.py)"
-  port=19195
-  kill_port "$port"
-
-  create_pitchfork_toml <<EOF
-[daemons.auto_watch_test]
-run = "python3 -u $http_script 0 $port"
-watch = ["auto_watch_marker.txt"]
-watch_mode = "auto"
-ready_port = $port
-EOF
-
-  echo "initial" > auto_watch_marker.txt
-
-  run pitchfork start auto_watch_test
-  assert_success
-  wait_for_status auto_watch_test running
-
-  local state_file
-  state_file="$PITCHFORK_STATE_DIR/state.toml"
-  grep -F 'watch_mode = "auto"' "$state_file"
-
-  sleep 0.5
-  local original_pid new_pid current_pid
-  original_pid="$(get_daemon_pid auto_watch_test)"
-  [[ -n "$original_pid" ]]
-
-  echo "changed" > auto_watch_marker.txt
-
-  new_pid="$original_pid"
-  for _ in $(seq 1 30); do
-    current_pid="$(get_daemon_pid auto_watch_test)"
-    if [[ -n "$current_pid" && "$current_pid" != "$original_pid" ]]; then
-      new_pid="$current_pid"
-      break
-    fi
-    sleep 0.3
-  done
-  [[ "$new_pid" != "$original_pid" ]]
-  [[ "$(get_daemon_status auto_watch_test)" == "running" ]]
-
-  pitchfork stop auto_watch_test
 }

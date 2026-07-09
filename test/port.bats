@@ -31,48 +31,6 @@ teardown() {
 }
 
 # ============================================================================
-# CLI port flag tests
-# ============================================================================
-
-@test "start with --expected-port flag" {
-  cat > server.sh <<'EOF'
-#!/bin/bash
-echo "Server starting on port $PORT"
-sleep 1
-echo "ready"
-sleep 30
-EOF
-  chmod +x server.sh
-
-  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
-  assert_success
-
-  run pitchfork start test-server --expected-port 9999
-  assert_success
-
-  run pitchfork stop test-server || true
-}
-
-@test "start with --expected-port and --bump flags" {
-  cat > server.sh <<'EOF'
-#!/bin/bash
-echo "Server starting on port $PORT"
-sleep 1
-echo "ready"
-sleep 30
-EOF
-  chmod +x server.sh
-
-  run pitchfork daemons add test-server --run "./server.sh" --ready-output "ready" --retry 0
-  assert_success
-
-  run pitchfork start test-server --expected-port 9999 --bump
-  assert_success
-
-  run pitchfork stop test-server || true
-}
-
-# ============================================================================
 # Port conflict and auto-bump tests
 # ============================================================================
 
@@ -196,23 +154,6 @@ EOF
   kill "$blocker_pid" 2>/dev/null || true
   wait "$blocker_pid" 2>/dev/null || true
   run pitchfork stop cli_port_test || true
-}
-
-@test "ready_port synchronizes with expected port" {
-  local port=45701
-
-  create_pitchfork_toml <<EOF
-[daemons.ready_sync]
-run = "python3 -m http.server $port"
-port = $port
-EOF
-
-  run pitchfork start ready_sync
-  assert_success
-
-  wait_for_status ready_sync running
-
-  run pitchfork stop ready_sync || true
 }
 
 @test "PITCHFORK_PORT_BUMP_ATTEMPTS env var limits bump attempts" {

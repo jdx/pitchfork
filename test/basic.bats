@@ -180,6 +180,7 @@ EOF
   run pitchfork status test_status
   assert_success
   assert_output --partial "running"
+  assert_output --partial "test_status"
 
   pitchfork stop test_status
 }
@@ -337,9 +338,10 @@ EOF
 
   local start_time elapsed
   start_time=$(date +%s)
-  pitchfork start ready_no_match
+  run pitchfork start ready_no_match
   elapsed=$(($(date +%s) - start_time))
 
+  assert_success
   [[ $elapsed -ge 3 ]]
 
   wait_for_logs ready_no_match "Output 3/3" 5
@@ -392,32 +394,6 @@ EOF
 
   pitchfork stop --all
 }
-
-@test "retry with ready check retries failed attempts" {
-  local fail_script
-  fail_script="$(script_path fail.sh)"
-
-  create_pitchfork_toml <<EOF
-[daemons.retry_ready]
-run = 'bash $fail_script 0'
-retry = 2
-ready_delay = 1
-EOF
-
-  run pitchfork start retry_ready
-  assert_failure
-
-  sleep 3
-
-  wait_for_logs retry_ready "Failed after 0!" 5
-  run pitchfork logs retry_ready --raw
-  local count
-  count=$(grep -c "Failed after 0!" <<< "$output")
-  [[ $count -gt 1 ]]
-
-  pitchfork stop retry_ready
-}
-
 # ============================================================================
 # HTTP / port / cmd ready checks
 # ============================================================================

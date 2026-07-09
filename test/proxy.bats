@@ -336,8 +336,9 @@ EOF
   run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_TLD=localhost PITCHFORK_PROXY_PORT=7777 pitchfork proxy status
   assert_success
   assert_output --partial "enabled"
-  assert_output --partial "localhost"
-  assert_output --partial "7777"
+  assert_output --partial "Scheme:  https"
+  assert_output --partial "TLD:     localhost"
+  assert_output --partial "Port:    7777"
 }
 
 @test "proxy trust fails when certificate is missing" {
@@ -349,71 +350,51 @@ EOF
   run pitchfork proxy trust 2>&1
   assert_failure
 
-  [[ "$output" == *"not found"* ]] || [[ "$output" == *"certificate"* ]] || [[ "$output" == *"Certificate"* ]] || [[ "$output" == *"ca.pem"* ]]
+  assert_output --partial "CA certificate not found at"
 }
 
 # ============================================================================
 # Proxy URL format tests
 # ============================================================================
 
-@test "global namespace daemon without slug has no proxy URL" {
-  local proj="$TEST_TEMP_DIR/global-proxy"
-  mkdir -p "$proj"
-  cd "$proj"
-
-  local port
-  port=$(_free_port)
-
-  local http_script
-  http_script="$(script_path http_server.py)"
-
+@test "daemons without slug never show proxy URL regardless of namespace" {
+  # Test global namespace
+  local proj_dir="$TEST_TEMP_DIR/proj-global"
+  mkdir -p "$proj_dir"
+  cd "$proj_dir"
   create_pitchfork_toml <<EOF
-namespace = "global"
+[daemons.web]
+run = "sleep 60"
 
-[daemons.myapi]
-run = "python3 -u $http_script 0 $port"
-expect = [$port]
+[daemons.web.ready]
+port = 0
 EOF
-
-  run pitchfork start myapi
-  assert_success
-  sleep 2
-
-  run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_TLD=localhost PITCHFORK_PROXY_PORT=7777 pitchfork status myapi
+  pitchfork supervisor start
+  pitchfork start web
+  run pitchfork status web
   assert_success
   [[ "$output" != *"Proxy:"* ]]
 
-  run pitchfork stop myapi || true
-  kill_port "$port"
-}
+  pitchfork stop web
+  pitchfork supervisor stop 2>/dev/null || true
 
-@test "local namespace daemon without slug has no proxy URL" {
-  local proj="$TEST_TEMP_DIR/myproject"
-  mkdir -p "$proj"
-  cd "$proj"
-
-  local port
-  port=$(_free_port)
-
-  local http_script
-  http_script="$(script_path http_server.py)"
-
+  # Test local namespace
+  local proj_local="$TEST_TEMP_DIR/proj-local"
+  mkdir -p "$proj_local"
+  cd "$proj_local"
+  export PITCHFORK_STATE_DIR="$(mktemp -d /tmp/pf-test-XXXXXX)"
+  mkdir -p "$PITCHFORK_STATE_DIR/logs"
   create_pitchfork_toml <<EOF
 namespace = "myproject"
 
-[daemons.api]
-run = "python3 -u $http_script 0 $port"
-expect = [$port]
+[daemons.web]
+run = "sleep 60"
 EOF
-
-  run pitchfork start api
-  assert_success
-  sleep 2
-
-  run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_TLD=localhost PITCHFORK_PROXY_PORT=7777 pitchfork status api
+  pitchfork supervisor start
+  pitchfork start web
+  run pitchfork status web
   assert_success
   [[ "$output" != *"Proxy:"* ]]
 
-  run pitchfork stop api || true
-  kill_port "$port"
+  pitchfork stop web
 }

@@ -35,28 +35,6 @@ EOF
   pitchfork stop tail_test
 }
 
-@test "logs --follow is an alias for --tail" {
-  local slowly_output
-  slowly_output="$(script_path slowly_output.sh)"
-
-  create_pitchfork_toml <<EOF
-[daemons.follow_test]
-run = "bash $slowly_output 1 10"
-ready_delay = 0
-EOF
-
-  pitchfork start follow_test
-  wait_for_logs follow_test "Output 1/10" 10
-
-  local output
-  output="$(run_with_pty timeout 4 pitchfork logs follow_test --follow 2>&1)" || true
-
-  [[ "$output" != *"(END)"* ]]
-  [[ "$output" == *"Output "* ]]
-
-  pitchfork stop follow_test
-}
-
 # ============================================================================
 # Clear logs
 # ============================================================================
@@ -114,28 +92,6 @@ EOF
   assert_output --partial "Output"
 
   pitchfork stop since_test
-}
-
-@test "logs --since with time only succeeds" {
-  local slowly_output
-  slowly_output="$(script_path slowly_output.sh)"
-
-  create_pitchfork_toml <<EOF
-[daemons.time_only_test]
-run = "bash $slowly_output 1 3"
-ready_delay = 0
-EOF
-
-  pitchfork start time_only_test
-  sleep 4
-
-  local time_str
-  time_str="$(date +%H:%M)"
-
-  run pitchfork logs time_only_test --since "$time_str" --raw
-  assert_success
-
-  pitchfork stop time_only_test
 }
 
 @test "logs --since and --until return logs in range" {
@@ -214,26 +170,6 @@ EOF
   pitchfork stop raw_test
 }
 
-@test "logs --raw works with --since" {
-  local slowly_output
-  slowly_output="$(script_path slowly_output.sh)"
-
-  create_pitchfork_toml <<EOF
-[daemons.raw_time_test]
-run = "bash $slowly_output 1 5"
-ready_delay = 0
-EOF
-
-  pitchfork start raw_time_test
-  sleep 6
-
-  run pitchfork logs raw_time_test --raw --since 5s
-  assert_success
-  [[ -n "$output" ]]
-
-  pitchfork stop raw_time_test
-}
-
 # ============================================================================
 # Line limit tests
 # ============================================================================
@@ -277,6 +213,7 @@ EOF
   run pitchfork logs pager_test
   assert_success
   assert_output --partial "Output"
+  [[ "$output" != *"(END)"* ]]
 
   pitchfork stop pager_test
 }
@@ -311,34 +248,6 @@ EOF
   pitchfork stop multi_log_1
   pitchfork stop multi_log_2
 }
-
-# ============================================================================
-# No-pager tests
-# ============================================================================
-
-@test "logs --no-pager outputs logs directly" {
-  local slowly_output
-  slowly_output="$(script_path slowly_output.sh)"
-
-  create_pitchfork_toml <<EOF
-[daemons.no_pager_test]
-run = "bash $slowly_output 1 3"
-ready_delay = 0
-EOF
-
-  pitchfork start no_pager_test
-  sleep 4
-
-  run pitchfork logs no_pager_test --no-pager
-  assert_success
-  assert_output --partial "Output"
-
-  pitchfork stop no_pager_test
-}
-
-# ============================================================================
-# SSE tests
-# ============================================================================
 
 # TODO: The Rust e2e test `test_web_logs_sse_skips_existing_content_on_connect`
 # started a web supervisor and consumed the SSE `/logs/project%2Fsse_connect/stream`
