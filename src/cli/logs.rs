@@ -809,10 +809,15 @@ pub async fn tail_logs(
         }
 
         if !out.is_empty() {
-            let out = out
-                .into_iter()
-                .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
-                .collect_vec();
+            // Single-daemon: entries are already in chronological order from
+            // the SQL query (order_desc: false). Skip the sort.
+            let out: Vec<_> = if single_daemon {
+                out
+            } else {
+                out.into_iter()
+                    .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
+                    .collect()
+            };
             let stdout = io::stdout();
             let mut buf = io::BufWriter::new(stdout.lock());
             for (date, name, msg) in &out {

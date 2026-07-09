@@ -7,7 +7,7 @@
 use crate::log_store::LogEntry;
 use jaq_core::load::{Arena, File, Loader};
 use jaq_core::{self, Ctx, Vars, data, unwrap_valr};
-use jaq_json::{self, Val, read::parse_single, write};
+use jaq_json::{self, Val, read::parse_single};
 
 /// A compiled jq filter that can be applied to log entries.
 pub struct JqFilter {
@@ -86,14 +86,4 @@ fn serialize_entry(entry: &LogEntry) -> String {
 /// Determine if a jaq Val is truthy (not false and not null).
 fn is_truthy(val: &Val) -> bool {
     !matches!(val, Val::Bool(false) | Val::Null)
-}
-
-/// Format a Val as a compact JSON string (for potential future use in
-/// `--jq` output mode).
-#[allow(dead_code)]
-pub fn val_to_json(val: &Val) -> String {
-    let mut buf = Vec::new();
-    let pp = write::Pp::default();
-    let _ = write::write(&mut buf, &pp, 0, val);
-    String::from_utf8_lossy(&buf).to_string()
 }

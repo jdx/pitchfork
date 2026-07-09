@@ -114,10 +114,10 @@ fn parse_logfmt(line: &str) -> Option<ParsedLog> {
         obj.insert(key.clone(), json_val);
     }
 
+    let level = extract_level(&obj);
+    let msg = extract_msg(&obj);
+    let logger = extract_logger(&obj);
     let value = Value::Object(obj);
-    let level = extract_level(value.as_object().unwrap());
-    let msg = extract_msg(value.as_object().unwrap());
-    let logger = extract_logger(value.as_object().unwrap());
     let fields_json = serde_json::to_string(&value).ok()?;
 
     Some(ParsedLog {
@@ -287,9 +287,8 @@ pub fn normalize_level_str(s: &str) -> Option<String> {
     }
 }
 
-/// Try to extract the human-readable message from common field names.
-fn extract_msg(obj: &Map<String, Value>) -> Option<String> {
-    for key in &["msg", "message", "event", "@message"] {
+fn extract_first_string(obj: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
         if let Some(Value::String(s)) = obj.get(*key) {
             return Some(s.clone());
         }
@@ -297,14 +296,14 @@ fn extract_msg(obj: &Map<String, Value>) -> Option<String> {
     None
 }
 
+/// Try to extract the human-readable message from common field names.
+fn extract_msg(obj: &Map<String, Value>) -> Option<String> {
+    extract_first_string(obj, &["msg", "message", "event", "@message"])
+}
+
 /// Try to extract the logger name from common field names.
 fn extract_logger(obj: &Map<String, Value>) -> Option<String> {
-    for key in &["logger", "name", "component", "module"] {
-        if let Some(Value::String(s)) = obj.get(*key) {
-            return Some(s.clone());
-        }
-    }
-    None
+    extract_first_string(obj, &["logger", "name", "component", "module"])
 }
 
 #[cfg(test)]

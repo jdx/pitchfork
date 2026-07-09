@@ -728,17 +728,7 @@ impl SqliteLogStore {
                         }
 
                         let (sql, query_params) = Self::build_query_sql(&opts, Some((start, end)));
-                        let mut stmt = conn.prepare(&sql).into_diagnostic()?;
-                        let params_ref: Vec<&dyn rusqlite::ToSql> =
-                            query_params.iter().map(|p| p.as_ref()).collect();
-                        let rows = stmt
-                            .query_map(params_ref.as_slice(), Self::row_to_entry)
-                            .into_diagnostic()?;
-                        let mut entries = Vec::new();
-                        for row in rows {
-                            entries.push(row.into_diagnostic()?);
-                        }
-                        Ok(entries)
+                        Self::execute_built_query(&conn, &sql, &query_params)
                     })
                 })
                 .map(|h| h.join().unwrap())
@@ -763,6 +753,25 @@ impl SqliteLogStore {
         }
 
         Ok(merged)
+    }
+
+    /// Execute a built SQL query and collect results into LogEntry.
+    fn execute_built_query(
+        conn: &Connection,
+        sql: &str,
+        query_params: &[Box<dyn rusqlite::ToSql>],
+    ) -> Result<Vec<LogEntry>> {
+        let mut stmt = conn.prepare(sql).into_diagnostic()?;
+        let params_ref: Vec<&dyn rusqlite::ToSql> =
+            query_params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(params_ref.as_slice(), Self::row_to_entry)
+            .into_diagnostic()?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row.into_diagnostic()?);
+        }
+        Ok(entries)
     }
 }
 
@@ -870,19 +879,7 @@ impl LogStore for SqliteLogStore {
         // Single-threaded path.
         let conn = self.conn.lock().unwrap();
         let (sql, query_params) = Self::build_query_sql(opts, None);
-
-        let mut stmt = conn.prepare(&sql).into_diagnostic()?;
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            query_params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(params_ref.as_slice(), Self::row_to_entry)
-            .into_diagnostic()?;
-
-        let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.into_diagnostic()?);
-        }
-        Ok(entries)
+        Self::execute_built_query(&conn, &sql, &query_params)
     }
 
     fn tail(&self, daemon_id: &DaemonId, after_id: Option<i64>) -> Result<Vec<LogEntry>> {
