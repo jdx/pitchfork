@@ -4,6 +4,7 @@ setup() {
   load test_helper/common_setup
   _common_setup
   export PITCHFORK_INTERVAL=1s
+  export PITCHFORK_CRON_CHECK_INTERVAL=1s
 }
 
 teardown() {
@@ -265,3 +266,130 @@ EOF
 
   [[ "$count" -eq 1 ]]
 }
+
+# ============================================================================
+# Fast cron immediate/retry tests
+# ============================================================================
+
+@test "cron immediate=false does not fire on first watcher tick" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_no_immediate]
+run = "echo fired"
+
+[daemons.cron_no_immediate.cron]
+schedule = "0 0 1 1 *"
+retrigger = "always"
+immediate = false
+EOF
+
+  run pitchfork start cron_no_immediate
+  assert_success
+
+  # The manual start runs the daemon once; with immediate=false the cron watcher
+  # should not trigger any additional runs for this far-future schedule.
+  sleep 3
+
+  local count
+  count=$(pitchfork logs cron_no_immediate --raw 2>/dev/null | grep -c "fired" || true)
+  [[ "$count" -eq 1 ]]
+}
+
+@test "cron immediate=true fires on start" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_immediate]
+run = "echo immediate_fired"
+
+[daemons.cron_immediate.cron]
+schedule = "*/5 * * * * *"
+retrigger = "always"
+immediate = true
+EOF
+
+  run pitchfork start cron_immediate
+  assert_success
+
+  # immediate=true should trigger the cron watcher on its first check because a
+  # scheduled time falls within the 10-second look-back window.
+  wait_for_logs cron_immediate "immediate_fired" 5
+
+  local count
+  count=$(pitchfork logs cron_immediate --raw 2>/dev/null | grep -c "immediate_fired" || true)
+  [[ "$count" -ge 2 ]]
+}
+
+@test "cron finish retrigger does not restart a running daemon" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_finish_running]
+run = "echo started && sleep 10"
+
+[daemons.cron_finish_running.cron]
+schedule = "* * * * * *"
+retrigger = "finish"
+immediate = true
+EOF
+
+  run pitchfork start cron_finish_running
+  assert_success
+
+  # With retrigger=finish, the daemon should not be restarted while it is still
+  # running, even though the schedule fires every second.
+  sleep 3
+
+  local count
+  count=$(pitchfork logs cron_finish_running --raw 2>/dev/null | grep -c "started" || true)
+  [[ "$count" -eq 1 ]]
+}
+
+@test "retry=true retries indefinitely" {
+  local fail_script
+  fail_script="$(script_path fail.sh)"
+
+  create_pitchfork_toml <<EOF
+[daemons.retry_infinite]
+run = 'bash "$fail_script" 0'
+retry = true
+EOF
+
+  # Infinite retry causes the start client to block forever, so run it in the
+  # background and observe several retry attempts.
+  pitchfork start retry_infinite &
+  local start_pid=$!
+  sleep 5
+  kill "$start_pid" 2>/dev/null || true
+  wait "$start_pid" 2>/dev/null || true
+
+  local count
+  count=$(pitchfork logs retry_infinite --raw 2>/dev/null | grep -c "Failed after 0!" || true)
+  [[ "$count" -ge 3 ]]
+
+  # The daemon should still be retrying, not in a final stopped state.
+  local status
+  status=$(get_daemon_status retry_infinite || true)
+  [[ "$status" != "stopped" ]]
+}
+
+@test "retry with ready_output re-checks on each attempt" {
+  local success_script
+  success_script="$(script_path success_on_third.sh)"
+  export TEST_SUCCESS_ON_THIRD_TIMESTAMP="$BATS_TEST_NAME"
+
+  create_pitchfork_toml <<EOF
+[daemons.retry_ready_output]
+run = 'bash "$success_script"'
+ready_output = "READY"
+retry = 2
+EOF
+
+  run pitchfork start retry_ready_output
+  assert_success
+
+  wait_for_logs retry_ready_output "Success!" 15
+  wait_for_logs retry_ready_output "Attempt 3" 15
+
+  # The daemon command exits after success, so it ends in stopped status.
+  # The important verification is that start succeeded and the third attempt
+  # produced the ready/success output despite the non-matching ready_output
+  # pattern being rechecked on each attempt.
+  wait_for_status retry_ready_output stopped
+}
+

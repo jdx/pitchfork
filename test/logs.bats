@@ -249,6 +249,294 @@ EOF
   pitchfork stop multi_log_2
 }
 
+# ============================================================================
+# Grep / regex filter tests
+# ============================================================================
+
+@test "logs --grep filters output by substring" {
+  create_pitchfork_toml <<EOF
+[daemons.grepper]
+run = "bash -c 'echo apple; echo banana; echo cherry; sleep 60'"
+ready_output = "cherry"
+EOF
+
+  pitchfork start grepper
+  wait_for_logs grepper "cherry" 10
+
+  run pitchfork logs grepper --grep banana --raw
+  assert_success
+  assert_output --partial "banana"
+  [[ "$output" != *"apple"* ]]
+  [[ "$output" != *"cherry"* ]]
+
+  pitchfork stop grepper
+}
+
+@test "logs --grep with multiple patterns (OR logic)" {
+  create_pitchfork_toml <<EOF
+[daemons.grepper]
+run = "bash -c 'echo apple; echo banana; echo cherry; sleep 60'"
+ready_output = "cherry"
+EOF
+
+  pitchfork start grepper
+  wait_for_logs grepper "cherry" 10
+
+  run pitchfork logs grepper --grep apple --grep cherry --raw
+  assert_success
+  assert_output --partial "apple"
+  assert_output --partial "cherry"
+  [[ "$output" != *"banana"* ]]
+
+  pitchfork stop grepper
+}
+
+@test "logs --grep with no matches returns empty" {
+  create_pitchfork_toml <<EOF
+[daemons.grepper]
+run = "bash -c 'echo apple; echo banana; echo cherry; sleep 60'"
+ready_output = "cherry"
+EOF
+
+  pitchfork start grepper
+  wait_for_logs grepper "cherry" 10
+
+  PITCHFORK_LOG=error run pitchfork logs grepper --grep nonexistent --raw
+  assert_success
+  [[ -z "$output" ]]
+
+  pitchfork stop grepper
+}
+
+@test "logs --regex filters output by regex pattern" {
+  create_pitchfork_toml <<EOF
+[daemons.regexer]
+run = "bash -c 'echo port 3000; echo port 4000; echo no_port_here; sleep 60'"
+ready_output = "no_port_here"
+EOF
+
+  pitchfork start regexer
+  wait_for_logs regexer "no_port_here" 10
+
+  run pitchfork logs regexer --regex 'port [0-9]+' --raw
+  assert_success
+  assert_output --partial "port 3000"
+  assert_output --partial "port 4000"
+  [[ "$output" != *"no_port_here"* ]]
+
+  pitchfork stop regexer
+}
+
+@test "logs --regex with invalid pattern gives error" {
+  create_pitchfork_toml <<EOF
+[daemons.regexer]
+run = "bash -c 'echo port 3000; echo port 4000; echo no_port_here; sleep 60'"
+ready_output = "no_port_here"
+EOF
+
+  pitchfork start regexer
+  wait_for_logs regexer "no_port_here" 10
+
+  run pitchfork logs regexer --regex '[invalid(' --raw
+  assert_failure
+  [[ "$output" == *"regex"* || "$output" == *"invalid"* || "$output" == *"parse"* ]]
+
+  pitchfork stop regexer
+}
+
+@test "logs --regex with no matches returns empty" {
+  create_pitchfork_toml <<EOF
+[daemons.regexer]
+run = "bash -c 'echo port 3000; echo port 4000; echo no_port_here; sleep 60'"
+ready_output = "no_port_here"
+EOF
+
+  pitchfork start regexer
+  wait_for_logs regexer "no_port_here" 10
+
+  PITCHFORK_LOG=error run pitchfork logs regexer --regex 'nomatch[0-9]+' --raw
+  assert_success
+  [[ -z "$output" ]]
+
+  pitchfork stop regexer
+}
+
+@test "logs --case-sensitive respects case" {
+  create_pitchfork_toml <<EOF
+[daemons.caser]
+run = "bash -c 'echo Hello; echo hello; echo HELLO; sleep 60'"
+ready_output = "HELLO"
+EOF
+
+  pitchfork start caser
+  wait_for_logs caser "HELLO" 10
+
+  run pitchfork logs caser --grep Hello --case-sensitive --raw
+  assert_success
+  assert_output --partial "Hello"
+  [[ "$output" != *"hello"* ]]
+  [[ "$output" != *"HELLO"* ]]
+
+  pitchfork stop caser
+}
+
+@test "logs without --case-sensitive is case-insensitive" {
+  create_pitchfork_toml <<EOF
+[daemons.caser]
+run = "bash -c 'echo Hello; echo hello; echo HELLO; sleep 60'"
+ready_output = "HELLO"
+EOF
+
+  pitchfork start caser
+  wait_for_logs caser "HELLO" 10
+
+  run pitchfork logs caser --grep hello --raw
+  assert_success
+  assert_output --partial "Hello"
+  assert_output --partial "hello"
+  assert_output --partial "HELLO"
+
+  pitchfork stop caser
+}
+
+# ============================================================================
+# Timestamp tests
+# ============================================================================
+
+@test "logs --no-timestamp omits timestamp prefix" {
+  create_pitchfork_toml <<EOF
+[daemons.notime]
+run = "bash -c 'echo testline; sleep 60'"
+ready_output = "testline"
+EOF
+
+  pitchfork start notime
+  wait_for_logs notime "testline" 10
+
+  run pitchfork logs notime --no-timestamp
+  assert_success
+  assert_output --partial "testline"
+  [[ "$output" != *"20"* ]]
+
+  pitchfork stop notime
+}
+
+# ============================================================================
+# Clear / error / edge case tests
+# ============================================================================
+
+@test "logs --clear for single daemon preserves others" {
+  create_pitchfork_toml <<EOF
+[daemons.keeper]
+run = "bash -c 'echo keep_me; sleep 60'"
+ready_output = "keep_me"
+
+[daemons.clearer]
+run = "bash -c 'echo clear_me; sleep 60'"
+ready_output = "clear_me"
+EOF
+
+  pitchfork start keeper
+  pitchfork start clearer
+  wait_for_logs keeper "keep_me" 10
+  wait_for_logs clearer "clear_me" 10
+
+  run pitchfork logs --clear clearer
+  assert_success
+
+  PITCHFORK_LOG=error run pitchfork logs clearer --raw
+  assert_success
+  [[ -z "$output" ]]
+
+  run pitchfork logs keeper --raw
+  assert_success
+  assert_output --partial "keep_me"
+
+  pitchfork stop keeper
+  pitchfork stop clearer
+}
+
+@test "logs on nonexistent daemon gives error" {
+  run pitchfork logs nonexistent_daemon --raw
+  assert_failure
+  [[ "$output" == *"nonexistent_daemon"* || "$output" == *"not found"* || "$output" == *"error"* ]]
+}
+
+@test "logs on daemon with no log output returns empty" {
+  create_pitchfork_toml <<EOF
+[daemons.unstarted]
+run = "bash -c 'echo would_log; sleep 60'"
+ready_output = "would_log"
+EOF
+
+  # Daemon is configured but not started; no logs should exist
+  PITCHFORK_LOG=error run pitchfork logs unstarted --raw
+  assert_success
+  [[ -z "$output" ]]
+}
+
+@test "logs without daemon argument lists available daemons" {
+  create_pitchfork_toml <<EOF
+[daemons.solo]
+run = "bash -c 'echo hello_world; sleep 60'"
+ready_output = "hello_world"
+EOF
+
+  pitchfork start solo
+  wait_for_logs solo "hello_world" 10
+
+  run pitchfork logs --raw --no-timestamp
+  assert_success
+  assert_output --partial "hello_world"
+
+  pitchfork stop solo
+}
+
+@test "logs --grep and --regex combined (OR logic)" {
+  create_pitchfork_toml <<EOF
+[daemons.combo]
+run = "bash -c 'echo alpha; echo beta; echo gamma; sleep 60'"
+ready_output = "gamma"
+EOF
+
+  pitchfork start combo
+  wait_for_logs combo "gamma" 10
+
+  run pitchfork logs combo --grep alpha --regex 'beta' --raw
+  assert_success
+  assert_output --partial "alpha"
+  assert_output --partial "beta"
+  [[ "$output" != *"gamma"* ]]
+
+  pitchfork stop combo
+}
+
+# ============================================================================
+# Tail + filter tests
+# ============================================================================
+
+@test "logs --tail with --grep only streams matching lines" {
+  create_pitchfork_toml <<EOF
+[daemons.tailer]
+run = "bash -c 'while true; do echo match_line; echo skip_line; sleep 1; done'"
+ready_output = "match_line"
+EOF
+
+  pitchfork start tailer
+  wait_for_logs tailer "match_line" 10
+
+  local output
+  output="$(timeout 3 pitchfork logs tailer --tail --grep match_line --raw 2>&1)" || true
+  [[ "$output" == *"match_line"* ]]
+  [[ "$output" != *"skip_line"* ]]
+
+  pitchfork stop tailer
+}
+
+# ============================================================================
+# SSE tests
+# ============================================================================
+
 # TODO: The Rust e2e test `test_web_logs_sse_skips_existing_content_on_connect`
 # started a web supervisor and consumed the SSE `/logs/project%2Fsse_connect/stream`
 # endpoint. Converting it reliably to bash requires backgrounding the supervisor,
