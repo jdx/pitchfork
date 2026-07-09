@@ -6,7 +6,7 @@ depends = ["build:ui"]
 run = [
   "cargo nextest run",
   "git submodule update --init --recursive",
-  "test/bats/bin/bats test",
+  "test/run_all_tests",
 ]
 
 [tasks.build-dev]
@@ -77,7 +77,7 @@ run = [
 
 [tools]
 aube = "latest"
-bun = "latest" # for tests. FIXME: replace with aube + node
+bun = "latest" # for web-ui playwright tests
 cargo-binstall = "latest"
 communique = "latest"
 hk = "latest"

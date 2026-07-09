@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 
+# Shared setup/teardown for all bats e2e tests.
+#
+# Design borrowed from the mise e2e framework:
+# - Full environment isolation per test (unique HOME, state dir, config dir)
+# - Fast watcher/poll intervals to keep tests snappy
+# - Temp dirs preserved on failure for post-mortem debugging
+# - Comprehensive wait helpers for async daemon behaviour
+
 _common_setup() {
   # Resolve project root from test file location
   PROJECT_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -10,41 +18,183 @@ _common_setup() {
   load "$PROJECT_ROOT/test/test_helper/bats-assert/load"
   load "$PROJECT_ROOT/test/test_helper/bats-file/load"
 
-  # Create isolated temp directory and cd into it
+  # Directory holding test daemon scripts (bash replacements for former bun scripts)
+  export TEST_SCRIPTS_DIR="$PROJECT_ROOT/test/scripts"
+
+  # Create isolated temp directory tree
   TEST_TEMP_DIR="$(temp_make)"
   export TEST_TEMP_DIR
-  cd "$TEST_TEMP_DIR" || return 1
+
+  # Isolated HOME so no user config/state leaks in
+  export HOME="$TEST_TEMP_DIR"
+
+  # Isolated pitchfork state/logs/config directories.
+  # Use a short path to stay under the 108-byte Unix socket path limit.
+  PITCHFORK_STATE_DIR="$(mktemp -d /tmp/pf-test-XXXXXX)"
+  export PITCHFORK_STATE_DIR
+  export PITCHFORK_LOGS_DIR="$PITCHFORK_STATE_DIR/logs"
+  export PITCHFORK_CONFIG_DIR="$TEST_TEMP_DIR/.config/pitchfork"
+  mkdir -p "$PITCHFORK_STATE_DIR" "$PITCHFORK_LOGS_DIR" "$PITCHFORK_CONFIG_DIR"
 
   # Ensure pitchfork binary is on PATH
   export PATH="$PROJECT_ROOT/target/debug:$PATH"
 
-  # Isolate HOME so no user config leaks in
-  export HOME="$TEST_TEMP_DIR"
+  # Fast watcher/poll intervals for responsive tests (matches Rust e2e defaults)
+  export PITCHFORK_WATCH_INTERVAL=100ms
+  export PITCHFORK_WATCH_POLL_INTERVAL=100ms
 
-  # Use a short state dir path to avoid exceeding Unix socket path limits (108 bytes)
-  PITCHFORK_STATE_DIR="$(mktemp -d /tmp/pf-test-XXXXXX)"
-  export PITCHFORK_STATE_DIR
-  export PITCHFORK_LOGS_DIR="$PITCHFORK_STATE_DIR/logs"
-  mkdir -p "$PITCHFORK_STATE_DIR" "$PITCHFORK_LOGS_DIR"
+  # Verbose logging for easier debugging
+  export PITCHFORK_LOG=debug
+
+  # Work inside the temp dir so pitchfork.toml is discovered there
+  cd "$TEST_TEMP_DIR" || return 1
 }
 
 _common_teardown() {
-  # Stop the supervisor if running
+  # Stop the supervisor if running (swallow errors — it may not be running)
   pitchfork supervisor stop 2>/dev/null || true
-  rm -rf "$PITCHFORK_STATE_DIR"
-  temp_del "$TEST_TEMP_DIR"
+
+  # Preserve temp dirs on failure for post-mortem debugging
+  if [[ -n "$BATS_TEST_COMPLETED" && "$BATS_TEST_COMPLETED" == "1" ]]; then
+    rm -rf "$PITCHFORK_STATE_DIR"
+    temp_del "$TEST_TEMP_DIR" 2>/dev/null || true
+  else
+    echo "# Test failed — preserving debug dirs:" >&3
+    echo "#   TEST_TEMP_DIR=$TEST_TEMP_DIR" >&3
+    echo "#   PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" >&3
+  fi
 }
 
-# --- Helper functions ---
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
 
-# Create a pitchfork.toml with daemon definitions
+# Write a pitchfork.toml from stdin into the current working directory
 create_pitchfork_toml() {
   cat > pitchfork.toml
 }
 
+# ---------------------------------------------------------------------------
+# Process / status helpers
+# ---------------------------------------------------------------------------
+
+# Wait for a daemon to reach a given status (up to 10s)
+# Usage: wait_for_status <daemon> <expected_status>
+wait_for_status() {
+  local daemon="$1"
+  local expected="$2"
+  for _ in $(seq 1 50); do
+    if pitchfork status "$daemon" 2>/dev/null | grep -q "Status:.*$expected"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for $daemon to reach status: $expected" >&2
+  pitchfork status "$daemon" 2>&1 >&2 || true
+  return 1
+}
+
+# Get daemon status string (e.g. "running", "stopped", "errored")
+get_daemon_status() {
+  local daemon="$1"
+  pitchfork status "$daemon" 2>/dev/null | grep '^Status:' | sed 's/^Status: *//'
+}
+
+# Get daemon PID (returns empty string if not running)
+get_daemon_pid() {
+  local daemon="$1"
+  local pid
+  pid="$(pitchfork status "$daemon" 2>/dev/null | grep '^PID:' | sed 's/^PID: *//')"
+  [[ "$pid" == "-" || -z "$pid" ]] && echo "" || echo "$pid"
+}
+
+# ---------------------------------------------------------------------------
+# Log helpers
+# ---------------------------------------------------------------------------
+
+# Read raw logs for a daemon (no ANSI, no pager)
+read_logs() {
+  local daemon="$1"
+  pitchfork logs "$daemon" --raw 2>/dev/null
+}
+
+# Wait for a daemon's logs to contain a substring (up to N seconds, default 10)
+# Usage: wait_for_logs <daemon> <needle> [timeout_secs]
+wait_for_logs() {
+  local daemon="$1"
+  local needle="$2"
+  local timeout_secs="${3:-10}"
+  for _ in $(seq 1 "$((timeout_secs * 5))"); do
+    if pitchfork logs "$daemon" --raw 2>/dev/null | grep -q "$needle"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for logs of '$daemon' to contain: $needle" >&2
+  pitchfork logs "$daemon" --raw 2>&1 | tail -20 >&2 || true
+  return 1
+}
+
+# Wait for a daemon to have at least N log lines (up to 10s)
+# Usage: wait_for_log_lines <daemon> <min_lines>
+wait_for_log_lines() {
+  local daemon="$1"
+  local min_lines="$2"
+  for _ in $(seq 1 50); do
+    local count
+    count="$(pitchfork logs "$daemon" --raw 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "$count" -ge "$min_lines" ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "Timed out waiting for $daemon to have $min_lines log lines" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# File helpers
+# ---------------------------------------------------------------------------
+
+# Wait up to 5s for a file to exist
+# Usage: wait_for_file <path>
+wait_for_file() {
+  local file="$1"
+  for _ in $(seq 1 50); do
+    if [[ -e "$file" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for file: $file" >&2
+  return 1
+}
+
+# Wait up to 5s for a file to contain exact content (trimmed)
+# Usage: wait_for_file_content <path> <expected_content>
+wait_for_file_content() {
+  local file="$1"
+  local expected="$2"
+  for _ in $(seq 1 50); do
+    if [[ -e "$file" ]]; then
+      local content
+      content="$(cat "$file" 2>/dev/null)"
+      if [[ "$(echo "$content" | tr -d '[:space:]')" == "$(echo "$expected" | tr -d '[:space:]')" ]]; then
+        return 0
+      fi
+    fi
+    sleep 0.1
+  done
+  echo "Timed out waiting for $file to contain: $expected" >&2
+  [[ -e "$file" ]] && echo "Actual content: $(cat "$file")" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# PTY / terminal helpers
+# ---------------------------------------------------------------------------
+
 # Run a command with a PTY so is_terminal() returns true.
-# This is critical for testing pager-related behavior — without a PTY,
-# stdout is a pipe and the pager is bypassed regardless of flags.
 # Usage: run_with_pty timeout 3 pitchfork logs ticker --tail
 run_with_pty() {
   if [[ "$(uname)" == "Darwin" ]]; then
@@ -54,34 +204,46 @@ run_with_pty() {
   fi
 }
 
-# Wait for a daemon to reach a given status (up to 10s)
-wait_for_status() {
-  local daemon="$1"
-  local expected="$2"
-  for _ in $(seq 1 50); do
-    if pitchfork status "$daemon" 2>/dev/null | grep -q "$expected"; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "Timed out waiting for $daemon to reach status: $expected" >&2
-  return 1
+# ---------------------------------------------------------------------------
+# Port helpers
+# ---------------------------------------------------------------------------
+
+# Kill any process listening on the specified port
+kill_port() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids="$(lsof -ti ":$port" 2>/dev/null)" || true
+    for pid in $pids; do
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser -k "${port}/tcp" 2>/dev/null || true
+  fi
+  sleep 0.1
 }
 
-# Wait for a daemon to have at least N log entries (up to 10s)
-wait_for_log_lines() {
-  local daemon="$1"
-  local min_lines="$2"
-  # Convert filesystem-safe name (e.g. "ns--daemon") to daemon ID (e.g. "ns/daemon")
-  local daemon_id="${daemon//--//}"
-  for _ in $(seq 1 50); do
-    local count
-    count=$(pitchfork logs "$daemon_id" --raw 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$count" -ge "$min_lines" ]]; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  echo "Timed out waiting for $daemon to have $min_lines log lines" >&2
-  return 1
+# Bind to a port to simulate it being in use (background, 5s lifetime)
+# Usage: occupy_port <port>
+occupy_port() {
+  local port="$1"
+  nohup python3 -c "
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', $port))
+s.listen(1)
+time.sleep(5)
+" >/dev/null 2>&1 &
+  echo $!
+}
+
+# ---------------------------------------------------------------------------
+# Path / script helpers
+# ---------------------------------------------------------------------------
+
+# Get absolute path to a test script
+# Usage: script_path fail.sh
+script_path() {
+  echo "$TEST_SCRIPTS_DIR/$1"
 }

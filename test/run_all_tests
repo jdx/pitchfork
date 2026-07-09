@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Parallel test runner for bats e2e tests.
+#
+# Uses bats native --jobs if GNU parallel is available, otherwise falls back
+# to bash background-job parallelism at the file level.
+#
+# Usage:
+#   test/run_all_tests                  # run all tests, parallel
+#   test/run_all_tests test/port.bats   # run specific file(s)
+#   test/run_all_tests --jobs 4         # control parallelism
+#   test/run_all_tests --no-parallel    # sequential
+#   test/run_all_tests --verbose        # show passing test output
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BATS_BIN="$SCRIPT_DIR/bats/bin/bats"
+
+# Parse arguments
+JOBS=""
+NO_PARALLEL=0
+VERBOSE=0
+FILES=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --jobs|-j)
+      JOBS="$2"
+      shift 2
+      ;;
+    --jobs=*)
+      JOBS="${1#*=}"
+      shift
+      ;;
+    --no-parallel)
+      NO_PARALLEL=1
+      shift
+      ;;
+    --verbose|-v)
+      VERBOSE=1
+      shift
+      ;;
+    --help|-h)
+      echo "Usage: $0 [--jobs N] [--no-parallel] [--verbose] [test_file.bats ...]"
+      echo ""
+      echo "Options:"
+      echo "  --jobs N, -j N    Number of parallel jobs (default: auto)"
+      echo "  --no-parallel     Run tests sequentially"
+      echo "  --verbose, -v     Show passing test output"
+      echo "  --help, -h        Show this help"
+      exit 0
+      ;;
+    *)
+      FILES+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Default: run all .bats files in the test directory
+if [[ ${#FILES[@]} -eq 0 ]]; then
+  while IFS= read -r f; do
+    FILES+=("$f")
+  done < <(find "$SCRIPT_DIR" -maxdepth 1 -name '*.bats' | sort)
+fi
+
+# Determine parallelism
+default_jobs="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+if [[ "$default_jobs" -gt 8 ]]; then
+  default_jobs=8
+fi
+if [[ "$default_jobs" -lt 1 ]]; then
+  default_jobs=1
+fi
+E2E_JOBS="${JOBS:-$default_jobs}"
+
+BATS_ARGS=()
+if [[ "$VERBOSE" == "1" ]]; then
+  BATS_ARGS+=("--tap")
+fi
+
+# ---- Sequential mode ----
+if [[ "$NO_PARALLEL" == "1" || "$E2E_JOBS" -le 1 ]]; then
+  exec "$BATS_BIN" "${BATS_ARGS[@]}" "${FILES[@]}"
+fi
+
+# ---- Parallel mode via bats native --jobs (requires GNU parallel or rush) ----
+if command -v parallel >/dev/null 2>&1 || command -v rush >/dev/null 2>&1; then
+  exec "$BATS_BIN" "${BATS_ARGS[@]}" --jobs "$E2E_JOBS" "${FILES[@]}"
+fi
+
+# ---- Fallback: bash background-job parallelism at file level ----
+# Each .bats file runs in its own process. Within a file, tests are sequential.
+# This borrows the scheduling pattern from the mise e2e runner.
+
+LOG_DIR="$(mktemp -d /tmp/pf-bats-logs-XXXXXX)"
+trap 'rm -rf "$LOG_DIR"' EXIT
+
+total=${#FILES[@]}
+declare -a PIDS
+declare -a LOG_FILES
+declare -a STATUS_FILES
+
+start_file() {
+  local index="$1"
+  local file="$2"
+  local log_file="$LOG_DIR/$index.log"
+  local status_file="$LOG_DIR/$index.status"
+
+  (
+    "$BATS_BIN" "${BATS_ARGS[@]}" "$file" >"$log_file" 2>&1
+    echo "$?" >"${status_file}.tmp" && mv "${status_file}.tmp" "$status_file"
+  ) &
+
+  PIDS[$index]=$!
+  LOG_FILES[$index]="$log_file"
+  STATUS_FILES[$index]="$status_file"
+}
+
+# Launch jobs, respecting concurrency limit
+active=0
+next=0
+while [[ $next -lt $total || $active -gt 0 ]]; do
+  # Fill concurrency slots
+  while [[ $active -lt $E2E_JOBS && $next -lt $total ]]; do
+    start_file "$next" "${FILES[$next]}"
+    next=$((next + 1))
+    active=$((active + 1))
+  done
+
+  # Check for completed jobs
+  for ((i = 0; i < next; i++)); do
+    if [[ -n "${STATUS_FILES[i]:-}" && -f "${STATUS_FILES[i]}" && -z "${FINISHED[i]:-}" ]]; then
+      FINISHED[i]=1
+      active=$((active - 1))
+    elif [[ -z "${FINISHED[i]:-}" && -n "${PIDS[i]:-}" ]]; then
+      if ! kill -0 "${PIDS[i]}" 2>/dev/null; then
+        # Process died without writing status
+        echo "1" >"${STATUS_FILES[i]}.tmp" && mv "${STATUS_FILES[i]}.tmp" "${STATUS_FILES[i]}"
+        FINISHED[i]=1
+        active=$((active - 1))
+      fi
+    fi
+  done
+
+  [[ $active -gt 0 ]] && sleep 0.1
+done
+
+# Collect results (print in order)
+overall_status=0
+FAILED=()
+for ((i = 0; i < total; i++)); do
+  test_status="$(cat "${STATUS_FILES[i]}" 2>/dev/null || echo 1)"
+  if [[ "$test_status" != "0" ]]; then
+    overall_status=1
+    FAILED+=("${FILES[$i]}")
+    echo "--- FAILED: ${FILES[$i]} ---" >&2
+    cat "${LOG_FILES[i]}" >&2
+    echo "" >&2
+  else
+    echo "PASS: ${FILES[$i]}" >&2
+    [[ "$VERBOSE" == "1" ]] && cat "${LOG_FILES[i]}"
+  fi
+done
+
+echo "" >&2
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  echo "Failed bats files (${#FAILED[@]}):" >&2
+  for f in "${FAILED[@]}"; do
+    echo "  - $f" >&2
+  done
+else
+  echo "All $total bats file(s) passed." >&2
+fi
+
+exit "$overall_status"
