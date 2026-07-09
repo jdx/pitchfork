@@ -34,6 +34,16 @@ pub struct JsonLogEntry {
     pub timestamp: String,
     pub daemon_id: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub msg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logger: Option<String>,
+    /// Parsed structured fields as a JSON object, or null if the line was
+    /// not structured (plain text).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]

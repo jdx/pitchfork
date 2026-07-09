@@ -1,12 +1,13 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
+use crate::log_parse::ParsedLog;
 use crate::log_store::{
-    ArchiveHook, LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern,
+    ArchiveHook, FieldFilter, LogEntry, LogQuery, LogStore, MessageFilter, escape_like_pattern,
 };
 use chrono::{DateTime, Local, TimeZone};
 use log::error;
 use miette::IntoDiagnostic;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -54,7 +55,16 @@ fn add_regexp_function(conn: &Connection) -> Result<()> {
 /// SQLite-backed log store with WAL mode for concurrent readers.
 pub struct SqliteLogStore {
     conn: Mutex<Connection>,
+    path: PathBuf,
 }
+
+/// Minimum result-set size to trigger parallel query.
+///
+/// Each parallel shard opens a new read-only SQLite connection (~5-12ms
+/// overhead per connection for PRAGMA setup + regexp function registration).
+/// Below this threshold, single-threaded is faster because the connection
+/// overhead exceeds the query savings.
+const PARALLEL_QUERY_THRESHOLD: usize = 200_000;
 
 impl SqliteLogStore {
     /// Open or create the SQLite log store at the given path.
@@ -67,7 +77,8 @@ impl SqliteLogStore {
         add_regexp_function(&conn)?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;",
+             PRAGMA synchronous = NORMAL;
+             PRAGMA mmap_size = 268435456;",
         )
         .into_diagnostic()?;
         conn.execute(
@@ -75,7 +86,11 @@ impl SqliteLogStore {
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 daemon_id   TEXT    NOT NULL,
                 timestamp   INTEGER NOT NULL,
-                message     TEXT    NOT NULL
+                message     TEXT    NOT NULL,
+                level       TEXT,
+                msg         TEXT,
+                logger      TEXT,
+                fields_json TEXT
             );",
             [],
         )
@@ -95,6 +110,33 @@ impl SqliteLogStore {
             [],
         )
         .into_diagnostic()?;
+
+        // Migrate existing tables: add columns introduced in this version.
+        // Must run BEFORE creating indexes that reference the new columns.
+        let existing_cols: Vec<String> = {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(log_entries)")
+                .into_diagnostic()?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(1))
+                .into_diagnostic()?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        for col in ["level", "msg", "logger", "fields_json"] {
+            if !existing_cols.iter().any(|c| c == col) {
+                conn.execute(
+                    &format!("ALTER TABLE log_entries ADD COLUMN {col} TEXT"),
+                    [],
+                )
+                .into_diagnostic()?;
+            }
+        }
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daemon_level_ts ON log_entries(daemon_id, level, timestamp);",
+            [],
+        )
+        .into_diagnostic()?;
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS log_clear_generations (
                 daemon_id TEXT PRIMARY KEY,
@@ -105,6 +147,7 @@ impl SqliteLogStore {
         .into_diagnostic()?;
         Ok(Self {
             conn: Mutex::new(conn),
+            path,
         })
     }
 
@@ -113,6 +156,10 @@ impl SqliteLogStore {
         let daemon_id: String = row.get(1)?;
         let ts_millis: i64 = row.get(2)?;
         let message: String = row.get(3)?;
+        let level: Option<String> = row.get(4)?;
+        let msg: Option<String> = row.get(5)?;
+        let logger: Option<String> = row.get(6)?;
+        let fields_json: Option<String> = row.get(7)?;
         let timestamp = Local
             .timestamp_millis_opt(ts_millis)
             .single()
@@ -122,6 +169,10 @@ impl SqliteLogStore {
             daemon_id,
             timestamp,
             message,
+            level,
+            msg,
+            logger,
+            fields_json,
         })
     }
 
@@ -255,7 +306,7 @@ impl SqliteLogStore {
                     let conn = self.conn.lock().unwrap();
                     let mut stmt = conn
                         .prepare(
-                            "SELECT id, daemon_id, timestamp, message FROM log_entries
+                            "SELECT id, daemon_id, timestamp, message, level, msg, logger, fields_json FROM log_entries
                              WHERE daemon_id = ?1 AND timestamp < ?2
                              ORDER BY timestamp ASC, id ASC
                              LIMIT ?3",
@@ -339,7 +390,7 @@ impl SqliteLogStore {
                     let conn = self.conn.lock().unwrap();
                     let mut stmt = conn
                         .prepare(
-                            "SELECT id, daemon_id, timestamp, message FROM log_entries
+                            "SELECT id, daemon_id, timestamp, message, level, msg, logger, fields_json FROM log_entries
                              WHERE daemon_id = ?1
                              ORDER BY timestamp ASC, id ASC
                              LIMIT ?2",
@@ -473,6 +524,259 @@ impl SqliteLogStore {
         tx.commit().into_diagnostic()?;
         Ok(count)
     }
+
+    /// Build the SQL query string and parameters for the given options.
+    ///
+    /// `id_range` is used by `query_parallel` to shard the query by id range.
+    /// When `Some((start, end))`, adds `id > start AND id <= end` to the WHERE clause.
+    fn build_query_sql(
+        opts: &LogQuery,
+        id_range: Option<(i64, i64)>,
+    ) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+        let mut conditions = Vec::new();
+        let mut query_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if !opts.daemon_ids.is_empty() {
+            let placeholders: Vec<String> = (1..=opts.daemon_ids.len())
+                .map(|i| format!("?{}", i))
+                .collect();
+            conditions.push(format!("daemon_id IN ({})", placeholders.join(", ")));
+            for id in &opts.daemon_ids {
+                query_params.push(Box::new(id.clone()));
+            }
+        }
+
+        if let Some(from) = opts.from {
+            conditions.push(format!("timestamp >= ?{}", query_params.len() + 1));
+            query_params.push(Box::new(from.timestamp_millis()));
+        }
+
+        if let Some(to) = opts.to {
+            conditions.push(format!("timestamp <= ?{}", query_params.len() + 1));
+            query_params.push(Box::new(to.timestamp_millis()));
+        }
+
+        if let Some(after_id) = opts.after_id {
+            conditions.push(format!("id > ?{}", query_params.len() + 1));
+            query_params.push(Box::new(after_id));
+        }
+
+        if let Some((start, end)) = id_range {
+            conditions.push(format!("id > ?{}", query_params.len() + 1));
+            query_params.push(Box::new(start));
+            conditions.push(format!("id <= ?{}", query_params.len() + 1));
+            query_params.push(Box::new(end));
+        }
+
+        let mut message_conditions = Vec::new();
+        for filter in &opts.message_filters {
+            match filter {
+                MessageFilter::Contains {
+                    pattern,
+                    case_sensitive,
+                } => {
+                    let param_index = query_params.len() + 1;
+                    if *case_sensitive {
+                        message_conditions
+                            .push(format!("INSTR(message, ?{idx}) > 0", idx = param_index));
+                        query_params.push(Box::new(pattern.clone()));
+                    } else {
+                        let escaped = escape_like_pattern(pattern);
+                        let param = format!("%{}%", escaped);
+                        message_conditions.push(format!(
+                            "LOWER(message) LIKE LOWER(?{idx}) ESCAPE '\\'",
+                            idx = param_index
+                        ));
+                        query_params.push(Box::new(param));
+                    }
+                }
+                MessageFilter::Regex { pattern } => {
+                    let param_index = query_params.len() + 1;
+                    message_conditions.push(format!("message REGEXP ?{param_index}"));
+                    query_params.push(Box::new(pattern.clone()));
+                }
+            }
+        }
+        if !message_conditions.is_empty() {
+            conditions.push(format!("({})", message_conditions.join(" OR ")));
+        }
+
+        for filter in &opts.field_filters {
+            match filter {
+                FieldFilter::LevelEq(level) => {
+                    let param_index = query_params.len() + 1;
+                    conditions.push(format!("level = ?{param_index}"));
+                    query_params.push(Box::new(level.clone()));
+                }
+                FieldFilter::FieldEq { key, value } => {
+                    let param_index = query_params.len() + 1;
+                    conditions.push(format!(
+                        "json_extract(fields_json, '$.{key}') = ?{param_index}"
+                    ));
+                    query_params.push(Box::new(value.clone()));
+                }
+            }
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let order = if opts.order_desc { "DESC" } else { "ASC" };
+
+        let limit_clause = opts
+            .limit
+            .map(|n| format!("LIMIT {}", n))
+            .unwrap_or_default();
+
+        let columns = if opts.include_structured {
+            "id, daemon_id, timestamp, message, level, msg, logger, fields_json"
+        } else {
+            "id, daemon_id, timestamp, message, NULL, NULL, NULL, NULL"
+        };
+
+        let sql = format!(
+            "SELECT {columns} FROM log_entries {} ORDER BY timestamp {}, id {} {}",
+            where_clause, order, order, limit_clause
+        );
+
+        (sql, query_params)
+    }
+
+    /// Returns true if parallel query is beneficial for the given options.
+    fn should_parallelize(opts: &LogQuery) -> bool {
+        if opts.daemon_ids.len() != 1 {
+            return false;
+        }
+        // Skip parallel for incremental tail polls (after_id set) — they
+        // return small batches and the connection overhead dominates.
+        if opts.after_id.is_some() {
+            return false;
+        }
+        let limit = opts.limit.unwrap_or(usize::MAX);
+        if limit < PARALLEL_QUERY_THRESHOLD {
+            return false;
+        }
+        std::thread::available_parallelism()
+            .map(|n| n.get() >= 2)
+            .unwrap_or(false)
+    }
+
+    /// Query using multiple read-only connections, sharded by id range.
+    ///
+    /// For a single daemon, id order ≈ timestamp order (timestamps are
+    /// assigned in insertion order within a single writer). This lets us
+    /// shard by contiguous id ranges and merge by concatenating shards in
+    /// the right order, without a global sort.
+    fn query_parallel(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
+        // Cap parallelism: each shard opens a new read-only connection with
+        // PRAGMA setup + regexp function registration (~5-12ms each). Beyond
+        // 2 threads the connection overhead dominates the query savings for
+        // typical log store sizes.
+        let max_threads = 2;
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(max_threads))
+            .unwrap_or(1);
+
+        let max_id: Option<i64> = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT MAX(id) FROM log_entries WHERE daemon_id = ?1",
+                params![&opts.daemon_ids[0]],
+                |row| row.get(0),
+            )
+            .ok()
+        };
+
+        let Some(max_id) = max_id else {
+            return Ok(Vec::new());
+        };
+        if max_id == 0 {
+            return Ok(Vec::new());
+        }
+
+        let shard_size = (max_id as usize).div_ceil(num_threads);
+        let path = self.path.clone();
+        let opts = opts.clone();
+        let needs_regexp = opts
+            .message_filters
+            .iter()
+            .any(|f| matches!(f, MessageFilter::Regex { .. }));
+
+        let shards: Vec<Result<Vec<LogEntry>>> = std::thread::scope(|s| {
+            (0..num_threads)
+                .map(|i| {
+                    let start = (i * shard_size) as i64;
+                    let end = if i == num_threads - 1 {
+                        max_id
+                    } else {
+                        ((i + 1) * shard_size) as i64
+                    };
+                    let opts = opts.clone();
+                    let path = path.clone();
+                    s.spawn(move || -> Result<Vec<LogEntry>> {
+                        let conn = Connection::open_with_flags(
+                            &path,
+                            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                        )
+                        .into_diagnostic()?;
+                        conn.execute_batch(
+                            "PRAGMA mmap_size = 268435456;
+                             PRAGMA query_only = 1;",
+                        )
+                        .into_diagnostic()?;
+                        if needs_regexp {
+                            add_regexp_function(&conn)?;
+                        }
+
+                        let (sql, query_params) = Self::build_query_sql(&opts, Some((start, end)));
+                        Self::execute_built_query(&conn, &sql, &query_params)
+                    })
+                })
+                .map(|h| h.join().unwrap())
+                .collect()
+        });
+
+        let mut merged = Vec::new();
+        if opts.order_desc {
+            for shard in shards.into_iter().rev() {
+                merged.extend(shard?);
+            }
+        } else {
+            for shard in shards {
+                merged.extend(shard?);
+            }
+        }
+
+        if let Some(limit) = opts.limit {
+            if merged.len() > limit {
+                merged.truncate(limit);
+            }
+        }
+
+        Ok(merged)
+    }
+
+    /// Execute a built SQL query and collect results into LogEntry.
+    fn execute_built_query(
+        conn: &Connection,
+        sql: &str,
+        query_params: &[Box<dyn rusqlite::ToSql>],
+    ) -> Result<Vec<LogEntry>> {
+        let mut stmt = conn.prepare(sql).into_diagnostic()?;
+        let params_ref: Vec<&dyn rusqlite::ToSql> =
+            query_params.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt
+            .query_map(params_ref.as_slice(), Self::row_to_entry)
+            .into_diagnostic()?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row.into_diagnostic()?);
+        }
+        Ok(entries)
+    }
 }
 
 impl LogStore for SqliteLogStore {
@@ -518,118 +822,68 @@ impl LogStore for SqliteLogStore {
         Ok(())
     }
 
-    fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
+    fn append_structured(&self, daemon_id: &DaemonId, parsed: &ParsedLog) -> Result<()> {
+        let ts = Local::now().timestamp_millis();
+        let id = daemon_id.qualified();
+
         let conn = self.conn.lock().unwrap();
-        let mut conditions = Vec::new();
-        let mut query_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-        if !opts.daemon_ids.is_empty() {
-            let placeholders: Vec<String> = (1..=opts.daemon_ids.len())
-                .map(|i| format!("?{}", i))
-                .collect();
-            conditions.push(format!("daemon_id IN ({})", placeholders.join(", ")));
-            for id in &opts.daemon_ids {
-                query_params.push(Box::new(id.clone()));
-            }
-        }
-
-        if let Some(from) = opts.from {
-            conditions.push(format!("timestamp >= ?{}", query_params.len() + 1));
-            query_params.push(Box::new(from.timestamp_millis()));
-        }
-
-        if let Some(to) = opts.to {
-            conditions.push(format!("timestamp <= ?{}", query_params.len() + 1));
-            query_params.push(Box::new(to.timestamp_millis()));
-        }
-
-        if let Some(after_id) = opts.after_id {
-            conditions.push(format!("id > ?{}", query_params.len() + 1));
-            query_params.push(Box::new(after_id));
-        }
-
-        let mut message_conditions = Vec::new();
-        for filter in &opts.message_filters {
-            match filter {
-                MessageFilter::Contains {
-                    pattern,
-                    case_sensitive,
-                } => {
-                    let param_index = query_params.len() + 1;
-                    if *case_sensitive {
-                        // SQLite LIKE is ASCII-case-insensitive by default, so use
-                        // INSTR to enforce literal case-sensitive substring matches.
-                        // INSTR performs a plain byte-level substring search, so no
-                        // LIKE escaping or % delimiters should be added.
-                        message_conditions
-                            .push(format!("INSTR(message, ?{idx}) > 0", idx = param_index));
-                        query_params.push(Box::new(pattern.clone()));
-                    } else {
-                        let escaped = escape_like_pattern(pattern);
-                        let param = format!("%{}%", escaped);
-                        message_conditions.push(format!(
-                            "LOWER(message) LIKE LOWER(?{idx}) ESCAPE '\\'",
-                            idx = param_index
-                        ));
-                        query_params.push(Box::new(param));
-                    }
-                }
-                MessageFilter::Regex { pattern } => {
-                    let param_index = query_params.len() + 1;
-                    message_conditions.push(format!("message REGEXP ?{param_index}"));
-                    query_params.push(Box::new(pattern.clone()));
-                }
-            }
-        }
-        if !message_conditions.is_empty() {
-            conditions.push(format!("({})", message_conditions.join(" OR ")));
-        }
-
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conditions.join(" AND "))
-        };
-
-        let order = if opts.order_desc { "DESC" } else { "ASC" };
-
-        let limit_clause = opts
-            .limit
-            .map(|n| format!("LIMIT {}", n))
-            .unwrap_or_default();
-
-        let sql = format!(
-            "SELECT id, daemon_id, timestamp, message FROM log_entries {} ORDER BY timestamp {}, id {} {}",
-            where_clause, order, order, limit_clause
-        );
-
-        let mut stmt = conn.prepare(&sql).into_diagnostic()?;
-        let params_ref: Vec<&dyn rusqlite::ToSql> =
-            query_params.iter().map(|p| p.as_ref()).collect();
-        let rows = stmt
-            .query_map(params_ref.as_slice(), |row| {
-                let id: i64 = row.get(0)?;
-                let daemon_id: String = row.get(1)?;
-                let ts_millis: i64 = row.get(2)?;
-                let message: String = row.get(3)?;
-                let timestamp = Local
-                    .timestamp_millis_opt(ts_millis)
-                    .single()
-                    .unwrap_or_else(Local::now);
-                Ok(LogEntry {
-                    id,
-                    daemon_id,
-                    timestamp,
-                    message,
-                })
-            })
+        let _ = conn
+            .execute(
+                "INSERT INTO log_entries (daemon_id, timestamp, message, level, msg, logger, fields_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![id, ts, parsed.message, parsed.level, parsed.msg, parsed.logger, parsed.fields_json],
+            )
             .into_diagnostic()?;
+        Ok(())
+    }
 
-        let mut entries = Vec::new();
-        for row in rows {
-            entries.push(row.into_diagnostic()?);
+    fn append_structured_batch(&self, daemon_id: &DaemonId, entries: &[ParsedLog]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
         }
-        Ok(entries)
+        let base_ts = Local::now().timestamp_millis();
+        let id = daemon_id.qualified();
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().into_diagnostic()?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO log_entries (daemon_id, timestamp, message, level, msg, logger, fields_json) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                )
+                .into_diagnostic()?;
+            for (idx, entry) in entries.iter().enumerate() {
+                let ts = base_ts + idx as i64;
+                stmt.execute(params![
+                    id,
+                    ts,
+                    entry.message,
+                    entry.level,
+                    entry.msg,
+                    entry.logger,
+                    entry.fields_json
+                ])
+                .into_diagnostic()?;
+            }
+        }
+        tx.commit().into_diagnostic()?;
+        Ok(())
+    }
+
+    fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
+        // Delegate to parallel path for large single-daemon queries.
+        if Self::should_parallelize(opts) && self.path.as_os_str() != ":memory:" {
+            if let Ok(entries) = self.query_parallel(opts) {
+                return Ok(entries);
+            }
+            // Fall back to single-threaded on parallel failure.
+        }
+
+        // Single-threaded path.
+        let conn = self.conn.lock().unwrap();
+        let (sql, query_params) = Self::build_query_sql(opts, None);
+        Self::execute_built_query(&conn, &sql, &query_params)
     }
 
     fn tail(&self, daemon_id: &DaemonId, after_id: Option<i64>) -> Result<Vec<LogEntry>> {
@@ -641,6 +895,8 @@ impl LogStore for SqliteLogStore {
             order_desc: false,
             after_id,
             message_filters: Vec::new(),
+            field_filters: Vec::new(),
+            include_structured: false,
         })
     }
 

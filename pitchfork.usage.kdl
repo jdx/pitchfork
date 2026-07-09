@@ -165,6 +165,18 @@ cmd logs help="Displays logs for daemon(s)" {
         arg <REGEX>
     }
     flag --case-sensitive help="Make --grep matching case-sensitive"
+    flag --level help="Filter by log level (error, warn, info, debug, trace)" {
+        long_help "Filter by log level (error, warn, info, debug, trace)\n\nMatches the normalized level extracted from structured log lines. Only effective for daemons with log_format json or logfmt."
+        arg <LEVEL>
+    }
+    flag --field help="Filter by structured field value (KEY=VALUE, can be repeated)" var=#true {
+        long_help "Filter by structured field value (KEY=VALUE, can be repeated)\n\nExtracts the value from fields_json using json_extract($.KEY). Multiple --field options are combined with AND."
+        arg "<KEY=VALUE>"
+    }
+    flag --jq help="Filter log entries with a jq expression" {
+        long_help "Filter log entries with a jq expression\n\nEach log entry is serialized as a JSON object with fields: timestamp, daemon_id, message, level, msg, logger, fields. Entries for which the expression produces a truthy value are shown."
+        arg <EXPR>
+    }
     flag --no-timestamp help="Omit timestamps from log output"
     arg "[ID]…" help="Show only logs for the specified daemon(s)" required=#false var=#true
 }

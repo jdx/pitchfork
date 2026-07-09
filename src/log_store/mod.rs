@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
+use crate::log_parse::ParsedLog;
 use chrono::{DateTime, Local};
 
 /// A single log entry.
@@ -9,6 +10,16 @@ pub struct LogEntry {
     pub daemon_id: String,
     pub timestamp: DateTime<Local>,
     pub message: String,
+    /// Normalized log level (`error`/`warn`/`info`/`debug`/`trace`), or `None`
+    /// for unstructured log lines.
+    pub level: Option<String>,
+    /// Extracted human-readable message (from `msg`/`message`/`event`/...).
+    pub msg: Option<String>,
+    /// Logger name (from `logger`/`name`/`component`/...).
+    pub logger: Option<String>,
+    /// The full parsed JSON object as a string, for `json_extract` queries.
+    /// `None` for plain-text lines that were not parsed.
+    pub fields_json: Option<String>,
 }
 
 /// A filter applied to the message text of log entries.
@@ -21,6 +32,15 @@ pub enum MessageFilter {
     },
     /// Regular expression match using SQLite REGEXP.
     Regex { pattern: String },
+}
+
+/// A filter applied to structured log fields.
+#[derive(Debug, Clone)]
+pub enum FieldFilter {
+    /// Match entries with a specific normalized level.
+    LevelEq(String),
+    /// Match entries where `json_extract(fields_json, '$.key') = value`.
+    FieldEq { key: String, value: String },
 }
 
 impl MessageFilter {
@@ -59,6 +79,12 @@ pub struct LogQuery {
     pub after_id: Option<i64>,
     /// Filters applied to the message text. Multiple filters are combined with OR.
     pub message_filters: Vec<MessageFilter>,
+    /// Filters applied to structured fields. Multiple filters are combined with AND.
+    pub field_filters: Vec<FieldFilter>,
+    /// Whether to SELECT the structured columns (level, msg, logger, fields_json).
+    /// When false, those fields are NULL in the result, avoiding unnecessary
+    /// string allocations for callers that only need the raw message.
+    pub include_structured: bool,
 }
 
 /// Escape special LIKE wildcard characters so user-supplied substrings are matched literally.
@@ -103,12 +129,31 @@ impl ArchiveHook {
 
 /// Unified interface for log storage and retrieval.
 pub trait LogStore: Send + Sync {
-    /// Append a single log line.
+    /// Append a single log line (unstructured).
     fn append(&self, daemon_id: &DaemonId, message: &str) -> Result<()>;
+
+    /// Append a single parsed log line with structured fields.
+    ///
+    /// The default implementation discards structured fields and falls back
+    /// to `append`.
+    fn append_structured(&self, daemon_id: &DaemonId, parsed: &ParsedLog) -> Result<()> {
+        self.append(daemon_id, &parsed.message)
+    }
+
+    /// Append multiple parsed log lines in a single transaction.
+    ///
+    /// The default implementation calls `append_structured` for each line.
+    fn append_structured_batch(&self, daemon_id: &DaemonId, entries: &[ParsedLog]) -> Result<()> {
+        for entry in entries {
+            self.append_structured(daemon_id, entry)?;
+        }
+        Ok(())
+    }
 
     /// Append multiple log lines in a single transaction.
     ///
     /// The default implementation falls back to calling `append` for each line.
+    #[allow(dead_code)]
     fn append_batch(&self, daemon_id: &DaemonId, messages: &[String]) -> Result<()> {
         for msg in messages {
             self.append(daemon_id, msg)?;
@@ -166,6 +211,8 @@ pub trait LogStore: Send + Sync {
             order_desc: true,
             after_id: None,
             message_filters: Vec::new(),
+            field_filters: Vec::new(),
+            include_structured: false,
         })?;
         Ok(entries.first().map(|e| e.id))
     }

@@ -123,6 +123,9 @@ pub struct Daemon {
     /// Archive hook command invoked before retention prunes this daemon's logs.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub archive_hook: Option<String>,
+    /// Log format for this daemon.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub log_format: Option<String>,
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
@@ -193,6 +196,9 @@ pub struct RunOptions {
     /// Archive hook command invoked before retention prunes this daemon's logs.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub archive_hook: Option<String>,
+    /// Log format for this daemon: `json`, `logfmt`, `auto`, or `text`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub log_format: Option<String>,
     /// Hook triggered when the daemon produces matching output
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub on_output_hook: Option<crate::pitchfork_toml::OnOutputHook>,
@@ -256,6 +262,7 @@ impl Daemon {
             cpu_limit: self.cpu_limit,
             stop_signal: self.stop_signal,
             archive_hook: self.archive_hook.clone(),
+            log_format: self.log_format.clone(),
             on_output_hook,
             pty: self.pty,
         }

@@ -1,7 +1,7 @@
 use crate::cli::json_output::{JsonLogEntry, print_json};
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
-use crate::log_store::{LogQuery, LogStore, MessageFilter};
+use crate::log_store::{FieldFilter, LogQuery, LogStore, MessageFilter};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::state_file::StateFile;
@@ -12,6 +12,7 @@ use console;
 use itertools::Itertools;
 use miette::IntoDiagnostic;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -53,10 +54,10 @@ impl PagerConfig {
 
 /// Format a single log line for output.
 /// When `single_daemon` is true, omits the daemon ID from the output.
-/// `id_width` is the display width used to pad the daemon name column
-/// so messages line up vertically across different daemon names.
-/// When `strip_ansi` is true, strips ANSI escape codes from the message.
-fn format_log_line(
+/// Write a formatted log line directly to `w`, avoiding intermediate String allocation.
+#[allow(clippy::too_many_arguments)]
+fn write_log_line(
+    w: &mut dyn Write,
     date: &str,
     id: &str,
     msg: &str,
@@ -64,28 +65,29 @@ fn format_log_line(
     id_width: usize,
     strip_ansi: bool,
     show_timestamp: bool,
-) -> String {
+) -> io::Result<()> {
     let msg = if strip_ansi {
-        console::strip_ansi_codes(msg).to_string()
+        console::strip_ansi_codes(msg)
     } else {
-        msg.to_string()
+        std::borrow::Cow::Borrowed(msg)
     };
     if single_daemon {
         if show_timestamp {
-            format!("{} {}", ndim(date), msg)
+            write!(w, "{} {}", ndim(date), msg)?;
         } else {
-            msg
+            w.write_all(msg.as_bytes())?;
         }
     } else {
         let colors_on = !strip_ansi && console::colors_enabled();
         let colored = dimmed_id(id, colors_on);
         let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
         if show_timestamp {
-            format!("{}  {} {}", padded, ndim(date), msg)
+            write!(w, "{}  {} {}", padded, ndim(date), msg)?;
         } else {
-            format!("{}  {}", padded, msg)
+            write!(w, "{}  {}", padded, msg)?;
         }
     }
+    w.write_all(b"\n")
 }
 
 /// Return a dimmed, colorized daemon ID string for display.
@@ -219,6 +221,28 @@ pub struct Logs {
     #[clap(long)]
     case_sensitive: bool,
 
+    /// Filter by log level (error, warn, info, debug, trace)
+    ///
+    /// Matches the normalized level extracted from structured log lines.
+    /// Only effective for daemons with log_format json or logfmt.
+    #[clap(long)]
+    level: Option<String>,
+
+    /// Filter by structured field value (KEY=VALUE, can be repeated)
+    ///
+    /// Extracts the value from fields_json using json_extract($.KEY).
+    /// Multiple --field options are combined with AND.
+    #[clap(long, value_name = "KEY=VALUE")]
+    field: Vec<String>,
+
+    /// Filter log entries with a jq expression
+    ///
+    /// Each log entry is serialized as a JSON object with fields:
+    /// timestamp, daemon_id, message, level, msg, logger, fields.
+    /// Entries for which the expression produces a truthy value are shown.
+    #[clap(long, value_name = "EXPR")]
+    jq: Option<String>,
+
     /// Omit timestamps from log output
     #[clap(long)]
     no_timestamp: bool,
@@ -251,28 +275,49 @@ impl Logs {
         };
 
         let message_filters = self.build_message_filters()?;
+        let field_filters = self.build_field_filters()?;
+
+        // Compile jq filter early so parse errors surface before any query.
+        let jq_filter = match self.jq.as_deref() {
+            Some(expr) => Some(crate::log_jq::JqFilter::new(expr)?),
+            None => None,
+        };
 
         if self.json {
-            return self.output_json(&resolved_ids, from, to, message_filters);
+            return self.output_json(
+                &resolved_ids,
+                from,
+                to,
+                message_filters,
+                field_filters,
+                jq_filter.as_ref(),
+            );
         }
 
         let single_daemon = resolved_ids.len() == 1;
         let show_timestamp = settings().logs.timestamp && !self.no_timestamp;
-        let log_lines = self.fetch_log_lines(&resolved_ids, from, to, message_filters.clone())?;
         let has_time_filter = from.is_some() || to.is_some();
-        self.output_logs(
-            log_lines,
+
+        self.query_and_output(
+            &resolved_ids,
+            from,
+            to,
+            message_filters.clone(),
+            field_filters.clone(),
+            jq_filter.as_ref(),
             single_daemon,
             has_time_filter,
-            self.tail,
             show_timestamp,
         )?;
+
         if self.tail {
             tail_logs(
                 &resolved_ids,
                 single_daemon,
                 true,
                 message_filters,
+                field_filters,
+                jq_filter.as_ref(),
                 show_timestamp,
             )
             .await?;
@@ -305,57 +350,156 @@ impl Logs {
         Ok(filters)
     }
 
-    fn fetch_log_lines(
+    fn build_field_filters(&self) -> Result<Vec<FieldFilter>> {
+        let mut filters = Vec::new();
+        if let Some(level) = self.level.as_ref() {
+            // Normalize the user-supplied level so "ERROR", "Error", "fatal"
+            // all match the stored canonical form.
+            let normalized = crate::log_parse::normalize_level_str(level).ok_or_else(|| {
+                miette::miette!(
+                    "invalid level '{level}'; expected one of: \
+                         error, err, fatal, critical, panic, alert, emerg, \
+                         warn, warning, info, inf, information, notice, \
+                         debug, dbg, trace, trc"
+                )
+            })?;
+            filters.push(FieldFilter::LevelEq(normalized));
+        }
+        for pair in &self.field {
+            let (key, value) = pair
+                .split_once('=')
+                .ok_or_else(|| miette::miette!("--field expects KEY=VALUE, got: {pair}"))?;
+            if key.is_empty() {
+                miette::bail!("--field key cannot be empty: {pair}");
+            }
+            // Whitelist key characters to prevent SQL injection via
+            // json_extract path interpolation.
+            if !key
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+            {
+                miette::bail!(
+                    "--field key may only contain alphanumeric, underscore, and dot; got: {key}"
+                );
+            }
+            filters.push(FieldFilter::FieldEq {
+                key: key.to_string(),
+                value: value.to_string(),
+            });
+        }
+        Ok(filters)
+    }
+
+    /// Query log entries and stream them directly to output, bypassing the
+    /// intermediate `Vec<(String, String, String)>` layer. This eliminates
+    /// 3 String allocations per row (timestamp format, daemon_id clone,
+    /// message clone) by borrowing directly from `LogEntry` and reusing a
+    /// single date buffer.
+    #[allow(clippy::too_many_arguments)]
+    fn query_and_output(
         &self,
         resolved_ids: &[DaemonId],
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
         message_filters: Vec<MessageFilter>,
-    ) -> Result<Vec<(String, String, String)>> {
+        field_filters: Vec<FieldFilter>,
+        jq_filter: Option<&crate::log_jq::JqFilter>,
+        single_daemon: bool,
+        has_time_filter: bool,
+        show_timestamp: bool,
+    ) -> Result<()> {
         let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
-        let has_time_filter = from.is_some() || to.is_some();
 
         let opts = LogQuery {
-            daemon_ids: daemon_ids.clone(),
+            daemon_ids,
             from,
             to,
             limit: if !has_time_filter { self.n } else { None },
             order_desc: !has_time_filter,
             after_id: None,
             message_filters,
+            field_filters,
+            include_structured: jq_filter.is_some(),
         };
-        let entries = LOG_STORE.query(&opts)?;
-        let log_lines: Vec<(String, String, String)> = entries
-            .into_iter()
-            .map(|e| {
-                let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
-                (ts, e.daemon_id, e.message)
-            })
-            .collect();
+        let mut entries = LOG_STORE.query(&opts)?;
 
-        let log_lines = if has_time_filter {
+        // Apply jq filter if present.
+        if let Some(jq) = jq_filter {
+            entries = jq.filter(entries);
+        }
+
+        // Apply time-filter take-last-N or reverse for chronological display.
+        if has_time_filter {
             if let Some(n) = self.n {
-                let len = log_lines.len();
+                let len = entries.len();
                 if len > n {
-                    log_lines.into_iter().skip(len - n).collect_vec()
-                } else {
-                    log_lines
+                    entries = entries.split_off(len - n);
                 }
-            } else {
-                log_lines
-            }
-        } else if let Some(n) = self.n {
-            let len = log_lines.len();
-            if len > n {
-                log_lines.into_iter().skip(len - n).rev().collect_vec()
-            } else {
-                log_lines.into_iter().rev().collect_vec()
             }
         } else {
-            log_lines.into_iter().rev().collect_vec()
+            entries.reverse();
+        }
+
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let id_width = entries.iter().map(|e| e.daemon_id.len()).max().unwrap_or(0);
+        let strip_ansi = self.raw || !console::colors_enabled();
+        let use_pager = !self.tail && !self.no_pager && should_use_pager(entries.len());
+
+        // Reusable buffer for timestamp formatting — avoids N allocations.
+        let mut date_buf = String::with_capacity(19);
+
+        let mut write_entries = |w: &mut dyn Write| -> io::Result<()> {
+            for entry in &entries {
+                date_buf.clear();
+                write!(date_buf, "{}", entry.timestamp.format("%Y-%m-%d %H:%M:%S"))
+                    .map_err(io::Error::other)?;
+                write_log_line(
+                    w,
+                    &date_buf,
+                    &entry.daemon_id,
+                    &entry.message,
+                    single_daemon,
+                    id_width,
+                    strip_ansi,
+                    show_timestamp,
+                )?;
+            }
+            Ok(())
         };
 
-        Ok(log_lines)
+        if use_pager {
+            let pager_config = PagerConfig::new(!has_time_filter);
+            match pager_config.spawn_piped() {
+                Ok(mut child) => {
+                    if let Some(stdin) = child.stdin.as_mut() {
+                        if let Err(e) = write_entries(stdin) {
+                            debug!("pager write error: {e}");
+                        }
+                        let _ = child.wait();
+                    } else {
+                        debug!("Failed to get pager stdin, falling back to direct output");
+                        let stdout = io::stdout();
+                        let mut buf = io::BufWriter::new(stdout.lock());
+                        write_entries(&mut buf).into_diagnostic()?;
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to spawn pager: {e}, falling back to direct output");
+                    let stdout = io::stdout();
+                    let mut buf = io::BufWriter::new(stdout.lock());
+                    write_entries(&mut buf).into_diagnostic()?;
+                }
+            }
+        } else {
+            let stdout = io::stdout();
+            let mut buf = io::BufWriter::new(stdout.lock());
+            write_entries(&mut buf).into_diagnostic()?;
+        }
+
+        Ok(())
     }
 
     fn output_json(
@@ -364,158 +508,69 @@ impl Logs {
         from: Option<DateTime<Local>>,
         to: Option<DateTime<Local>>,
         message_filters: Vec<MessageFilter>,
+        field_filters: Vec<FieldFilter>,
+        jq_filter: Option<&crate::log_jq::JqFilter>,
     ) -> Result<()> {
-        let log_lines = self.fetch_log_lines(resolved_ids, from, to, message_filters)?;
+        let daemon_ids: Vec<String> = resolved_ids.iter().map(|id| id.qualified()).collect();
+        let has_time_filter = from.is_some() || to.is_some();
 
-        let json_entries: Vec<JsonLogEntry> = log_lines
+        let opts = LogQuery {
+            daemon_ids,
+            from,
+            to,
+            limit: if !has_time_filter { self.n } else { None },
+            order_desc: !has_time_filter,
+            after_id: None,
+            message_filters,
+            field_filters,
+            include_structured: true,
+        };
+        let entries = LOG_STORE.query(&opts)?;
+
+        // Apply jq filter if present.
+        let entries = match jq_filter {
+            Some(jq) => jq.filter(entries),
+            None => entries,
+        };
+
+        // Reverse only when the SQL query returned DESC (no time filter),
+        // to produce chronological (oldest-first) output. With a time
+        // filter, the query is ASC and already chronological.
+        let mut entries: Vec<_> = if has_time_filter {
+            entries
+        } else {
+            entries.into_iter().rev().collect()
+        };
+
+        // When a time filter is active, the SQL query returned all matching
+        // entries without LIMIT. Trim to the last N here.
+        if has_time_filter
+            && let Some(n) = self.n
+            && entries.len() > n
+        {
+            entries = entries.split_off(entries.len() - n);
+        }
+
+        let json_entries: Vec<JsonLogEntry> = entries
             .into_iter()
-            .map(|(timestamp, daemon_id, message)| JsonLogEntry {
-                timestamp,
-                daemon_id,
-                message: console::strip_ansi_codes(&message).to_string(),
+            .map(|e| {
+                let fields = e
+                    .fields_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+                JsonLogEntry {
+                    timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    daemon_id: e.daemon_id,
+                    message: console::strip_ansi_codes(&e.message).to_string(),
+                    level: e.level,
+                    msg: e.msg,
+                    logger: e.logger,
+                    fields,
+                }
             })
             .collect();
 
         print_json(&json_entries)
-    }
-
-    fn output_logs(
-        &self,
-        log_lines: Vec<(String, String, String)>,
-        single_daemon: bool,
-        has_time_filter: bool,
-        force_no_pager: bool,
-        show_timestamp: bool,
-    ) -> Result<()> {
-        if log_lines.is_empty() {
-            return Ok(());
-        }
-
-        let id_width = log_lines
-            .iter()
-            .map(|(_, id, _)| id.len())
-            .max()
-            .unwrap_or(0);
-        let strip_ansi = self.raw || !console::colors_enabled();
-
-        if self.raw {
-            for (date, id, msg) in log_lines {
-                let line = format_log_line(
-                    &date,
-                    &id,
-                    &msg,
-                    single_daemon,
-                    id_width,
-                    strip_ansi,
-                    show_timestamp,
-                );
-                println!("{line}");
-            }
-            return Ok(());
-        }
-
-        let use_pager = !force_no_pager && !self.no_pager && should_use_pager(log_lines.len());
-
-        if use_pager {
-            self.output_with_pager(
-                log_lines,
-                single_daemon,
-                id_width,
-                has_time_filter,
-                strip_ansi,
-                show_timestamp,
-            )?;
-        } else {
-            for (date, id, msg) in log_lines {
-                println!(
-                    "{}",
-                    format_log_line(
-                        &date,
-                        &id,
-                        &msg,
-                        single_daemon,
-                        id_width,
-                        strip_ansi,
-                        show_timestamp,
-                    )
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    fn output_with_pager(
-        &self,
-        log_lines: Vec<(String, String, String)>,
-        single_daemon: bool,
-        id_width: usize,
-        has_time_filter: bool,
-        strip_ansi: bool,
-        show_timestamp: bool,
-    ) -> Result<()> {
-        // When time filter is used, start at top; otherwise start at end
-        let pager_config = PagerConfig::new(!has_time_filter);
-
-        match pager_config.spawn_piped() {
-            Ok(mut child) => {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    for (date, id, msg) in log_lines {
-                        let line = format!(
-                            "{}\n",
-                            format_log_line(
-                                &date,
-                                &id,
-                                &msg,
-                                single_daemon,
-                                id_width,
-                                strip_ansi,
-                                show_timestamp,
-                            )
-                        );
-                        if stdin.write_all(line.as_bytes()).is_err() {
-                            break;
-                        }
-                    }
-                    let _ = child.wait();
-                } else {
-                    debug!("Failed to get pager stdin, falling back to direct output");
-                    for (date, id, msg) in log_lines {
-                        println!(
-                            "{}",
-                            format_log_line(
-                                &date,
-                                &id,
-                                &msg,
-                                single_daemon,
-                                id_width,
-                                strip_ansi,
-                                show_timestamp,
-                            )
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                debug!("Failed to spawn pager: {e}, falling back to direct output");
-                for (date, id, msg) in log_lines {
-                    println!(
-                        "{}",
-                        format_log_line(
-                            &date,
-                            &id,
-                            &msg,
-                            single_daemon,
-                            id_width,
-                            strip_ansi,
-                            show_timestamp,
-                        )
-                    );
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -668,6 +723,8 @@ pub async fn tail_logs(
     single_daemon: bool,
     start_from_end: bool,
     message_filters: Vec<MessageFilter>,
+    field_filters: Vec<FieldFilter>,
+    jq_filter: Option<&crate::log_jq::JqFilter>,
     show_timestamp: bool,
 ) -> Result<()> {
     // Poll SQLite log store for new entries since last known row id.
@@ -711,32 +768,42 @@ pub async fn tail_logs(
                 order_desc: false,
                 after_id,
                 message_filters: message_filters.clone(),
+                field_filters: field_filters.clone(),
+                include_structured: jq_filter.is_some(),
             }) {
-                Ok(entries) => {
+                Ok(raw_entries) => {
+                    // Save the max id from SQL results (before jq filtering)
+                    // so the cursor always advances past evaluated rows, even
+                    // when jq rejects all of them.
+                    let last_raw_id = raw_entries.last().map(|e| e.id);
+
+                    // Apply jq filter if present.
+                    let entries = match jq_filter {
+                        Some(jq) => jq.filter(raw_entries),
+                        None => raw_entries,
+                    };
                     for entry in &entries {
                         let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
                         out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
                     }
                     // Advance the cursor past rows already evaluated.
                     //
-                    // When the query returned entries, entries.last().id is the
-                    // highest row id examined (within the same lock hold as the
-                    // query, so no race with concurrent append_batch). Using it
-                    // directly avoids a separate last_id call that could skip
-                    // matching rows written between the two lock acquisitions.
+                    // Use the max id from the raw SQL result (not the jq-filtered
+                    // subset) so the cursor advances past all rows the database
+                    // returned, preventing re-evaluation on every poll.
                     //
                     // When the filter is active and no entries matched, fall
                     // back to last_id to advance past non-matching rows so they
                     // are not re-evaluated on every poll. The narrow race here
                     // (a matching row written between query and last_id) is
                     // accepted as the cost of bounded re-scanning.
-                    let new_cursor = if !entries.is_empty() {
-                        entries.last().map(|e| e.id)
-                    } else if message_filters.is_empty() {
-                        // No filter and no entries: nothing to advance past.
-                        None
-                    } else {
+                    let has_sql_filter = !message_filters.is_empty() || !field_filters.is_empty();
+                    let new_cursor = if let Some(id) = last_raw_id {
+                        Some(id)
+                    } else if has_sql_filter || jq_filter.is_some() {
                         LOG_STORE.last_id(id).ok().flatten()
+                    } else {
+                        None
                     };
                     if let Some(last_id) = new_cursor {
                         states.insert(id.qualified(), last_id);
@@ -749,23 +816,29 @@ pub async fn tail_logs(
         }
 
         if !out.is_empty() {
-            let out = out
-                .into_iter()
-                .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
-                .collect_vec();
-            for (date, name, msg) in out {
-                println!(
-                    "{}",
-                    format_log_line(
-                        &date,
-                        &name,
-                        &msg,
-                        single_daemon,
-                        id_width,
-                        strip_ansi,
-                        show_timestamp,
-                    )
-                );
+            // Single-daemon: entries are already in chronological order from
+            // the SQL query (order_desc: false). Skip the sort.
+            let out: Vec<_> = if single_daemon {
+                out
+            } else {
+                out.into_iter()
+                    .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
+                    .collect()
+            };
+            let stdout = io::stdout();
+            let mut buf = io::BufWriter::new(stdout.lock());
+            for (date, name, msg) in &out {
+                write_log_line(
+                    &mut buf,
+                    date,
+                    name,
+                    msg,
+                    single_daemon,
+                    id_width,
+                    strip_ansi,
+                    show_timestamp,
+                )
+                .into_diagnostic()?;
             }
         }
     }
@@ -987,6 +1060,8 @@ pub fn collect_startup_logs(
         order_desc: false,
         after_id: None,
         message_filters: Vec::new(),
+        field_filters: Vec::new(),
+        include_structured: false,
     })?;
     let log_lines = entries
         .into_iter()

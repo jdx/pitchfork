@@ -94,6 +94,102 @@ pitchfork logs api --since "2024-01-15 09:00" --until "2024-01-15 12:00"
 pitchfork logs api --since 1h -n 20
 ```
 
+## Structured Log Parsing
+
+Pitchfork can automatically parse structured logs produced by your daemons. When a log line is written in JSON or logfmt format, pitchfork extracts fields such as `level`, `msg`, and `logger` and stores them alongside the original message. This makes it possible to filter by log level, query individual fields, and pipe output through jq expressions.
+
+### Configure Log Format
+
+Log parsing can be configured per daemon or applied globally as a default.
+
+Per-daemon configuration:
+
+```toml
+[daemons.api]
+run = "node server.js"
+
+[daemons.api.logs]
+log_format = "json"  # json | logfmt | text
+```
+
+Global default in `[settings.logs]`:
+
+```toml
+[settings.logs]
+log_format = "json"  # json | logfmt | text (default: text)
+```
+
+| Format | Description |
+|---|---|
+| `json` | Parse as single-line JSON (NDJSON) |
+| `logfmt` | Parse as `key=value` space-delimited pairs |
+| `text` | No parsing, store as plain text (default) |
+
+### Filter by Level
+
+```bash
+pitchfork logs api --level error
+pitchfork logs api --level warn
+```
+
+Level values are normalized automatically. For example, `fatal`, `critical`, `panic`, and `err` all match `error`, while `warning` matches `warn`.
+
+### Filter by Field
+
+```bash
+pitchfork logs api --field request_id=abc123
+pitchfork logs api --field status=500 --field method=GET
+```
+
+Field queries use SQLite `json_extract` on the stored `fields_json` column. Multiple `--field` flags are combined with AND.
+
+### jq Filtering
+
+```bash
+pitchfork logs api --jq '.level == "error" and .status >= 500'
+pitchfork logs api --jq '.request_id | startswith("req_00")'
+```
+
+Each log entry is serialized into a JSON object with `timestamp`, `daemon_id`, `message`, `level`, `msg`, `logger`, and `fields`. The jq expression is evaluated against each object; entries that return a truthy value are kept.
+
+Pitchfork ships with [jaq](https://github.com/01mf02/jaq), a pure-Rust jq implementation, so no external jq binary is required.
+
+### JSON Output
+
+```bash
+pitchfork logs api --json
+```
+
+This outputs a JSON array with structured fields:
+
+```json
+[
+  {
+    "timestamp": "2025-07-08 12:00:00",
+    "daemon_id": "global/api",
+    "message": "{\"level\":\"info\",\"msg\":\"started\"}",
+    "level": "info",
+    "msg": "started",
+    "logger": "main",
+    "fields": { "port": 8080 }
+  }
+]
+```
+
+The `level`, `msg`, `logger`, and `fields` fields are only present when the log line was successfully parsed.
+
+### Composing Filters
+
+`--level`, `--field`, `--grep`, and `--regex` are applied at the SQL layer to narrow the candidate set first. `--jq` then filters the remaining entries in the application layer:
+
+```bash
+# SQL layer filters level=error, then jq filters status>=500
+pitchfork logs api --level error --jq '.status >= 500'
+
+# --grep and --field can be combined
+pitchfork logs api --grep "timeout" --field service=api
+```
+
 ## Raw Output
 
 Output raw log lines without color or formatting:
@@ -172,3 +268,16 @@ You can also view logs in real-time through the [TUI](/guides/tui) (`pitchfork t
 ## Log Storage Location
 
 Logs are stored in a single SQLite database at `~/.local/state/pitchfork/logs/logs.db`. Each daemon has its own table partition identified by its qualified ID (`namespace/name`). See [File Locations](/reference/file-locations#logs) for details on the state directory resolution.
+
+## Performance
+
+Structured logs are parsed once at ingestion time and stored as indexed columns (`level`, `msg`, `logger`, `fields_json`) in SQLite. Queries read these columns directly without re-parsing the original log line.
+
+Benchmarked against [hl](https://github.com/pamburus/hl) (a multi-core terminal log viewer that parses JSON on every read) on 100,000 JSON log lines (~300 bytes each, 8 fields):
+
+| Scenario | pitchfork (single-core) | hl (single-core) | hl (16-core) |
+|---|---|---|---|
+| Full retrieval | 135ms | 117ms | 20ms |
+| Level filter (`--level error`) | 40ms | 75ms | 15ms |
+
+On a single core, pitchfork is competitive on full retrieval and significantly faster on filtered queries thanks to SQLite's `idx_daemon_level_ts` index. hl's multi-core advantage comes from its striped reader/worker/writer pipeline, which is suited for one-off streaming inspection rather than persistent storage and repeated queries.
