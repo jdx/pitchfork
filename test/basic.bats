@@ -477,7 +477,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.cmd_test]
-run = 'bash -c "echo Starting; sleep 1; touch $marker; echo Ready; sleep 60"'
+run = "echo Starting; sleep 1; touch $marker; echo Ready; sleep 60"
 ready_cmd = 'test -f $marker'
 EOF
 
@@ -511,7 +511,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.dir_test]
-run = 'bash -c "pwd > $marker && sleep 60"'
+run = "pwd > $marker && sleep 60"
 dir = "mysubdir"
 ready_delay = 1
 EOF
@@ -537,7 +537,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.dir_abs_test]
-run = 'bash -c "pwd > $marker && sleep 60"'
+run = "pwd > $marker && sleep 60"
 dir = "$abs_dir"
 ready_delay = 1
 EOF
@@ -559,7 +559,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.env_test]
-run = 'bash -c "echo \$MY_TEST_VAR > $marker && sleep 60"'
+run = "echo \$MY_TEST_VAR > $marker && sleep 60"
 ready_delay = 1
 
 [daemons.env_test.env]
@@ -583,7 +583,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.multi_env_test]
-run = 'bash -c "echo \$VAR_A:\$VAR_B:\$VAR_C > $marker && sleep 60"'
+run = "echo \$VAR_A:\$VAR_B:\$VAR_C > $marker && sleep 60"
 ready_delay = 1
 
 [daemons.multi_env_test.env]
@@ -610,7 +610,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.combined_test]
-run = 'bash -c "echo \$MY_PORT:\$(pwd) > $marker && sleep 60"'
+run = "echo \$MY_PORT:\$(pwd) > $marker && sleep 60"
 dir = "combined_test_dir"
 ready_delay = 1
 
@@ -662,7 +662,7 @@ EOF
 @test "stop kills child processes" {
   create_pitchfork_toml <<EOF
 [daemons.stop_children_test]
-run = 'bash -c "sleep 60 & sleep 60 & wait"'
+run = "sleep 60 & sleep 60 & wait"
 ready_delay = 1
 EOF
 

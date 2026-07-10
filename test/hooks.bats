@@ -18,7 +18,7 @@ teardown() {
 
   create_pitchfork_toml <<EOF
 [daemons.printer]
-run = "bash -c 'sleep 0.2; echo hello world; sleep 60'"
+run = "sleep 0.2; echo hello world; sleep 60"
 
 [daemons.printer.hooks]
 on_output = { filter = "hello", run = "touch $marker" }
@@ -38,7 +38,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.printer]
-run = "bash -c 'echo goodbye; sleep 60'"
+run = "echo goodbye; sleep 60"
 
 [daemons.printer.hooks]
 on_output = { filter = "hello", run = "touch $marker" }
@@ -63,7 +63,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.printer]
-run = "bash -c 'sleep 0.2; echo port 3000; sleep 60'"
+run = "sleep 0.2; echo port 3000; sleep 60"
 
 [daemons.printer.hooks]
 on_output = { regex = "port [0-9]+", run = "touch $marker" }
@@ -83,7 +83,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.printer]
-run = "bash -c 'echo no numbers here; sleep 60'"
+run = "echo no numbers here; sleep 60"
 
 [daemons.printer.hooks]
 on_output = { regex = "port [0-9]+", run = "touch $marker" }
@@ -107,10 +107,10 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.printer]
-run = "bash -c 'sleep 0.2; echo line1; sleep 60'"
+run = "sleep 0.2; echo line1; sleep 60"
 
 [daemons.printer.hooks]
-on_output = { run = "sh -c 'echo x >> $counter'" }
+on_output = { run = "echo x >> $counter" }
 EOF
 
   pitchfork supervisor start
@@ -132,10 +132,10 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.printer]
-run = "bash -c 'sleep 0.2; echo server started on port 8080; sleep 60'"
+run = "sleep 0.2; echo server started on port 8080; sleep 60"
 
 [daemons.printer.hooks]
-on_output = { filter = "server started", run = "sh -c 'echo \$PITCHFORK_MATCHED_LINE > $capture'" }
+on_output = { filter = "server started", run = "echo \$PITCHFORK_MATCHED_LINE > $capture" }
 EOF
 
   pitchfork supervisor start
@@ -158,10 +158,10 @@ EOF
   # Emit 5 lines quickly then pause; debounce of 2s should collapse them into 1 firing.
   create_pitchfork_toml <<EOF
 [daemons.spammer]
-run = "bash -c 'for i in 1 2 3 4 5; do echo tick; done; sleep 60'"
+run = "for i in 1 2 3 4 5; do echo tick; done; sleep 60"
 
 [daemons.spammer.hooks]
-on_output = { filter = "tick", run = "sh -c 'echo x >> $counter'", debounce = "2s" }
+on_output = { filter = "tick", run = "echo x >> $counter", debounce = "2s" }
 EOF
 
   pitchfork supervisor start
@@ -187,7 +187,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.errorer]
-run = "bash -c 'sleep 0.2; echo error: something went wrong >&2; sleep 60'"
+run = "sleep 0.2; echo error: something went wrong >&2; sleep 60"
 
 [daemons.errorer.hooks]
 on_output = { filter = "error:", run = "touch $marker" }
@@ -211,7 +211,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.ready_hook_test]
-run = "bash -c 'sleep 0.2; echo READY; sleep 60'"
+run = "sleep 0.2; echo READY; sleep 60"
 ready_output = "READY"
 
 [daemons.ready_hook_test.hooks]
@@ -237,7 +237,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.fail_retry_hook]
-run = "sh -c 'exit 1'"
+run = "exit 1"
 retry = 2
 
 [daemons.fail_retry_hook.hooks]
@@ -261,11 +261,11 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.retry_hook_test]
-run = "sh -c 'exit 1'"
+run = "exit 1"
 retry = 2
 
 [daemons.retry_hook_test.hooks]
-on_retry = "sh -c 'echo retry >> $marker'"
+on_retry = "echo retry >> $marker"
 EOF
 
   pitchfork supervisor start
@@ -285,7 +285,7 @@ EOF
 @test "PITCHFORK_DAEMON_ID is passed to daemon process" {
   create_pitchfork_toml <<EOF
 [daemons.id_env_test]
-run = "sh -c 'echo \$PITCHFORK_DAEMON_ID && sleep 60'"
+run = "echo \$PITCHFORK_DAEMON_ID && sleep 60"
 ready_delay = 1
 EOF
 
@@ -305,12 +305,12 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.retry_count_test]
-run = "sh -c 'echo \$PITCHFORK_RETRY_COUNT && exit 1'"
+run = "echo \$PITCHFORK_RETRY_COUNT && exit 1"
 retry = 1
 ready_delay = 1
 
 [daemons.retry_count_test.hooks]
-on_retry = "sh -c 'echo \$PITCHFORK_RETRY_COUNT >> $marker'"
+on_retry = "echo \$PITCHFORK_RETRY_COUNT >> $marker"
 EOF
 
   pitchfork supervisor start
@@ -328,11 +328,11 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.hook_env_test]
-run = "sh -c 'exit 7'"
+run = "exit 7"
 retry = 0
 
 [daemons.hook_env_test.hooks]
-on_fail = "sh -c 'echo \$PITCHFORK_DAEMON_ID \$PITCHFORK_EXIT_CODE > $marker'"
+on_fail = "echo \$PITCHFORK_DAEMON_ID \$PITCHFORK_EXIT_CODE > $marker"
 EOF
 
   pitchfork supervisor start
@@ -380,7 +380,7 @@ run = "sleep 60"
 ready_delay = 1
 
 [daemons.stop_reason_test.hooks]
-on_stop = "sh -c 'echo \$PITCHFORK_EXIT_REASON > $marker'"
+on_stop = "echo \$PITCHFORK_EXIT_REASON > $marker"
 EOF
 
   pitchfork supervisor start
@@ -423,11 +423,11 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.exit_fail_test]
-run = "sh -c 'exit 1'"
+run = "exit 1"
 retry = 0
 
 [daemons.exit_fail_test.hooks]
-on_exit = "sh -c 'echo \$PITCHFORK_EXIT_REASON > $marker'"
+on_exit = "echo \$PITCHFORK_EXIT_REASON > $marker"
 EOF
 
   pitchfork supervisor start
@@ -442,11 +442,11 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.exit_clean_test]
-run = "sh -c 'exit 0'"
+run = "exit 0"
 retry = 0
 
 [daemons.exit_clean_test.hooks]
-on_exit = "sh -c 'echo \$PITCHFORK_EXIT_REASON > $marker'"
+on_exit = "echo \$PITCHFORK_EXIT_REASON > $marker"
 EOF
 
   pitchfork supervisor start
@@ -486,11 +486,11 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.exit_retry_guard_test]
-run = "sh -c 'exit 1'"
+run = "exit 1"
 retry = 2
 
 [daemons.exit_retry_guard_test.hooks]
-on_exit = "sh -c 'echo x >> $counter'"
+on_exit = "echo x >> $counter"
 EOF
 
   pitchfork supervisor start

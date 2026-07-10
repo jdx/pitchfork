@@ -58,7 +58,7 @@ EOF
 
   create_pitchfork_toml <<EOF
 [daemons.cpu_burner]
-run = "bash -c 'while true; do echo x > /dev/null; done'"
+run = "while true; do echo x > /dev/null; done"
 cpu_limit = 10
 retry = 0
 ready_delay = 1
@@ -274,7 +274,7 @@ EOF
   # Verify the sub-table is parsed and log_format is applied at runtime
   create_pitchfork_toml <<'EOF'
 [daemons.subtable_json]
-run = "bash -c 'echo {\"level\":\"info\",\"msg\":\"subt\"}; sleep 60'"
+run = 'echo {"level":"info","msg":"subt"}; sleep 60'
 ready_output = "subt"
 
 [daemons.subtable_json.logs]

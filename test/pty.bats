@@ -72,7 +72,7 @@ EOF
 @test "pty = true allocates a pseudo-terminal" {
   create_pitchfork_toml <<'EOF'
 [daemons.with_pty]
-run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 30'"
+run = "if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 30"
 pty = true
 EOF
 
@@ -87,7 +87,7 @@ EOF
 @test "pty = false (default) does not allocate a pseudo-terminal" {
   create_pitchfork_toml <<'EOF'
 [daemons.no_pty]
-run = "sh -c 'if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 30'"
+run = "if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 30"
 EOF
 
   run pitchfork start no_pty

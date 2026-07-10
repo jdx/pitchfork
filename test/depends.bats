@@ -12,11 +12,11 @@ teardown() {
 @test "start with dependency auto-starts dependency" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db ready && sleep 30'"
+run = "echo db ready && sleep 30"
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api ready && sleep 30'"
+run = "echo api ready && sleep 30"
 depends = ["db"]
 ready_delay = 1
 EOF
@@ -38,16 +38,16 @@ EOF
 @test "dependency start order is respected" {
   create_pitchfork_toml <<EOF
 [daemons.database]
-run = "bash -c 'echo database started && sleep 30'"
+run = "echo database started && sleep 30"
 ready_delay = 1
 
 [daemons.backend]
-run = "bash -c 'echo backend started && sleep 30'"
+run = "echo backend started && sleep 30"
 depends = ["database"]
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api started && sleep 30'"
+run = "echo api started && sleep 30"
 depends = ["backend"]
 ready_delay = 1
 EOF
@@ -71,20 +71,20 @@ EOF
 @test "start --all respects dependencies" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db started && sleep 30'"
+run = "echo db started && sleep 30"
 ready_delay = 1
 
 [daemons.cache]
-run = "bash -c 'echo cache started && sleep 30'"
+run = "echo cache started && sleep 30"
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api started && sleep 30'"
+run = "echo api started && sleep 30"
 depends = ["db", "cache"]
 ready_delay = 1
 
 [daemons.worker]
-run = "bash -c 'echo worker started && sleep 30'"
+run = "echo worker started && sleep 30"
 depends = ["db"]
 ready_delay = 1
 EOF
@@ -105,11 +105,11 @@ EOF
 @test "already running dependency is skipped" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db ready && sleep 30'"
+run = "echo db ready && sleep 30"
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api ready && sleep 30'"
+run = "echo api ready && sleep 30"
 depends = ["db"]
 ready_delay = 1
 EOF
@@ -165,11 +165,11 @@ EOF
 @test "force flag only restarts the requested daemon" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db_started; sleep 60'"
+run = "echo db_started; sleep 60"
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api_started; sleep 60'"
+run = "echo api_started; sleep 60"
 depends = ["db"]
 ready_delay = 1
 EOF
@@ -207,20 +207,20 @@ EOF
 @test "stop --all stops all daemons" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db started && sleep 30'"
+run = "echo db started && sleep 30"
 ready_delay = 1
 
 [daemons.cache]
-run = "bash -c 'echo cache started && sleep 30'"
+run = "echo cache started && sleep 30"
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api started && sleep 30'"
+run = "echo api started && sleep 30"
 depends = ["db", "cache"]
 ready_delay = 1
 
 [daemons.worker]
-run = "bash -c 'echo worker started && sleep 30'"
+run = "echo worker started && sleep 30"
 depends = ["db"]
 ready_delay = 1
 EOF
@@ -244,16 +244,16 @@ EOF
 @test "stop --all handles partial running daemons" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db started && sleep 30'"
+run = "echo db started && sleep 30"
 ready_delay = 1
 
 [daemons.api]
-run = "bash -c 'echo api started && sleep 30'"
+run = "echo api started && sleep 30"
 depends = ["db"]
 ready_delay = 1
 
 [daemons.worker]
-run = "bash -c 'echo worker started && sleep 30'"
+run = "echo worker started && sleep 30"
 ready_delay = 1
 EOF
 
@@ -276,7 +276,7 @@ EOF
 @test "stop --all succeeds when no daemons are running" {
   create_pitchfork_toml <<EOF
 [daemons.db]
-run = "bash -c 'echo db started && sleep 30'"
+run = "echo db started && sleep 30"
 ready_delay = 1
 EOF
 

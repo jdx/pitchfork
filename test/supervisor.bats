@@ -255,7 +255,7 @@ EOF
 @test "pitchfork wait returns when daemon exits naturally" {
   create_pitchfork_toml <<EOF
 [daemons.wait_test]
-run = 'bash -c "sleep 2; echo done"'
+run = "sleep 2; echo done"
 ready_delay = 0
 EOF
 
@@ -275,11 +275,11 @@ EOF
 @test "pitchfork wait with multiple daemons" {
   create_pitchfork_toml <<EOF
 [daemons.wait1]
-run = 'bash -c "sleep 1; echo done1"'
+run = "sleep 1; echo done1"
 ready_delay = 0
 
 [daemons.wait2]
-run = 'bash -c "sleep 2; echo done2"'
+run = "sleep 2; echo done2"
 ready_delay = 0
 EOF
 

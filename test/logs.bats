@@ -258,7 +258,7 @@ EOF
 @test "logs --grep filters output by substring" {
   create_pitchfork_toml <<EOF
 [daemons.grepper]
-run = "bash -c 'echo apple; echo banana; echo cherry; sleep 60'"
+run = "echo apple; echo banana; echo cherry; sleep 60"
 ready_output = "cherry"
 EOF
 
@@ -277,7 +277,7 @@ EOF
 @test "logs --grep with multiple patterns (OR logic)" {
   create_pitchfork_toml <<EOF
 [daemons.grepper]
-run = "bash -c 'echo apple; echo banana; echo cherry; sleep 60'"
+run = "echo apple; echo banana; echo cherry; sleep 60"
 ready_output = "cherry"
 EOF
 
@@ -296,7 +296,7 @@ EOF
 @test "logs --grep with no matches returns empty" {
   create_pitchfork_toml <<EOF
 [daemons.grepper]
-run = "bash -c 'echo apple; echo banana; echo cherry; sleep 60'"
+run = "echo apple; echo banana; echo cherry; sleep 60"
 ready_output = "cherry"
 EOF
 
@@ -313,7 +313,7 @@ EOF
 @test "logs --regex filters output by regex pattern" {
   create_pitchfork_toml <<EOF
 [daemons.regexer]
-run = "bash -c 'echo port 3000; echo port 4000; echo no_port_here; sleep 60'"
+run = "echo port 3000; echo port 4000; echo no_port_here; sleep 60"
 ready_output = "no_port_here"
 EOF
 
@@ -332,7 +332,7 @@ EOF
 @test "logs --regex with invalid pattern gives error" {
   create_pitchfork_toml <<EOF
 [daemons.regexer]
-run = "bash -c 'echo port 3000; echo port 4000; echo no_port_here; sleep 60'"
+run = "echo port 3000; echo port 4000; echo no_port_here; sleep 60"
 ready_output = "no_port_here"
 EOF
 
@@ -349,7 +349,7 @@ EOF
 @test "logs --regex with no matches returns empty" {
   create_pitchfork_toml <<EOF
 [daemons.regexer]
-run = "bash -c 'echo port 3000; echo port 4000; echo no_port_here; sleep 60'"
+run = "echo port 3000; echo port 4000; echo no_port_here; sleep 60"
 ready_output = "no_port_here"
 EOF
 
@@ -366,7 +366,7 @@ EOF
 @test "logs --case-sensitive respects case" {
   create_pitchfork_toml <<EOF
 [daemons.caser]
-run = "bash -c 'echo Hello; echo hello; echo HELLO; sleep 60'"
+run = "echo Hello; echo hello; echo HELLO; sleep 60"
 ready_output = "HELLO"
 EOF
 
@@ -385,7 +385,7 @@ EOF
 @test "logs without --case-sensitive is case-insensitive" {
   create_pitchfork_toml <<EOF
 [daemons.caser]
-run = "bash -c 'echo Hello; echo hello; echo HELLO; sleep 60'"
+run = "echo Hello; echo hello; echo HELLO; sleep 60"
 ready_output = "HELLO"
 EOF
 
@@ -408,7 +408,7 @@ EOF
 @test "logs --no-timestamp omits timestamp prefix" {
   create_pitchfork_toml <<EOF
 [daemons.notime]
-run = "bash -c 'echo testline; sleep 60'"
+run = "echo testline; sleep 60"
 ready_output = "testline"
 EOF
 
@@ -430,11 +430,11 @@ EOF
 @test "logs --clear for single daemon preserves others" {
   create_pitchfork_toml <<EOF
 [daemons.keeper]
-run = "bash -c 'echo keep_me; sleep 60'"
+run = "echo keep_me; sleep 60"
 ready_output = "keep_me"
 
 [daemons.clearer]
-run = "bash -c 'echo clear_me; sleep 60'"
+run = "echo clear_me; sleep 60"
 ready_output = "clear_me"
 EOF
 
@@ -467,7 +467,7 @@ EOF
 @test "logs on daemon with no log output returns empty" {
   create_pitchfork_toml <<EOF
 [daemons.unstarted]
-run = "bash -c 'echo would_log; sleep 60'"
+run = "echo would_log; sleep 60"
 ready_output = "would_log"
 EOF
 
@@ -480,7 +480,7 @@ EOF
 @test "logs without daemon argument lists available daemons" {
   create_pitchfork_toml <<EOF
 [daemons.solo]
-run = "bash -c 'echo hello_world; sleep 60'"
+run = "echo hello_world; sleep 60"
 ready_output = "hello_world"
 EOF
 
@@ -497,7 +497,7 @@ EOF
 @test "logs --grep and --regex combined (OR logic)" {
   create_pitchfork_toml <<EOF
 [daemons.combo]
-run = "bash -c 'echo alpha; echo beta; echo gamma; sleep 60'"
+run = "echo alpha; echo beta; echo gamma; sleep 60"
 ready_output = "gamma"
 EOF
 
@@ -520,7 +520,7 @@ EOF
 @test "logs --tail with --grep only streams matching lines" {
   create_pitchfork_toml <<EOF
 [daemons.tailer]
-run = "bash -c 'while true; do echo match_line; echo skip_line; sleep 1; done'"
+run = "while true; do echo match_line; echo skip_line; sleep 1; done"
 ready_output = "match_line"
 EOF
 
