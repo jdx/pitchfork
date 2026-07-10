@@ -97,7 +97,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = { version = "1.0", features = ["preserve_order"] }
-rmcp = { version = "1", features = ["server", "transport-io"] }
+rmcp = { version = "2", features = ["server", "transport-io"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 xx = { version = "2", features = ["fslock", "hash"] }
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
