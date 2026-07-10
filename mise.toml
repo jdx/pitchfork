@@ -1,13 +1,29 @@
 [env]
-_.path = "target/debug"
+_.path = ["target/debug", "test/bats/bin"]
 
 [tasks.test]
 depends = ["build:ui"]
 run = [
   "cargo nextest run",
   "git submodule update --init --recursive",
-  "test/run_all_tests",
+  "mise run test:bats",
 ]
+
+[tasks."test:bats"]
+description = "Run bats e2e tests"
+run = '''
+if [ -n "$TRANCHE" ] && [ -n "$TRANCHE_COUNT" ]; then
+  tests=$(ls -1 test/*.bats | sort | awk -v t="$TRANCHE" -v n="$TRANCHE_COUNT" 'NR % n == t')
+else
+  tests="test"
+fi
+if command -v parallel >/dev/null 2>&1; then
+  bats --jobs 16 $tests
+else
+  echo "GNU parallel not found, running sequentially" >&2
+  bats $tests
+fi
+'''
 
 [tasks.build-dev]
 description = "rebuild and restart supervisor (without sudo, as what Agent prefers), to make changes take effect"
@@ -15,7 +31,7 @@ depends = ["build"]
 run = "pitchfork sup start -f"
 
 [tasks.ci]
-depends = ["lint", "build", "build:docs", "test", "test:web-ui"]
+depends = ["lint", "build", "build:docs", "test", "render"]
 
 [tasks.ci-dev]
 depends = ["lint-fix", "build", "build:docs", "test", "render"]
