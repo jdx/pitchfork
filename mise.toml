@@ -31,7 +31,7 @@ depends = ["build"]
 run = "pitchfork sup start -f"
 
 [tasks.ci]
-depends = ["lint", "build", "build:docs", "test", "render"]
+depends = ["lint", "build", "build:docs", "test", "test:web-ui"]
 
 [tasks.ci-dev]
 depends = ["lint-fix", "build", "build:docs", "test", "render"]
