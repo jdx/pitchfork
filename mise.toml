@@ -18,7 +18,7 @@ run = "pitchfork sup start -f"
 depends = ["lint", "build", "build:docs", "test", "test:web-ui"]
 
 [tasks.ci-dev]
-depends = ["lint-fix", "build", "build:docs", "test", "test:web-ui"]
+depends = ["lint-fix", "build", "build:docs", "test", "render"]
 
 [tasks.docs]
 dir = "docs"
