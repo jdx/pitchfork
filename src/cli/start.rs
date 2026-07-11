@@ -9,12 +9,8 @@ use crate::ui::style::{ncyan, ndim};
 use miette::ensure;
 use std::sync::Arc;
 
-/// Starts a daemon from a pitchfork.toml file
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "s",
-    verbatim_doc_comment,
-    long_about = "\
+/// Shared long help for the `start` command and its implicit fallback form.
+pub(crate) const LONG_ABOUT: &str = "\
 Starts a daemon from a pitchfork.toml file
 
 Daemons are defined in pitchfork.toml with a `[daemons.<name>]` section.
@@ -34,7 +30,14 @@ Examples:
   pitchfork start api --http http://localhost:8080/health
                                 Wait for HTTP endpoint to return 2xx
   pitchfork start api --port 8080
-                                Wait for TCP port to be listening"
+                                Wait for TCP port to be listening";
+
+/// Starts a daemon from a pitchfork.toml file
+#[derive(Debug, clap::Args)]
+#[clap(
+    visible_alias = "s",
+    verbatim_doc_comment,
+    long_about = LONG_ABOUT
 )]
 pub struct Start {
     /// ID of the daemon(s) in pitchfork.toml to start

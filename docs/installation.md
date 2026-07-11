@@ -36,26 +36,47 @@ Pitchfork supports tab completion for bash, zsh, and fish.
 Shell completion requires the [`usage`](https://usage.jdx.dev) CLI tool to be installed.
 :::
 
-### Bash
+::: code-group
 
-```bash
+```bash [bash]
 mkdir -p ~/.local/share/bash-completion/completions
 pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork
 ```
 
-### Zsh
-
-```bash
+```bash [zsh]
 mkdir -p ~/.zfunc
 pitchfork completion zsh > ~/.zfunc/_pitchfork
 # Add to ~/.zshrc: fpath=(~/.zfunc $fpath)
 ```
 
-### Fish
-
-```bash
+```bash [fish]
 pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish
 ```
+
+:::
+
+## Shell Alias (Optional)
+
+For a shorter command, add a `pf` alias to your shell. Combined with the
+implicit `start` shorthand, you can then start a daemon with just `pf api`:
+
+::: code-group
+
+```bash [bash]
+echo 'alias pf=pitchfork' >> ~/.bashrc
+```
+
+```bash [zsh]
+echo 'alias pf=pitchfork' >> ~/.zshrc
+```
+
+```bash [fish]
+echo 'alias pf pitchfork' >> ~/.config/fish/config.fish
+```
+
+:::
+
+Restart your shell or `source` the file, then `pf api` runs `pitchfork start api`.
 
 ## What's Next?
 
