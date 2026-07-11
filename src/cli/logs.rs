@@ -1,7 +1,7 @@
 use crate::cli::json_output::{JsonLogEntry, print_json};
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
-use crate::log_store::{FieldFilter, LogQuery, LogStore, MessageFilter};
+use crate::log_store::{FieldFilter, LogEntry, LogQuery, LogStore, MessageFilter};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::state_file::StateFile;
@@ -52,65 +52,190 @@ impl PagerConfig {
     }
 }
 
-/// Format a single log line for output.
-/// When `single_daemon` is true, omits the daemon ID from the output.
-/// Write a formatted log line directly to `w`, avoiding intermediate String allocation.
+/// Fields already displayed in dedicated positions; excluded from the
+/// extra-fields section of structured log output.
+const KNOWN_FIELD_KEYS: &[&str] = &[
+    "level",
+    "severity",
+    "lvl",
+    "PRIORITY",
+    "@level",
+    "msg",
+    "message",
+    "event",
+    "@message",
+    "logger",
+    "name",
+    "component",
+    "module",
+    "timestamp",
+    "ts",
+    "time",
+    "@timestamp",
+];
+
+/// Format a log level as a colored 3-letter badge: `|ERR|`, `|WRN|`, etc.
+fn level_badge(level: &str) -> String {
+    match level {
+        "error" => console::style("|ERR|").red().bold().to_string(),
+        "warn" => console::style("|WRN|").yellow().to_string(),
+        "info" => console::style("|INF|").cyan().to_string(),
+        "debug" => console::style("|DBG|").magenta().to_string(),
+        "trace" => console::style("|TRC|").dim().to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Format a single JSON value for display in the fields section.
+///
+/// Strings that look like booleans, null, numbers, or contain spaces are
+/// quoted to avoid ambiguity. Numbers are green, booleans are
+/// yellow/red, null is dim.
+fn format_field_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => {
+            let needs_quotes = s.is_empty()
+                || s.contains(' ')
+                || s.contains('=')
+                || s.contains('\t')
+                || s == "true"
+                || s == "false"
+                || s == "null"
+                || s.parse::<f64>().is_ok();
+            if needs_quotes {
+                format!("\"{s}\"")
+            } else {
+                s.clone()
+            }
+        }
+        serde_json::Value::Number(n) => console::style(n).green().to_string(),
+        serde_json::Value::Bool(true) => console::style("true").yellow().to_string(),
+        serde_json::Value::Bool(false) => console::style("false").red().to_string(),
+        serde_json::Value::Null => console::style("null").dim().to_string(),
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+        }
+    }
+}
+
+/// Format structured fields as `key=value` pairs, excluding known keys.
+fn format_fields(fields_json: &str) -> String {
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_str(fields_json) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    for (key, value) in &obj {
+        if KNOWN_FIELD_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let key_styled = console::style(key.as_str()).blue().to_string();
+        let value_styled = format_field_value(value);
+        parts.push(format!("{key_styled}={value_styled}"));
+    }
+    parts.join(" ")
+}
+
+/// Format and write a single log entry with structured field highlighting.
+///
+/// When the entry has structured fields (`fields_json` is `Some`), renders as:
+/// `<timestamp> |LEVEL| logger  message  key=value key=value`
+///
+/// Otherwise falls back to plain display: `<timestamp> message`
 #[allow(clippy::too_many_arguments)]
-fn write_log_line(
+fn write_formatted_log(
     w: &mut dyn Write,
+    entry: &LogEntry,
     date: &str,
-    id: &str,
-    msg: &str,
     single_daemon: bool,
-    id_width: usize,
     strip_ansi: bool,
     show_timestamp: bool,
 ) -> io::Result<()> {
-    let msg = if strip_ansi {
-        console::strip_ansi_codes(msg)
+    // Always strip PTY control sequences (cursor moves, clear screen, etc.)
+    // while preserving SGR color codes. PTY daemons emit these sequences which
+    // can corrupt pager output (e.g. triggering page breaks in `less`).
+    let clean_msg = strip_pty_controls(&entry.message);
+    let raw_msg: std::borrow::Cow<'_, str> = if strip_ansi {
+        console::strip_ansi_codes(&clean_msg)
     } else {
-        std::borrow::Cow::Borrowed(msg)
+        std::borrow::Cow::Owned(clean_msg)
     };
-    if single_daemon {
-        if show_timestamp {
-            write!(w, "{} {}", ndim(date), msg)?;
-        } else {
-            w.write_all(msg.as_bytes())?;
+
+    let mut out = String::with_capacity(256);
+
+    // Timestamp (leftmost)
+    if show_timestamp {
+        out.push_str(&ndim(date).to_string());
+        out.push(' ');
+    }
+
+    // Daemon ID (multi-daemon mode): [colored_id] matching pf start style
+    if !single_daemon {
+        let colors_on = !strip_ansi && console::colors_enabled();
+        let colored = colored_id_label(&entry.daemon_id, colors_on);
+        out.push_str(&colored);
+        out.push(' ');
+    }
+
+    if entry.fields_json.is_some() {
+        // Structured display: level badge, logger, message, fields
+        let mut need_sep = false;
+
+        if let Some(level) = &entry.level {
+            let badge = level_badge(level);
+            if !badge.is_empty() {
+                out.push_str(&badge);
+                need_sep = true;
+            }
+        }
+
+        if let Some(logger) = &entry.logger {
+            if need_sep {
+                out.push(' ');
+            }
+            out.push_str(&ndim(logger).to_string());
+            need_sep = true;
+        }
+
+        // Content: message + fields (2-space gap from metadata)
+        let msg_cow = entry.msg.as_deref().filter(|s| !s.is_empty()).map(|s| {
+            let cleaned = strip_pty_controls(s);
+            if strip_ansi {
+                std::borrow::Cow::Owned(console::strip_ansi_codes(&cleaned).to_string())
+            } else {
+                std::borrow::Cow::Owned(cleaned)
+            }
+        });
+        let fields_str = entry
+            .fields_json
+            .as_deref()
+            .map(format_fields)
+            .filter(|s| !s.is_empty());
+
+        if msg_cow.is_some() || fields_str.is_some() {
+            if need_sep {
+                out.push_str("  ");
+            }
+            if let Some(msg) = &msg_cow {
+                out.push_str(msg);
+                if fields_str.is_some() {
+                    out.push_str("  ");
+                }
+            }
+            if let Some(fields) = &fields_str {
+                out.push_str(fields);
+            }
+        } else if !need_sep {
+            // No level badge, logger, message, or fields — fall back to
+            // the raw message so the line isn't empty.
+            out.push_str(&raw_msg);
         }
     } else {
-        let colors_on = !strip_ansi && console::colors_enabled();
-        let colored = dimmed_id(id, colors_on);
-        let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
-        if show_timestamp {
-            write!(w, "{}  {} {}", padded, ndim(date), msg)?;
-        } else {
-            write!(w, "{}  {}", padded, msg)?;
-        }
+        // Unstructured log: just the raw message
+        out.push_str(&raw_msg);
     }
-    w.write_all(b"\n")
-}
 
-/// Return a dimmed, colorized daemon ID string for display.
-/// Each daemon gets a deterministic color via FNV-1a hash so that
-/// multiple daemons are visually distinguishable while remaining subtle.
-fn dimmed_id(id: &str, colors_enabled: bool) -> String {
-    if !colors_enabled {
-        return id.to_string();
-    }
-    let colors = [
-        (180, 120, 120), // dim red
-        (180, 160, 100), // dim yellow
-        (120, 180, 120), // dim green
-        (120, 180, 180), // dim cyan
-        (180, 120, 180), // dim magenta
-        (120, 160, 180), // dim blue
-    ];
-    let mut h: usize = 0x811C_9DC5; // FNV offset basis
-    for b in id.bytes() {
-        h = h.wrapping_mul(0x0100_0193).wrapping_add(b as usize);
-    }
-    let (r, g, b) = colors[h % colors.len()];
-    format!("\x1b[2;38;2;{};{};{}m{}\x1b[0m", r, g, b, id)
+    out.push('\n');
+    w.write_all(out.as_bytes())
 }
 
 /// Return a colorized `[namespace/id]` label for display in progress jobs.
@@ -295,7 +420,7 @@ impl Logs {
         }
 
         let single_daemon = resolved_ids.len() == 1;
-        let show_timestamp = settings().logs.timestamp && !self.no_timestamp;
+        let show_timestamp = settings().logs.timestamp && !self.no_timestamp && !self.raw;
         let has_time_filter = from.is_some() || to.is_some();
 
         self.query_and_output(
@@ -319,6 +444,7 @@ impl Logs {
                 field_filters,
                 jq_filter.as_ref(),
                 show_timestamp,
+                self.raw,
             )
             .await?;
         }
@@ -419,7 +545,7 @@ impl Logs {
             after_id: None,
             message_filters,
             field_filters,
-            include_structured: jq_filter.is_some(),
+            include_structured: jq_filter.is_some() || !self.raw,
         };
         let mut entries = LOG_STORE.query(&opts)?;
 
@@ -444,25 +570,23 @@ impl Logs {
             return Ok(());
         }
 
-        let id_width = entries.iter().map(|e| e.daemon_id.len()).max().unwrap_or(0);
         let strip_ansi = self.raw || !console::colors_enabled();
         let use_pager = !self.tail && !self.no_pager && should_use_pager(entries.len());
+        let ts_format = &settings().logs.timestamp_format;
 
         // Reusable buffer for timestamp formatting — avoids N allocations.
-        let mut date_buf = String::with_capacity(19);
+        let mut date_buf = String::with_capacity(ts_format.len() + 6);
 
         let mut write_entries = |w: &mut dyn Write| -> io::Result<()> {
             for entry in &entries {
                 date_buf.clear();
-                write!(date_buf, "{}", entry.timestamp.format("%Y-%m-%d %H:%M:%S"))
+                write!(date_buf, "{}", entry.timestamp.format(ts_format))
                     .map_err(io::Error::other)?;
-                write_log_line(
+                write_formatted_log(
                     w,
+                    entry,
                     &date_buf,
-                    &entry.daemon_id,
-                    &entry.message,
                     single_daemon,
-                    id_width,
                     strip_ansi,
                     show_timestamp,
                 )?;
@@ -718,6 +842,7 @@ fn get_all_daemon_ids() -> Result<Vec<DaemonId>> {
         .collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn tail_logs(
     names: &[DaemonId],
     single_daemon: bool,
@@ -726,15 +851,10 @@ pub async fn tail_logs(
     field_filters: Vec<FieldFilter>,
     jq_filter: Option<&crate::log_jq::JqFilter>,
     show_timestamp: bool,
+    raw: bool,
 ) -> Result<()> {
     // Poll SQLite log store for new entries since last known row id.
-    let id_width = names
-        .iter()
-        .map(|id| id.qualified().len())
-        .max()
-        .unwrap_or(0);
-
-    let strip_ansi = !console::colors_enabled();
+    let strip_ansi = raw || !console::colors_enabled();
 
     let mut states: std::collections::HashMap<String, i64> = names
         .iter()
@@ -769,7 +889,7 @@ pub async fn tail_logs(
                 after_id,
                 message_filters: message_filters.clone(),
                 field_filters: field_filters.clone(),
-                include_structured: jq_filter.is_some(),
+                include_structured: jq_filter.is_some() || !raw,
             }) {
                 Ok(raw_entries) => {
                     // Save the max id from SQL results (before jq filtering)
@@ -782,10 +902,7 @@ pub async fn tail_logs(
                         Some(jq) => jq.filter(raw_entries),
                         None => raw_entries,
                     };
-                    for entry in &entries {
-                        let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
-                        out.push((ts, entry.daemon_id.clone(), entry.message.clone()));
-                    }
+                    out.extend(entries);
                     // Advance the cursor past rows already evaluated.
                     //
                     // Use the max id from the raw SQL result (not the jq-filtered
@@ -818,23 +935,27 @@ pub async fn tail_logs(
         if !out.is_empty() {
             // Single-daemon: entries are already in chronological order from
             // the SQL query (order_desc: false). Skip the sort.
-            let out: Vec<_> = if single_daemon {
+            let out: Vec<LogEntry> = if single_daemon {
                 out
             } else {
                 out.into_iter()
-                    .sorted_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))
+                    .sorted_by(|a, b| a.timestamp.cmp(&b.timestamp).then(a.id.cmp(&b.id)))
                     .collect()
             };
             let stdout = io::stdout();
             let mut buf = io::BufWriter::new(stdout.lock());
-            for (date, name, msg) in &out {
-                write_log_line(
+            let ts_format = &settings().logs.timestamp_format;
+            let mut date_buf = String::with_capacity(ts_format.len() + 6);
+            for entry in &out {
+                date_buf.clear();
+                write!(date_buf, "{}", entry.timestamp.format(ts_format))
+                    .map_err(io::Error::other)
+                    .into_diagnostic()?;
+                write_formatted_log(
                     &mut buf,
-                    date,
-                    name,
-                    msg,
+                    entry,
+                    &date_buf,
                     single_daemon,
-                    id_width,
                     strip_ansi,
                     show_timestamp,
                 )
@@ -959,19 +1080,13 @@ pub fn print_error_logs_block(log_lines: &[(String, String, String)]) {
     let show_id = unique_ids.len() > 1;
 
     if show_id {
-        let id_width = log_lines
-            .iter()
-            .map(|(_, id, _)| console::measure_text_width(id))
-            .max()
-            .unwrap_or(0);
         for (date, id, msg) in log_lines {
             let time = date.split(' ').nth(1).unwrap_or(date);
-            let colored = dimmed_id(id, is_tty && console::colors_enabled_stderr());
-            let padded = console::pad_str(&colored, id_width, console::Alignment::Left, None);
+            let colored = colored_id_label(id, is_tty && console::colors_enabled_stderr());
             eprintln!(
-                "{}  {} {}",
-                padded,
+                "{} {} {}",
                 estyle(time).red().dim(),
+                colored,
                 format_msg(msg)
             );
         }

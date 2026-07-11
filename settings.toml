@@ -237,13 +237,39 @@ default = "true"
 description = "Show timestamps in log output"
 docs = """
 When enabled (default), pitchfork prefixes each log line with a timestamp
-(e.g. `2024-01-15 10:30:00`).
+(e.g. `07-10 10:30:00`).
 
 When disabled, timestamps are omitted from `pitchfork logs` output. This is
 useful when piping logs to tools like `lnav` that expect raw JSON or when
 you want to process log output without the timestamp prefix.
 
 Can be overridden per-invocation with `pitchfork logs --no-timestamp`.
+"""
+
+[logs.timestamp_format]
+type = "String"
+env = "PITCHFORK_LOG_TIMESTAMP_FORMAT"
+default = "%m-%d %H:%M:%S"
+description = "strftime format for log timestamps in `pitchfork logs` output"
+docs = """
+Controls the date/time format used when displaying timestamps in `pitchfork logs`
+output. Uses chrono strftime syntax.
+
+Common format specifiers:
+- `%Y` — full year (2024)
+- `%m` — month (01-12)
+- `%d` — day (01-31)
+- `%H` — hour (00-23)
+- `%M` — minute (00-59)
+- `%S` — second (00-59)
+
+Examples:
+- `%m-%d %H:%M:%S` — `07-10 10:30:00` (default)
+- `%Y-%m-%d %H:%M:%S` — `2024-07-10 10:30:00`
+- `%H:%M:%S` — `10:30:00` (time only)
+- `%Y/%m/%d %H:%M` — `2024/07/10 10:30`
+
+Only affects the text display output, not `--json` or `--raw` modes.
 """
 
 [logs.line_retention]
