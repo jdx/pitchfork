@@ -75,7 +75,7 @@ enum Commands {
     name = "pitchfork",
     bin_name = "pitchfork start",
     version = env!("CARGO_PKG_VERSION"),
-    about = env!("CARGO_PKG_DESCRIPTION")
+    long_about = start::LONG_ABOUT
 )]
 struct StartFallback {
     #[clap(flatten)]
@@ -221,6 +221,20 @@ mod tests {
         assert!(
             rendered.contains("Usage: pitchfork start"),
             "expected usage to contain 'pitchfork start', got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn fallback_help_shows_start_long_about() {
+        let err = StartFallback::try_parse_from(["pitchfork", "mydaemon", "--help"]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("Examples:"),
+            "expected help to include Start long_about examples, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("pitchfork start api"),
+            "expected help to reference `pitchfork start api`, got: {rendered}"
         );
     }
 }
