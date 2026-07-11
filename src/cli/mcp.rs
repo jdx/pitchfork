@@ -9,7 +9,7 @@ use rmcp::{
     RoleServer, ServiceExt,
     handler::server::{ServerHandler, tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolRequestParams, CallToolResult, Content, ErrorCode, ErrorData, Implementation,
+        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ErrorData, Implementation,
         InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
     },
     schemars::JsonSchema,
@@ -159,7 +159,7 @@ impl PitchforkServer {
 
         let text = serde_json::to_string_pretty(&daemons)
             .map_err(|e| internal_err(format!("Failed to serialize daemon status: {e}")))?;
-        Ok(CallToolResult::success(vec![Content::text(text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Start one or more named daemons
@@ -171,7 +171,7 @@ impl PitchforkServer {
         Parameters(params): Parameters<StartParams>,
     ) -> std::result::Result<CallToolResult, ErrorData> {
         if params.id.is_empty() {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "At least one daemon ID must be provided",
             )]));
         }
@@ -210,13 +210,13 @@ impl PitchforkServer {
                     started_names.join(", ")
                 )
             };
-            Ok(CallToolResult::error(vec![Content::text(msg)]))
+            Ok(CallToolResult::error(vec![ContentBlock::text(msg)]))
         } else if started_names.is_empty() {
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No daemons needed starting (already running or no matching daemons found)",
             )]))
         } else {
-            Ok(CallToolResult::success(vec![Content::text(format!(
+            Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "Started: {}",
                 started_names.join(", ")
             ))]))
@@ -230,7 +230,7 @@ impl PitchforkServer {
         Parameters(params): Parameters<StopParams>,
     ) -> std::result::Result<CallToolResult, ErrorData> {
         if params.id.is_empty() {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "At least one daemon ID must be provided",
             )]));
         }
@@ -260,7 +260,7 @@ impl PitchforkServer {
 
         if actually_running.is_empty() {
             let names: Vec<String> = ids.iter().map(|id| id.qualified()).collect();
-            return Ok(CallToolResult::success(vec![Content::text(format!(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "No daemons were running: {}",
                 names.join(", ")
             ))]));
@@ -272,12 +272,12 @@ impl PitchforkServer {
             .map_err(|e| internal_err(format!("Failed to stop daemons: {e}")))?;
 
         if result.any_failed {
-            Ok(CallToolResult::error(vec![Content::text(
+            Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Some daemons failed to stop",
             )]))
         } else {
             let names: Vec<String> = actually_running.iter().map(|id| id.qualified()).collect();
-            Ok(CallToolResult::success(vec![Content::text(format!(
+            Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "Stopped: {}",
                 names.join(", ")
             ))]))
@@ -293,7 +293,7 @@ impl PitchforkServer {
         Parameters(params): Parameters<RestartParams>,
     ) -> std::result::Result<CallToolResult, ErrorData> {
         if params.id.is_empty() {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "At least one daemon ID must be provided",
             )]));
         }
@@ -332,13 +332,13 @@ impl PitchforkServer {
                     started_names.join(", ")
                 )
             };
-            Ok(CallToolResult::error(vec![Content::text(msg)]))
+            Ok(CallToolResult::error(vec![ContentBlock::text(msg)]))
         } else if started_names.is_empty() {
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No daemons were restarted",
             )]))
         } else {
-            Ok(CallToolResult::success(vec![Content::text(format!(
+            Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                 "Restarted: {}",
                 started_names.join(", ")
             ))]))
@@ -369,7 +369,7 @@ impl PitchforkServer {
         };
 
         if daemon_ids.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No daemon logs found",
             )]));
         }
@@ -413,11 +413,11 @@ impl PitchforkServer {
         }
 
         if output.is_empty() {
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No logs available",
             )]))
         } else {
-            Ok(CallToolResult::success(vec![Content::text(output)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
         }
     }
 }
