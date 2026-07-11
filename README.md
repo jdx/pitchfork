@@ -101,6 +101,8 @@ Start all daemons or multiple daemons **in parallel**:
 $ pitchfork start --all
 
 $ pitchfork start redis api
+
+$ pitchfork redis api # shorthand for `pitchfork start redis api`
 ```
 
 ### Shell hook (auto start/stop)

@@ -31,6 +31,8 @@ Or start specific ones:
 
 ```bash
 pitchfork start api redis
+
+pitchfork api redis # shorthand for `pitchfork start api redis`
 ```
 
 ## Check Status
