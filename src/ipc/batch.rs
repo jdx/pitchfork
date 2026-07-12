@@ -9,7 +9,8 @@ use crate::daemon_id::DaemonId;
 use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
-    PitchforkToml, PitchforkTomlDaemon, ReadyHttp, is_dot_config_pitchfork, is_global_config,
+    PitchforkToml, PitchforkTomlDaemon, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort,
+    is_dot_config_pitchfork, is_global_config,
 };
 use chrono::{DateTime, Local};
 use indexmap::IndexMap;
@@ -117,10 +118,18 @@ pub fn build_run_options(
         run_opts.shell_pid = opts.shell_pid;
         run_opts.force = opts.force;
         run_opts.ready_delay = opts.delay.or(run_opts.ready_delay);
-        run_opts.ready_output = opts.output.clone().or(run_opts.ready_output);
+        run_opts.ready_output =
+            merge_ready_output_override(run_opts.ready_output, opts.output.clone());
         run_opts.ready_http = merge_ready_http_override(run_opts.ready_http, opts.http.clone());
-        run_opts.ready_port = opts.port.or(run_opts.ready_port);
-        run_opts.ready_cmd = opts.cmd.clone().or(run_opts.ready_cmd);
+        run_opts.ready_port = if let Some(port) = opts.port {
+            Some(ReadyPort {
+                port,
+                timeout: run_opts.ready_port.as_ref().and_then(|p| p.timeout),
+            })
+        } else {
+            run_opts.ready_port.clone()
+        };
+        run_opts.ready_cmd = merge_ready_cmd_override(run_opts.ready_cmd, opts.cmd.clone());
         if let Some(ref expected) = opts.expected_port {
             run_opts.port.get_or_insert_with(Default::default).expect = expected.clone();
         }
@@ -146,16 +155,44 @@ fn merge_ready_http_override(
     }
 }
 
+fn merge_ready_cmd_override(
+    configured: Option<ReadyCmd>,
+    override_cmd: Option<String>,
+) -> Option<ReadyCmd> {
+    match (configured, override_cmd) {
+        (Some(mut ready_cmd), Some(cmd)) => {
+            ready_cmd.run = cmd;
+            Some(ready_cmd)
+        }
+        (None, Some(cmd)) => Some(ReadyCmd::new(cmd)),
+        (ready_cmd, None) => ready_cmd,
+    }
+}
+
+fn merge_ready_output_override(
+    configured: Option<ReadyOutput>,
+    override_pattern: Option<String>,
+) -> Option<ReadyOutput> {
+    match (configured, override_pattern) {
+        (Some(mut ready_output), Some(pattern)) => {
+            ready_output.pattern = pattern;
+            Some(ready_output)
+        }
+        (None, Some(pattern)) => Some(ReadyOutput::new(pattern)),
+        (ready_output, None) => ready_output,
+    }
+}
+
 /// Determine the effective ready check type from merged RunOptions.
 fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
-    if let Some(ref pattern) = opts.ready_output {
-        ReadyCheckType::Output(pattern.clone())
+    if let Some(ref output) = opts.ready_output {
+        ReadyCheckType::Output(output.pattern.clone())
     } else if let Some(ref http) = opts.ready_http {
         ReadyCheckType::Http(http.url.clone())
-    } else if let Some(port) = opts.ready_port {
-        ReadyCheckType::Port(port)
+    } else if let Some(port) = &opts.ready_port {
+        ReadyCheckType::Port(port.port)
     } else if let Some(ref cmd) = opts.ready_cmd {
-        ReadyCheckType::Cmd(cmd.clone())
+        ReadyCheckType::Cmd(cmd.run.clone())
     } else if let Some(secs) = opts.ready_delay {
         ReadyCheckType::Delay(secs)
     } else {
@@ -734,7 +771,7 @@ impl IpcClient {
         let output = opts.output.clone();
         let http = merge_ready_http_override(ready_http, opts.http.clone());
         let port = opts.port;
-        let ready_cmd = opts.cmd.clone();
+        let ready_cmd = opts.cmd.clone().map(ReadyCmd::new);
         let expected_port = opts.expected_port.clone();
         let auto_bump_port = opts.auto_bump_port;
         let retry = opts.retry.unwrap_or_default();
@@ -750,9 +787,9 @@ impl IpcClient {
                 dir: crate::config_types::Dir(dir),
                 retry,
                 ready_delay: delay.or(Some(3)),
-                ready_output: output,
+                ready_output: output.map(ReadyOutput::new),
                 ready_http: http,
-                ready_port: port,
+                ready_port: port.map(ReadyPort::new),
                 ready_cmd,
                 port: crate::config_types::PortConfig::from_parts(
                     expected_port.unwrap_or_default(),
@@ -957,10 +994,10 @@ impl IpcClient {
             dir: crate::config_types::Dir(dir),
             retry: opts.retry.unwrap_or_default(),
             ready_delay: opts.delay.or(Some(3)),
-            ready_output: opts.output,
+            ready_output: opts.output.map(ReadyOutput::new),
             ready_http: merge_ready_http_override(None, opts.http),
-            ready_port: opts.port,
-            ready_cmd: opts.cmd.clone(),
+            ready_port: opts.port.map(ReadyPort::new),
+            ready_cmd: opts.cmd.clone().map(ReadyCmd::new),
             port: crate::config_types::PortConfig::from_parts(
                 opts.expected_port.unwrap_or_default(),
                 opts.auto_bump_port.unwrap_or_default(),
@@ -1010,6 +1047,8 @@ pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> Path
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::env;
 
     use super::*;
@@ -1019,6 +1058,7 @@ mod tests {
         let configured = Some(ReadyHttp {
             url: "http://localhost:3000/original".to_string(),
             status: vec![401],
+            timeout: None,
         });
 
         let ready_http =
@@ -1039,6 +1079,7 @@ mod tests {
             ready_http: Some(ReadyHttp {
                 url: "http://localhost:3000/original".to_string(),
                 status: vec![401],
+                timeout: None,
             }),
             ..PitchforkTomlDaemon::default()
         };
@@ -1052,6 +1093,52 @@ mod tests {
 
         assert_eq!(ready_http.url, "http://localhost:3000/health");
         assert_eq!(ready_http.status, vec![401]);
+    }
+
+    #[test]
+    fn build_run_options_preserves_ready_port_timeout_for_cli_port_override() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ready_port: Some(ReadyPort {
+                port: 3000,
+                timeout: Some(Duration::from_secs(45)),
+            }),
+            ..PitchforkTomlDaemon::default()
+        };
+        let opts = StartOptions {
+            port: Some(4000),
+            ..StartOptions::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
+        let ready_port = run_opts.ready_port.unwrap();
+
+        assert_eq!(ready_port.port, 4000);
+        assert_eq!(ready_port.timeout, Some(Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn build_run_options_preserves_ready_output_timeout_for_cli_output_override() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ready_output: Some(ReadyOutput {
+                pattern: "READY".to_string(),
+                timeout: Some(Duration::from_secs(45)),
+            }),
+            ..PitchforkTomlDaemon::default()
+        };
+        let opts = StartOptions {
+            output: Some("DONE".to_string()),
+            ..StartOptions::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
+        let ready_output = run_opts.ready_output.unwrap();
+
+        assert_eq!(ready_output.pattern, "DONE");
+        assert_eq!(ready_output.timeout, Some(Duration::from_secs(45)));
     }
 
     #[test]

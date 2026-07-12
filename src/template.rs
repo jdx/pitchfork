@@ -260,7 +260,10 @@ pub fn render_daemon_templates(
     }
 
     if let Some(ref cmd) = config.ready_cmd {
-        config.ready_cmd = Some(renderer.render(cmd)?);
+        config.ready_cmd = Some(crate::pitchfork_toml::ReadyCmd {
+            run: renderer.render(&cmd.run)?,
+            timeout: cmd.timeout,
+        });
     }
 
     Ok(())

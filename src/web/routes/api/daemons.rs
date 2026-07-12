@@ -161,10 +161,10 @@ fn entry_to_api(
             None
         },
         ready_delay: d.ready_delay,
-        ready_output: d.ready_output.clone(),
+        ready_output: d.ready_output.as_ref().map(|o| o.pattern.clone()),
         ready_http_url: d.ready_http.as_ref().map(|r| r.url.clone()),
-        ready_port: d.ready_port,
-        ready_cmd: d.ready_cmd.clone(),
+        ready_port: d.ready_port.as_ref().map(|p| p.port),
+        ready_cmd: d.ready_cmd.as_ref().map(|r| r.run.clone()),
         port_config: d.port.as_ref().map(|p| {
             if p.bump.0 == 0 {
                 p.expect

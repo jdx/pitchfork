@@ -71,7 +71,7 @@ ready_http = "http://localhost:3000/ready"
 
 [daemons.private_api]
 run = "node server.js"
-ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
+ready_http = { url = "http://localhost:3000/health", status = [200, 401], timeout = "30s" }
 ```
 
 **Best for:** Web services with health check endpoints.
@@ -79,7 +79,7 @@ ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
 ::: tip
 The HTTP check polls every 500ms with a 5 second timeout per request. The string
 form accepts any 2xx response; the object form accepts the exact `status` codes
-you list.
+you list and an optional overall `timeout` for the entire readiness polling period.
 :::
 
 ## Port Check
@@ -101,12 +101,18 @@ ready_port = 3000
 [daemons.database]
 run = "postgres -D /var/lib/pgsql/data"
 ready_port = 5432
+
+[daemons.api_with_timeout]
+run = "node server.js"
+ready_port = { port = 3000, timeout = "30s" }
 ```
 
 **Best for:** Services that listen on a known port but don't have a health endpoint.
 
 ::: tip
 The port check polls every 500ms by attempting a TCP connection to 127.0.0.1:port.
+Add a `timeout` to cap how long the check will poll. Without a timeout, the check
+remains open until the daemon starts listening.
 :::
 
 ## Command Check
@@ -128,12 +134,17 @@ ready_cmd = "curl -sf http://localhost:3000/health"
 [daemons.database]
 run = "postgres -D /var/lib/pgsql/data"
 ready_cmd = "pg_isready -h localhost"
+
+[daemons.worker]
+run = "./start-worker.sh"
+ready_cmd = { run = "test -f /tmp/worker.ready", timeout = "60s" }
 ```
 
 **Best for:** Services that require custom readiness logic or external tools.
 
 ::: tip
-The command check polls every 500ms. Use this when you need more complex readiness checks than the built-in options provide.
+The command check polls every 500ms. Add a `timeout` to cap how long the check
+will poll. Use this when you need more complex readiness checks than the built-in options provide.
 :::
 
 ## Behaviors
@@ -149,6 +160,7 @@ The command check polls every 500ms. Use this when you need more complex readine
 - If multiple checks are configured (HTTP, port, command), the first one to succeed marks the daemon as ready
 - **Delay check** only fires when no other check type (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`) is configured. It acts as the fallback default.
 - If the daemon exits with a non-zero code before becoming ready, `pitchfork start/run` exits with that same code
+- A timed `ready_http`, `ready_port`, or `ready_cmd` stops polling when its deadline is reached. Startup fails only when every configured check has reached its deadline; any unbounded check keeps startup open. When startup fails because all checks are exhausted, pitchfork exits with code `124`, kills the daemon, and applies normal retry and dependency behavior.
 
 ## Common Patterns
 

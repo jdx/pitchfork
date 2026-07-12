@@ -3,7 +3,8 @@ use crate::cli::daemons::resolve_project_config_path;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, namespace_from_path,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
+    namespace_from_path,
 };
 use crate::settings::settings;
 use indexmap::IndexMap;
@@ -244,10 +245,10 @@ impl Add {
                 cron,
                 retry,
                 ready_delay: self.ready_delay,
-                ready_output: self.ready_output.clone(),
+                ready_output: self.ready_output.clone().map(ReadyOutput::new),
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),
-                ready_port: self.ready_port,
-                ready_cmd: self.ready_cmd.clone(),
+                ready_port: self.ready_port.map(ReadyPort::new),
+                ready_cmd: self.ready_cmd.clone().map(ReadyCmd::new),
                 port: {
                     let expect = self.expected_port.clone();
                     let bump = match self.bump {

@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, StopConfig, StopSignal, WatchMode,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
+    StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -163,13 +164,13 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_port: Option<u16>,
+    pub ready_port: Option<ReadyPort>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_cmd: Option<String>,
+    pub ready_cmd: Option<ReadyCmd>,
     /// New port configuration (preferred)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port: Option<PortConfig>,
@@ -1231,7 +1232,7 @@ impl PitchforkToml {
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
                     ready_http: daemon.ready_http.clone(),
-                    ready_port: daemon.ready_port,
+                    ready_port: daemon.ready_port.clone(),
                     ready_cmd: daemon.ready_cmd.clone(),
                     port: port.cloned(),
                     // Deprecated fields: written for backward compatibility with older pitchfork versions
@@ -1577,14 +1578,13 @@ pub struct PitchforkTomlDaemon {
     /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
     pub ready_http: Option<ReadyHttp>,
     /// TCP port to check for readiness (connection success = ready)
-    #[schemars(range(min = 1, max = 65535))]
-    pub ready_port: Option<u16>,
+    pub ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness (exit code 0 = ready)
-    pub ready_cmd: Option<String>,
+    pub ready_cmd: Option<ReadyCmd>,
     /// Port configuration: expected ports and auto-bump settings
     pub port: Option<PortConfig>,
     /// Whether to start this daemon automatically on system boot
@@ -1683,7 +1683,7 @@ impl PitchforkTomlDaemon {
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),
-            ready_port: self.ready_port,
+            ready_port: self.ready_port.clone(),
             ready_cmd: self.ready_cmd.clone(),
             port: self.port.clone(),
             wait_ready: false,

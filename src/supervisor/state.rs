@@ -13,7 +13,10 @@ use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::MemoryLimit;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::pitchfork_toml::PortConfig;
+use crate::pitchfork_toml::ReadyCmd;
 use crate::pitchfork_toml::ReadyHttp;
+use crate::pitchfork_toml::ReadyOutput;
+use crate::pitchfork_toml::ReadyPort;
 use crate::pitchfork_toml::Retry;
 use crate::pitchfork_toml::StopConfig;
 use crate::pitchfork_toml::WatchMode;
@@ -42,10 +45,10 @@ pub(crate) struct UpsertDaemonOpts {
     pub retry: Option<Retry>,
     pub retry_count: Option<u32>,
     pub ready_delay: Option<u64>,
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     pub ready_http: Option<ReadyHttp>,
-    pub ready_port: Option<u16>,
-    pub ready_cmd: Option<String>,
+    pub ready_port: Option<ReadyPort>,
+    pub ready_cmd: Option<ReadyCmd>,
     /// Port configuration
     pub port: Option<PortConfig>,
     /// Resolved ports actually used after auto-bump (may differ from expected)
@@ -129,7 +132,7 @@ impl UpsertDaemonOpts {
             o.ready_delay = opts.ready_delay;
             o.ready_output = opts.ready_output.clone();
             o.ready_http = opts.ready_http.clone();
-            o.ready_port = opts.ready_port;
+            o.ready_port = opts.ready_port.clone();
             o.ready_cmd = opts.ready_cmd.clone();
             o.port = opts.port.clone();
             o.depends = Some(opts.depends.clone());
@@ -209,7 +212,9 @@ impl Supervisor {
             ready_http: opts
                 .ready_http
                 .or(existing.and_then(|d| d.ready_http.clone())),
-            ready_port: opts.ready_port.or(existing.and_then(|d| d.ready_port)),
+            ready_port: opts
+                .ready_port
+                .or(existing.and_then(|d| d.ready_port.clone())),
             ready_cmd: opts
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),

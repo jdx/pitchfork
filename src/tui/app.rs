@@ -7,7 +7,7 @@ use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    ReadyHttp, Retry, namespace_from_path,
+    ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
 use crate::settings::settings;
@@ -330,9 +330,15 @@ pub struct EditorState {
     #[allow(dead_code)]
     pub scroll_offset: usize,
     /// Preserved config field for ready_cmd (no form UI yet)
-    preserved_ready_cmd: Option<String>,
+    preserved_ready_cmd: Option<ReadyCmd>,
     /// Preserved ready_http statuses (no form UI yet)
     preserved_ready_http_status: Option<Vec<u16>>,
+    /// Preserved ready_http timeout (no form UI yet)
+    preserved_ready_http_timeout: Option<std::time::Duration>,
+    /// Preserved ready_output timeout (no form UI yet)
+    preserved_ready_output_timeout: Option<std::time::Duration>,
+    /// Preserved ready_port timeout (no form UI yet)
+    preserved_ready_port_timeout: Option<std::time::Duration>,
 }
 
 impl EditorState {
@@ -350,6 +356,9 @@ impl EditorState {
             scroll_offset: 0,
             preserved_ready_cmd: None,
             preserved_ready_http_status: None,
+            preserved_ready_http_timeout: None,
+            preserved_ready_output_timeout: None,
+            preserved_ready_port_timeout: None,
         }
     }
 
@@ -372,6 +381,9 @@ impl EditorState {
                 .ready_http
                 .as_ref()
                 .and_then(|h| (!h.status.is_empty()).then(|| h.status.clone())),
+            preserved_ready_http_timeout: config.ready_http.as_ref().and_then(|h| h.timeout),
+            preserved_ready_output_timeout: config.ready_output.as_ref().and_then(|o| o.timeout),
+            preserved_ready_port_timeout: config.ready_port.as_ref().and_then(|p| p.timeout),
         }
     }
 
@@ -477,14 +489,19 @@ impl EditorState {
                 "retry" => field.value = FormFieldValue::Number(config.retry.count()),
                 "ready_delay" => field.value = FormFieldValue::OptionalNumber(config.ready_delay),
                 "ready_output" => {
-                    field.value = FormFieldValue::OptionalText(config.ready_output.clone())
+                    field.value = FormFieldValue::OptionalText(
+                        config.ready_output.as_ref().map(|o| o.pattern.clone()),
+                    )
                 }
                 "ready_http" => {
                     field.value = FormFieldValue::OptionalText(
                         config.ready_http.as_ref().map(|h| h.url.clone()),
                     )
                 }
-                "ready_port" => field.value = FormFieldValue::OptionalPort(config.ready_port),
+                "ready_port" => {
+                    field.value =
+                        FormFieldValue::OptionalPort(config.ready_port.as_ref().map(|p| p.port))
+                }
                 "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
                 "depends" => {
                     field.value = FormFieldValue::StringList(
@@ -553,15 +570,24 @@ impl EditorState {
                 ("retry", FormFieldValue::Number(n)) => config.retry = Retry(*n),
                 ("ready_delay", FormFieldValue::OptionalNumber(n)) => config.ready_delay = *n,
                 ("ready_output", FormFieldValue::OptionalText(s)) => {
-                    config.ready_output = s.clone()
+                    config.ready_output = s.clone().map(|pattern| ReadyOutput {
+                        pattern,
+                        timeout: self.preserved_ready_output_timeout,
+                    })
                 }
                 ("ready_http", FormFieldValue::OptionalText(s)) => {
                     config.ready_http = s.clone().map(|url| ReadyHttp {
                         url,
                         status: self.preserved_ready_http_status.clone().unwrap_or_default(),
+                        timeout: self.preserved_ready_http_timeout,
                     })
                 }
-                ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = *p,
+                ("ready_port", FormFieldValue::OptionalPort(p)) => {
+                    config.ready_port = p.map(|port| ReadyPort {
+                        port,
+                        timeout: self.preserved_ready_port_timeout,
+                    })
+                }
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
                 ("depends", FormFieldValue::StringList(v)) => {
                     config.depends = v.iter().filter_map(|s| DaemonId::parse(s).ok()).collect()
