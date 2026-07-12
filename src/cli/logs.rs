@@ -137,10 +137,14 @@ fn format_fields(fields_json: &str) -> String {
 
 /// Format and write a single log entry with structured field highlighting.
 ///
-/// When the entry has structured fields (`fields_json` is `Some`), renders as:
-/// `<timestamp> |LEVEL| logger  message  key=value key=value`
+/// When `raw` is set, the original message is emitted verbatim (after ANSI
+/// stripping if requested), ignoring any structured fields. This keeps `--raw`
+/// honored even when `--jq` populates `fields_json` for filtering.
 ///
-/// Otherwise falls back to plain display: `<timestamp> message`
+/// Otherwise, when the entry has structured fields (`fields_json` is `Some`),
+/// renders as: `<timestamp> |LEVEL| logger  message  key=value key=value`
+///
+/// Falls back to plain display: `<timestamp> message`
 #[allow(clippy::too_many_arguments)]
 fn write_formatted_log(
     w: &mut dyn Write,
@@ -149,6 +153,7 @@ fn write_formatted_log(
     single_daemon: bool,
     strip_ansi: bool,
     show_timestamp: bool,
+    raw: bool,
 ) -> io::Result<()> {
     // Always strip PTY control sequences (cursor moves, clear screen, etc.)
     // while preserving SGR color codes. PTY daemons emit these sequences which
@@ -176,7 +181,12 @@ fn write_formatted_log(
         out.push(' ');
     }
 
-    if entry.fields_json.is_some() {
+    if raw {
+        // Raw mode: emit the original log line verbatim. Structured
+        // fields may still be populated (e.g. --jq needs them for
+        // filtering) but must not alter the raw output format.
+        out.push_str(&raw_msg);
+    } else if entry.fields_json.is_some() {
         // Structured display: level badge, logger, message, fields
         let mut need_sep = false;
 
@@ -589,6 +599,7 @@ impl Logs {
                     single_daemon,
                     strip_ansi,
                     show_timestamp,
+                    self.raw,
                 )?;
             }
             Ok(())
@@ -958,6 +969,7 @@ pub async fn tail_logs(
                     single_daemon,
                     strip_ansi,
                     show_timestamp,
+                    raw,
                 )
                 .into_diagnostic()?;
             }
