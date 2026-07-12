@@ -54,6 +54,7 @@ impl Wait {
                 Vec::new(),
                 None,
                 settings().logs.timestamp,
+                false,
             )
             .await
             .unwrap_or_default();

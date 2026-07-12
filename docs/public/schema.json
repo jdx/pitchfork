@@ -762,6 +762,13 @@
             "boolean",
             "null"
           ]
+        },
+        "timestamp_format": {
+          "description": "strftime format for log timestamps in `pitchfork logs` output",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
