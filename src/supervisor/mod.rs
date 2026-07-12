@@ -138,7 +138,12 @@ pub fn start_in_background() -> Result<()> {
 impl Supervisor {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            state_file: Mutex::new(StateFile::new(env::PITCHFORK_STATE_FILE.clone())),
+            state_file: Mutex::new(StateFile::read(&*env::PITCHFORK_STATE_FILE).unwrap_or_else(
+                |e| {
+                    warn!("failed to read state file, starting with empty state: {e}");
+                    StateFile::new(env::PITCHFORK_STATE_FILE.clone())
+                },
+            )),
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),

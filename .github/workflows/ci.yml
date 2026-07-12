@@ -18,7 +18,7 @@ env:
   MISE_EXPERIMENTAL: true
 
 jobs:
-  ci:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -36,7 +36,9 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: mise run ci
+      - run: mise run build:ui
+      - run: cargo build
+      - run: mise run lint
       - run: mise run render
       - name: assert render produces no diff
         run: |
@@ -46,6 +48,43 @@ jobs:
             git diff HEAD
             exit 1
           fi
+      - run: cargo nextest run
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pitchfork-debug
+          path: target/debug/pitchfork
+
+  ci-bats:
+    needs: build
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tranche: [0, 1]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pitchfork-debug
+          path: target/debug
+      - run: chmod +x target/debug/pitchfork
+      - run: sudo apt-get update && sudo apt-get install -y parallel
+      - run: mise run test:bats
+        env:
+          TRANCHE: ${{ matrix.tranche }}
+          TRANCHE_COUNT: 2
 
   windows-build:
     runs-on: windows-latest
@@ -80,7 +119,8 @@ jobs:
   # blocked. Lets the branch-protection rule depend on one name instead of N.
   final:
     needs:
-      - ci
+      - build
+      - ci-bats
       - windows-build
     runs-on: ubuntu-latest
     timeout-minutes: 2
