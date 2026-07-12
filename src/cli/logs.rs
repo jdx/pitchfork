@@ -429,7 +429,11 @@ impl Logs {
             );
         }
 
-        let single_daemon = resolved_ids.len() == 1;
+        // Only suppress the daemon id label when the user explicitly asked
+        // for a single daemon. When no daemon is named on the command line
+        // (e.g. `pf logs`), ids are shown even if only one daemon has logs,
+        // so the user can tell where each line came from.
+        let single_daemon = resolved_ids.len() == 1 && !self.id.is_empty();
         let show_timestamp = settings().logs.timestamp && !self.no_timestamp && !self.raw;
         let has_time_filter = from.is_some() || to.is_some();
 
