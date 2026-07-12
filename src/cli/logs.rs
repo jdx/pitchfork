@@ -74,16 +74,20 @@ const KNOWN_FIELD_KEYS: &[&str] = &[
     "@timestamp",
 ];
 
-/// Format a log level as a colored 3-letter badge: `|ERR|`, `|WRN|`, etc.
+/// Format a log level badge: `[ERR]`, `[WRN|`, etc.
+///
+/// Brackets use the same dim color as the logger; the level letters use the
+/// level's accent color in bold.
 fn level_badge(level: &str) -> String {
-    match level {
-        "error" => console::style("|ERR|").red().bold().to_string(),
-        "warn" => console::style("|WRN|").yellow().to_string(),
-        "info" => console::style("|INF|").cyan().to_string(),
-        "debug" => console::style("|DBG|").magenta().to_string(),
-        "trace" => console::style("|TRC|").dim().to_string(),
-        _ => String::new(),
-    }
+    let label = match level {
+        "error" => console::style("ERR").red().bold(),
+        "warn" => console::style("WRN").yellow().bold(),
+        "info" => console::style("INF").cyan().bold(),
+        "debug" => console::style("DBG").magenta().bold(),
+        "trace" => console::style("TRC").dim().bold(),
+        _ => return String::new(),
+    };
+    format!("{}{}{}", ndim("["), label, ndim("]"))
 }
 
 /// Format a single JSON value for display in the fields section.
@@ -137,10 +141,15 @@ fn format_fields(fields_json: &str) -> String {
 
 /// Format and write a single log entry with structured field highlighting.
 ///
-/// When the entry has structured fields (`fields_json` is `Some`), renders as:
-/// `<timestamp> |LEVEL| logger  message  key=value key=value`
+/// When `raw` is set, the original message is emitted verbatim (after ANSI
+/// stripping if requested), ignoring any structured fields. This keeps `--raw`
+/// honored even when `--jq` populates `fields_json` for filtering.
 ///
-/// Otherwise falls back to plain display: `<timestamp> message`
+/// Otherwise, when the entry has structured fields (`fields_json` is `Some`),
+/// renders as: `<timestamp> [LEVEL] logger: message > key=value key=value`
+/// For warn/error levels, the timestamp and message use the level's accent color.
+///
+/// Falls back to plain display: `<timestamp> message`
 #[allow(clippy::too_many_arguments)]
 fn write_formatted_log(
     w: &mut dyn Write,
@@ -149,6 +158,7 @@ fn write_formatted_log(
     single_daemon: bool,
     strip_ansi: bool,
     show_timestamp: bool,
+    raw: bool,
 ) -> io::Result<()> {
     // Always strip PTY control sequences (cursor moves, clear screen, etc.)
     // while preserving SGR color codes. PTY daemons emit these sequences which
@@ -162,47 +172,79 @@ fn write_formatted_log(
 
     let mut out = String::with_capacity(256);
 
-    // Timestamp (leftmost)
-    if show_timestamp {
-        out.push_str(&ndim(date).to_string());
-        out.push(' ');
-    }
+    if raw {
+        // Raw mode: emit timestamp + original line verbatim. Structured
+        // fields may still be populated (e.g. --jq needs them for
+        // filtering) but must not alter the raw output format.
+        if show_timestamp {
+            out.push_str(&ndim(date).to_string());
+            out.push(' ');
+        }
+        if !single_daemon {
+            let colors_on = !strip_ansi && console::colors_enabled();
+            out.push_str(&colored_id_label(&entry.daemon_id, colors_on));
+            out.push(' ');
+        }
+        out.push_str(&raw_msg);
+    } else if entry.fields_json.is_some() {
+        // Structured display: [LEVEL] logger: message > key=value
+        let level = entry.level.as_deref();
+        let accent = match level {
+            Some("error") => "error",
+            Some("warn") => "warn",
+            _ => "",
+        };
 
-    // Daemon ID (multi-daemon mode): [colored_id] matching pf start style
-    if !single_daemon {
-        let colors_on = !strip_ansi && console::colors_enabled();
-        let colored = colored_id_label(&entry.daemon_id, colors_on);
-        out.push_str(&colored);
-        out.push(' ');
-    }
+        // Timestamp — accent-colored for warn/error
+        if show_timestamp {
+            let ts = match accent {
+                "error" => console::style(date).red().to_string(),
+                "warn" => console::style(date).yellow().to_string(),
+                _ => ndim(date).to_string(),
+            };
+            out.push_str(&ts);
+            out.push(' ');
+        }
 
-    if entry.fields_json.is_some() {
-        // Structured display: level badge, logger, message, fields
+        // Daemon ID (multi-daemon mode)
+        if !single_daemon {
+            let colors_on = !strip_ansi && console::colors_enabled();
+            out.push_str(&colored_id_label(&entry.daemon_id, colors_on));
+            out.push(' ');
+        }
+
         let mut need_sep = false;
 
-        if let Some(level) = &entry.level {
-            let badge = level_badge(level);
+        // Level badge: [ERR] with dim brackets + bold accent letters
+        if let Some(lvl) = level {
+            let badge = level_badge(lvl);
             if !badge.is_empty() {
                 out.push_str(&badge);
                 need_sep = true;
             }
         }
 
+        // Separators (colon, arrow): always dim regardless of level
+        let sep = ndim(":").to_string();
+        let arrow = ndim(" > ").to_string();
+
+        // Logger: italic + colon
         if let Some(logger) = &entry.logger {
             if need_sep {
                 out.push(' ');
             }
-            out.push_str(&ndim(logger).to_string());
+            out.push_str(&console::style(logger).italic().dim().to_string());
+            out.push_str(&sep);
             need_sep = true;
         }
 
-        // Content: message + fields (2-space gap from metadata)
+        // Message (bold, accent-colored for warn/error) + fields
         let msg_cow = entry.msg.as_deref().filter(|s| !s.is_empty()).map(|s| {
             let cleaned = strip_pty_controls(s);
             if strip_ansi {
-                std::borrow::Cow::Owned(console::strip_ansi_codes(&cleaned).to_string())
+                std::borrow::Cow::<str>::Owned(console::strip_ansi_codes(&cleaned).to_string())
             } else {
-                std::borrow::Cow::Owned(cleaned)
+                std::borrow::Cow::<str>::Owned(cleaned)
             }
         });
         let fields_str = entry
@@ -213,12 +255,17 @@ fn write_formatted_log(
 
         if msg_cow.is_some() || fields_str.is_some() {
             if need_sep {
-                out.push_str("  ");
+                out.push(' ');
             }
             if let Some(msg) = &msg_cow {
-                out.push_str(msg);
+                let styled = match accent {
+                    "error" => console::style(msg.as_ref()).red().bold().to_string(),
+                    "warn" => console::style(msg.as_ref()).yellow().bold().to_string(),
+                    _ => console::style(msg.as_ref()).bold().to_string(),
+                };
+                out.push_str(&styled);
                 if fields_str.is_some() {
-                    out.push_str("  ");
+                    out.push_str(&arrow);
                 }
             }
             if let Some(fields) = &fields_str {
@@ -230,7 +277,16 @@ fn write_formatted_log(
             out.push_str(&raw_msg);
         }
     } else {
-        // Unstructured log: just the raw message
+        // Unstructured log: timestamp + raw message
+        if show_timestamp {
+            out.push_str(&ndim(date).to_string());
+            out.push(' ');
+        }
+        if !single_daemon {
+            let colors_on = !strip_ansi && console::colors_enabled();
+            out.push_str(&colored_id_label(&entry.daemon_id, colors_on));
+            out.push(' ');
+        }
         out.push_str(&raw_msg);
     }
 
@@ -346,9 +402,10 @@ pub struct Logs {
     #[clap(long)]
     case_sensitive: bool,
 
-    /// Filter by log level (error, warn, info, debug, trace)
+    /// Filter by minimum log level (error, warn, info, debug, trace)
     ///
-    /// Matches the normalized level extracted from structured log lines.
+    /// Shows entries at or above the given severity.
+    /// For example, `--level warn` shows warn and error.
     /// Only effective for daemons with log_format json or logfmt.
     #[clap(long)]
     level: Option<String>,
@@ -419,7 +476,11 @@ impl Logs {
             );
         }
 
-        let single_daemon = resolved_ids.len() == 1;
+        // Only suppress the daemon id label when the user explicitly asked
+        // for a single daemon. When no daemon is named on the command line
+        // (e.g. `pf logs`), ids are shown even if only one daemon has logs,
+        // so the user can tell where each line came from.
+        let single_daemon = resolved_ids.len() == 1 && !self.id.is_empty();
         let show_timestamp = settings().logs.timestamp && !self.no_timestamp && !self.raw;
         let has_time_filter = from.is_some() || to.is_some();
 
@@ -489,7 +550,7 @@ impl Logs {
                          debug, dbg, trace, trc"
                 )
             })?;
-            filters.push(FieldFilter::LevelEq(normalized));
+            filters.push(FieldFilter::LevelMin(normalized));
         }
         for pair in &self.field {
             let (key, value) = pair
@@ -589,6 +650,7 @@ impl Logs {
                     single_daemon,
                     strip_ansi,
                     show_timestamp,
+                    self.raw,
                 )?;
             }
             Ok(())
@@ -958,6 +1020,7 @@ pub async fn tail_logs(
                     single_daemon,
                     strip_ansi,
                     show_timestamp,
+                    raw,
                 )
                 .into_diagnostic()?;
             }

@@ -98,6 +98,27 @@ pitchfork logs api --since 1h -n 20
 
 Pitchfork can automatically parse structured logs produced by your daemons. When a log line is written in JSON or logfmt format, pitchfork extracts fields such as `level`, `msg`, and `logger` and stores them alongside the original message. This makes it possible to filter by log level, query individual fields, and pipe output through jq expressions.
 
+<div class="structured-logs-screenshot">
+  <img src="/img/structured-logs.png" alt="Structured log output with level badges, logger names, and highlighted fields" />
+</div>
+
+<style scoped>
+.structured-logs-screenshot {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+.structured-logs-screenshot img {
+  height: auto;
+  width: 100%;
+  max-width: 880px;
+  min-width: 0;
+  display: block;
+  margin: 0 auto;
+  border-radius: 8px;
+  border: 1px solid var(--vp-c-divider);
+}
+</style>
+
 ### Configure Log Format
 
 Log parsing can be configured per daemon or applied globally as a default.

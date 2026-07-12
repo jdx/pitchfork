@@ -37,10 +37,25 @@ pub enum MessageFilter {
 /// A filter applied to structured log fields.
 #[derive(Debug, Clone)]
 pub enum FieldFilter {
-    /// Match entries with a specific normalized level.
-    LevelEq(String),
+    /// Match entries at or above a severity threshold.
+    ///
+    /// `--level warn` keeps `warn` and `error` (higher severity).
+    /// Severity order (low→high): trace < debug < info < warn < error.
+    LevelMin(String),
     /// Match entries where `json_extract(fields_json, '$.key') = value`.
     FieldEq { key: String, value: String },
+}
+
+/// Levels at or above the given threshold, ordered low→high.
+pub fn levels_at_or_above(min: &str) -> Vec<&'static str> {
+    match min {
+        "error" => vec!["error"],
+        "warn" => vec!["warn", "error"],
+        "info" => vec!["info", "warn", "error"],
+        "debug" => vec!["debug", "info", "warn", "error"],
+        "trace" => vec!["trace", "debug", "info", "warn", "error"],
+        _ => vec![],
+    }
 }
 
 impl MessageFilter {

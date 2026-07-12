@@ -603,10 +603,23 @@ impl SqliteLogStore {
 
         for filter in &opts.field_filters {
             match filter {
-                FieldFilter::LevelEq(level) => {
-                    let param_index = query_params.len() + 1;
-                    conditions.push(format!("level = ?{param_index}"));
-                    query_params.push(Box::new(level.clone()));
+                FieldFilter::LevelMin(level) => {
+                    let matching = crate::log_store::levels_at_or_above(level);
+                    if matching.is_empty() {
+                        // Unknown level: no results
+                        conditions.push("0".to_string());
+                    } else {
+                        let placeholders = matching
+                            .iter()
+                            .map(|l| {
+                                let idx = query_params.len() + 1;
+                                query_params.push(Box::new((*l).to_string()));
+                                format!("?{idx}")
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        conditions.push(format!("level IN ({placeholders})"));
+                    }
                 }
                 FieldFilter::FieldEq { key, value } => {
                     let param_index = query_params.len() + 1;
