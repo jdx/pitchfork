@@ -89,9 +89,9 @@ Make --grep matching case-sensitive
 
 ### `--level <LEVEL>`
 
-Filter by log level (error, warn, info, debug, trace)
+Filter by minimum log level (error, warn, info, debug, trace)
 
-Matches the normalized level extracted from structured log lines. Only effective for daemons with log_format json or logfmt.
+Shows entries at or above the given severity. For example, `--level warn` shows warn and error. Only effective for daemons with log_format json or logfmt.
 
 ### `--field… <KEY=VALUE>`
 

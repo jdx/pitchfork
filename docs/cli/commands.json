@@ -1122,9 +1122,9 @@
           {
             "name": "level",
             "usage": "--level <LEVEL>",
-            "help": "Filter by log level (error, warn, info, debug, trace)",
-            "help_long": "Filter by log level (error, warn, info, debug, trace)\n\nMatches the normalized level extracted from structured log lines. Only effective for daemons with log_format json or logfmt.",
-            "help_first_line": "Filter by log level (error, warn, info, debug, trace)",
+            "help": "Filter by minimum log level (error, warn, info, debug, trace)",
+            "help_long": "Filter by minimum log level (error, warn, info, debug, trace)\n\nShows entries at or above the given severity. For example, `--level warn` shows warn and error. Only effective for daemons with log_format json or logfmt.",
+            "help_first_line": "Filter by minimum log level (error, warn, info, debug, trace)",
             "short": [],
             "long": [
               "level"

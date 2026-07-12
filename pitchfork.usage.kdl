@@ -165,8 +165,8 @@ cmd logs help="Displays logs for daemon(s)" {
         arg <REGEX>
     }
     flag --case-sensitive help="Make --grep matching case-sensitive"
-    flag --level help="Filter by log level (error, warn, info, debug, trace)" {
-        long_help "Filter by log level (error, warn, info, debug, trace)\n\nMatches the normalized level extracted from structured log lines. Only effective for daemons with log_format json or logfmt."
+    flag --level help="Filter by minimum log level (error, warn, info, debug, trace)" {
+        long_help "Filter by minimum log level (error, warn, info, debug, trace)\n\nShows entries at or above the given severity. For example, `--level warn` shows warn and error. Only effective for daemons with log_format json or logfmt."
         arg <LEVEL>
     }
     flag --field help="Filter by structured field value (KEY=VALUE, can be repeated)" var=#true {

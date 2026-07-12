@@ -281,6 +281,47 @@ EOF
   pitchfork stop level_case
 }
 
+@test "logs --level shows entries at or above the threshold" {
+  cat > "$PWD/emit.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '{"level":"trace","msg":"trace_msg"}' '{"level":"debug","msg":"debug_msg"}' '{"level":"info","msg":"info_msg"}' '{"level":"warn","msg":"warn_msg"}' '{"level":"error","msg":"error_msg"}'
+sleep 3600
+EOF
+  chmod +x "$PWD/emit.sh"
+
+  create_pitchfork_toml <<EOF
+[daemons.level_threshold]
+run = "bash $PWD/emit.sh"
+ready_output = "error_msg"
+
+[daemons.level_threshold.logs]
+log_format = "json"
+EOF
+
+  pitchfork start level_threshold
+  wait_for_logs level_threshold "error_msg" 10
+
+  # --level warn shows warn and error, excludes info/debug/trace
+  PITCHFORK_LOG=error run pitchfork logs level_threshold --level warn --raw --no-timestamp
+  assert_success
+  [[ "$output" == *'"msg":"warn_msg"'* ]]
+  [[ "$output" == *'"msg":"error_msg"'* ]]
+  [[ "$output" != *'"msg":"info_msg"'* ]]
+  [[ "$output" != *'"msg":"debug_msg"'* ]]
+  [[ "$output" != *'"msg":"trace_msg"'* ]]
+
+  # --level info shows info, warn, error
+  PITCHFORK_LOG=error run pitchfork logs level_threshold --level info --raw --no-timestamp
+  assert_success
+  [[ "$output" == *'"msg":"info_msg"'* ]]
+  [[ "$output" == *'"msg":"warn_msg"'* ]]
+  [[ "$output" == *'"msg":"error_msg"'* ]]
+  [[ "$output" != *'"msg":"debug_msg"'* ]]
+  [[ "$output" != *'"msg":"trace_msg"'* ]]
+
+  pitchfork stop level_threshold
+}
+
 @test "logs --level with invalid value gives error" {
   cat > "$PWD/emit.sh" <<'EOF'
 #!/usr/bin/env bash

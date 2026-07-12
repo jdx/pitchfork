@@ -402,9 +402,10 @@ pub struct Logs {
     #[clap(long)]
     case_sensitive: bool,
 
-    /// Filter by log level (error, warn, info, debug, trace)
+    /// Filter by minimum log level (error, warn, info, debug, trace)
     ///
-    /// Matches the normalized level extracted from structured log lines.
+    /// Shows entries at or above the given severity.
+    /// For example, `--level warn` shows warn and error.
     /// Only effective for daemons with log_format json or logfmt.
     #[clap(long)]
     level: Option<String>,
@@ -549,7 +550,7 @@ impl Logs {
                          debug, dbg, trace, trc"
                 )
             })?;
-            filters.push(FieldFilter::LevelEq(normalized));
+            filters.push(FieldFilter::LevelMin(normalized));
         }
         for pair in &self.field {
             let (key, value) = pair
