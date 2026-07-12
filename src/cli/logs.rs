@@ -74,16 +74,20 @@ const KNOWN_FIELD_KEYS: &[&str] = &[
     "@timestamp",
 ];
 
-/// Format a log level as a colored 3-letter badge: `|ERR|`, `|WRN|`, etc.
+/// Format a log level badge: `[ERR]`, `[WRN|`, etc.
+///
+/// Brackets use the same dim color as the logger; the level letters use the
+/// level's accent color in bold.
 fn level_badge(level: &str) -> String {
-    match level {
-        "error" => console::style("|ERR|").red().bold().to_string(),
-        "warn" => console::style("|WRN|").yellow().to_string(),
-        "info" => console::style("|INF|").cyan().to_string(),
-        "debug" => console::style("|DBG|").magenta().to_string(),
-        "trace" => console::style("|TRC|").dim().to_string(),
-        _ => String::new(),
-    }
+    let label = match level {
+        "error" => console::style("ERR").red().bold(),
+        "warn" => console::style("WRN").yellow().bold(),
+        "info" => console::style("INF").cyan().bold(),
+        "debug" => console::style("DBG").magenta().bold(),
+        "trace" => console::style("TRC").dim().bold(),
+        _ => return String::new(),
+    };
+    format!("{}{}{}", ndim("["), label, ndim("]"))
 }
 
 /// Format a single JSON value for display in the fields section.
@@ -142,7 +146,8 @@ fn format_fields(fields_json: &str) -> String {
 /// honored even when `--jq` populates `fields_json` for filtering.
 ///
 /// Otherwise, when the entry has structured fields (`fields_json` is `Some`),
-/// renders as: `<timestamp> |LEVEL| logger  message  key=value key=value`
+/// renders as: `<timestamp> [LEVEL] logger: message > key=value key=value`
+/// For warn/error levels, the timestamp and message use the level's accent color.
 ///
 /// Falls back to plain display: `<timestamp> message`
 #[allow(clippy::too_many_arguments)]
@@ -167,52 +172,79 @@ fn write_formatted_log(
 
     let mut out = String::with_capacity(256);
 
-    // Timestamp (leftmost)
-    if show_timestamp {
-        out.push_str(&ndim(date).to_string());
-        out.push(' ');
-    }
-
-    // Daemon ID (multi-daemon mode): [colored_id] matching pf start style
-    if !single_daemon {
-        let colors_on = !strip_ansi && console::colors_enabled();
-        let colored = colored_id_label(&entry.daemon_id, colors_on);
-        out.push_str(&colored);
-        out.push(' ');
-    }
-
     if raw {
-        // Raw mode: emit the original log line verbatim. Structured
+        // Raw mode: emit timestamp + original line verbatim. Structured
         // fields may still be populated (e.g. --jq needs them for
         // filtering) but must not alter the raw output format.
+        if show_timestamp {
+            out.push_str(&ndim(date).to_string());
+            out.push(' ');
+        }
+        if !single_daemon {
+            let colors_on = !strip_ansi && console::colors_enabled();
+            out.push_str(&colored_id_label(&entry.daemon_id, colors_on));
+            out.push(' ');
+        }
         out.push_str(&raw_msg);
     } else if entry.fields_json.is_some() {
-        // Structured display: level badge, logger, message, fields
+        // Structured display: [LEVEL] logger: message > key=value
+        let level = entry.level.as_deref();
+        let accent = match level {
+            Some("error") => "error",
+            Some("warn") => "warn",
+            _ => "",
+        };
+
+        // Timestamp — accent-colored for warn/error
+        if show_timestamp {
+            let ts = match accent {
+                "error" => console::style(date).red().to_string(),
+                "warn" => console::style(date).yellow().to_string(),
+                _ => ndim(date).to_string(),
+            };
+            out.push_str(&ts);
+            out.push(' ');
+        }
+
+        // Daemon ID (multi-daemon mode)
+        if !single_daemon {
+            let colors_on = !strip_ansi && console::colors_enabled();
+            out.push_str(&colored_id_label(&entry.daemon_id, colors_on));
+            out.push(' ');
+        }
+
         let mut need_sep = false;
 
-        if let Some(level) = &entry.level {
-            let badge = level_badge(level);
+        // Level badge: [ERR] with dim brackets + bold accent letters
+        if let Some(lvl) = level {
+            let badge = level_badge(lvl);
             if !badge.is_empty() {
                 out.push_str(&badge);
                 need_sep = true;
             }
         }
 
+        // Separators (colon, arrow): always dim regardless of level
+        let sep = ndim(":").to_string();
+        let arrow = ndim(" > ").to_string();
+
+        // Logger: italic + colon
         if let Some(logger) = &entry.logger {
             if need_sep {
                 out.push(' ');
             }
-            out.push_str(&ndim(logger).to_string());
+            out.push_str(&console::style(logger).italic().dim().to_string());
+            out.push_str(&sep);
             need_sep = true;
         }
 
-        // Content: message + fields (2-space gap from metadata)
+        // Message (bold, accent-colored for warn/error) + fields
         let msg_cow = entry.msg.as_deref().filter(|s| !s.is_empty()).map(|s| {
             let cleaned = strip_pty_controls(s);
             if strip_ansi {
-                std::borrow::Cow::Owned(console::strip_ansi_codes(&cleaned).to_string())
+                std::borrow::Cow::<str>::Owned(console::strip_ansi_codes(&cleaned).to_string())
             } else {
-                std::borrow::Cow::Owned(cleaned)
+                std::borrow::Cow::<str>::Owned(cleaned)
             }
         });
         let fields_str = entry
@@ -223,12 +255,17 @@ fn write_formatted_log(
 
         if msg_cow.is_some() || fields_str.is_some() {
             if need_sep {
-                out.push_str("  ");
+                out.push(' ');
             }
             if let Some(msg) = &msg_cow {
-                out.push_str(msg);
+                let styled = match accent {
+                    "error" => console::style(msg.as_ref()).red().bold().to_string(),
+                    "warn" => console::style(msg.as_ref()).yellow().bold().to_string(),
+                    _ => console::style(msg.as_ref()).bold().to_string(),
+                };
+                out.push_str(&styled);
                 if fields_str.is_some() {
-                    out.push_str("  ");
+                    out.push_str(&arrow);
                 }
             }
             if let Some(fields) = &fields_str {
@@ -240,7 +277,16 @@ fn write_formatted_log(
             out.push_str(&raw_msg);
         }
     } else {
-        // Unstructured log: just the raw message
+        // Unstructured log: timestamp + raw message
+        if show_timestamp {
+            out.push_str(&ndim(date).to_string());
+            out.push(' ');
+        }
+        if !single_daemon {
+            let colors_on = !strip_ansi && console::colors_enabled();
+            out.push_str(&colored_id_label(&entry.daemon_id, colors_on));
+            out.push(' ');
+        }
         out.push_str(&raw_msg);
     }
 
