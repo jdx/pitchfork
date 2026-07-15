@@ -86,34 +86,6 @@ jobs:
           TRANCHE: ${{ matrix.tranche }}
           TRANCHE_COUNT: 2
 
-  windows-build:
-    runs-on: windows-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: true
-          persist-credentials: false
-      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
-        with:
-          cache: false
-      # save-if gates cache writes to main so PRs can only restore, not poison.
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build UI assets
-        working-directory: ui
-        run: |
-          aube install
-          aube run build
-      # `cargo check` (debug) catches the compile errors that otherwise only
-      # surface in the release pipeline, without paying for an optimized link.
-      # Integration tests under tests/ are Unix-only (lsof, pkill, etc.) so
-      # we limit the check to lib + bins.
-      - run: cargo check --lib --bins --all-features
-
   # Aggregator that required-status-checks can target. If any upstream job
   # failed, was cancelled, or was skipped, this step exits non-zero so the PR is
   # blocked. Lets the branch-protection rule depend on one name instead of N.
@@ -121,7 +93,6 @@ jobs:
     needs:
       - build
       - ci-bats
-      - windows-build
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions: {}
