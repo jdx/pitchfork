@@ -305,6 +305,133 @@ impl JsonSchema for ReadyHttp {
 }
 
 // ---------------------------------------------------------------------------
+// ReadyPort
+// ---------------------------------------------------------------------------
+
+/// TCP readiness port: a literal port number or a Tera template string that
+/// renders to one.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// ready_port = 3000                          # literal
+/// ready_port = "{{ daemons.redis.port }}"    # template
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadyPort {
+    Port(u16),
+    Template(String),
+}
+
+impl ReadyPort {
+    /// The resolved port number. `None` if this is an unrendered template.
+    pub fn as_port(&self) -> Option<u16> {
+        match self {
+            Self::Port(port) => Some(*port),
+            Self::Template(_) => None,
+        }
+    }
+}
+
+impl From<u16> for ReadyPort {
+    fn from(port: u16) -> Self {
+        Self::Port(port)
+    }
+}
+
+impl std::str::FromStr for ReadyPort {
+    type Err = String;
+
+    /// Numeric strings must be a valid port (1-65535); anything else
+    /// (non-empty) is treated as a Tera template.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            Err("ready_port cannot be empty".to_string())
+        } else if let Ok(n) = s.parse::<i64>() {
+            u16::try_from(n)
+                .ok()
+                .filter(|&p| p > 0)
+                .map(Self::Port)
+                .ok_or_else(|| format!("ready_port out of range (1-65535): {n}"))
+        } else {
+            Ok(Self::Template(s.to_string()))
+        }
+    }
+}
+
+impl std::fmt::Display for ReadyPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Port(port) => write!(f, "{port}"),
+            Self::Template(template) => f.write_str(template),
+        }
+    }
+}
+
+impl Serialize for ReadyPort {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Port(port) => s.serialize_u16(*port),
+            Self::Template(template) => s.serialize_str(template),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadyPort {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+
+        impl serde::de::Visitor<'_> for V {
+            type Value = ReadyPort;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a port number (1-65535) or a template string")
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ReadyPort, E> {
+                u16::try_from(v)
+                    .ok()
+                    .filter(|&p| p > 0)
+                    .map(ReadyPort::Port)
+                    .ok_or_else(|| E::custom(format!("ready_port out of range (1-65535): {v}")))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<ReadyPort, E> {
+                if v < 0 {
+                    Err(E::custom("ready_port cannot be negative"))
+                } else {
+                    self.visit_u64(v as u64)
+                }
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<ReadyPort, E> {
+                // Numeric strings resolve immediately; anything else is a
+                // Tera template rendered at daemon start time.
+                v.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_any(V)
+    }
+}
+
+impl JsonSchema for ReadyPort {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ReadyPort")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "TCP readiness port: a port number, or a template string rendering to one (e.g. \"{{ daemons.redis.port }}\")",
+            "oneOf": [
+                { "type": "integer", "minimum": 1, "maximum": 65535 },
+                { "type": "string", "description": "Tera template that renders to a port number" }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StopSignal
 // ---------------------------------------------------------------------------
 
