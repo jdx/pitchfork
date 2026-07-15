@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -68,20 +68,16 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           export PATH="$PWD/target/debug:$PATH"
-          # Balanced file assignment (by test count, greedy fill):
-          # S0(47): basic errors watch
-          # S1(48): settings log_store depends pty
-          # S2(47): logs config_merge namespace interval
-          # S3(47): structured_logs cron state migration
-          # S4(46): hooks proxy port config
-          # S5(40): config_fields supervisor autostop
+          # Balanced 4-way assignment (snake/serpentine by test count):
+          # S0(70): basic proxy cron namespace watch
+          # S1(67): settings supervisor config_merge port migration
+          # S2(68): logs config_fields log_store state config autostop
+          # S3(70): structured_logs hooks errors depends pty interval
           case "$SHARD" in
-            0) tests="test/basic.bats test/errors.bats test/watch.bats" ;;
-            1) tests="test/settings.bats test/log_store.bats test/depends.bats test/pty.bats" ;;
-            2) tests="test/logs.bats test/config_merge.bats test/namespace.bats test/interval.bats" ;;
-            3) tests="test/structured_logs.bats test/cron.bats test/state.bats test/migration.bats" ;;
-            4) tests="test/hooks.bats test/proxy.bats test/port.bats test/config.bats" ;;
-            5) tests="test/config_fields.bats test/supervisor.bats test/autostop.bats" ;;
+            0) tests="test/basic.bats test/proxy.bats test/cron.bats test/namespace.bats test/watch.bats" ;;
+            1) tests="test/settings.bats test/supervisor.bats test/config_merge.bats test/port.bats test/migration.bats" ;;
+            2) tests="test/logs.bats test/config_fields.bats test/log_store.bats test/state.bats test/config.bats test/autostop.bats" ;;
+            3) tests="test/structured_logs.bats test/hooks.bats test/errors.bats test/depends.bats test/pty.bats test/interval.bats" ;;
           esac
           echo "Running shard $SHARD: $tests"
           test/bats/bin/bats $tests
