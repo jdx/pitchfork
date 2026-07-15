@@ -54,7 +54,7 @@ jobs:
       - name: Build
         run: cargo build --all-features
       - name: Upload binary
-        uses: actions/upload-artifact@6027fc2b59c3a054649ab6dc2cf777402545c2bb # v4
+        uses: actions/upload-artifact@v4
         with:
           name: pitchfork-bin
           path: target/debug/pitchfork.exe
