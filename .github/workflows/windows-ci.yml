@@ -55,6 +55,8 @@ jobs:
       - name: Install sqlite3
         shell: pwsh
         run: choco install sqlite -y --no-progress
+      - name: Create UI placeholder
+        run: mkdir -p ui/dist && echo '<html><body>placeholder</body></html>' > ui/dist/index.html
       - name: Build
         run: cargo build --all-features
       - name: Run bats e2e tests (shard ${{ matrix.shard }})
