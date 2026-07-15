@@ -6,6 +6,8 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 /// Map from parent PID to its child PIDs.
 type ParentToChildren = HashMap<u32, Vec<u32>>;
@@ -273,11 +275,35 @@ impl Procs {
         #[cfg(windows)]
         {
             let _ = (stop_signal, stop_timeout);
-            self.refresh_pids(&[pid]);
-            if let Some(process) = self.lock_system().process(sysinfo_pid) {
-                process.kill();
-                process.wait();
+            // Use taskkill /F /T to kill the entire process tree.
+            // sysinfo's process.kill() only kills the main process, leaving
+            // child processes (e.g. python3 spawned by sh -c) orphaned and
+            // still holding ports. The /T flag kills all descendant processes.
+            let output = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID"])
+                .arg(pid.to_string())
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .output();
+            match output {
+                Ok(o) if o.status.success() => {
+                    debug!("taskkill /F /T /PID {pid} succeeded");
+                }
+                Ok(o) => {
+                    // taskkill failed — process may have already exited
+                    debug!(
+                        "taskkill /F /T /PID {pid} exited with status {}: {}",
+                        o.status,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    );
+                }
+                Err(e) => {
+                    debug!("failed to spawn taskkill for pid {pid}: {e}");
+                }
             }
+            // Brief sleep to let the OS signal the process handle, giving
+            // tokio's child.wait() in the monitor task a chance to detect
+            // the exit and fire on_stop/on_exit hooks.
+            std::thread::sleep(std::time::Duration::from_millis(200));
             Ok(true)
         }
 
@@ -363,27 +389,26 @@ impl Procs {
     /// Check if a process is terminated or is a zombie.
     /// On Linux, zombie processes still have /proc/[pid] entries but are effectively dead.
     /// This prevents unnecessary signal escalation for processes that have already exited.
+    #[cfg(unix)]
     fn is_terminated_or_zombie(&self, sysinfo_pid: sysinfo::Pid) -> bool {
         let system = self.lock_system();
         match system.process(sysinfo_pid) {
             None => true,
             Some(process) => {
-                #[cfg(unix)]
-                {
-                    matches!(process.status(), sysinfo::ProcessStatus::Zombie)
-                }
-                #[cfg(not(unix))]
-                {
-                    let _ = process;
-                    false
-                }
+                matches!(process.status(), sysinfo::ProcessStatus::Zombie)
             }
         }
     }
 
     pub(crate) fn refresh_processes(&self) {
-        self.lock_system()
-            .refresh_processes(ProcessesToUpdate::All, true);
+        let mut system = self.lock_system();
+        system.refresh_processes(ProcessesToUpdate::All, true);
+        // On Windows, refresh_processes() does not update CPU usage.
+        // sysinfo requires a separate refresh_cpu_usage() call to compute
+        // the CPU delta between two samples. The first call stores the
+        // baseline; subsequent calls return the actual percentage.
+        #[cfg(windows)]
+        system.refresh_cpu_usage();
     }
 
     /// Refresh only specific PIDs instead of all processes.

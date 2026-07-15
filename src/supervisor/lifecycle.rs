@@ -718,7 +718,11 @@ impl Supervisor {
             }
 
             loop {
+                // biased: prioritize process exit over delay/output, so that
+                // a daemon that fails during ready_delay is detected before
+                // the delay timer fires and falsely marks it as ready.
                 select! {
+                    biased;
                     Some(line) = output_rx.recv() => {
                         let parsed = parse_line(&line);
                         log_buffer.push(parsed);
@@ -907,12 +911,22 @@ impl Supervisor {
                         }
                     } => {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
-                            info!("daemon {id} ready: delay elapsed");
-                            ready_notified = true;
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
+                            // Check if the process already exited or is exiting before
+                            // declaring it ready. On Windows, sleep(0) fires before
+                            // child.wait() detects the exit, causing pitchfork start to
+                            // return success for a daemon that already failed.
+                            if exit_status.is_some() {
+                                debug!("daemon {id} exited during ready_delay, not marking as ready");
+                            } else if !PROCS.is_running(daemon_pid) {
+                                debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
+                            } else {
+                                info!("daemon {id} ready: delay elapsed");
+                                ready_notified = true;
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(Ok(()));
+                                }
+                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                             }
-                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                         }
                         // Disable timer after it fires
                         delay_timer = None;
@@ -926,6 +940,24 @@ impl Supervisor {
                     }
                 }
             }
+
+            // Snapshot the daemon state BEFORE draining output.
+            //
+            // The drain can take up to 5s (e.g. when child processes keep the
+            // stdout pipe open). During that time, a subsequent start() call
+            // (e.g. from `pitchfork restart`) can upsert the daemon with a new
+            // PID and Running status. If we only checked state AFTER the drain,
+            // the monitoring task would see d.pid != Some(old_pid) && !is_stopped()
+            // && !is_stopping() and return early without firing on_stop/on_exit
+            // hooks.
+            //
+            // By snapshotting is_stopping before the drain, we preserve the
+            // knowledge that stop() was called, so hooks fire correctly even
+            // if start() has since changed the state.
+            let pre_drain_daemon = SUPERVISOR.get_daemon(&id).await;
+            let pre_drain_is_stopping = pre_drain_daemon
+                .as_ref()
+                .is_some_and(|d| d.status.is_stopped() || d.status.is_stopping());
 
             // Drain any in-flight output lines that were still in the mpsc
             // channel or the OS pipe buffer when the child exited. Without
@@ -992,25 +1024,27 @@ impl Supervisor {
             }
             let _monitor_guard = MonitorGuard;
             // Check if this monitoring task is for the current daemon process.
-            // Allow Stopped/Stopping daemons through: stop() clears pid atomically,
-            // so d.pid != Some(pid) would be true, but we still need the is_stopped()
-            // branch below to fire on_stop/on_exit hooks.
-            if current_daemon.is_none()
-                || current_daemon.as_ref().is_some_and(|d| {
-                    d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
-                })
+            // If the daemon was intentionally stopped (pre_drain_is_stopping),
+            // skip this check — we must still fire on_stop/on_exit hooks even
+            // if start() has since changed the PID and status.
+            if !pre_drain_is_stopping
+                && (current_daemon.is_none()
+                    || current_daemon.as_ref().is_some_and(|d| {
+                        d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
+                    }))
             {
                 // Another process has taken over, don't update status
                 return;
             }
-            // Capture the intentional-stop flag BEFORE any state changes.
-            // stop() transitions Stopping → Stopped and clears pid. If stop() wins the race
-            // and sets Stopped before this task runs, we still need to fire on_stop/on_exit.
-            // Treat both Stopping and Stopped as "intentional stop by pitchfork".
+            // Capture the intentional-stop flag. Combine pre-drain and
+            // post-drain state to handle both race orders:
+            //  - stop() set Stopping before drain → pre_drain_is_stopping
+            //  - stop() set Stopped during drain → current_daemon.is_stopped()
             let already_stopped = current_daemon
                 .as_ref()
                 .is_some_and(|d| d.status.is_stopped());
             let is_stopping = already_stopped
+                || pre_drain_is_stopping
                 || current_daemon
                     .as_ref()
                     .is_some_and(|d| d.status.is_stopping());
@@ -1032,8 +1066,12 @@ impl Supervisor {
                 (Err(_), false) => (-1, "fail"),
             };
 
-            // Update daemon state unless stop() already did it (won the race).
-            if !already_stopped {
+            // Update daemon state unless stop() already did it (won the race),
+            // OR the daemon was intentionally stopped before the drain
+            // (pre_drain_is_stopping). In the latter case, start() may have
+            // upserted Running during the 5s drain, and we must NOT overwrite
+            // it with Stopped — that would undo the restart.
+            if !already_stopped && !pre_drain_is_stopping {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
@@ -1175,15 +1213,22 @@ impl Supervisor {
                             .set(|o| {
                                 o.pid = None;
                                 o.status = DaemonStatus::Stopped;
-                                o.last_exit_success = Some(true); // Manual stop is considered successful
+                                o.last_exit_success = Some(true);
                             })
                             .build(),
                     )
                     .await?;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
-                    // Process already dead, directly mark as stopped
-                    // Note that the cleanup logic is handled in monitor task
+                    // Process already dead. If the daemon is already in a
+                    // terminal state (Errored or Stopped), don't overwrite it
+                    // with Stopped — the background retry checker needs
+                    // Errored to retry the daemon after supervisor restart.
+                    if daemon.status.is_errored() || daemon.status.is_stopped() {
+                        debug!("daemon {id} already in terminal status {}, not overwriting", daemon.status);
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
+                    // Otherwise mark as stopped (cleanup for unexpected exit)
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
                             .set(|o| {

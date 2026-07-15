@@ -9,6 +9,7 @@
 use crate::Result;
 
 /// File name for the installed CA certificate on Linux.
+#[cfg(target_os = "linux")]
 const INSTALLED_CERT_NAME: &str = "pitchfork-proxy.crt";
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,7 @@ fn is_ca_trusted_macos(cert_path: &std::path::Path) -> bool {
 }
 
 /// Linux distro CA trust configuration.
+#[cfg(target_os = "linux")]
 struct LinuxCATrustConfig {
     cert_dir: &'static str,
     /// Update command split into program + args.
@@ -162,6 +164,7 @@ pub fn install_cert(cert_path: &std::path::Path) -> Result<()> {
         );
     }
 
+    #[allow(unreachable_code)] // fallback bail! diverges on non-macOS/Linux
     Ok(())
 }
 
@@ -281,6 +284,7 @@ pub fn uninstall_cert(cert_path: &std::path::Path) -> Result<()> {
         miette::bail!("Automatic certificate removal is not supported on this platform.");
     }
 
+    #[allow(unreachable_code)] // fallback bail! diverges on non-macOS/Linux
     Ok(())
 }
 

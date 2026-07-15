@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_default_shell() {
         // Default should be Sh (or Cmd on Windows)
-        let default = Shell::default();
+        let default = Shell::default_for_platform();
         #[cfg(unix)]
         assert_eq!(default, Shell::Sh);
         #[cfg(windows)]

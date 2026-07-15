@@ -731,14 +731,16 @@ impl Supervisor {
             .collect();
 
         if watch_configs.is_empty() {
-            debug!("No daemons with watch patterns configured");
-            return Ok(());
+            debug!("No daemons with watch patterns configured, watcher will start lazily");
+            // Do NOT return early — spawn the watcher loop anyway so it can
+            // pick up daemons added after supervisor startup (e.g. when the
+            // supervisor is pre-started before tests create pitchfork.toml).
+        } else {
+            info!(
+                "Setting up file watching for {} daemon(s)",
+                watch_configs.len()
+            );
         }
-
-        info!(
-            "Setting up file watching for {} daemon(s)",
-            watch_configs.len()
-        );
 
         // Collect all directories to watch
         let mut all_dirs = std::collections::HashSet::new();
@@ -757,8 +759,7 @@ impl Supervisor {
         }
 
         if all_dirs.is_empty() {
-            debug!("No directories to watch after expanding patterns");
-            return Ok(());
+            debug!("No directories to watch yet, watcher will check again on next loop");
         }
 
         // Spawn the file watcher task

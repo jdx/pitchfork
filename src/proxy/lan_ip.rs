@@ -71,6 +71,7 @@ async fn probe_default_route() -> Option<Ipv4Addr> {
 }
 
 /// A network interface matched from `getifaddrs`.
+#[allow(dead_code)] // fields only read on Unix; struct used as type signature on Windows
 struct InterfaceInfo {
     name: String,
     ip: Ipv4Addr,

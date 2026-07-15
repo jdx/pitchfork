@@ -69,10 +69,18 @@ impl IpcServerHandle {
 
 impl IpcServer {
     pub fn new() -> Result<(Self, IpcServerHandle)> {
-        xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
-        let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
+        // Unix: create the socket directory and remove any stale socket file.
+        // Windows: named pipes exist in a flat kernel namespace — no files to create or clean up.
+        #[cfg(unix)]
+        {
+            xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
+            let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
+        }
         let opts = ListenerOptions::new().name(fs_name("main")?);
+        #[cfg(unix)]
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
+        #[cfg(windows)]
+        debug!("Listening on named pipe");
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
@@ -142,7 +150,8 @@ impl IpcServer {
                     }
                 }
             }
-            // Clean up socket file on graceful shutdown
+            // Clean up socket file on graceful shutdown (Unix only)
+            #[cfg(unix)]
             let _ = std::fs::remove_file(&*env::IPC_SOCK_MAIN);
             debug!("IPC server shut down cleanly");
         });
@@ -314,6 +323,7 @@ impl IpcServer {
 
     pub fn close(&self) {
         debug!("Closing IPC server");
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&*env::IPC_SOCK_MAIN);
     }
 }

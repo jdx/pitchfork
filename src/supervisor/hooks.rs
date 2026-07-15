@@ -6,6 +6,7 @@
 
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
+use crate::settings::settings;
 use crate::shell::Shell;
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
@@ -48,6 +49,23 @@ fn get_hook_cmd(
     })
 }
 
+/// Create a tokio Command for a hook using the configured `general.shell`
+/// setting (same shell used for daemon `run` commands), falling back to the
+/// platform default if the setting is empty or unparseable.
+fn hook_command(cmd: &str) -> tokio::process::Command {
+    let shell_setting = settings().general.shell.clone();
+    match shell_words::split(&shell_setting) {
+        Ok(parts) if !parts.is_empty() => {
+            let (program, args) = parts.split_first().unwrap();
+            let mut command = tokio::process::Command::new(program);
+            command.args(args);
+            command.arg(cmd);
+            command
+        }
+        _ => Shell::default_for_platform().command(cmd),
+    }
+}
+
 /// Fire a hook command as a fire-and-forget tokio task.
 ///
 /// Reads the hook command from fresh config (`PitchforkToml::all_merged()`),
@@ -87,7 +105,7 @@ pub(crate) async fn fire_hook(
 
         info!("firing {hook_type} hook for daemon {daemon_id}: {cmd}");
 
-        let mut command = Shell::default_for_platform().command(&cmd);
+        let mut command = hook_command(&cmd);
         command
             .current_dir(&daemon_dir)
             .stdout(std::process::Stdio::null())
@@ -160,7 +178,7 @@ pub(crate) async fn fire_output_hook(
 
         info!("firing on_output hook for daemon {daemon_id}: {cmd}");
 
-        let mut command = Shell::default_for_platform().command(&cmd);
+        let mut command = hook_command(&cmd);
         command
             .current_dir(&daemon_dir)
             .stdout(std::process::Stdio::null())

@@ -120,18 +120,114 @@ pub fn start_in_background() -> Result<()> {
     if let Some(parent) = log_file.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let stderr_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file)
-        .into_diagnostic()?;
     #[cfg(unix)]
     fix_state_dir_permissions();
-    cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
-        .stdout_null()
-        .stderr_file(stderr_file)
-        .start()
-        .into_diagnostic()?;
+
+    // On Unix, use duct with stderr redirected to the log file.
+    #[cfg(unix)]
+    {
+        let stderr_file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+            .into_diagnostic()?;
+        cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
+            .stdin_null()
+            .stdout_null()
+            .stderr_file(stderr_file)
+            .start()
+            .into_diagnostic()?;
+    }
+
+    // On Windows, use CreateProcessW directly with bInheritHandles=FALSE.
+    // std::process::Command always sets bInheritHandles=TRUE when any stdio
+    // handle is configured (even Stdio::null()), which causes the background
+    // supervisor to inherit ALL inheritable handles from the parent —
+    // including bats' stdout capture pipe. The supervisor keeps the pipe
+    // open after the CLI exits, and bats hangs forever waiting for EOF.
+    //
+    // CreateProcessW with bInheritHandles=FALSE prevents any handle
+    // inheritance. We pass NUL device handles for stdin/stdout/stderr
+    // via STARTUPINFO without inheriting any parent handles.
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{CloseHandle, FALSE, GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            OPEN_EXISTING,
+        };
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION,
+            STARTF_USESTDHANDLES, STARTUPINFOW,
+        };
+
+        // Open NUL device for stdin/stdout/stderr
+        // The supervisor uses its own internal file-based logger
+        // (PITCHFORK_LOG_FILE), so stderr to NUL is fine.
+        let nul: Vec<u16> = "\\\\?\\NUL\0".encode_utf16().collect();
+        let null_handle = unsafe {
+            CreateFileW(
+                nul.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if null_handle as usize == usize::MAX {
+            return Err(miette::miette!(
+                "failed to open NUL device for supervisor stdio: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = null_handle;
+        si.hStdOutput = null_handle;
+        si.hStdError = null_handle;
+
+        let bin_path = &*env::PITCHFORK_BIN;
+        let mut cmd_line: Vec<u16> = format!("\"{}\" supervisor run\0", bin_path.to_string_lossy())
+            .encode_utf16()
+            .collect();
+
+        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmd_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                FALSE, // bInheritHandles = FALSE — the whole point
+                DETACHED_PROCESS | CREATE_NO_WINDOW,
+                std::ptr::null(),
+                std::ptr::null(),
+                &si,
+                &mut pi,
+            )
+        };
+
+        // Close the NUL handle — the child has its own copy.
+        unsafe { CloseHandle(null_handle) };
+
+        if ok == 0 {
+            return Err(miette::miette!(
+                "CreateProcessW failed for supervisor: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        // Close process/thread handles — we don't need them (detached process).
+        unsafe {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    }
+
     Ok(())
 }
 
@@ -534,6 +630,16 @@ impl Supervisor {
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
 
+        // Prune shell PIDs that are no longer running. This is essential on
+        // Unix so that exited shells don't keep daemons alive forever.
+        //
+        // On Windows, skip this check: Git Bash (MSYS2) PIDs from `$$` are
+        // Cygwin-internal PIDs that are invisible to sysinfo (which sees
+        // Windows PIDs). The is_running check would always return false,
+        // immediately removing every registered shell and breaking autostop.
+        // Shell registration/deregistration relies on UpdateShellDir IPC
+        // messages instead.
+        #[cfg(unix)]
         for (dir, pids) in dirs_with_pids {
             let to_remove = pids
                 .iter()
@@ -861,6 +967,8 @@ impl Supervisor {
             }
         }
 
+        // Unix: remove the socket directory. Windows: named pipes have no filesystem component.
+        #[cfg(unix)]
         let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);
     }
 
