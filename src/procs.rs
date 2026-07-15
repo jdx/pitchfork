@@ -4,10 +4,10 @@ use crate::settings::settings;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::Mutex;
-use sysinfo::ProcessesToUpdate;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::sync::Mutex;
+use sysinfo::ProcessesToUpdate;
 
 /// Map from parent PID to its child PIDs.
 type ParentToChildren = HashMap<u32, Vec<u32>>;

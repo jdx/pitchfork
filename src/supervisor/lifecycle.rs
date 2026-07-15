@@ -1225,7 +1225,10 @@ impl Supervisor {
                     // with Stopped — the background retry checker needs
                     // Errored to retry the daemon after supervisor restart.
                     if daemon.status.is_errored() || daemon.status.is_stopped() {
-                        debug!("daemon {id} already in terminal status {}, not overwriting", daemon.status);
+                        debug!(
+                            "daemon {id} already in terminal status {}, not overwriting",
+                            daemon.status
+                        );
                         return Ok(IpcResponse::DaemonWasNotRunning);
                     }
                     // Otherwise mark as stopped (cleanup for unexpected exit)

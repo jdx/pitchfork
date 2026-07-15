@@ -113,20 +113,25 @@ impl WatchFiles {
 /// the prefix after canonicalization to keep paths consistent across the watcher
 /// and the pattern matcher.
 fn normalize_watch_path(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .map(|p| {
+    match path.canonicalize() {
+        Ok(p) => {
             #[cfg(windows)]
-            { strip_verbatim_prefix(&p) }
+            {
+                strip_verbatim_prefix(&p)
+            }
             #[cfg(not(windows))]
-            { p }
-        })
-        .unwrap_or_else(|_| {
+            {
+                p
+            }
+        }
+        Err(_) => {
             if path.is_absolute() {
                 path.to_path_buf()
             } else {
                 crate::env::CWD.join(path)
             }
-        })
+        }
+    }
 }
 
 /// Strip the `\\?\` verbatim prefix from a Windows path.
