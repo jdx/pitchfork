@@ -10,8 +10,16 @@ static BASE_PATH: OnceLock<String> = OnceLock::new();
 
 static WEB_PORT: OnceLock<u16> = OnceLock::new();
 
+/// URL of the running web UI, derived from the actual bound address
+/// (which may differ from settings due to port bumping).
+static WEB_URL: OnceLock<String> = OnceLock::new();
+
 pub fn port() -> Option<u16> {
     WEB_PORT.get().copied()
+}
+
+pub fn url() -> Option<String> {
+    WEB_URL.get().cloned()
 }
 
 pub(crate) fn normalize_base_path(path: Option<&str>) -> crate::Result<String> {

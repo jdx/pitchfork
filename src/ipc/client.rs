@@ -436,6 +436,24 @@ impl IpcClient {
         }
     }
 
+    /// Get the URL of the web UI from the supervisor, if it is running.
+    ///
+    /// Returns the actual bound address (which may differ from static config
+    /// due to port bumping or settings changed since the supervisor started).
+    /// Returns `None` if the web UI is not running or the supervisor is too
+    /// old to recognize the request.
+    pub async fn get_web_url(&self) -> Result<Option<String>> {
+        match self.request(IpcRequest::GetWebUrl).await? {
+            IpcResponse::WebUrl { url } => Ok(url),
+            IpcResponse::Error(e) => {
+                // Old supervisor doesn't recognize GetWebUrl — not an error.
+                debug!("web url lookup skipped: {e}");
+                Ok(None)
+            }
+            rsp => Err(Self::unexpected_response("WebUrl", &rsp).into()),
+        }
+    }
+
     /// Stop a single daemon (low-level operation)
     pub async fn stop(&self, id: DaemonId) -> Result<bool> {
         let id_str = id.qualified();

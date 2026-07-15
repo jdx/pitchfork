@@ -190,6 +190,15 @@ pub async fn serve(port: u16, web_path: Option<String>) -> Result<()> {
     let (listener, actual_port) = try_bind(bind_address, port, port_attempts).await?;
     let _ = super::WEB_PORT.set(actual_port);
     let actual_addr = listener.local_addr().unwrap();
+    let url_host = match actual_addr.ip() {
+        ip if ip.is_unspecified() => "localhost".to_string(),
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+        std::net::IpAddr::V4(ip) => ip.to_string(),
+    };
+    // The scheme is hardcoded because the web server only speaks plain HTTP.
+    // If TLS support is ever added, this must pick the scheme accordingly or
+    // the URL reported by `supervisor status` will be wrong.
+    let _ = super::WEB_URL.set(format!("http://{url_host}:{actual_port}{base_path}"));
 
     info!("Web UI listening on http://{actual_addr}");
 

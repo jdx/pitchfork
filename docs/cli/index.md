@@ -43,7 +43,7 @@
 - [`pitchfork supervisor <SUBCOMMAND>`](/cli/supervisor.md)
 - [`pitchfork supervisor run [FLAGS]`](/cli/supervisor/run.md)
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
-- [`pitchfork supervisor status`](/cli/supervisor/status.md)
+- [`pitchfork supervisor status [--json]`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
 - [`pitchfork tui`](/cli/tui.md)
 - [`pitchfork wait <ID>`](/cli/wait.md)
