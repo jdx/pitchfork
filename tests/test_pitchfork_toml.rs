@@ -252,6 +252,32 @@ ready_port = "{{ daemons.redis.port }}"
     Ok(())
 }
 
+/// Numeric-looking ready_port strings are validated at parse time, not
+/// treated as templates
+#[test]
+fn test_daemon_with_out_of_range_ready_port_string() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    for bad in ["\"-1\"", "\"0\"", "\"70000\"", "0", "70000"] {
+        let toml_content = format!(
+            r#"
+[daemons.ready_daemon]
+run = "echo hi"
+ready_port = {bad}
+"#
+        );
+        fs::write(&toml_path, toml_content).unwrap();
+        let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+            .expect_err(&format!("ready_port = {bad} should fail to parse"));
+        let chain = format!("{err:?}");
+        assert!(
+            chain.contains("ready_port"),
+            "error for {bad} should mention ready_port: {chain}"
+        );
+    }
+}
+
 /// Test daemon with structured HTTP ready check
 #[test]
 fn test_daemon_with_ready_http_status() -> Result<()> {

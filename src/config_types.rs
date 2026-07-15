@@ -347,7 +347,7 @@ impl std::str::FromStr for ReadyPort {
         let s = s.trim();
         if s.is_empty() {
             Err("ready_port cannot be empty".to_string())
-        } else if let Ok(n) = s.parse::<u64>() {
+        } else if let Ok(n) = s.parse::<i64>() {
             u16::try_from(n)
                 .ok()
                 .filter(|&p| p > 0)
