@@ -204,13 +204,14 @@ EOF
   pitchfork start retry_persist &
   local start_pid=$!
 
-  wait_for_log_lines retry_persist 2
+  wait_for_log_lines retry_persist 3
 
   run pitchfork supervisor stop
   assert_success
 
   kill "$start_pid" 2>/dev/null || true
   wait "$start_pid" 2>/dev/null || true
+  sleep 1
 
   # State file keys use the qualified "namespace/name" form.
   local retry_count

@@ -7,7 +7,6 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
-  MISE_EXPERIMENTAL: true
 
 jobs:
   rust-tests:
@@ -46,16 +45,14 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
-        with:
-          cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          workspaces: .
+          shared-key: windows-ci-bats
       - name: Install sqlite3
         shell: pwsh
         run: choco install sqlite -y --no-progress
       - name: Create UI placeholder
+        shell: bash
         run: mkdir -p ui/dist && echo '<html><body>placeholder</body></html>' > ui/dist/index.html
       - name: Build
         run: cargo build --all-features
