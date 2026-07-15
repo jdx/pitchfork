@@ -32,11 +32,15 @@ jobs:
       - name: Run Rust tests
         run: cargo nextest run --all-features
 
-  build:
+  bats-tests:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -46,54 +50,33 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Build UI assets
-        working-directory: ui
-        run: |
-          aube install
-          aube run build
-      - name: Build
-        run: cargo build --all-features
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
         with:
-          name: pitchfork-bin
-          path: target/debug/pitchfork.exe
-          retention-days: 1
-
-  bats-tests:
-    needs: build
-    runs-on: windows-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        tranche: [0, 1, 2, 3, 4, 5]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: true
-          persist-credentials: false
-      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
-        with:
-          cache: false
+          workspaces: .
       - name: Install sqlite3
         shell: pwsh
         run: choco install sqlite -y --no-progress
-      - name: Download binary
-        uses: actions/download-artifact@v4
-        with:
-          name: pitchfork-bin
-          path: target/debug
-      - name: Run bats e2e tests (tranche ${{ matrix.tranche }})
+      - name: Build
+        run: cargo build --all-features
+      - name: Run bats e2e tests (shard ${{ matrix.shard }})
         shell: bash
         env:
-          TRANCHE: ${{ matrix.tranche }}
-          TRANCHE_COUNT: 6
+          SHARD: ${{ matrix.shard }}
         run: |
-          chmod +x target/debug/pitchfork.exe
           export PATH="$PWD/target/debug:$PATH"
-          tests=$(ls -1 test/*.bats | sort | awk -v t="$TRANCHE" -v n="$TRANCHE_COUNT" 'NR % n == t')
-          echo "Running tranche $TRANCHE: $tests"
+          # Balanced file assignment (by test count, greedy fill):
+          # S0(47): basic errors watch
+          # S1(48): settings log_store depends pty
+          # S2(47): logs config_merge namespace interval
+          # S3(47): structured_logs cron state migration
+          # S4(46): hooks proxy port config
+          # S5(40): config_fields supervisor autostop
+          case "$SHARD" in
+            0) tests="test/basic.bats test/errors.bats test/watch.bats" ;;
+            1) tests="test/settings.bats test/log_store.bats test/depends.bats test/pty.bats" ;;
+            2) tests="test/logs.bats test/config_merge.bats test/namespace.bats test/interval.bats" ;;
+            3) tests="test/structured_logs.bats test/cron.bats test/state.bats test/migration.bats" ;;
+            4) tests="test/hooks.bats test/proxy.bats test/port.bats test/config.bats" ;;
+            5) tests="test/config_fields.bats test/supervisor.bats test/autostop.bats" ;;
+          esac
+          echo "Running shard $SHARD: $tests"
           test/bats/bin/bats $tests
