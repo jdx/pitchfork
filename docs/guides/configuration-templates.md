@@ -46,6 +46,9 @@ Templates work in these configuration fields:
 | `env` values | <code v-pre>env = { DB_URL = "postgres://localhost:{{ daemons.db.port }}" }</code> |
 | `hooks.*` commands | <code v-pre>on_ready = "curl http://localhost:{{ daemons.api.port }}/health"</code> |
 | `ready_cmd` | <code v-pre>ready_cmd = "curl http://localhost:{{ daemons.api.port }}/health"</code> |
+| `ready_http` | <code v-pre>ready_http = "http://localhost:{{ daemons.api.port }}/health"</code> |
+| `ready_port` | <code v-pre>ready_port = "{{ daemons.api.port }}"</code> (must render to a port number) |
+| `ready_output` | <code v-pre>ready_output = "listening on port {{ daemons.api.port }}"</code> |
 
 ## Template Variables
 

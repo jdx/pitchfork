@@ -325,7 +325,7 @@
           ]
         },
         "ready_port": {
-          "description": "TCP port to check for readiness (connection success = ready)",
+          "description": "TCP port to check for readiness (connection success = ready).\nAccepts a port number, a Tera template string that renders to one, or an\nobject with an optional overall polling timeout.",
           "anyOf": [
             {
               "$ref": "#/$defs/ReadyPort"
@@ -608,13 +608,17 @@
       ]
     },
     "ReadyPort": {
-      "description": "TCP port readiness check: a port number, or { port, timeout } object with an optional overall polling timeout",
+      "description": "TCP readiness port: a port number, a template string rendering to one, or an object with an optional overall polling timeout",
       "oneOf": [
         {
           "description": "TCP port number to check for readiness",
           "type": "integer",
           "maximum": 65535,
           "minimum": 1
+        },
+        {
+          "description": "Tera template that renders to a port number",
+          "type": "string"
         },
         {
           "type": "object",
@@ -625,13 +629,26 @@
               "maximum": 65535,
               "minimum": 1
             },
+            "template": {
+              "description": "Tera template that renders to a port number",
+              "type": "string"
+            },
             "timeout": {
               "description": "Overall readiness polling timeout (e.g. '30s', '5m')",
               "type": "string"
             }
           },
-          "required": [
-            "port"
+          "oneOf": [
+            {
+              "required": [
+                "port"
+              ]
+            },
+            {
+              "required": [
+                "template"
+              ]
+            }
           ]
         }
       ]

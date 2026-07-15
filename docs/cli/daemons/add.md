@@ -76,7 +76,7 @@ HTTP endpoint URL to poll for readiness
 
 ### `--ready-port <READY_PORT>`
 
-TCP port to check for readiness
+TCP port to check for readiness (a number or Tera template)
 
 ### `--ready-cmd <READY_CMD>`
 

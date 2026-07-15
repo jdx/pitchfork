@@ -147,6 +147,27 @@ The command check polls every 500ms. Add a `timeout` to cap how long the check
 will poll. Use this when you need more complex readiness checks than the built-in options provide.
 :::
 
+## Templates
+
+All ready check fields (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`) accept
+[Tera templates](/guides/configuration-templates) to reference resolved values from
+daemons started earlier in the dependency order:
+
+```toml
+[daemons.redis]
+run = "redis-server"
+port = { expect = [6379], bump = 10 }
+
+[daemons.worker]
+run = "worker --redis-port {{ daemons.redis.port }}"
+# Ready once the worker can reach redis, even if its port was auto-bumped
+ready_cmd = "redis-cli -p {{ daemons.redis.port }} ping"
+depends = ["redis"]
+```
+
+`ready_port` templates must render to a port number (1-65535); otherwise the daemon
+fails to start with an error.
+
 ## Behaviors
 
 | Check Type | Ready When |

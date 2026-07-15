@@ -135,6 +135,7 @@ fn stop_cmd_probe_state(probe: &mut Option<CmdProbe>) {
 /// A check with no timeout is unbounded; a timed check can still succeed until its
 /// deadline fires. `ready_delay` is only used as a fallback when no other check is
 /// configured, so it is not counted here.
+#[allow(clippy::too_many_arguments)]
 fn any_ready_check_remaining(
     ready_output: Option<&ReadyOutput>,
     output_exhausted: bool,
@@ -261,35 +262,36 @@ impl Supervisor {
             .await
             {
                 Ok(resolved) => {
-                    let ready_port =
-                        if let Some(configured_port) = opts.ready_port.as_ref().map(|p| p.port) {
-                            // If ready_port matches one of the expected ports, apply the same bump offset
-                            let bump_offset = resolved
-                                .first()
-                                .unwrap_or(&0)
-                                .saturating_sub(*expected_ports.first().unwrap_or(&0));
-                            if expected_ports.contains(&configured_port) && bump_offset > 0 {
-                                configured_port
-                                    .checked_add(bump_offset)
-                                    .or(Some(configured_port))
-                            } else {
-                                Some(configured_port)
-                            }
-                        } else if opts.ready_output.is_none()
-                            && opts.ready_http.is_none()
-                            && opts.ready_cmd.is_none()
-                            && opts.ready_delay.is_none()
-                        {
-                            // No other ready check configured — use the first expected port as a
-                            // TCP port readiness check so the daemon is considered ready once it
-                            // starts listening.  Skip port 0 (ephemeral port request).
-                            resolved.first().copied().filter(|&p| p != 0)
+                    let ready_port = if let Some(configured_port) =
+                        opts.ready_port.as_ref().and_then(|p| p.as_port())
+                    {
+                        // If ready_port matches one of the expected ports, apply the same bump offset
+                        let bump_offset = resolved
+                            .first()
+                            .unwrap_or(&0)
+                            .saturating_sub(*expected_ports.first().unwrap_or(&0));
+                        if expected_ports.contains(&configured_port) && bump_offset > 0 {
+                            configured_port
+                                .checked_add(bump_offset)
+                                .or(Some(configured_port))
                         } else {
-                            // Another ready check is configured (output/http/cmd/delay).
-                            // Don't add an implicit TCP port check — it could race and fire
-                            // before the daemon has produced any output.
-                            None
-                        };
+                            Some(configured_port)
+                        }
+                    } else if opts.ready_output.is_none()
+                        && opts.ready_http.is_none()
+                        && opts.ready_cmd.is_none()
+                        && opts.ready_delay.is_none()
+                    {
+                        // No other ready check configured — use the first expected port as a
+                        // TCP port readiness check so the daemon is considered ready once it
+                        // starts listening.  Skip port 0 (ephemeral port request).
+                        resolved.first().copied().filter(|&p| p != 0)
+                    } else {
+                        // Another ready check is configured (output/http/cmd/delay).
+                        // Don't add an implicit TCP port check — it could race and fire
+                        // before the daemon has produced any output.
+                        None
+                    };
                     info!("daemon {id}: ports {expected_ports:?} resolved to {resolved:?}");
                     (resolved, ready_port)
                 }
@@ -327,14 +329,17 @@ impl Supervisor {
             // the TCP readiness probe would immediately succeed and pitchfork
             // would falsely consider the daemon ready — routing proxy traffic to
             // the wrong process.
-            if let Some(port) = opts.ready_port.as_ref().map(|p| p.port) {
+            if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port()) {
                 if port > 0 {
                     if let Some((pid, process)) = detect_port_conflict(port).await {
                         return Ok(IpcResponse::PortConflict { port, process, pid });
                     }
                 }
             }
-            (Vec::new(), opts.ready_port.as_ref().map(|p| p.port))
+            (
+                Vec::new(),
+                opts.ready_port.as_ref().and_then(|p| p.as_port()),
+            )
         };
 
         // Parse the configured shell (default "sh -c") into program + args.
@@ -535,7 +540,8 @@ impl Supervisor {
                         o.pid = Some(pid);
                         o.cmd = Some(original_cmd);
                         o.ready_port = effective_ready_port.map(|p| ReadyPort {
-                            port: p,
+                            port: Some(p),
+                            template: None,
                             timeout: opts.ready_port.as_ref().and_then(|rp| rp.timeout),
                         });
                         o.port = crate::config_types::PortConfig::from_parts(
@@ -554,7 +560,8 @@ impl Supervisor {
         let ready_http = opts.ready_http.clone();
         let ready_port = effective_ready_port;
         let implicit_ready_port = ready_port.map(|p| ReadyPort {
-            port: p,
+            port: Some(p),
+            template: None,
             timeout: None,
         });
         let ready_port_config = opts.ready_port.clone().or(implicit_ready_port);

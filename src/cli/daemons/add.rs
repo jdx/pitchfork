@@ -73,9 +73,9 @@ pub struct Add {
     /// HTTP endpoint URL to poll for readiness
     #[clap(long)]
     ready_http: Option<String>,
-    /// TCP port to check for readiness
+    /// TCP port to check for readiness (a number or Tera template)
     #[clap(long)]
-    ready_port: Option<u16>,
+    ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness
     #[clap(long)]
     ready_cmd: Option<String>,
@@ -247,7 +247,7 @@ impl Add {
                 ready_delay: self.ready_delay,
                 ready_output: self.ready_output.clone().map(ReadyOutput::new),
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),
-                ready_port: self.ready_port.map(ReadyPort::new),
+                ready_port: self.ready_port.clone(),
                 ready_cmd: self.ready_cmd.clone().map(ReadyCmd::new),
                 port: {
                     let expect = self.expected_port.clone();

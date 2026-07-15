@@ -230,6 +230,59 @@ ready_cmd = "test -f /tmp/ready"
     Ok(())
 }
 
+/// Test daemon with a templated ready_port
+#[test]
+fn test_daemon_with_templated_ready_port() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_port = "{{ daemons.redis.port }}"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+
+    assert_eq!(
+        daemon.ready_port,
+        Some(pitchfork_toml::ReadyPort::from_template(
+            "{{ daemons.redis.port }}"
+        ))
+    );
+
+    Ok(())
+}
+
+/// Numeric-looking ready_port strings are validated at parse time, not
+/// treated as templates
+#[test]
+fn test_daemon_with_out_of_range_ready_port_string() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    for bad in ["\"-1\"", "\"0\"", "\"70000\"", "0", "70000"] {
+        let toml_content = format!(
+            r#"
+[daemons.ready_daemon]
+run = "echo hi"
+ready_port = {bad}
+"#
+        );
+        fs::write(&toml_path, toml_content).unwrap();
+        let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+            .expect_err(&format!("ready_port = {bad} should fail to parse"));
+        let chain = format!("{err:?}");
+        assert!(
+            chain.contains("ready_port"),
+            "error for {bad} should mention ready_port: {chain}"
+        );
+    }
+}
+
 /// Test daemon with structured HTTP ready check
 #[test]
 fn test_daemon_with_ready_http_status() -> Result<()> {
@@ -383,7 +436,7 @@ ready_port = { port = 8080, timeout = "30s" }
     let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
     let ready_port = daemon.ready_port.as_ref().unwrap();
 
-    assert_eq!(ready_port.port, 8080);
+    assert_eq!(ready_port.port, Some(8080));
     assert_eq!(ready_port.timeout, Some(Duration::from_secs(30)));
 
     Ok(())

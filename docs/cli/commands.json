@@ -366,8 +366,8 @@
               {
                 "name": "ready-port",
                 "usage": "--ready-port <READY_PORT>",
-                "help": "TCP port to check for readiness",
-                "help_first_line": "TCP port to check for readiness",
+                "help": "TCP port to check for readiness (a number or Tera template)",
+                "help_first_line": "TCP port to check for readiness (a number or Tera template)",
                 "short": [],
                 "long": [
                   "ready-port"

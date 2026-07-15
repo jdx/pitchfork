@@ -445,17 +445,24 @@ impl JsonSchema for ReadyCmd {
 // ReadyPort
 // ---------------------------------------------------------------------------
 
-/// TCP port readiness check configuration.
+/// TCP readiness port: a literal port number or a Tera template string that
+/// renders to one, plus an optional overall polling timeout.
 ///
-/// Accepts two TOML forms:
+/// Accepts four TOML forms:
 /// ```toml
-/// ready_port = 3000                                  # shorthand, no timeout
-/// ready_port = { port = 3000, timeout = "30s" }      # full
+/// ready_port = 3000                                  # literal port
+/// ready_port = "{{ daemons.redis.port }}"            # template
+/// ready_port = { port = 3000, timeout = "30s" }      # literal with timeout
+/// ready_port = { template = "{{ daemons.redis.port }}", timeout = "30s" }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReadyPort {
-    /// TCP port number to check for readiness.
-    pub port: u16,
+    /// TCP port number to check for readiness. `None` when the port is
+    /// provided as a template.
+    pub port: Option<u16>,
+    /// Tera template string that renders to a port number. `None` when a
+    /// literal port is used.
+    pub template: Option<String>,
     /// Optional overall polling timeout. When set, the port readiness check stops
     /// after this deadline and the daemon fails if no other check succeeds.
     pub timeout: Option<std::time::Duration>,
@@ -464,22 +471,70 @@ pub struct ReadyPort {
 impl ReadyPort {
     pub fn new(port: u16) -> Self {
         Self {
-            port,
+            port: Some(port),
+            template: None,
             timeout: None,
+        }
+    }
+
+    pub fn from_template(template: impl Into<String>) -> Self {
+        Self {
+            port: None,
+            template: Some(template.into()),
+            timeout: None,
+        }
+    }
+
+    /// The resolved port number. `None` if this is an unrendered template.
+    pub fn as_port(&self) -> Option<u16> {
+        self.port
+    }
+}
+
+impl From<u16> for ReadyPort {
+    fn from(port: u16) -> Self {
+        Self::new(port)
+    }
+}
+
+impl std::str::FromStr for ReadyPort {
+    type Err = String;
+
+    /// Numeric strings must be a valid port (1-65535); anything else
+    /// (non-empty) is treated as a Tera template.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            Err("ready_port cannot be empty".to_string())
+        } else if let Ok(n) = s.parse::<i64>() {
+            u16::try_from(n)
+                .ok()
+                .filter(|&p| p > 0)
+                .map(Self::new)
+                .ok_or_else(|| format!("ready_port out of range (1-65535): {n}"))
+        } else {
+            Ok(Self::from_template(s.to_string()))
         }
     }
 }
 
 impl std::fmt::Display for ReadyPort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.port)
+        match (&self.port, &self.template) {
+            (Some(port), _) => write!(f, "{port}"),
+            (None, Some(template)) => f.write_str(template),
+            (None, None) => Ok(()),
+        }
     }
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[doc(hidden)]
 pub struct ReadyPortRaw {
-    port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    template: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timeout: Option<String>,
 }
@@ -487,42 +542,54 @@ pub struct ReadyPortRaw {
 impl Serialize for ReadyPort {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         if self.timeout.is_none() {
-            self.port.serialize(s)
-        } else {
-            ReadyPortRaw {
-                port: self.port,
-                timeout: format_timeout(self.timeout),
+            if let Some(port) = self.port {
+                return s.serialize_u16(port);
             }
-            .serialize(s)
+            if let Some(template) = &self.template {
+                return s.serialize_str(template);
+            }
+            return s.serialize_none();
         }
+        ReadyPortRaw {
+            port: self.port,
+            template: self.template.clone(),
+            timeout: format_timeout(self.timeout),
+        }
+        .serialize(s)
     }
 }
 
 impl<'de> Deserialize<'de> for ReadyPort {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct Visitor;
+        struct V;
 
-        impl<'de> serde::de::Visitor<'de> for Visitor {
+        impl<'de> serde::de::Visitor<'de> for V {
             type Value = ReadyPort;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(
-                    "a positive integer port number or an object with 'port' and optional 'timeout'",
+                    "a port number, a template string, or an object with 'port'/'template' and optional 'timeout'",
                 )
             }
 
             fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
-                if v == 0 || v > 65535 {
-                    return Err(E::custom("port must be between 1 and 65535"));
-                }
-                Ok(ReadyPort::new(v as u16))
+                u16::try_from(v)
+                    .ok()
+                    .filter(|&p| p > 0)
+                    .map(ReadyPort::new)
+                    .ok_or_else(|| E::custom(format!("ready_port out of range (1-65535): {v}")))
             }
 
             fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
-                if v <= 0 {
-                    return Err(E::custom("port must be a positive integer"));
+                if v < 0 {
+                    Err(E::custom("ready_port cannot be negative"))
+                } else {
+                    self.visit_u64(v as u64)
                 }
-                self.visit_u64(v as u64)
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                v.parse().map_err(E::custom)
             }
 
             fn visit_map<A: serde::de::MapAccess<'de>>(
@@ -531,18 +598,26 @@ impl<'de> Deserialize<'de> for ReadyPort {
             ) -> Result<Self::Value, A::Error> {
                 let raw =
                     ReadyPortRaw::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-                if raw.port == 0 {
-                    return Err(serde::de::Error::custom("port must be between 1 and 65535"));
+                if raw.port.is_none() && raw.template.is_none() {
+                    return Err(serde::de::Error::custom(
+                        "ready_port object must have either 'port' or 'template'",
+                    ));
+                }
+                if let Some(port) = raw.port {
+                    if port == 0 {
+                        return Err(serde::de::Error::custom("port must be between 1 and 65535"));
+                    }
                 }
                 let timeout = parse_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
                 Ok(ReadyPort {
                     port: raw.port,
+                    template: raw.template,
                     timeout,
                 })
             }
         }
 
-        d.deserialize_any(Visitor)
+        d.deserialize_any(V)
     }
 }
 
@@ -553,16 +628,21 @@ impl JsonSchema for ReadyPort {
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "TCP port readiness check: a port number, or { port, timeout } object with an optional overall polling timeout",
+            "description": "TCP readiness port: a port number, a template string rendering to one, or an object with an optional overall polling timeout",
             "oneOf": [
                 { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to check for readiness" },
+                { "type": "string", "description": "Tera template that renders to a port number" },
                 {
                     "type": "object",
                     "properties": {
                         "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to check for readiness" },
+                        "template": { "type": "string", "description": "Tera template that renders to a port number" },
                         "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
                     },
-                    "required": ["port"]
+                    "oneOf": [
+                        { "required": ["port"] },
+                        { "required": ["template"] }
+                    ]
                 }
             ]
         })

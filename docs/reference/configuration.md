@@ -224,7 +224,8 @@ ready_delay = 5
 
 ### `ready_output`
 
-Regex pattern to match in output for readiness.
+Regex pattern to match in output for readiness. Supports
+[templates](/guides/configuration-templates).
 
 ```toml
 [daemons.postgres]
@@ -236,7 +237,8 @@ ready_output = "ready to accept connections"
 
 HTTP endpoint URL to poll for readiness. By default, any 2xx response is ready.
 Use the object form when specific non-2xx statuses also mean the service is up
-(for example an authenticated endpoint returning 401).
+(for example an authenticated endpoint returning 401). The URL supports
+[templates](/guides/configuration-templates).
 
 ```toml
 [daemons.api]
@@ -251,16 +253,24 @@ ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
 ### `ready_port`
 
 TCP port to check for readiness. Daemon is ready when port is listening.
+Accepts a port number or a [template](/guides/configuration-templates) string
+that renders to one.
 
 ```toml
 [daemons.api]
 run = "npm run server"
 ready_port = 3000
+
+[daemons.worker]
+run = "npm run worker"
+ready_port = "{{ daemons.api.port }}"
+depends = ["api"]
 ```
 
 ### `ready_cmd`
 
 Shell command to poll for readiness. Daemon is ready when command exits with code 0.
+Supports [templates](/guides/configuration-templates).
 
 ```toml
 [daemons.postgres]

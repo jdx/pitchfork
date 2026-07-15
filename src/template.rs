@@ -1,7 +1,8 @@
 //! Tera template rendering for pitchfork.toml configuration fields.
 //!
-//! Allows `run`, `env` values, `hooks.*`, and `ready_cmd` to use Tera templates
-//! like `{{ daemons.redis.ports[0] }}` to reference computed values from other daemons.
+//! Allows `run`, `env` values, `hooks.*`, and the readiness fields (`ready_cmd`,
+//! `ready_http`, `ready_port`, `ready_output`) to use Tera templates like
+//! `{{ daemons.redis.ports[0] }}` to reference computed values from other daemons.
 //!
 //! Templates are resolved level-by-level along the dependency order: each level
 //! can reference daemons from previous levels (which have already started and
@@ -203,7 +204,7 @@ pub fn render_template(template: &str, context: &TemplateContext) -> Result<Stri
 /// Render all template-enabled fields of a daemon config.
 ///
 /// Modifies the config in place. Returns the first error encountered from
-/// non-hook fields (`run`, `env`, `ready_cmd`). Hook template errors are
+/// non-hook fields (`run`, `env`, `ready_*`). Hook template errors are
 /// logged as warnings and the hook is set to `None` — hooks are re-rendered
 /// at fire time via `fire_hook`, so pre-rendered hook strings are unused.
 pub fn render_daemon_templates(
@@ -264,6 +265,40 @@ pub fn render_daemon_templates(
             run: renderer.render(&cmd.run)?,
             timeout: cmd.timeout,
         });
+    }
+
+    if let Some(ref output) = config.ready_output {
+        let pattern = renderer.render(&output.pattern)?;
+        config.ready_output = Some(crate::config_types::ReadyOutput {
+            pattern,
+            timeout: output.timeout,
+        });
+    }
+
+    if let Some(ref http) = config.ready_http {
+        let mut http = http.clone();
+        http.url = renderer.render(&http.url)?;
+        config.ready_http = Some(http);
+    }
+
+    if let Some(ref ready_port) = config.ready_port {
+        if let Some(ref template) = ready_port.template {
+            let rendered = renderer.render(template)?;
+            let port = rendered
+                .trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|&p| p > 0)
+                .ok_or_else(|| RenderError::InvalidPort {
+                    template: template.clone(),
+                    rendered: rendered.clone(),
+                })?;
+            config.ready_port = Some(crate::config_types::ReadyPort {
+                port: Some(port),
+                template: None,
+                timeout: ready_port.timeout,
+            });
+        }
     }
 
     Ok(())
@@ -344,6 +379,10 @@ pub enum RenderError {
         template: String,
         source: tera::Error,
     },
+    #[error(
+        "ready_port template {template:?} rendered to {rendered:?}, expected a port number (1-65535)"
+    )]
+    InvalidPort { template: String, rendered: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +587,70 @@ mod tests {
         let on_output = hooks.on_output.unwrap();
         assert_eq!(on_output.run, "curl http://localhost:6379");
         assert_eq!(on_output.filter.as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_ready_fields() {
+        use crate::config_types::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
+
+        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            ready_cmd: Some(ReadyCmd::new("redis-cli -p {{ daemons.redis.port }} ping")),
+            ready_output: Some(ReadyOutput::new("listening on {{ daemons.redis.port }}")),
+            ready_http: Some(ReadyHttp {
+                url: "http://localhost:{{ daemons.redis.port }}/health".to_string(),
+                status: vec![200, 401],
+                timeout: None,
+            }),
+            ready_port: Some(ReadyPort::from_template("{{ daemons.redis.port }}")),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &ctx).unwrap();
+
+        assert_eq!(
+            config.ready_cmd.as_ref().unwrap().run,
+            "redis-cli -p 6379 ping"
+        );
+        assert_eq!(
+            config.ready_output.as_ref().unwrap().pattern,
+            "listening on 6379"
+        );
+        let http = config.ready_http.unwrap();
+        assert_eq!(http.url, "http://localhost:6379/health");
+        assert_eq!(http.status, vec![200, 401]);
+        assert_eq!(config.ready_port, Some(ReadyPort::new(6379)));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_ready_port_invalid() {
+        use crate::config_types::ReadyPort;
+
+        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            ready_port: Some(ReadyPort::from_template("{{ name }}")),
+            ..Default::default()
+        };
+
+        let err = render_daemon_templates(&mut config, &ctx).unwrap_err();
+        assert!(matches!(err, RenderError::InvalidPort { .. }));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_ready_port_literal_untouched() {
+        use crate::config_types::ReadyPort;
+
+        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            ready_port: Some(ReadyPort::new(8080)),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &ctx).unwrap();
+        assert_eq!(config.ready_port, Some(ReadyPort::new(8080)));
     }
 
     #[test]

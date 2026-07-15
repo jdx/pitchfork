@@ -123,7 +123,8 @@ pub fn build_run_options(
         run_opts.ready_http = merge_ready_http_override(run_opts.ready_http, opts.http.clone());
         run_opts.ready_port = if let Some(port) = opts.port {
             Some(ReadyPort {
-                port,
+                port: Some(port),
+                template: None,
                 timeout: run_opts.ready_port.as_ref().and_then(|p| p.timeout),
             })
         } else {
@@ -189,8 +190,8 @@ fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
         ReadyCheckType::Output(output.pattern.clone())
     } else if let Some(ref http) = opts.ready_http {
         ReadyCheckType::Http(http.url.clone())
-    } else if let Some(port) = &opts.ready_port {
-        ReadyCheckType::Port(port.port)
+    } else if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port()) {
+        ReadyCheckType::Port(port)
     } else if let Some(ref cmd) = opts.ready_cmd {
         ReadyCheckType::Cmd(cmd.run.clone())
     } else if let Some(secs) = opts.ready_delay {
@@ -1101,7 +1102,8 @@ mod tests {
         let daemon_config = PitchforkTomlDaemon {
             run: "echo ready".to_string(),
             ready_port: Some(ReadyPort {
-                port: 3000,
+                port: Some(3000),
+                template: None,
                 timeout: Some(Duration::from_secs(45)),
             }),
             ..PitchforkTomlDaemon::default()
@@ -1114,7 +1116,7 @@ mod tests {
         let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
         let ready_port = run_opts.ready_port.unwrap();
 
-        assert_eq!(ready_port.port, 4000);
+        assert_eq!(ready_port.port, Some(4000));
         assert_eq!(ready_port.timeout, Some(Duration::from_secs(45)));
     }
 

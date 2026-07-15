@@ -59,7 +59,7 @@ cmd daemons help="List configured daemons from all merged config files." {
         flag --ready-http help="HTTP endpoint URL to poll for readiness" {
             arg <READY_HTTP>
         }
-        flag --ready-port help="TCP port to check for readiness" {
+        flag --ready-port help="TCP port to check for readiness (a number or Tera template)" {
             arg <READY_PORT>
         }
         flag --ready-cmd help="Shell command to poll for readiness" {

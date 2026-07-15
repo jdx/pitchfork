@@ -1581,7 +1581,9 @@ pub struct PitchforkTomlDaemon {
     pub ready_output: Option<ReadyOutput>,
     /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
     pub ready_http: Option<ReadyHttp>,
-    /// TCP port to check for readiness (connection success = ready)
+    /// TCP port to check for readiness (connection success = ready).
+    /// Accepts a port number, a Tera template string that renders to one, or an
+    /// object with an optional overall polling timeout.
     pub ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness (exit code 0 = ready)
     pub ready_cmd: Option<ReadyCmd>,
