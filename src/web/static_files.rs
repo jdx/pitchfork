@@ -45,7 +45,7 @@ fn inject_into_index_html(data: &[u8]) -> Body {
     // works both at the root and under a sub-path (`web_path`). A <base> tag
     // anchors those URLs to the app root; without it, reloading a nested SPA
     // route like /daemon/:id resolves them against the route path instead.
-    let replaced = replaced.replace("<head>", &format!("<head>\n  <base href=\"{base}/\">"));
+    let replaced = replaced.replacen("<head>", &format!("<head>\n  <base href=\"{base}/\">"), 1);
     Body::from(replaced.into_bytes())
 }
 
