@@ -213,8 +213,15 @@ EOF
   assert_success
 
   run read_state
+  # Normalize Windows backslash path separators to forward slashes so the
+  # persisted state can be compared with cygpath -m output.
+  output="${output//\\//}"
   assert_output --partial "[shell_dirs]"
-  assert_output --partial "$(pwd)"
+  local cwd; cwd="$(pwd)"
+  if command -v cygpath >/dev/null 2>&1; then
+    cwd="$(cygpath -m -l "$cwd" 2>/dev/null || echo "$cwd")"
+  fi
+  assert_output --partial "$cwd"
 
   # Leave the directory and verify the old directory is removed from state
   cd /tmp
@@ -222,6 +229,7 @@ EOF
   assert_success
 
   run read_state
+  output="${output//\\//}"
   refute_output --partial "$TEST_TEMP_DIR"
 }
 

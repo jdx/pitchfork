@@ -14,6 +14,7 @@ teardown() {
 # ============================================================================
 
 @test "logs --tail streams newly appended output without pager" {
+  skip_on_windows "PTY-based streaming test requires script(1)"
   local slowly_output
   slowly_output="$(script_path slowly_output.sh)"
 

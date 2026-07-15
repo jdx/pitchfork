@@ -14,6 +14,9 @@ teardown() {
   export PITCHFORK_AUTOSTOP_DELAY=5s
   export PITCHFORK_INTERVAL=2s
 
+  # Restart supervisor to pick up the test-specific interval/delay settings
+  pitchfork supervisor start --force >/dev/null 2>&1
+
   create_pitchfork_toml <<EOF
 namespace = "project"
 
@@ -104,6 +107,9 @@ EOF
 @test "autostop happens immediately when delay is zero" {
   export PITCHFORK_AUTOSTOP_DELAY=0s
   export PITCHFORK_INTERVAL=2s
+
+  # Restart supervisor to pick up the test-specific interval/delay settings
+  pitchfork supervisor start --force >/dev/null 2>&1
 
   create_pitchfork_toml <<EOF
 namespace = "project"

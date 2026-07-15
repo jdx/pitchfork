@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 
 setup() {
+  export PITCHFORK_INTERVAL=2s
   load test_helper/common_setup
   _common_setup
-  export PITCHFORK_INTERVAL=2s
 }
 
 teardown() {

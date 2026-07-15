@@ -10,7 +10,13 @@ teardown() {
 }
 
 # Query the SQLite log database directly
-query_logs_db() { sqlite3 "$PITCHFORK_LOGS_DIR/logs.db" "$1" 2>/dev/null; }
+query_logs_db() {
+  local db_path="$PITCHFORK_LOGS_DIR/logs.db"
+  if command -v cygpath >/dev/null 2>&1; then
+    db_path="$(cygpath -m "$db_path")"
+  fi
+  sqlite3 "$db_path" "$1" 2>/dev/null
+}
 
 # Skip tests that need sqlite3 if it is not installed
 require_sqlite3() { command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not available"; }
@@ -384,7 +390,7 @@ EOF
 @test "logs --field with multiple values uses AND logic" {
   cat > "$PWD/emit.sh" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' '{"method":"GET","path":"/error","msg":"get_error_msg"}' '{"method":"POST","path":"/error","msg":"post_error_msg"}' '{"method":"GET","path":"/ok","msg":"get_ok_msg"}'
+printf '%s\n' '{"method":"GET","path":"error","msg":"get_error_msg"}' '{"method":"POST","path":"error","msg":"post_error_msg"}' '{"method":"GET","path":"ok","msg":"get_ok_msg"}'
 sleep 3600
 EOF
   chmod +x "$PWD/emit.sh"
@@ -401,7 +407,7 @@ EOF
   pitchfork start field_and
   wait_for_logs field_and "get_ok_msg" 10
 
-  PITCHFORK_LOG=error run pitchfork logs field_and --field method=GET --field path=/error --raw --no-timestamp
+  run pitchfork logs field_and --field method=GET --field path=error --raw --no-timestamp
   assert_success
   [[ "$output" == *'"msg":"get_error_msg"'* ]]
   [[ "$output" != *'"msg":"post_error_msg"'* ]]

@@ -42,20 +42,120 @@ _common_setup() {
   # Ensure pitchfork binary is on PATH
   export PATH="$PROJECT_ROOT/target/debug:$PATH"
 
+  # Use sh as the daemon shell on all platforms. On Windows, the default
+  # (cmd) cannot parse Unix-style commands used in test scripts. Git Bash's
+  # sh.exe is available in the CI environment.
+  export PITCHFORK_SHELL="sh -c"
+
   # Fast watcher/poll intervals for responsive tests (matches Rust e2e defaults)
   export PITCHFORK_WATCH_INTERVAL=100ms
   export PITCHFORK_WATCH_POLL_INTERVAL=100ms
+  # Longer debounce: Windows ReadDirectoryChangesW may report multiple events
+  # for a single file modification (truncate + write + close), spaced >1s apart.
+  # A 3s debounce coalesces these into a single restart.
+  export PITCHFORK_FILE_WATCH_DEBOUNCE=3s
 
   # Verbose logging for easier debugging
   export PITCHFORK_LOG=debug
 
   # Work inside the temp dir so pitchfork.toml is discovered there
   cd "$TEST_TEMP_DIR" || return 1
+
+  # Pre-start the supervisor with output redirected to a file (not a pipe).
+  # On Windows, when pitchfork auto-starts the supervisor via bats' `run`
+  # (which uses pipes), the background supervisor inherits the pipe write
+  # end and keeps it open after the CLI exits, causing bats to hang forever
+  # waiting for pipe EOF. By starting the supervisor here with redirection
+  # to /dev/null (a file, not a pipe), there's no pipe to inherit, and
+  # subsequent pitchfork commands connect to the already-running supervisor
+  # without spawning a new background process.
+  pitchfork supervisor start --force >/dev/null 2>&1 || true
+}
+
+# Skip a test on Windows (Git Bash / MSYS2).
+# Usage: skip_on_windows "reason"
+skip_on_windows() {
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    skip "$1"
+  fi
+}
+
+# Kill a process by PID, working on both Unix and Windows.
+# On Windows Git Bash, `kill -9` may not terminate native Windows processes.
+# Use taskkill //F //PID as a fallback.
+kill_pid() {
+  local pid="$1"
+  kill -9 "$pid" 2>/dev/null || true
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    taskkill //F //PID "$pid" 2>/dev/null || true
+  fi
+}
+
+# Normalize a path for cross-platform comparison.
+# On Windows Git Bash, paths can appear in multiple formats:
+#   /tmp/...           (Git Bash virtual mount)
+#   /c/Users/...       (MSYS2 sh.exe pwd output)
+#   C:/Users/...       (Windows native)
+#   C:\Users\...       (Windows backslash)
+# Strip to just the lowercase drive-less form for comparison.
+normalize_path() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    # cygpath -m handles all input formats and outputs C:/ mixed format
+    cygpath -m "$p" 2>/dev/null || echo "$p"
+  else
+    echo "$p"
+  fi
+}
+
+# Compare two paths ignoring format differences.
+# Usage: assert_path_equal "expected" "actual"
+assert_path_equal() {
+  local expected="$1" actual="$2"
+  # Strip numeric prefixes like "8080:" before normalization.
+  # Drive-letter paths (C:/...) must be left intact so cygpath -m -l
+  # does not double the drive prefix.
+  local prefix=""
+  if [[ "$expected" =~ ^([0-9]+):(.*)$ ]]; then
+    prefix="${BASH_REMATCH[1]}:"
+    expected="${BASH_REMATCH[2]}"
+    actual="${actual#"$prefix"}"
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    # -m = mixed format (C:/), -l = prefer long names over 8.3 short names
+    expected="$(cygpath -m -l "$expected" 2>/dev/null || echo "$expected")"
+    actual="$(cygpath -m -l "$actual" 2>/dev/null || echo "$actual")"
+  fi
+  expected="$prefix$expected"
+  actual="$prefix$actual"
+  [[ "$expected" == "$actual" ]] || {
+    echo "Path mismatch:" >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    return 1
+  }
+}
+
+# Convert a path to a Unix-style path suitable for shell commands.
+#
+# On Windows Git Bash, paths may be returned in Windows native format (e.g.
+# C:/Users/...). The supervisor's shell (configured as "sh -c") cannot resolve
+# those paths, so convert them to the Unix-style form (/c/Users/...) that
+# MSYS2 sh understands. On non-Windows platforms the path is returned unchanged.
+to_shell_path() {
+  local p="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$p" 2>/dev/null || echo "$p"
+  else
+    echo "$p"
+  fi
 }
 
 _common_teardown() {
   # Stop the supervisor if running (swallow errors — it may not be running)
-  pitchfork supervisor stop 2>/dev/null || true
+  # Use timeout to prevent hang if supervisor stop is stuck (e.g. daemon
+  # cleanup on Windows where POSIX signals are unavailable).
+  timeout 10 pitchfork supervisor stop 2>/dev/null || true
 
   # Preserve temp dirs on failure for post-mortem debugging
   if [[ -n "$BATS_TEST_COMPLETED" && "$BATS_TEST_COMPLETED" == "1" ]]; then
@@ -65,6 +165,12 @@ _common_teardown() {
     echo "# Test failed — preserving debug dirs:" >&3
     echo "#   TEST_TEMP_DIR=$TEST_TEMP_DIR" >&3
     echo "#   PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" >&3
+    # Print supervisor log file for debugging watcher/hook issues
+    local sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+    if [[ -f "$sup_log" ]]; then
+      echo "# --- pitchfork.log (last 80 lines) ---" >&3
+      tail -80 "$sup_log" 2>/dev/null | sed 's/^/#   /' >&3 || true
+    fi
   fi
 }
 
@@ -202,6 +308,13 @@ wait_for_file_content() {
 run_with_pty() {
   if [[ "$(uname)" == "Darwin" ]]; then
     script -q /dev/null "$@"
+  elif [[ "$(uname)" == MINGW* || "$(uname)" == MSYS* ]]; then
+    # Windows: use winpty if available, otherwise run without PTY
+    if command -v winpty >/dev/null 2>&1; then
+      winpty "$@"
+    else
+      "$@"
+    fi
   else
     script -qec "$*" /dev/null
   fi
@@ -222,6 +335,14 @@ kill_port() {
     done
   elif command -v fuser >/dev/null 2>&1; then
     fuser -k "${port}/tcp" 2>/dev/null || true
+  # Use a kill_port fallback that works without rg (not installed on Windows CI)
+  elif command -v netstat >/dev/null 2>&1; then
+    # Windows: use netstat + taskkill
+    local pids
+    pids="$(netstat -ano 2>/dev/null | grep ":${port}\s.*LISTENING" | awk '{print $NF}' | sort -u)" || true
+    for pid in $pids; do
+      taskkill //F //PID "$pid" 2>/dev/null || true
+    done
   fi
   sleep 0.1
 }

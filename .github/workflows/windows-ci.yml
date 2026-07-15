@@ -70,4 +70,3 @@ jobs:
           tests=$(ls -1 test/*.bats | sort | awk -v t="$TRANCHE" -v n="$TRANCHE_COUNT" 'NR % n == t')
           echo "Running tranche $TRANCHE: $tests"
           test/bats/bin/bats $tests
-        continue-on-error: true
