@@ -88,6 +88,15 @@ pub struct JsonSlugEntry {
 }
 
 #[derive(Serialize)]
+pub struct JsonSupervisorStatus {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_ui: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct JsonSettingEntry {
     pub key: String,
     pub value: String,

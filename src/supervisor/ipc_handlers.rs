@@ -163,6 +163,9 @@ impl Supervisor {
                 let sessions = self.get_project_sessions_info().await;
                 IpcResponse::ProjectSessions(sessions)
             }
+            IpcRequest::GetWebUrl => IpcResponse::WebUrl {
+                url: crate::web::url(),
+            },
         };
         // Ensure state is flushed to disk before returning the response
         // so that CLI commands reading StateFile::get() see fresh data.
