@@ -32,15 +32,11 @@ jobs:
       - name: Run Rust tests
         run: cargo nextest run --all-features
 
-  bats-tests:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        tranche: [0, 1]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -50,9 +46,6 @@ jobs:
         with:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Install sqlite3
-        shell: pwsh
-        run: choco install sqlite -y --no-progress
       - name: Build UI assets
         working-directory: ui
         run: |
@@ -60,12 +53,46 @@ jobs:
           aube run build
       - name: Build
         run: cargo build --all-features
+      - name: Upload binary
+        uses: actions/upload-artifact@6027fc2b59c3a054649ab6dc2cf777402545c2bb # v4
+        with:
+          name: pitchfork-bin
+          path: target/debug/pitchfork.exe
+          retention-days: 1
+
+  bats-tests:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tranche: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: false
+      - name: Install sqlite3
+        shell: pwsh
+        run: choco install sqlite -y --no-progress
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: pitchfork-bin
+          path: target/debug
       - name: Run bats e2e tests (tranche ${{ matrix.tranche }})
         shell: bash
         env:
           TRANCHE: ${{ matrix.tranche }}
-          TRANCHE_COUNT: 2
+          TRANCHE_COUNT: 6
         run: |
+          chmod +x target/debug/pitchfork.exe
           export PATH="$PWD/target/debug:$PATH"
           tests=$(ls -1 test/*.bats | sort | awk -v t="$TRANCHE" -v n="$TRANCHE_COUNT" 'NR % n == t')
           echo "Running tranche $TRANCHE: $tests"
