@@ -7,7 +7,7 @@ use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    ReadyHttp, Retry, namespace_from_path,
+    ReadyHttp, ReadyPort, Retry, namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
 use crate::settings::settings;
@@ -105,7 +105,7 @@ pub enum FormFieldValue {
     OptionalText(Option<String>),
     Number(u32),
     OptionalNumber(Option<u64>),
-    OptionalPort(Option<u16>),
+    OptionalPort(Option<ReadyPort>),
     #[allow(dead_code)]
     Boolean(bool),
     OptionalBoolean(Option<bool>),
@@ -289,7 +289,22 @@ impl FormField {
                 *opt = text.parse().ok();
             }
             FormFieldValue::OptionalPort(opt) => {
-                *opt = text.parse().ok();
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    *opt = None;
+                    self.error = None;
+                } else {
+                    match trimmed.parse() {
+                        Ok(value) => {
+                            *opt = Some(value);
+                            self.error = None;
+                        }
+                        Err(e) => {
+                            *opt = None;
+                            self.error = Some(e);
+                        }
+                    }
+                }
             }
             FormFieldValue::StringList(v) => {
                 *v = text
@@ -484,7 +499,9 @@ impl EditorState {
                         config.ready_http.as_ref().map(|h| h.url.clone()),
                     )
                 }
-                "ready_port" => field.value = FormFieldValue::OptionalPort(config.ready_port),
+                "ready_port" => {
+                    field.value = FormFieldValue::OptionalPort(config.ready_port.clone())
+                }
                 "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
                 "depends" => {
                     field.value = FormFieldValue::StringList(
@@ -561,7 +578,7 @@ impl EditorState {
                         status: self.preserved_ready_http_status.clone().unwrap_or_default(),
                     })
                 }
-                ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = *p,
+                ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = p.clone(),
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
                 ("depends", FormFieldValue::StringList(v)) => {
                     config.depends = v.iter().filter_map(|s| DaemonId::parse(s).ok()).collect()
@@ -717,6 +734,12 @@ impl EditorState {
             && field.cursor > 0
         {
             let mut text = field.get_text();
+            // Value-backed fields (OptionalNumber/OptionalPort) drop invalid
+            // input in set_text, so the cursor can be past the derived text.
+            field.cursor = field.cursor.min(text.chars().count());
+            if field.cursor == 0 {
+                return;
+            }
             field.cursor -= 1;
             let byte_idx = char_to_byte_index(&text, field.cursor);
             text.remove(byte_idx);
@@ -755,10 +778,6 @@ impl EditorState {
             match (field.name, &field.value) {
                 ("run", FormFieldValue::Text(s)) if s.is_empty() => {
                     field.error = Some("Required".to_string());
-                    valid = false;
-                }
-                ("ready_port", FormFieldValue::OptionalPort(Some(p))) if *p == 0 => {
-                    field.error = Some("Port must be 1-65535".to_string());
                     valid = false;
                 }
                 ("ready_http", FormFieldValue::OptionalText(Some(url)))

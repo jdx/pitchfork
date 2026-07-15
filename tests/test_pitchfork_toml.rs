@@ -216,8 +216,38 @@ ready_cmd = "test -f /tmp/ready"
         "http://localhost:8080/health"
     );
     assert!(daemon.ready_http.as_ref().unwrap().status.is_empty());
-    assert_eq!(daemon.ready_port, Some(8080));
+    assert_eq!(
+        daemon.ready_port,
+        Some(pitchfork_toml::ReadyPort::Port(8080))
+    );
     assert_eq!(daemon.ready_cmd, Some("test -f /tmp/ready".to_string()));
+
+    Ok(())
+}
+
+/// Test daemon with a templated ready_port
+#[test]
+fn test_daemon_with_templated_ready_port() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_port = "{{ daemons.redis.port }}"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+
+    assert_eq!(
+        daemon.ready_port,
+        Some(pitchfork_toml::ReadyPort::Template(
+            "{{ daemons.redis.port }}".to_string()
+        ))
+    );
 
     Ok(())
 }
@@ -1034,7 +1064,7 @@ run = "npm run debug"
     // api should be overridden by local
     let api = pt.daemons.get(&api_key).unwrap();
     assert_eq!(api.run, "npm run dev");
-    assert_eq!(api.ready_port, Some(3001));
+    assert_eq!(api.ready_port, Some(pitchfork_toml::ReadyPort::Port(3001)));
 
     // worker should remain from base
     let worker = pt.daemons.get(&worker_key).unwrap();

@@ -246,7 +246,7 @@ impl Add {
                 ready_delay: self.ready_delay,
                 ready_output: self.ready_output.clone(),
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),
-                ready_port: self.ready_port,
+                ready_port: self.ready_port.map(Into::into),
                 ready_cmd: self.ready_cmd.clone(),
                 port: {
                     let expect = self.expected_port.clone();

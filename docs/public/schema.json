@@ -317,14 +317,15 @@
           ]
         },
         "ready_port": {
-          "description": "TCP port to check for readiness (connection success = ready)",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 1
+          "description": "TCP port to check for readiness (connection success = ready).\nAccepts a port number or a Tera template string that renders to one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadyPort"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "retry": {
           "description": "Number of times to retry if the daemon fails.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
@@ -541,6 +542,20 @@
           "required": [
             "url"
           ]
+        }
+      ]
+    },
+    "ReadyPort": {
+      "description": "TCP readiness port: a port number, or a template string rendering to one (e.g. \"{{ daemons.redis.port }}\")",
+      "oneOf": [
+        {
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        },
+        {
+          "description": "Tera template that renders to a port number",
+          "type": "string"
         }
       ]
     },

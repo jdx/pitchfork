@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, Retry, StopConfig, StopSignal, WatchMode,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, ReadyPort, Retry, StopConfig, StopSignal,
+    WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -167,7 +168,7 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_port: Option<u16>,
+    pub ready_port: Option<ReadyPort>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<String>,
     /// New port configuration (preferred)
@@ -1231,7 +1232,7 @@ impl PitchforkToml {
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
                     ready_http: daemon.ready_http.clone(),
-                    ready_port: daemon.ready_port,
+                    ready_port: daemon.ready_port.clone(),
                     ready_cmd: daemon.ready_cmd.clone(),
                     port: port.cloned(),
                     // Deprecated fields: written for backward compatibility with older pitchfork versions
@@ -1580,9 +1581,9 @@ pub struct PitchforkTomlDaemon {
     pub ready_output: Option<String>,
     /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
     pub ready_http: Option<ReadyHttp>,
-    /// TCP port to check for readiness (connection success = ready)
-    #[schemars(range(min = 1, max = 65535))]
-    pub ready_port: Option<u16>,
+    /// TCP port to check for readiness (connection success = ready).
+    /// Accepts a port number or a Tera template string that renders to one.
+    pub ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness (exit code 0 = ready)
     pub ready_cmd: Option<String>,
     /// Port configuration: expected ports and auto-bump settings
@@ -1683,7 +1684,17 @@ impl PitchforkTomlDaemon {
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),
-            ready_port: self.ready_port,
+            // Templates are resolved to a literal port by render_daemon_templates
+            // on the start path; an unrendered template has no usable port.
+            ready_port: self.ready_port.as_ref().and_then(|rp| {
+                let port = rp.as_port();
+                if port.is_none() {
+                    warn!(
+                        "daemon {id}: ready_port template {rp:?} was not rendered on this start path; skipping port readiness check"
+                    );
+                }
+                port
+            }),
             ready_cmd: self.ready_cmd.clone(),
             port: self.port.clone(),
             wait_ready: false,
