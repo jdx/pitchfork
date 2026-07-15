@@ -718,11 +718,39 @@ impl Supervisor {
             }
 
             loop {
-                // biased: prioritize process exit over delay/output, so that
-                // a daemon that fails during ready_delay is detected before
-                // the delay timer fires and falsely marks it as ready.
+                // biased: evaluate in exit → output → delay order so that
+                // process exit pre-empts both buffered output and the delay
+                // timer, preventing a dead daemon from being marked ready.
                 select! {
                     biased;
+                    Some(result) = exit_rx.recv() => {
+                        // Process exited - save exit status and notify if not ready yet
+                        exit_status = Some(result);
+                        debug!("daemon {id} process exited, exit_status: {exit_status:?}");
+                        if !ready_notified {
+                            if let Some(tx) = ready_tx.take() {
+                                // Check if process exited successfully
+                                let is_success = exit_status.as_ref()
+                                    .and_then(|r| r.as_ref().ok())
+                                    .map(|s| s.success())
+                                    .unwrap_or(false);
+
+                                if is_success {
+                                    debug!("daemon {id} exited successfully before ready check, sending success notification");
+                                    let _ = tx.send(Ok(()));
+                                } else {
+                                    let exit_code = exit_status.as_ref()
+                                        .and_then(|r| r.as_ref().ok())
+                                        .and_then(|s| s.code());
+                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
+                                    let _ = tx.send(Err(exit_code));
+                                }
+                            }
+                        } else {
+                            debug!("daemon {id} was already marked ready, not sending notification");
+                        }
+                        break;
+                    },
                     Some(line) = output_rx.recv() => {
                         let parsed = parse_line(&line);
                         log_buffer.push(parsed);
@@ -776,34 +804,6 @@ impl Supervisor {
                             }
                         }
                     }
-                    Some(result) = exit_rx.recv() => {
-                        // Process exited - save exit status and notify if not ready yet
-                        exit_status = Some(result);
-                        debug!("daemon {id} process exited, exit_status: {exit_status:?}");
-                        if !ready_notified {
-                            if let Some(tx) = ready_tx.take() {
-                                // Check if process exited successfully
-                                let is_success = exit_status.as_ref()
-                                    .and_then(|r| r.as_ref().ok())
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-
-                                if is_success {
-                                    debug!("daemon {id} exited successfully before ready check, sending success notification");
-                                    let _ = tx.send(Ok(()));
-                                } else {
-                                    let exit_code = exit_status.as_ref()
-                                        .and_then(|r| r.as_ref().ok())
-                                        .and_then(|s| s.code());
-                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
-                                    let _ = tx.send(Err(exit_code));
-                                }
-                            }
-                        } else {
-                            debug!("daemon {id} was already marked ready, not sending notification");
-                        }
-                        break;
-                    },
                     _ = async {
                         if let Some(ref mut interval) = http_check_interval {
                             interval.tick().await;

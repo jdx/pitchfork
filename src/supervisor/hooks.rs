@@ -4,10 +4,10 @@
 //! lifecycle events (ready, fail, retry). They are configured in pitchfork.toml
 //! under `[daemons.<name>.hooks]`.
 
+use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
-use crate::shell::Shell;
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
 use indexmap::IndexMap;
@@ -50,9 +50,10 @@ fn get_hook_cmd(
 }
 
 /// Create a tokio Command for a hook using the configured `general.shell`
-/// setting (same shell used for daemon `run` commands), falling back to the
-/// platform default if the setting is empty or unparseable.
-fn hook_command(cmd: &str) -> tokio::process::Command {
+/// setting (same shell used for daemon `run` commands). Returns an error
+/// if the shell setting is empty or unparseable, matching daemon startup
+/// validation — callers should log and skip the hook.
+fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
     let shell_setting = settings().general.shell.clone();
     match shell_words::split(&shell_setting) {
         Ok(parts) if !parts.is_empty() => {
@@ -60,9 +61,14 @@ fn hook_command(cmd: &str) -> tokio::process::Command {
             let mut command = tokio::process::Command::new(program);
             command.args(args);
             command.arg(cmd);
-            command
+            Ok(command)
         }
-        _ => Shell::default_for_platform().command(cmd),
+        Ok(_) => Err(miette::miette!(
+            "general.shell setting is empty, cannot run hook"
+        )),
+        Err(e) => Err(miette::miette!(
+            "failed to parse general.shell setting {shell_setting:?}: {e}"
+        )),
     }
 }
 
@@ -105,7 +111,13 @@ pub(crate) async fn fire_hook(
 
         info!("firing {hook_type} hook for daemon {daemon_id}: {cmd}");
 
-        let mut command = hook_command(&cmd);
+        let mut command = match hook_command(&cmd) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("{hook_type} hook for daemon {daemon_id}: {e}");
+                return;
+            }
+        };
         command
             .current_dir(&daemon_dir)
             .stdout(std::process::Stdio::null())
@@ -178,7 +190,13 @@ pub(crate) async fn fire_output_hook(
 
         info!("firing on_output hook for daemon {daemon_id}: {cmd}");
 
-        let mut command = hook_command(&cmd);
+        let mut command = match hook_command(&cmd) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("on_output hook for daemon {daemon_id}: {e}");
+                return;
+            }
+        };
         command
             .current_dir(&daemon_dir)
             .stdout(std::process::Stdio::null())

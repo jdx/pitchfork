@@ -284,26 +284,33 @@ impl Procs {
                 .arg(pid.to_string())
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .output();
-            match output {
+            let taskkill_succeeded = match output {
                 Ok(o) if o.status.success() => {
                     debug!("taskkill /F /T /PID {pid} succeeded");
+                    true
                 }
                 Ok(o) => {
-                    // taskkill failed — process may have already exited
                     debug!(
                         "taskkill /F /T /PID {pid} exited with status {}: {}",
                         o.status,
                         String::from_utf8_lossy(&o.stderr).trim()
                     );
+                    false
                 }
                 Err(e) => {
                     debug!("failed to spawn taskkill for pid {pid}: {e}");
+                    false
                 }
-            }
+            };
             // Brief sleep to let the OS signal the process handle, giving
             // tokio's child.wait() in the monitor task a chance to detect
             // the exit and fire on_stop/on_exit hooks.
             std::thread::sleep(std::time::Duration::from_millis(200));
+            if !taskkill_succeeded && self.is_running(pid) {
+                return Err(miette::miette!(
+                    "taskkill failed and process {pid} is still running"
+                ));
+            }
             Ok(true)
         }
 

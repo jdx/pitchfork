@@ -132,11 +132,17 @@ fn fs_name(name: &str) -> Result<Name<'_>> {
     // cannot contain path separators. Derive a unique pipe name from the
     // state directory to preserve test isolation when multiple supervisors
     // run concurrently with different PITCHFORK_STATE_DIR values.
+    //
+    // Use a hash of the state directory path rather than character replacement
+    // to guarantee injectivity: `C:\a.b` and `C:\a\b` would both flatten to
+    // `C--a-b` with the old approach, causing pipe name collisions.
     #[cfg(windows)]
     {
         let state_dir = env::PITCHFORK_STATE_DIR.to_string_lossy();
-        let flat = state_dir.replace(['\\', '/', ':', '.'], "-");
-        let pipe_name = format!("pitchfork-{flat}-{name}");
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(state_dir.as_ref(), &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        let pipe_name = format!("pitchfork-{hash:016x}-{name}");
         Ok(pipe_name
             .to_ns_name::<GenericNamespaced>()
             .into_diagnostic()?)

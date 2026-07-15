@@ -236,9 +236,17 @@ pub fn expand_watch_patterns(patterns: &[String], base_dir: &Path) -> Result<Has
 /// (verbatim path). If we don't strip it, canonicalized watcher paths won't
 /// match non-canonicalized glob patterns built from `env::CWD`, causing all
 /// file-change matching to silently fail on Windows.
+///
+/// Verbatim UNC paths (`\\?\UNC\server\share`) are converted to the regular
+/// UNC form (`//server/share`) so they match glob patterns consistently.
 fn normalize_path_for_glob(path: &str) -> String {
-    let path = path.strip_prefix(r"\\?\").unwrap_or(path);
-    path.replace('\\', "/")
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!("//{}", rest.replace('\\', "/"))
+    } else {
+        path.strip_prefix(r"\\?\")
+            .unwrap_or(path)
+            .replace('\\', "/")
+    }
 }
 
 /// Check if a changed path matches any of the watch patterns.
