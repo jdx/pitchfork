@@ -54,8 +54,14 @@ jobs:
       - name: Create UI placeholder
         shell: bash
         run: mkdir -p ui/dist && echo '<html><body>placeholder</body></html>' > ui/dist/index.html
-      - name: Build
-        run: cargo build --all-features
+      - name: Build (skip if cached)
+        shell: bash
+        run: |
+          if [ -f target/debug/pitchfork.exe ]; then
+            echo "pitchfork.exe found in cache, skipping cargo build"
+          else
+            cargo build --all-features
+          fi
       - name: Run bats e2e tests (shard ${{ matrix.shard }})
         shell: bash
         env:
