@@ -262,6 +262,9 @@ impl FormField {
     }
 
     pub fn set_text(&mut self, text: String) {
+        // Any edit invalidates a previous validation error; arms below
+        // re-set it for input that fails to parse.
+        self.error = None;
         match &mut self.value {
             FormFieldValue::Text(s) => *s = text,
             FormFieldValue::OptionalText(opt) => {
@@ -773,7 +776,13 @@ impl EditorState {
 
         // Validate fields
         for field in &mut self.fields {
-            field.error = None;
+            // Keep parse errors from set_text (e.g. out-of-range ready_port):
+            // the typed value was already dropped, so saving now would
+            // silently lose the field.
+            if field.error.is_some() {
+                valid = false;
+                continue;
+            }
 
             match (field.name, &field.value) {
                 ("run", FormFieldValue::Text(s)) if s.is_empty() => {
