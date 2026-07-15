@@ -30,7 +30,9 @@ jobs:
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: false
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build UI assets
         working-directory: ui
         run: |
@@ -53,9 +55,10 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
           shared-key: windows-ci-bats
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install sqlite3
         shell: pwsh
         run: choco install sqlite -y --no-progress
