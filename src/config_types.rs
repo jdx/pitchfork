@@ -123,6 +123,23 @@ pub trait BoolOrU32: Sized + Copy + From<u32> + Into<u32> {
 }
 
 // ---------------------------------------------------------------------------
+// Shared readiness timeout helpers
+// ---------------------------------------------------------------------------
+
+/// Parse a humantime duration string (e.g. "30s", "5m") into a `Duration`.
+/// Returns `Ok(None)` when the input is `None`.
+fn parse_timeout(raw: &Option<String>) -> std::result::Result<Option<std::time::Duration>, String> {
+    raw.as_ref()
+        .map(|s| humantime::parse_duration(s).map_err(|e| format!("invalid timeout: {e}")))
+        .transpose()
+}
+
+/// Format a `Duration` as a humantime string, or `None` when unset.
+fn format_timeout(timeout: Option<std::time::Duration>) -> Option<String> {
+    timeout.map(|d| humantime::format_duration(d).to_string())
+}
+
+// ---------------------------------------------------------------------------
 // MemoryLimit
 // ---------------------------------------------------------------------------
 
@@ -177,13 +194,16 @@ impl JsonSchema for CpuLimit {
 /// Accepts two TOML forms:
 /// ```toml
 /// ready_http = "http://localhost:3000/health"  # shorthand, any 2xx response
-/// ready_http = { url = "http://localhost:3000/health", status = [200, 401] }
+/// ready_http = { url = "http://localhost:3000/health", status = [200, 401], timeout = "30s" }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReadyHttp {
     pub url: String,
     /// Exact status codes that indicate readiness. Empty means any 2xx response.
     pub status: Vec<u16>,
+    /// Optional overall polling timeout. When set, the HTTP readiness check stops
+    /// after this deadline and the daemon fails if no other check succeeds.
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl ReadyHttp {
@@ -191,6 +211,7 @@ impl ReadyHttp {
         Self {
             url: url.into(),
             status: vec![],
+            timeout: None,
         }
     }
 
@@ -211,10 +232,10 @@ impl std::fmt::Display for ReadyHttp {
             let status = self
                 .status
                 .iter()
-                .map(u16::to_string)
+                .map(|s| s.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            write!(f, "{} (status: {status})", self.url)
+            write!(f, "{} (status: {})", self.url, status)
         }
     }
 }
@@ -225,6 +246,8 @@ pub struct ReadyHttpRaw {
     url: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     status: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
 }
 
 impl StringOrStruct for ReadyHttp {
@@ -243,14 +266,16 @@ impl StringOrStruct for ReadyHttp {
                 ));
             }
         }
+        let timeout = parse_timeout(&raw.timeout)?;
         Ok(Self {
             url: raw.url,
             status: raw.status,
+            timeout,
         })
     }
 
     fn is_shorthand(&self) -> bool {
-        self.status.is_empty()
+        self.status.is_empty() && self.timeout.is_none()
     }
 
     fn to_short(&self) -> String {
@@ -261,6 +286,7 @@ impl StringOrStruct for ReadyHttp {
         ReadyHttpRaw {
             url: self.url.clone(),
             status: self.status.clone(),
+            timeout: format_timeout(self.timeout),
         }
     }
 }
@@ -284,7 +310,7 @@ impl JsonSchema for ReadyHttp {
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "HTTP readiness check: a URL string accepting any 2xx response, or { url, status } object with exact accepted status codes",
+            "description": "HTTP readiness check: a URL string accepting any 2xx response, or { url, status, timeout } object with exact accepted status codes and optional overall polling timeout",
             "oneOf": [
                 { "type": "string", "description": "HTTP URL to poll for readiness; any 2xx response is ready" },
                 {
@@ -295,9 +321,120 @@ impl JsonSchema for ReadyHttp {
                             "type": "array",
                             "description": "Exact HTTP status codes that indicate readiness. Omit to accept any 2xx response.",
                             "items": { "type": "integer", "minimum": 100, "maximum": 599 }
-                        }
+                        },
+                        "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m'). Distinct from per-request http_client_timeout." }
                     },
                     "required": ["url"]
+                }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ReadyCmd
+// ---------------------------------------------------------------------------
+
+/// Command readiness check configuration.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// ready_cmd = "pg_isready -h localhost"                        # shorthand, no timeout
+/// ready_cmd = { run = "pg_isready -h localhost", timeout = "30s" } # full
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadyCmd {
+    /// Shell command to run. Exit code 0 indicates readiness.
+    pub run: String,
+    /// Optional overall polling timeout. When set, the command readiness check stops
+    /// after this deadline and the daemon fails if no other check succeeds.
+    pub timeout: Option<std::time::Duration>,
+}
+
+impl ReadyCmd {
+    pub fn new(run: impl Into<String>) -> Self {
+        Self {
+            run: run.into(),
+            timeout: None,
+        }
+    }
+}
+
+impl std::fmt::Display for ReadyCmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.run)
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct ReadyCmdRaw {
+    run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
+}
+
+impl StringOrStruct for ReadyCmd {
+    type Short = String;
+    type Raw = ReadyCmdRaw;
+
+    fn from_short(run: String) -> Self {
+        Self::new(run)
+    }
+
+    fn from_raw(raw: ReadyCmdRaw) -> std::result::Result<Self, String> {
+        let timeout = parse_timeout(&raw.timeout)?;
+        Ok(Self {
+            run: raw.run,
+            timeout,
+        })
+    }
+
+    fn is_shorthand(&self) -> bool {
+        self.timeout.is_none()
+    }
+
+    fn to_short(&self) -> String {
+        self.run.clone()
+    }
+
+    fn to_raw(&self) -> ReadyCmdRaw {
+        ReadyCmdRaw {
+            run: self.run.clone(),
+            timeout: format_timeout(self.timeout),
+        }
+    }
+}
+
+impl Serialize for ReadyCmd {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.string_or_struct_serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadyCmd {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::string_or_struct_deserialize(d)
+    }
+}
+
+impl JsonSchema for ReadyCmd {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ReadyCmd")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Command readiness check: a shell command string, or { run, timeout } object with an optional overall polling timeout",
+            "oneOf": [
+                { "type": "string", "description": "Shell command that returns exit code 0 when ready" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "run": { "type": "string", "description": "Shell command that returns exit code 0 when ready" },
+                        "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
+                    },
+                    "required": ["run"]
                 }
             ]
         })
@@ -309,32 +446,54 @@ impl JsonSchema for ReadyHttp {
 // ---------------------------------------------------------------------------
 
 /// TCP readiness port: a literal port number or a Tera template string that
-/// renders to one.
+/// renders to one, plus an optional overall polling timeout.
 ///
-/// Accepts two TOML forms:
+/// Accepts four TOML forms:
 /// ```toml
-/// ready_port = 3000                          # literal
-/// ready_port = "{{ daemons.redis.port }}"    # template
+/// ready_port = 3000                                  # literal port
+/// ready_port = "{{ daemons.redis.port }}"            # template
+/// ready_port = { port = 3000, timeout = "30s" }      # literal with timeout
+/// ready_port = { template = "{{ daemons.redis.port }}", timeout = "30s" }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadyPort {
-    Port(u16),
-    Template(String),
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadyPort {
+    /// TCP port number to check for readiness. `None` when the port is
+    /// provided as a template.
+    pub port: Option<u16>,
+    /// Tera template string that renders to a port number. `None` when a
+    /// literal port is used.
+    pub template: Option<String>,
+    /// Optional overall polling timeout. When set, the port readiness check stops
+    /// after this deadline and the daemon fails if no other check succeeds.
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl ReadyPort {
+    pub fn new(port: u16) -> Self {
+        Self {
+            port: Some(port),
+            template: None,
+            timeout: None,
+        }
+    }
+
+    pub fn from_template(template: impl Into<String>) -> Self {
+        Self {
+            port: None,
+            template: Some(template.into()),
+            timeout: None,
+        }
+    }
+
     /// The resolved port number. `None` if this is an unrendered template.
     pub fn as_port(&self) -> Option<u16> {
-        match self {
-            Self::Port(port) => Some(*port),
-            Self::Template(_) => None,
-        }
+        self.port
     }
 }
 
 impl From<u16> for ReadyPort {
     fn from(port: u16) -> Self {
-        Self::Port(port)
+        Self::new(port)
     }
 }
 
@@ -351,52 +510,77 @@ impl std::str::FromStr for ReadyPort {
             u16::try_from(n)
                 .ok()
                 .filter(|&p| p > 0)
-                .map(Self::Port)
+                .map(Self::new)
                 .ok_or_else(|| format!("ready_port out of range (1-65535): {n}"))
         } else {
-            Ok(Self::Template(s.to_string()))
+            Ok(Self::from_template(s.to_string()))
         }
     }
 }
 
 impl std::fmt::Display for ReadyPort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Port(port) => write!(f, "{port}"),
-            Self::Template(template) => f.write_str(template),
+        match (&self.port, &self.template) {
+            (Some(port), _) => write!(f, "{port}"),
+            (None, Some(template)) => f.write_str(template),
+            (None, None) => Ok(()),
         }
     }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct ReadyPortRaw {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
 }
 
 impl Serialize for ReadyPort {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::Port(port) => s.serialize_u16(*port),
-            Self::Template(template) => s.serialize_str(template),
+        if self.timeout.is_none() {
+            if let Some(port) = self.port {
+                return s.serialize_u16(port);
+            }
+            if let Some(template) = &self.template {
+                return s.serialize_str(template);
+            }
+            return s.serialize_none();
         }
+        ReadyPortRaw {
+            port: self.port,
+            template: self.template.clone(),
+            timeout: format_timeout(self.timeout),
+        }
+        .serialize(s)
     }
 }
 
 impl<'de> Deserialize<'de> for ReadyPort {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         struct V;
 
-        impl serde::de::Visitor<'_> for V {
+        impl<'de> serde::de::Visitor<'de> for V {
             type Value = ReadyPort;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a port number (1-65535) or a template string")
+                f.write_str(
+                    "a port number, a template string, or an object with 'port'/'template' and optional 'timeout'",
+                )
             }
 
-            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<ReadyPort, E> {
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
                 u16::try_from(v)
                     .ok()
                     .filter(|&p| p > 0)
-                    .map(ReadyPort::Port)
+                    .map(ReadyPort::new)
                     .ok_or_else(|| E::custom(format!("ready_port out of range (1-65535): {v}")))
             }
 
-            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<ReadyPort, E> {
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
                 if v < 0 {
                     Err(E::custom("ready_port cannot be negative"))
                 } else {
@@ -404,14 +588,36 @@ impl<'de> Deserialize<'de> for ReadyPort {
                 }
             }
 
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<ReadyPort, E> {
-                // Numeric strings resolve immediately; anything else is a
-                // Tera template rendered at daemon start time.
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 v.parse().map_err(E::custom)
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let raw =
+                    ReadyPortRaw::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                if raw.port.is_none() && raw.template.is_none() {
+                    return Err(serde::de::Error::custom(
+                        "ready_port object must have either 'port' or 'template'",
+                    ));
+                }
+                if let Some(port) = raw.port {
+                    if port == 0 {
+                        return Err(serde::de::Error::custom("port must be between 1 and 65535"));
+                    }
+                }
+                let timeout = parse_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
+                Ok(ReadyPort {
+                    port: raw.port,
+                    template: raw.template,
+                    timeout,
+                })
             }
         }
 
-        deserializer.deserialize_any(V)
+        d.deserialize_any(V)
     }
 }
 
@@ -422,10 +628,132 @@ impl JsonSchema for ReadyPort {
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "TCP readiness port: a port number, or a template string rendering to one (e.g. \"{{ daemons.redis.port }}\")",
+            "description": "TCP readiness port: a port number, a template string rendering to one, or an object with an optional overall polling timeout",
             "oneOf": [
-                { "type": "integer", "minimum": 1, "maximum": 65535 },
-                { "type": "string", "description": "Tera template that renders to a port number" }
+                { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to check for readiness" },
+                { "type": "string", "description": "Tera template that renders to a port number" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to check for readiness" },
+                        "template": { "type": "string", "description": "Tera template that renders to a port number" },
+                        "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
+                    },
+                    "oneOf": [
+                        { "required": ["port"] },
+                        { "required": ["template"] }
+                    ]
+                }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ReadyOutput
+// ---------------------------------------------------------------------------
+
+/// Output readiness check configuration.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// ready_output = "Server listening"                   # shorthand, no timeout
+/// ready_output = { pattern = "Server listening", timeout = "30s" }  # full
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReadyOutput {
+    /// Regex pattern matched against ANSI-stripped stdout/stderr lines.
+    pub pattern: String,
+    /// Optional overall polling timeout. When set, the output readiness check stops
+    /// after this deadline and the daemon fails if no other check succeeds.
+    pub timeout: Option<std::time::Duration>,
+}
+
+impl ReadyOutput {
+    pub fn new(pattern: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            timeout: None,
+        }
+    }
+}
+
+impl std::fmt::Display for ReadyOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.pattern)
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct ReadyOutputRaw {
+    pattern: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
+}
+
+impl StringOrStruct for ReadyOutput {
+    type Short = String;
+    type Raw = ReadyOutputRaw;
+
+    fn from_short(pattern: String) -> Self {
+        Self::new(pattern)
+    }
+
+    fn from_raw(raw: ReadyOutputRaw) -> std::result::Result<Self, String> {
+        let timeout = parse_timeout(&raw.timeout)?;
+        Ok(Self {
+            pattern: raw.pattern,
+            timeout,
+        })
+    }
+
+    fn is_shorthand(&self) -> bool {
+        self.timeout.is_none()
+    }
+
+    fn to_short(&self) -> String {
+        self.pattern.clone()
+    }
+
+    fn to_raw(&self) -> ReadyOutputRaw {
+        ReadyOutputRaw {
+            pattern: self.pattern.clone(),
+            timeout: format_timeout(self.timeout),
+        }
+    }
+}
+
+impl Serialize for ReadyOutput {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.string_or_struct_serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ReadyOutput {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::string_or_struct_deserialize(d)
+    }
+}
+
+impl JsonSchema for ReadyOutput {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ReadyOutput")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Output readiness check: a regex pattern string, or { pattern, timeout } object with an optional overall polling timeout",
+            "oneOf": [
+                { "type": "string", "description": "Regex pattern matched against ANSI-stripped stdout/stderr lines" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Regex pattern matched against ANSI-stripped stdout/stderr lines" },
+                        "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
+                    },
+                    "required": ["pattern"]
+                }
             ]
         })
     }
@@ -563,10 +891,7 @@ impl StringOrStruct for StopConfig {
     }
 
     fn from_raw(raw: StopConfigRaw) -> std::result::Result<Self, String> {
-        let timeout = raw
-            .timeout
-            .map(|s| humantime::parse_duration(&s).map_err(|e| format!("invalid timeout: {e}")))
-            .transpose()?;
+        let timeout = parse_timeout(&raw.timeout)?;
         Ok(Self {
             signal: raw.signal,
             timeout,
@@ -584,9 +909,7 @@ impl StringOrStruct for StopConfig {
     fn to_raw(&self) -> StopConfigRaw {
         StopConfigRaw {
             signal: self.signal,
-            timeout: self
-                .timeout
-                .map(|d| humantime::format_duration(d).to_string()),
+            timeout: format_timeout(self.timeout),
         }
     }
 }

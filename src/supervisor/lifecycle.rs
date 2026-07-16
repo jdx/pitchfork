@@ -11,6 +11,7 @@ use crate::error::PortError;
 use crate::ipc::IpcResponse;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
+use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
 use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::shell::Shell;
@@ -60,6 +61,95 @@ pub(crate) fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
             None
         }
     }
+}
+
+/// Handle for an in-flight readiness command probe.
+///
+/// The spawned task owns the `tokio::process::Child` and waits for either the
+/// process to exit or the cancel signal. Dropping the handle without cancelling
+/// leaves the task running, but the child is started with `kill_on_drop(true)`
+/// so it will still be terminated when the task ends.
+struct CmdProbe {
+    cancel_tx: tokio::sync::oneshot::Sender<()>,
+    result_rx: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+}
+
+/// Spawn a readiness command probe and return a handle that can be used to wait
+/// for the exit status or cancel the probe.
+///
+/// The probe is started with `kill_on_drop(true)` as a cancellation fallback. The
+/// spawned task waits for the process to exit; if cancellation is requested, it
+/// kills the child and waits for it to reap before reporting the result.
+fn spawn_cmd_probe(id: &DaemonId, cmd: &str, dir: &std::path::Path) -> CmdProbe {
+    let mut command = Shell::default_for_platform().command(cmd);
+    command
+        .current_dir(dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            warn!("daemon {id}: failed to spawn readiness command probe: {e}");
+            // Return a probe whose result channel is already closed. The caller will
+            // treat this the same as a probe that exited non-zero and respawn after
+            // the ready_check_interval, preserving the existing retry behaviour.
+            let (cancel_tx, _) = tokio::sync::oneshot::channel();
+            let (_, result_rx) = tokio::sync::oneshot::channel();
+            return CmdProbe {
+                cancel_tx,
+                result_rx,
+            };
+        }
+    };
+
+    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+
+    tokio::spawn(async move {
+        let status = tokio::select! {
+            status = child.wait() => status,
+            _ = &mut cancel_rx => {
+                let mut child = child;
+                let _ = child.kill().await;
+                child.wait().await
+            }
+        };
+        let _ = result_tx.send(status);
+    });
+
+    CmdProbe {
+        cancel_tx,
+        result_rx,
+    }
+}
+
+/// Cancel an active command probe and clear its handle.
+fn stop_cmd_probe_state(probe: &mut Option<CmdProbe>) {
+    if let Some(p) = probe.take() {
+        let _ = p.cancel_tx.send(());
+    }
+}
+
+/// Returns true if any configured readiness check can still succeed.
+/// A check with no timeout is unbounded; a timed check can still succeed until its
+/// deadline fires. `ready_delay` is only used as a fallback when no other check is
+/// configured, so it is not counted here.
+#[allow(clippy::too_many_arguments)]
+fn any_ready_check_remaining(
+    ready_output: Option<&ReadyOutput>,
+    output_exhausted: bool,
+    ready_port: Option<&ReadyPort>,
+    port_exhausted: bool,
+    ready_http: Option<&ReadyHttp>,
+    http_exhausted: bool,
+    ready_cmd: Option<&ReadyCmd>,
+    cmd_exhausted: bool,
+) -> bool {
+    ready_output.is_some_and(|o| o.timeout.is_none() || !output_exhausted)
+        || ready_port.is_some_and(|p| p.timeout.is_none() || !port_exhausted)
+        || ready_http.is_some_and(|h| h.timeout.is_none() || !http_exhausted)
+        || ready_cmd.is_some_and(|c| c.timeout.is_none() || !cmd_exhausted)
 }
 
 impl Supervisor {
@@ -172,7 +262,9 @@ impl Supervisor {
             .await
             {
                 Ok(resolved) => {
-                    let ready_port = if let Some(configured_port) = opts.ready_port {
+                    let ready_port = if let Some(configured_port) =
+                        opts.ready_port.as_ref().and_then(|p| p.as_port())
+                    {
                         // If ready_port matches one of the expected ports, apply the same bump offset
                         let bump_offset = resolved
                             .first()
@@ -237,14 +329,17 @@ impl Supervisor {
             // the TCP readiness probe would immediately succeed and pitchfork
             // would falsely consider the daemon ready — routing proxy traffic to
             // the wrong process.
-            if let Some(port) = opts.ready_port {
+            if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port()) {
                 if port > 0 {
                     if let Some((pid, process)) = detect_port_conflict(port).await {
                         return Ok(IpcResponse::PortConflict { port, process, pid });
                     }
                 }
             }
-            (Vec::new(), opts.ready_port)
+            (
+                Vec::new(),
+                opts.ready_port.as_ref().and_then(|p| p.as_port()),
+            )
         };
 
         // Parse the configured shell (default "sh -c") into program + args.
@@ -444,7 +539,11 @@ impl Supervisor {
                     .set(|o| {
                         o.pid = Some(pid);
                         o.cmd = Some(original_cmd);
-                        o.ready_port = effective_ready_port;
+                        o.ready_port = effective_ready_port.map(|p| ReadyPort {
+                            port: Some(p),
+                            template: None,
+                            timeout: opts.ready_port.as_ref().and_then(|rp| rp.timeout),
+                        });
                         o.port = crate::config_types::PortConfig::from_parts(
                             expected_ports,
                             opts.port.as_ref().map(|p| p.bump).unwrap_or_default(),
@@ -460,6 +559,12 @@ impl Supervisor {
         let ready_output = opts.ready_output.clone();
         let ready_http = opts.ready_http.clone();
         let ready_port = effective_ready_port;
+        let implicit_ready_port = ready_port.map(|p| ReadyPort {
+            port: Some(p),
+            template: None,
+            timeout: None,
+        });
+        let ready_port_config = opts.ready_port.clone().or(implicit_ready_port);
         let ready_cmd = opts.ready_cmd.clone();
         let daemon_dir = opts.dir.0.clone();
         let hook_retry_count = opts.retry_count;
@@ -589,7 +694,9 @@ impl Supervisor {
             // Setup readiness checking
             let mut ready_notified = false;
             let mut ready_tx = ready_tx;
-            let ready_pattern = ready_output.as_ref().and_then(|p| get_or_compile_regex(p));
+            let ready_pattern = ready_output
+                .as_ref()
+                .and_then(|o| get_or_compile_regex(&o.pattern));
             // Track whether we've already spawned the active_port detection task
             let mut active_port_spawned = false;
 
@@ -622,15 +729,31 @@ impl Supervisor {
             let mut delay_timer =
                 ready_delay.map(|secs| Box::pin(time::sleep(Duration::from_secs(secs))));
 
+            // Track exhaustion of timed checks
+            let mut http_exhausted = false;
+            let mut cmd_exhausted = false;
+            let mut port_exhausted = false;
+            let mut output_exhausted = false;
+
             // Get settings for intervals
             let s = settings();
             let ready_check_interval = s.supervisor_ready_check_interval();
             let http_client_timeout = s.supervisor_http_client_timeout();
 
-            // Setup HTTP readiness check interval
+            // Setup output readiness check deadline
+            let mut output_deadline = ready_output
+                .as_ref()
+                .and_then(|o| o.timeout)
+                .map(|d| Box::pin(time::sleep(d)));
+
+            // Setup HTTP readiness check interval and deadline
             let mut http_check_interval = ready_http
                 .as_ref()
                 .map(|_| tokio::time::interval(ready_check_interval));
+            let mut http_deadline = ready_http
+                .as_ref()
+                .and_then(|h| h.timeout)
+                .map(|d| Box::pin(time::sleep(d)));
             let http_client = ready_http.as_ref().map(|_| {
                 reqwest::Client::builder()
                     .timeout(http_client_timeout)
@@ -638,14 +761,25 @@ impl Supervisor {
                     .unwrap_or_default()
             });
 
-            // Setup TCP port readiness check interval
+            // Setup TCP port readiness check interval and deadline
             let mut port_check_interval =
                 ready_port.map(|_| tokio::time::interval(ready_check_interval));
-
-            // Setup command readiness check interval
-            let mut cmd_check_interval = ready_cmd
+            let mut port_deadline = ready_port_config
                 .as_ref()
-                .map(|_| tokio::time::interval(ready_check_interval));
+                .and_then(|p| p.timeout)
+                .map(|d| Box::pin(time::sleep(d)));
+
+            // Setup command readiness check state. Probes are spawned one at a time;
+            // a non-zero result triggers a respawn delay, and a timeout stops the probe.
+            let mut cmd_probe: Option<CmdProbe> = None;
+            let mut cmd_respawn_delay: Option<_> = None;
+            let mut cmd_deadline = ready_cmd
+                .as_ref()
+                .and_then(|c| c.timeout)
+                .map(|d| Box::pin(time::sleep(d)));
+            if let Some(ref cmd) = ready_cmd {
+                cmd_probe = Some(spawn_cmd_probe(&id, &cmd.run, daemon_dir.as_path()));
+            }
 
             // Use a channel to communicate process exit status
             let (exit_tx, mut exit_rx) =
@@ -733,6 +867,7 @@ impl Supervisor {
 
                         // Check if output matches ready pattern
                         if !ready_notified
+                            && !output_exhausted
                             && let Some(ref pattern) = ready_pattern
                             && pattern.is_match(&line_clean)
                         {
@@ -749,6 +884,11 @@ impl Supervisor {
                                 let _ = tx.send(Ok(()));
                             }
                             fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            stop_cmd_probe_state(&mut cmd_probe);
+                            http_deadline = None;
+                            cmd_deadline = None;
+                            port_deadline = None;
+                            output_deadline = None;
                             if !active_port_spawned && has_port_config {
                                 active_port_spawned = true;
                                 detect_and_store_active_port(id.clone(), daemon_pid);
@@ -771,6 +911,9 @@ impl Supervisor {
                                 }
                             }
                         }
+                        // Yield briefly so that the output readiness deadline can be
+                        // evaluated even when output is produced continuously.
+                        tokio::task::yield_now().await;
                     }
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
@@ -806,7 +949,7 @@ impl Supervisor {
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_http.is_some() => {
+                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
                         if let (Some(http), Some(client)) = (&ready_http, &http_client) {
                             match client.get(&http.url).send().await {
                                 Ok(response) if http.accepts_status(response.status().as_u16()) => {
@@ -817,6 +960,11 @@ impl Supervisor {
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     http_check_interval = None;
+                                    http_deadline = None;
+                                    stop_cmd_probe_state(&mut cmd_probe);
+                                    cmd_deadline = None;
+                                    port_deadline = None;
+                                    output_deadline = None;
                                     if !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
@@ -832,12 +980,75 @@ impl Supervisor {
                         }
                     }
                     _ = async {
+                        if let Some(ref mut deadline) = http_deadline {
+                            deadline.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_http.is_some() => {
+                        http_exhausted = true;
+                        http_deadline = None;
+                        http_check_interval = None;
+                        warn!("daemon {id}: HTTP readiness check timed out");
+                        let any_remaining = any_ready_check_remaining(
+                            ready_output.as_ref(),
+                            output_exhausted,
+                            ready_port_config.as_ref(),
+                            port_exhausted,
+                            ready_http.as_ref(),
+                            http_exhausted,
+                            ready_cmd.as_ref(),
+                            cmd_exhausted,
+                        );
+                        if !any_remaining {
+                            error!("daemon {id}: all readiness checks exhausted, failing");
+                            stop_cmd_probe_state(&mut cmd_probe);
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Err(Some(124)));
+                            }
+                            let stop_cfg = opts.stop_signal.unwrap_or_default();
+                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut deadline) = output_deadline {
+                            deadline.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_output.is_some() => {
+                        output_exhausted = true;
+                        output_deadline = None;
+                        warn!("daemon {id}: output readiness check timed out");
+                        let any_remaining = any_ready_check_remaining(
+                            ready_output.as_ref(),
+                            output_exhausted,
+                            ready_port_config.as_ref(),
+                            port_exhausted,
+                            ready_http.as_ref(),
+                            http_exhausted,
+                            ready_cmd.as_ref(),
+                            cmd_exhausted,
+                        );
+                        if !any_remaining {
+                            error!("daemon {id}: all readiness checks exhausted, failing");
+                            stop_cmd_probe_state(&mut cmd_probe);
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Err(Some(124)));
+                            }
+                            let stop_cfg = opts.stop_signal.unwrap_or_default();
+                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            break;
+                        }
+                    }
+                    _ = async {
                         if let Some(ref mut interval) = port_check_interval {
                             interval.tick().await;
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_port.is_some() => {
+                    }, if !ready_notified && ready_port.is_some() && !port_exhausted => {
                         if let Some(port) = ready_port {
                             match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
                                 Ok(_) => {
@@ -849,6 +1060,11 @@ impl Supervisor {
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                     // Stop checking once ready
                                     port_check_interval = None;
+                                    port_deadline = None;
+                                    stop_cmd_probe_state(&mut cmd_probe);
+                                    http_deadline = None;
+                                    cmd_deadline = None;
+                                    output_deadline = None;
                                     if !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
@@ -861,42 +1077,114 @@ impl Supervisor {
                         }
                     }
                     _ = async {
-                        if let Some(ref mut interval) = cmd_check_interval {
-                            interval.tick().await;
+                        if let Some(ref mut deadline) = port_deadline {
+                            deadline.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_port.is_some() => {
+                        port_exhausted = true;
+                        port_deadline = None;
+                        port_check_interval = None;
+                        warn!("daemon {id}: TCP port readiness check timed out");
+                        let any_remaining = any_ready_check_remaining(
+                            ready_output.as_ref(),
+                            output_exhausted,
+                            ready_port_config.as_ref(),
+                            port_exhausted,
+                            ready_http.as_ref(),
+                            http_exhausted,
+                            ready_cmd.as_ref(),
+                            cmd_exhausted,
+                        );
+                        if !any_remaining {
+                            error!("daemon {id}: all readiness checks exhausted, failing");
+                            stop_cmd_probe_state(&mut cmd_probe);
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Err(Some(124)));
+                            }
+                            let stop_cfg = opts.stop_signal.unwrap_or_default();
+                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut delay) = cmd_respawn_delay {
+                            delay.await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_cmd.is_some() && !cmd_exhausted && cmd_probe.is_none() => {
+                        if let Some(ref cmd) = ready_cmd {
+                            cmd_probe = Some(spawn_cmd_probe(&id, &cmd.run, daemon_dir.as_path()));
+                        }
+                        cmd_respawn_delay = None;
+                    }
+                    result = async {
+                        if let Some(probe) = cmd_probe.as_mut() {
+                            std::pin::Pin::new(&mut probe.result_rx).await
+                        } else {
+                            std::future::pending::<Result<Result<std::process::ExitStatus, std::io::Error>, tokio::sync::oneshot::error::RecvError>>().await
+                        }
+                    }, if !ready_notified && ready_cmd.is_some() && !cmd_exhausted => {
+                        // The probe task has finished; remove the handle so it is not
+                        // cancelled or reused. This must happen only after this branch
+                        // actually wins the select, not while constructing the future.
+                        let _ = cmd_probe.take();
+                        match result {
+                            Ok(Ok(status)) if status.success() => {
+                                info!("daemon {id} ready: readiness command succeeded");
+                                ready_notified = true;
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(Ok(()));
+                                }
+                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                cmd_respawn_delay = None;
+                                cmd_deadline = None;
+                                http_deadline = None;
+                                port_deadline = None;
+                                output_deadline = None;
+                                if !active_port_spawned && has_port_config {
+                                    active_port_spawned = true;
+                                    detect_and_store_active_port(id.clone(), daemon_pid);
+                                }
+                            }
+                            Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {
+                                trace!("daemon {id} cmd check: command not ready, will respawn");
+                                cmd_respawn_delay = Some(Box::pin(time::sleep(ready_check_interval)));
+                            }
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut deadline) = cmd_deadline {
+                            deadline.await;
                         } else {
                             std::future::pending::<()>().await;
                         }
                     }, if !ready_notified && ready_cmd.is_some() => {
-                        if let Some(ref cmd) = ready_cmd {
-                            // Run the readiness check command using the shell abstraction
-                            let mut command = Shell::default_for_platform().command(cmd);
-                            command
-                                .current_dir(&daemon_dir)
-                                .stdout(std::process::Stdio::null())
-                                .stderr(std::process::Stdio::null());
-                            let result: std::io::Result<std::process::ExitStatus> = command.status().await;
-                            match result {
-                                Ok(status) if status.success() => {
-                                    info!("daemon {id} ready: readiness command succeeded");
-                                    ready_notified = true;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
-                                    }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    // Stop checking once ready
-                                    cmd_check_interval = None;
-                                    if !active_port_spawned && has_port_config {
-                                        active_port_spawned = true;
-                                        detect_and_store_active_port(id.clone(), daemon_pid);
-                                    }
-                                }
-                                Ok(_) => {
-                                    trace!("daemon {id} cmd check: command returned non-zero (not ready)");
-                                }
-                                Err(e) => {
-                                    trace!("daemon {id} cmd check failed: {e}");
-                                }
+                        cmd_exhausted = true;
+                        cmd_deadline = None;
+                        stop_cmd_probe_state(&mut cmd_probe);
+                        cmd_respawn_delay = None;
+                        warn!("daemon {id}: command readiness check timed out");
+                        let any_remaining = any_ready_check_remaining(
+                            ready_output.as_ref(),
+                            output_exhausted,
+                            ready_port_config.as_ref(),
+                            port_exhausted,
+                            ready_http.as_ref(),
+                            http_exhausted,
+                            ready_cmd.as_ref(),
+                            cmd_exhausted,
+                        );
+                        if !any_remaining {
+                            error!("daemon {id}: all readiness checks exhausted, failing");
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Err(Some(124)));
                             }
+                            let stop_cfg = opts.stop_signal.unwrap_or_default();
+                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            break;
                         }
                     }
                     _ = async {
@@ -913,6 +1201,13 @@ impl Supervisor {
                                 let _ = tx.send(Ok(()));
                             }
                             fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            // Clear all deadlines — no other checks are configured
+                            // when delay fires as readiness, but clear defensively.
+                            output_deadline = None;
+                            http_deadline = None;
+                            cmd_deadline = None;
+                            port_deadline = None;
+                            stop_cmd_probe_state(&mut cmd_probe);
                         }
                         // Disable timer after it fires
                         delay_timer = None;
@@ -1823,4 +2118,102 @@ fn build_pitchfork_url(slug: &Option<String>, s: &crate::settings::Settings) -> 
     let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
     let tld = if lan_enabled { "local" } else { &s.proxy.tld };
     Some(format!("{scheme}://{slug}.{tld}{port_suffix}",))
+}
+
+#[cfg(test)]
+mod ready_check_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn any_ready_check_remaining_prefers_unbounded_checks() {
+        let http = ReadyHttp::new("http://localhost/health");
+        let cmd = ReadyCmd::new("true");
+
+        assert!(any_ready_check_remaining(
+            None,
+            false,
+            None,
+            false,
+            Some(&http),
+            false,
+            None,
+            false
+        ));
+        assert!(any_ready_check_remaining(
+            None,
+            false,
+            None,
+            false,
+            None,
+            false,
+            Some(&cmd),
+            false
+        ));
+        assert!(any_ready_check_remaining(
+            None,
+            false,
+            Some(&ReadyPort::new(8080)),
+            false,
+            Some(&http),
+            true,
+            Some(&cmd),
+            true
+        ));
+    }
+
+    #[test]
+    fn any_ready_check_remaining_exhausted_timed_checks() {
+        let http = ReadyHttp {
+            url: "http://localhost/health".to_string(),
+            status: vec![],
+            timeout: Some(Duration::from_secs(5)),
+        };
+        let cmd = ReadyCmd {
+            run: "true".to_string(),
+            timeout: Some(Duration::from_secs(5)),
+        };
+
+        assert!(any_ready_check_remaining(
+            None,
+            false,
+            None,
+            false,
+            Some(&http),
+            false,
+            Some(&cmd),
+            false
+        ));
+        assert!(!any_ready_check_remaining(
+            None,
+            false,
+            None,
+            false,
+            Some(&http),
+            true,
+            Some(&cmd),
+            true
+        ));
+    }
+
+    #[tokio::test]
+    async fn spawn_cmd_probe_reports_success() {
+        let id = DaemonId::new("global", "probe-test");
+        let probe = spawn_cmd_probe(&id, "true", &std::env::temp_dir());
+        let status = probe.result_rx.await.unwrap().unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn spawn_cmd_probe_stops_on_request() {
+        let id = DaemonId::new("global", "probe-test");
+        let probe = spawn_cmd_probe(&id, "sleep 30", &std::env::temp_dir());
+        let CmdProbe {
+            cancel_tx,
+            result_rx,
+        } = probe;
+        let _ = cancel_tx.send(());
+        let status = result_rx.await.unwrap().unwrap();
+        assert!(!status.success());
+    }
 }

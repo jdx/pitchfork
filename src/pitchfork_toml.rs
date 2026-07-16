@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyHttp, ReadyPort, Retry, StopConfig, StopSignal,
-    WatchMode,
+    PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
+    StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -164,13 +164,13 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_port: Option<ReadyPort>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_cmd: Option<String>,
+    pub ready_cmd: Option<ReadyCmd>,
     /// New port configuration (preferred)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port: Option<PortConfig>,
@@ -1578,14 +1578,15 @@ pub struct PitchforkTomlDaemon {
     /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     /// HTTP URL to poll for readiness. Accepts any 2xx response by default, or configured statuses.
     pub ready_http: Option<ReadyHttp>,
     /// TCP port to check for readiness (connection success = ready).
-    /// Accepts a port number or a Tera template string that renders to one.
+    /// Accepts a port number, a Tera template string that renders to one, or an
+    /// object with an optional overall polling timeout.
     pub ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness (exit code 0 = ready)
-    pub ready_cmd: Option<String>,
+    pub ready_cmd: Option<ReadyCmd>,
     /// Port configuration: expected ports and auto-bump settings
     pub port: Option<PortConfig>,
     /// Whether to start this daemon automatically on system boot
@@ -1684,17 +1685,7 @@ impl PitchforkTomlDaemon {
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),
-            // Templates are resolved to a literal port by render_daemon_templates
-            // on the start path; an unrendered template has no usable port.
-            ready_port: self.ready_port.as_ref().and_then(|rp| {
-                let port = rp.as_port();
-                if port.is_none() {
-                    warn!(
-                        "daemon {id}: ready_port template {rp:?} was not rendered on this start path; skipping port readiness check"
-                    );
-                }
-                port
-            }),
+            ready_port: self.ready_port.clone(),
             ready_cmd: self.ready_cmd.clone(),
             port: self.port.clone(),
             wait_ready: false,

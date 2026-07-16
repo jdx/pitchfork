@@ -471,6 +471,48 @@ EOF
   pitchfork stop port_test
 }
 
+@test "ready port timeout fails daemon" {
+  kill_port 18083
+
+  create_pitchfork_toml <<EOF
+[daemons.port_timeout_test]
+run = "sleep 30"
+ready_port = { port = 18083, timeout = "3s" }
+retry = 0
+EOF
+
+  local start_time elapsed
+  start_time=$(date +%s)
+  run pitchfork start port_timeout_test
+  elapsed=$(($(date +%s) - start_time))
+
+  assert_failure
+  [[ $elapsed -ge 2 ]]
+  [[ $elapsed -lt 10 ]]
+
+  wait_for_status port_timeout_test errored
+}
+
+@test "ready output timeout fails daemon" {
+  create_pitchfork_toml <<EOF
+[daemons.output_timeout_test]
+run = "while true; do echo 'still starting'; sleep 1; done"
+ready_output = { pattern = "READY", timeout = "3s" }
+retry = 0
+EOF
+
+  local start_time elapsed
+  start_time=$(date +%s)
+  run pitchfork start output_timeout_test
+  elapsed=$(($(date +%s) - start_time))
+
+  assert_failure
+  [[ $elapsed -ge 2 ]]
+  [[ $elapsed -lt 10 ]]
+
+  wait_for_status output_timeout_test errored
+}
+
 @test "ready cmd check waits for command to succeed" {
   local marker
   marker="$TEST_TEMP_DIR/ready_marker"
@@ -498,6 +540,61 @@ EOF
   assert_output --partial "Ready"
 
   pitchfork stop cmd_test
+}
+
+@test "ready cmd timeout fails daemon and blocks dependent" {
+  create_pitchfork_toml <<EOF
+[daemons.never_ready]
+run = "sleep 30"
+ready_cmd = { run = "false", timeout = "3s" }
+retry = 0
+
+[daemons.dependent]
+run = "sleep 30"
+depends = ["never_ready"]
+ready_delay = 1
+retry = 0
+EOF
+
+  local start_time elapsed
+  start_time=$(date +%s)
+  run pitchfork start never_ready
+  elapsed=$(($(date +%s) - start_time))
+
+  assert_failure
+  [[ $elapsed -ge 2 ]]
+  [[ $elapsed -lt 10 ]]
+
+  wait_for_status never_ready errored
+
+  start_time=$(date +%s)
+  run pitchfork start dependent
+  elapsed=$(($(date +%s) - start_time))
+
+  assert_failure
+  [[ $elapsed -lt 10 ]]
+
+  run pitchfork status dependent
+  refute_output --partial "running"
+}
+
+@test "ready cmd probe survives concurrent output lines" {
+  create_pitchfork_toml <<EOF
+[daemons.cmd_output_race]
+run = "while true; do echo tick; sleep 0.05; done"
+ready_cmd = "sleep 1; true"
+EOF
+
+  local start_time elapsed
+  start_time=$(date +%s)
+  run pitchfork start cmd_output_race
+  elapsed=$(($(date +%s) - start_time))
+
+  assert_success
+  [[ $elapsed -ge 1 ]]
+  [[ $elapsed -lt 15 ]]
+
+  pitchfork stop cmd_output_race
 }
 
 # ============================================================================
