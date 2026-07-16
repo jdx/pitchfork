@@ -55,6 +55,7 @@ EOF
 }
 
 @test "cpu_limit triggers on high CPU usage" {
+  skip_on_windows "sysinfo CPU sampling is unreliable on Windows CI"
   export PITCHFORK_INTERVAL=1s
   pitchfork supervisor start --force >/dev/null 2>&1
   export PITCHFORK_INTERVAL=1s

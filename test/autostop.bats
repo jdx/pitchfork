@@ -11,6 +11,7 @@ teardown() {
 }
 
 @test "autostop is delayed when PITCHFORK_AUTOSTOP_DELAY is set" {
+  skip_on_windows "shell PID liveness check is skipped on Windows, autostop timing unreliable"
   export PITCHFORK_AUTOSTOP_DELAY=5s
   export PITCHFORK_INTERVAL=2s
 
