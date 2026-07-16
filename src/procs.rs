@@ -187,6 +187,13 @@ impl Procs {
 
         // Wait for graceful shutdown: fast initial check then slower polling.
         // Per-daemon timeout overrides the global setting.
+        //
+        // The wait must cover the ENTIRE group, not just the leader. The leader
+        // is often a thin shell (`sh -c ...`) that dies within milliseconds of
+        // the signal while its children are still shutting down gracefully
+        // (e.g. `docker compose up` waiting for its container to stop).
+        // Returning as soon as the leader dies lets a force-restart spawn a
+        // replacement that collides with the still-terminating old instance.
         let stop_timeout = stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
         let fast_ms = 10u64;
         let slow_ms = 50u64;
@@ -204,9 +211,8 @@ impl Procs {
 
         for sleep_duration in fast_checks.chain(slow_checks) {
             std::thread::sleep(sleep_duration);
-            self.refresh_pids(&[pid]);
             elapsed_ms += sleep_duration.as_millis() as u64;
-            if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
+            if process_group_terminated(pgid) {
                 debug!("process group {pgid} terminated after {signal_name} ({elapsed_ms} ms)",);
                 return Ok(true);
             }
@@ -225,8 +231,16 @@ impl Procs {
             }
         }
 
-        // Brief wait for SIGKILL to take effect
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Wait for SIGKILL to take effect on the whole group (bounded: SIGKILL
+        // cannot be caught, so members disappear as soon as the kernel reaps
+        // them — anything left after this is stuck in uninterruptible sleep).
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if process_group_terminated(pgid) {
+                return Ok(true);
+            }
+        }
+        warn!("process group {pgid} still has members after SIGKILL");
         Ok(true)
     }
 
@@ -616,6 +630,22 @@ fn format_duration(secs: u64) -> String {
 
 fn format_bytes_per_sec(bytes: u64) -> String {
     format!("{}/s", humanbyte::to_string(bytes, humanbyte::Format::IEC))
+}
+
+/// Check whether a process group has no remaining members.
+///
+/// `killpg(pgid, 0)` probes for any member without delivering a signal:
+/// ESRCH means the group is empty. Unreaped zombies still count as members,
+/// but they are reaped promptly (the leader by the supervisor's monitoring
+/// task via `child.wait()`, orphans by init or the container-mode reaper),
+/// so the group empties as soon as every member has actually exited.
+#[cfg(unix)]
+fn process_group_terminated(pgid: i32) -> bool {
+    let ret = unsafe { libc::killpg(pgid, 0) };
+    if ret == 0 {
+        return false;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(unix)]

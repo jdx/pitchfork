@@ -1462,9 +1462,12 @@ impl Supervisor {
                     }
 
                     // Process successfully stopped
-                    // Note: kill_async uses SIGTERM -> wait ~3s -> SIGKILL strategy,
-                    // and also detects zombie processes, so by the time it returns,
-                    // the process should be fully terminated.
+                    // Note: kill_process_group_async waits for the ENTIRE process
+                    // group to exit (stop signal -> stop_timeout -> SIGKILL, then a
+                    // bounded verification), so a replacement daemon can be started
+                    // without colliding with a still-terminating instance. The only
+                    // exception is a member stuck in uninterruptible sleep, which is
+                    // logged with a warning.
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
                             .set(|o| {
