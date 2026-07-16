@@ -852,11 +852,12 @@ impl Supervisor {
             }
 
             loop {
-                // biased: evaluate in exit → output → delay order so that
-                // process exit pre-empts both buffered output and the delay
-                // timer, preventing a dead daemon from being marked ready.
+                // exit_rx is checked before delay_timer via the
+                // exit_status.is_some() / PROCS.is_running() guard in
+                // the delay branch below, which prevents a dead daemon
+                // from being marked ready on Windows where sleep(0)
+                // fires before child.wait() detects the exit.
                 select! {
-                    biased;
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
                         exit_status = Some(result);
