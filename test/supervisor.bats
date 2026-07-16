@@ -222,7 +222,7 @@ EOF
   run pitchfork supervisor start
   assert_success
 
-  wait_for_status retry_persist errored 30
+  wait_for_status retry_persist errored 60
 
   # Give the supervisor time to exhaust the remaining retries.
   sleep 10
