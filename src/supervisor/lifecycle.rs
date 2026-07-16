@@ -759,9 +759,11 @@ impl Supervisor {
                 .map(|d| Box::pin(time::sleep(d)));
 
             // Setup HTTP readiness check interval and deadline
-            let mut http_check_interval = ready_http
-                .as_ref()
-                .map(|_| tokio::time::interval(ready_check_interval));
+            let mut http_check_interval = ready_http.as_ref().map(|_| {
+                let mut i = tokio::time::interval(ready_check_interval);
+                i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                i
+            });
             let mut http_deadline = ready_http
                 .as_ref()
                 .and_then(|h| h.timeout)
@@ -774,8 +776,11 @@ impl Supervisor {
             });
 
             // Setup TCP port readiness check interval and deadline
-            let mut port_check_interval =
-                ready_port.map(|_| tokio::time::interval(ready_check_interval));
+            let mut port_check_interval = ready_port.map(|_| {
+                let mut i = tokio::time::interval(ready_check_interval);
+                i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                i
+            });
             let mut port_deadline = ready_port_config
                 .as_ref()
                 .and_then(|p| p.timeout)
@@ -864,12 +869,11 @@ impl Supervisor {
             }
 
             loop {
-                // exit_rx is checked before delay_timer via the
-                // exit_status.is_some() / PROCS.is_running() guard in
-                // the delay branch below, which prevents a dead daemon
-                // from being marked ready on Windows where sleep(0)
-                // fires before child.wait() detects the exit.
+                // biased: evaluate in exit → output → delay order so that
+                // process exit pre-empts both buffered output and the delay
+                // timer, preventing a dead daemon from being marked ready.
                 select! {
+                    biased;
                     Some(result) = exit_rx.recv() => {
                         // Process exited - save exit status and notify if not ready yet
                         exit_status = Some(result);
