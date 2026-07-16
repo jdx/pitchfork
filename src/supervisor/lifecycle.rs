@@ -1217,15 +1217,20 @@ impl Supervisor {
                             // return success for a daemon that already failed.
                             if exit_status.is_some() {
                                 debug!("daemon {id} exited during ready_delay, not marking as ready");
-                            } else if !PROCS.is_running(daemon_pid) {
-                                debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
                             } else {
-                                info!("daemon {id} ready: delay elapsed");
-                                ready_notified = true;
-                                if let Some(tx) = ready_tx.take() {
-                                    let _ = tx.send(Ok(()));
+                                // Force-refresh sysinfo for this PID before checking.
+                                // On Windows, the cached process list may be stale.
+                                PROCS.refresh_pids(&[daemon_pid]);
+                                if !PROCS.is_running(daemon_pid) {
+                                    debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
+                                } else {
+                                    info!("daemon {id} ready: delay elapsed");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                                 }
-                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                             }
                             // Clear all deadlines — no other checks are configured
                             // when delay fires as readiness, but clear defensively.
