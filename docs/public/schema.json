@@ -27,9 +27,6 @@
       "default": {}
     }
   },
-  "required": [
-    "daemons"
-  ],
   "$defs": {
     "CpuLimit": {
       "description": "CPU usage limit as a percentage (e.g. 80 for 80% of one core, 200 for 2 cores)",
