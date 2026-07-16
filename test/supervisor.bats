@@ -222,10 +222,10 @@ EOF
   run pitchfork supervisor start
   assert_success
 
-  wait_for_status retry_persist errored 60
-
-  # Give the supervisor time to exhaust the remaining retries.
-  sleep 10
+  # Wait for at least 4 total failures (original 3 + at least 1 more after restart).
+  # The daemon cycles through running → errored → running during retries, so
+  # polling status is unreliable. Waiting for log lines is deterministic.
+  wait_for_logs retry_persist "Failed after 0!" 60
 
   run pitchfork logs retry_persist --raw
   local count
