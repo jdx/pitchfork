@@ -492,7 +492,13 @@ EOF
 
   assert_failure
   [[ $elapsed -ge 2 ]]
-  [[ $elapsed -lt 10 ]]
+  # Windows needs more time for taskkill /F /T + output drain after the
+  # ready-check timeout fires.
+  local max_elapsed=10
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    max_elapsed=30
+  fi
+  [[ $elapsed -lt $max_elapsed ]]
 
   wait_for_status port_timeout_test errored
 }
