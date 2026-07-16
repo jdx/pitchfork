@@ -82,6 +82,18 @@ struct CmdProbe {
 /// kills the child and waits for it to reap before reporting the result.
 fn spawn_cmd_probe(id: &DaemonId, cmd: &str, dir: &std::path::Path) -> CmdProbe {
     let mut command = Shell::default_for_platform().command(cmd);
+    // On Windows, default_for_platform() returns Shell::Cmd which cannot parse
+    // Unix-style commands like "sleep 1; true". Use the configured general.shell
+    // setting if available (same as daemon run commands and hooks).
+    let shell_setting = settings().general.shell.clone();
+    if let Ok(parts) = shell_words::split(&shell_setting)
+        && !parts.is_empty()
+    {
+        let (program, args) = parts.split_first().unwrap();
+        command = tokio::process::Command::new(program);
+        command.args(args);
+        command.arg(cmd);
+    }
     command
         .current_dir(dir)
         .stdout(std::process::Stdio::null())
