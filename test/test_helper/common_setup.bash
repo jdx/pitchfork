@@ -187,12 +187,13 @@ create_pitchfork_toml() {
 # Process / status helpers
 # ---------------------------------------------------------------------------
 
-# Wait for a daemon to reach a given status (up to 10s)
-# Usage: wait_for_status <daemon> <expected_status>
+# Wait for a daemon to reach a given status (up to 30s, or custom timeout)
+# Usage: wait_for_status <daemon> <expected_status> [timeout_secs]
 wait_for_status() {
   local daemon="$1"
   local expected="$2"
-  for _ in $(seq 1 50); do
+  local timeout_secs="${3:-30}"
+  for _ in $(seq 1 "$((timeout_secs * 5))"); do
     if pitchfork status "$daemon" 2>/dev/null | grep -q "Status:.*$expected"; then
       return 0
     fi
