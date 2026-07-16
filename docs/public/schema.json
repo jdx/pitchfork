@@ -284,9 +284,13 @@
         },
         "ready_cmd": {
           "description": "Shell command to poll for readiness (exit code 0 = ready)",
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadyCmd"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "ready_delay": {
@@ -311,20 +315,25 @@
         },
         "ready_output": {
           "description": "Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness",
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadyOutput"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "ready_port": {
-          "description": "TCP port to check for readiness (connection success = ready)",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 1
+          "description": "TCP port to check for readiness (connection success = ready).\nAccepts a port number, a Tera template string that renders to one, or an\nobject with an optional overall polling timeout.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadyPort"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "retry": {
           "description": "Number of times to retry if the daemon fails.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
@@ -514,8 +523,33 @@
         }
       ]
     },
+    "ReadyCmd": {
+      "description": "Command readiness check: a shell command string, or { run, timeout } object with an optional overall polling timeout",
+      "oneOf": [
+        {
+          "description": "Shell command that returns exit code 0 when ready",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "description": "Shell command that returns exit code 0 when ready",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Overall readiness polling timeout (e.g. '30s', '5m')",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run"
+          ]
+        }
+      ]
+    },
     "ReadyHttp": {
-      "description": "HTTP readiness check: a URL string accepting any 2xx response, or { url, status } object with exact accepted status codes",
+      "description": "HTTP readiness check: a URL string accepting any 2xx response, or { url, status, timeout } object with exact accepted status codes and optional overall polling timeout",
       "oneOf": [
         {
           "description": "HTTP URL to poll for readiness; any 2xx response is ready",
@@ -533,6 +567,10 @@
                 "minimum": 100
               }
             },
+            "timeout": {
+              "description": "Overall readiness polling timeout (e.g. '30s', '5m'). Distinct from per-request http_client_timeout.",
+              "type": "string"
+            },
             "url": {
               "description": "HTTP URL to poll for readiness",
               "type": "string"
@@ -540,6 +578,77 @@
           },
           "required": [
             "url"
+          ]
+        }
+      ]
+    },
+    "ReadyOutput": {
+      "description": "Output readiness check: a regex pattern string, or { pattern, timeout } object with an optional overall polling timeout",
+      "oneOf": [
+        {
+          "description": "Regex pattern matched against ANSI-stripped stdout/stderr lines",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "description": "Regex pattern matched against ANSI-stripped stdout/stderr lines",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Overall readiness polling timeout (e.g. '30s', '5m')",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      ]
+    },
+    "ReadyPort": {
+      "description": "TCP readiness port: a port number, a template string rendering to one, or an object with an optional overall polling timeout",
+      "oneOf": [
+        {
+          "description": "TCP port number to check for readiness",
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        },
+        {
+          "description": "Tera template that renders to a port number",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "port": {
+              "description": "TCP port number to check for readiness",
+              "type": "integer",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "template": {
+              "description": "Tera template that renders to a port number",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Overall readiness polling timeout (e.g. '30s', '5m')",
+              "type": "string"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "port"
+              ]
+            },
+            {
+              "required": [
+                "template"
+              ]
+            }
           ]
         }
       ]

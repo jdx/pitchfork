@@ -1639,7 +1639,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
         if let Some(output) = &cfg.ready_output {
             lines.push(Line::from(vec![
                 Span::styled("Ready output: ", Style::default().fg(GRAY)),
-                Span::styled(output.clone(), Style::default().fg(Color::White)),
+                Span::styled(output.pattern.clone(), Style::default().fg(Color::White)),
             ]));
         }
 

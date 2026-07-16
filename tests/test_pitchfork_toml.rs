@@ -2,6 +2,7 @@ use pitchfork_cli::daemon_id::DaemonId;
 use pitchfork_cli::*;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::TempDir;
 
 /// Helper function to get a daemon by name from a PitchforkToml
@@ -210,16 +211,76 @@ ready_cmd = "test -f /tmp/ready"
     let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
 
     assert_eq!(daemon.ready_delay, Some(5000));
-    assert_eq!(daemon.ready_output, Some("Server is ready".to_string()));
+    assert_eq!(
+        daemon.ready_output,
+        Some(pitchfork_toml::ReadyOutput::new("Server is ready"))
+    );
     assert_eq!(
         daemon.ready_http.as_ref().unwrap().url,
         "http://localhost:8080/health"
     );
     assert!(daemon.ready_http.as_ref().unwrap().status.is_empty());
-    assert_eq!(daemon.ready_port, Some(8080));
-    assert_eq!(daemon.ready_cmd, Some("test -f /tmp/ready".to_string()));
+    assert_eq!(
+        daemon.ready_port,
+        Some(pitchfork_toml::ReadyPort::new(8080))
+    );
+    assert_eq!(daemon.ready_cmd.as_ref().unwrap().run, "test -f /tmp/ready");
+    assert!(daemon.ready_cmd.as_ref().unwrap().timeout.is_none());
 
     Ok(())
+}
+
+/// Test daemon with a templated ready_port
+#[test]
+fn test_daemon_with_templated_ready_port() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_port = "{{ daemons.redis.port }}"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+
+    assert_eq!(
+        daemon.ready_port,
+        Some(pitchfork_toml::ReadyPort::from_template(
+            "{{ daemons.redis.port }}"
+        ))
+    );
+
+    Ok(())
+}
+
+/// Numeric-looking ready_port strings are validated at parse time, not
+/// treated as templates
+#[test]
+fn test_daemon_with_out_of_range_ready_port_string() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    for bad in ["\"-1\"", "\"0\"", "\"70000\"", "0", "70000"] {
+        let toml_content = format!(
+            r#"
+[daemons.ready_daemon]
+run = "echo hi"
+ready_port = {bad}
+"#
+        );
+        fs::write(&toml_path, toml_content).unwrap();
+        let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+            .expect_err(&format!("ready_port = {bad} should fail to parse"));
+        let chain = format!("{err:?}");
+        assert!(
+            chain.contains("ready_port"),
+            "error for {bad} should mention ready_port: {chain}"
+        );
+    }
 }
 
 /// Test daemon with structured HTTP ready check
@@ -268,6 +329,179 @@ ready_http = { url = "http://localhost:8080/health", status = [99] }
         err.contains("ready_http status must be between 100 and 599"),
         "unexpected error: {err}"
     );
+}
+
+/// Test daemon with structured command ready check including a timeout
+#[test]
+fn test_daemon_with_ready_cmd_object() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_cmd = { run = "test -f /tmp/ready", timeout = "5s" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+    let ready_cmd = daemon.ready_cmd.as_ref().unwrap();
+
+    assert_eq!(ready_cmd.run, "test -f /tmp/ready");
+    assert_eq!(ready_cmd.timeout, Some(Duration::from_secs(5)));
+
+    Ok(())
+}
+
+/// Test daemon with structured HTTP ready check including a timeout
+#[test]
+fn test_daemon_with_ready_http_timeout() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_http = { url = "http://localhost:8080/health", timeout = "30s" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+    let ready_http = daemon.ready_http.as_ref().unwrap();
+
+    assert_eq!(ready_http.url, "http://localhost:8080/health");
+    assert!(ready_http.status.is_empty());
+    assert_eq!(ready_http.timeout, Some(Duration::from_secs(30)));
+
+    Ok(())
+}
+
+/// Test invalid command ready check timeout is rejected
+#[test]
+fn test_daemon_with_invalid_ready_cmd_timeout() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_cmd = { run = "test -f /tmp/ready", timeout = "not-a-duration" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
+}
+
+/// Test invalid HTTP ready check timeout is rejected
+#[test]
+fn test_daemon_with_invalid_ready_http_timeout() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_http = { url = "http://localhost:8080/health", timeout = "not-a-duration" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
+}
+
+/// Test daemon with structured port ready check including a timeout
+#[test]
+fn test_daemon_with_ready_port_timeout() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_port = { port = 8080, timeout = "30s" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+    let ready_port = daemon.ready_port.as_ref().unwrap();
+
+    assert_eq!(ready_port.port, Some(8080));
+    assert_eq!(ready_port.timeout, Some(Duration::from_secs(30)));
+
+    Ok(())
+}
+
+/// Test invalid port ready check timeout is rejected
+#[test]
+fn test_daemon_with_invalid_ready_port_timeout() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_port = { port = 8080, timeout = "not-a-duration" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
+}
+
+/// Test output ready check with timeout
+#[test]
+fn test_daemon_with_ready_output_timeout() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_output = { pattern = "Server is ready", timeout = "30s" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "ready_daemon").unwrap();
+
+    let ready_output = daemon.ready_output.as_ref().unwrap();
+    assert_eq!(ready_output.pattern, "Server is ready");
+    assert_eq!(ready_output.timeout, Some(Duration::from_secs(30)));
+
+    Ok(())
+}
+
+/// Test invalid output ready check timeout is rejected
+#[test]
+fn test_daemon_with_invalid_ready_output_timeout() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.ready_daemon]
+run = "echo 'server starting'"
+ready_output = { pattern = "Server is ready", timeout = "not-a-duration" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
 }
 
 /// Test multiple daemons in one file
@@ -508,7 +742,9 @@ ready_output = "ready to accept connections"
     assert_eq!(db.ready_delay, Some(3000));
     assert_eq!(
         db.ready_output,
-        Some("ready to accept connections".to_string())
+        Some(pitchfork_toml::ReadyOutput::new(
+            "ready to accept connections"
+        ))
     );
 
     Ok(())
@@ -1034,7 +1270,7 @@ run = "npm run debug"
     // api should be overridden by local
     let api = pt.daemons.get(&api_key).unwrap();
     assert_eq!(api.run, "npm run dev");
-    assert_eq!(api.ready_port, Some(3001));
+    assert_eq!(api.ready_port, Some(pitchfork_toml::ReadyPort::new(3001)));
 
     // worker should remain from base
     let worker = pt.daemons.get(&worker_key).unwrap();

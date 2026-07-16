@@ -263,8 +263,57 @@ impl IpcClient {
     /// Run a single daemon with the given options (low-level operation)
     pub async fn run(&self, opts: RunOptions) -> Result<RunResult> {
         let start_time = chrono::Local::now();
-        // Use longer timeout for daemon start - ready_delay can be up to 60s+
-        let timeout = Duration::from_secs(opts.ready_delay.unwrap_or(3) + 60);
+        // If any configured readiness check is unbounded (no timeout), the
+        // supervisor may wait indefinitely. Use a generous cap so the client
+        // does not disconnect prematurely — e.g. when a bounded ready_cmd
+        // is paired with an unbounded ready_port. When all checks are bounded,
+        // wait through the longest deadline plus a response buffer.
+        let has_unbounded_check = opts
+            .ready_output
+            .as_ref()
+            .is_some_and(|o| o.timeout.is_none())
+            || opts
+                .ready_port
+                .as_ref()
+                .is_some_and(|p| p.timeout.is_none())
+            || opts
+                .ready_http
+                .as_ref()
+                .is_some_and(|h| h.timeout.is_none())
+            || opts.ready_cmd.as_ref().is_some_and(|c| c.timeout.is_none());
+        let timeout = if has_unbounded_check {
+            Duration::from_secs(3600)
+        } else {
+            let max_deadline = opts
+                .ready_output
+                .as_ref()
+                .and_then(|o| o.timeout)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+                .max(
+                    opts.ready_http
+                        .as_ref()
+                        .and_then(|h| h.timeout)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                )
+                .max(
+                    opts.ready_cmd
+                        .as_ref()
+                        .and_then(|c| c.timeout)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                )
+                .max(
+                    opts.ready_port
+                        .as_ref()
+                        .and_then(|p| p.timeout)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                )
+                .max(opts.ready_delay.unwrap_or(3));
+            Duration::from_secs(max_deadline + 60)
+        };
         let rsp = self
             .request_with_timeout(IpcRequest::Run(opts.clone()), timeout)
             .await?;

@@ -1,7 +1,8 @@
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{
-    CpuLimit, CronRetrigger, Dir, MemoryLimit, PortConfig, ReadyHttp, Retry, StopConfig, WatchMode,
+    CpuLimit, CronRetrigger, Dir, MemoryLimit, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput,
+    ReadyPort, Retry, StopConfig, WatchMode,
 };
 use indexmap::IndexMap;
 use std::fmt::Display;
@@ -64,13 +65,13 @@ pub struct Daemon {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_http: Option<ReadyHttp>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_port: Option<u16>,
+    pub ready_port: Option<ReadyPort>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub ready_cmd: Option<String>,
+    pub ready_cmd: Option<ReadyCmd>,
     /// Port configuration (expected ports and auto-bump settings)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port: Option<PortConfig>,
@@ -153,10 +154,10 @@ pub struct RunOptions {
     pub retry: Retry,
     pub retry_count: u32,
     pub ready_delay: Option<u64>,
-    pub ready_output: Option<String>,
+    pub ready_output: Option<ReadyOutput>,
     pub ready_http: Option<ReadyHttp>,
-    pub ready_port: Option<u16>,
-    pub ready_cmd: Option<String>,
+    pub ready_port: Option<ReadyPort>,
+    pub ready_cmd: Option<ReadyCmd>,
     pub port: Option<PortConfig>,
     pub wait_ready: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -245,7 +246,7 @@ impl Daemon {
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),
-            ready_port: self.ready_port,
+            ready_port: self.ready_port.clone(),
             ready_cmd: self.ready_cmd.clone(),
             port: self.port.clone(),
             wait_ready: false,
