@@ -151,13 +151,7 @@ pub fn start_in_background() -> Result<()> {
     // via STARTUPINFO without inheriting any parent handles.
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Foundation::{
-            CloseHandle, FALSE, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
-        };
-        use windows_sys::Win32::Storage::FileSystem::{
-            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-        };
+        use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
         use windows_sys::Win32::System::Threading::{
             CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION, STARTUPINFOW,
         };
