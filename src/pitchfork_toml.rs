@@ -239,6 +239,7 @@ struct PitchforkTomlDaemonRaw {
 #[schemars(title = "Pitchfork Configuration")]
 pub struct PitchforkToml {
     /// Map of daemon IDs to their configurations
+    #[serde(default)]
     pub daemons: IndexMap<DaemonId, PitchforkTomlDaemon>,
     /// Optional explicit namespace declared in this file.
     ///
