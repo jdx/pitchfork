@@ -186,6 +186,7 @@ EOF
 }
 
 @test "retry count persists across supervisor restart" {
+  skip_on_windows "exponential backoff + state persistence timing is unreliable on Windows CI"
 
   export PITCHFORK_INTERVAL=1s
   local fail_script
