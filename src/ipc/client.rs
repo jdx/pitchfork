@@ -15,10 +15,25 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+/// Returns whether the version-mismatch warning was already emitted by this
+/// process, marking it as emitted. Parallel batch tasks each open their own
+/// connection, so without this a mismatched supervisor would warn once per
+/// daemon instead of once.
+fn version_mismatch_already_warned() -> bool {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+}
+
 pub struct IpcClient {
     _id: String,
     recv: Mutex<BufReader<RecvHalf>>,
     send: Mutex<SendHalf>,
+    /// Held across a full request/response exchange. The wire protocol has no
+    /// request IDs, so responses are attributed purely by read order — if two
+    /// tasks interleave request/read on the same connection, each can consume
+    /// the other's response. Callers that need parallel requests must use
+    /// dedicated connections (one in-flight request per connection).
+    exchange: Mutex<()>,
 }
 
 impl IpcClient {
@@ -43,7 +58,7 @@ impl IpcClient {
             IpcResponse::ConnectOk {
                 version: supervisor_version,
             } => {
-                if supervisor_version != client_version {
+                if supervisor_version != client_version && !version_mismatch_already_warned() {
                     warn!(
                         "CLI version {client_version} differs from supervisor version {supervisor_version}. \
                          Restart the supervisor with: pitchfork supervisor start --force"
@@ -61,10 +76,12 @@ impl IpcClient {
                     }
                     .into());
                 }
-                warn!(
-                    "Supervisor is running an older version. \
-                     Restart the supervisor with: pitchfork supervisor start --force"
-                );
+                if !version_mismatch_already_warned() {
+                    warn!(
+                        "Supervisor is running an older version. \
+                         Restart the supervisor with: pitchfork supervisor start --force"
+                    );
+                }
             }
             _ => {
                 return Err(IpcError::UnexpectedResponse {
@@ -121,6 +138,7 @@ impl IpcClient {
                             _id: id.to_string(),
                             recv: Mutex::new(recv),
                             send: Mutex::new(send),
+                            exchange: Mutex::new(()),
                         });
                     }
                     Err(err) => {
@@ -218,6 +236,7 @@ impl IpcClient {
         msg: IpcRequest,
         timeout: Duration,
     ) -> Result<IpcResponse> {
+        let _exchange = self.exchange.lock().await;
         self.send(msg).await?;
         self.read(timeout).await
     }
