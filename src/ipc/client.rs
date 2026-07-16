@@ -15,13 +15,21 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-/// Returns whether the version-mismatch warning was already emitted by this
-/// process, marking it as emitted. Parallel batch tasks each open their own
-/// connection, so without this a mismatched supervisor would warn once per
-/// daemon instead of once.
-fn version_mismatch_already_warned() -> bool {
-    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+/// Returns whether the version-mismatch warning was already emitted for this
+/// supervisor version, marking it as emitted. Parallel batch tasks each open
+/// their own connection, so without this a mismatched supervisor would warn
+/// once per daemon instead of once. Keyed by the supervisor version so a
+/// long-lived process (TUI, web, MCP) warns again if a *different* mismatched
+/// supervisor appears later.
+fn version_mismatch_already_warned(supervisor_version: &str) -> bool {
+    static WARNED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut warned = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    if warned.as_deref() == Some(supervisor_version) {
+        true
+    } else {
+        *warned = Some(supervisor_version.to_string());
+        false
+    }
 }
 
 pub struct IpcClient {
@@ -34,6 +42,11 @@ pub struct IpcClient {
     /// the other's response. Callers that need parallel requests must use
     /// dedicated connections (one in-flight request per connection).
     exchange: Mutex<()>,
+    /// Set when an exchange fails mid-stream (timeout or I/O error). The
+    /// abandoned response may still arrive on the connection later, so reading
+    /// again would attribute it to the next request (permanent off-by-one
+    /// desync). The next exchange reconnects instead of reading stale data.
+    desynced: std::sync::atomic::AtomicBool,
 }
 
 impl IpcClient {
@@ -58,7 +71,9 @@ impl IpcClient {
             IpcResponse::ConnectOk {
                 version: supervisor_version,
             } => {
-                if supervisor_version != client_version && !version_mismatch_already_warned() {
+                if supervisor_version != client_version
+                    && !version_mismatch_already_warned(&supervisor_version)
+                {
                     warn!(
                         "CLI version {client_version} differs from supervisor version {supervisor_version}. \
                          Restart the supervisor with: pitchfork supervisor start --force"
@@ -76,7 +91,7 @@ impl IpcClient {
                     }
                     .into());
                 }
-                if !version_mismatch_already_warned() {
+                if !version_mismatch_already_warned("legacy") {
                     warn!(
                         "Supervisor is running an older version. \
                          Restart the supervisor with: pitchfork supervisor start --force"
@@ -96,6 +111,20 @@ impl IpcClient {
     }
 
     async fn connect_(id: &str, name: &str) -> Result<Self> {
+        let (recv, send) = Self::open_stream(name).await?;
+        Ok(Self {
+            _id: id.to_string(),
+            recv: Mutex::new(recv),
+            send: Mutex::new(send),
+            exchange: Mutex::new(()),
+            desynced: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// Open a raw socket stream to the supervisor with connect retry/backoff.
+    /// Used both for the initial connection and to re-establish a connection
+    /// whose framing was lost after a failed exchange (see `desynced`).
+    async fn open_stream(name: &str) -> Result<(BufReader<RecvHalf>, SendHalf)> {
         let s = settings();
         let connect_attempts = u32::try_from(s.ipc.connect_attempts).unwrap_or_else(|_| {
             warn!(
@@ -132,14 +161,7 @@ impl IpcClient {
                 match interprocess::local_socket::tokio::Stream::connect(fs_name(name)?).await {
                     Ok(conn) => {
                         let (recv, send) = conn.split();
-                        let recv = BufReader::new(recv);
-
-                        return Ok(Self {
-                            _id: id.to_string(),
-                            recv: Mutex::new(recv),
-                            send: Mutex::new(send),
-                            exchange: Mutex::new(()),
-                        });
+                        return Ok((BufReader::new(recv), send));
                     }
                     Err(err) => {
                         if let Some(duration) = duration {
@@ -236,9 +258,26 @@ impl IpcClient {
         msg: IpcRequest,
         timeout: Duration,
     ) -> Result<IpcResponse> {
+        use std::sync::atomic::Ordering;
         let _exchange = self.exchange.lock().await;
-        self.send(msg).await?;
-        self.read(timeout).await
+        // A previous exchange failed mid-stream, so its response may still be
+        // queued (or half-read) on the socket. Reconnect to restore framing —
+        // reading would attribute the stale response to this request.
+        if self.desynced.load(Ordering::Acquire) {
+            let (recv, send) = Self::open_stream("main").await?;
+            *self.recv.lock().await = recv;
+            *self.send.lock().await = send;
+            self.desynced.store(false, Ordering::Release);
+        }
+        let result = async {
+            self.send(msg).await?;
+            self.read(timeout).await
+        }
+        .await;
+        if result.is_err() {
+            self.desynced.store(true, Ordering::Release);
+        }
+        result
     }
 
     // =========================================================================
@@ -507,7 +546,23 @@ impl IpcClient {
     /// Stop a single daemon (low-level operation)
     pub async fn stop(&self, id: DaemonId) -> Result<bool> {
         let id_str = id.qualified();
-        let rsp = self.request(IpcRequest::Stop { id: id.clone() }).await?;
+        // The supervisor's Stop handler blocks until the daemon's ENTIRE
+        // process group has exited (stop signal -> stop budget -> SIGKILL ->
+        // bounded verification), which can far exceed the flat IPC request
+        // timeout — a correct, in-progress stop would otherwise be reported
+        // as a failure. Budget the request from the daemon's own stop
+        // configuration: its graceful window, plus the supervisor's ~2s
+        // post-SIGKILL verification, plus the normal request timeout as slack.
+        let stop_budget = crate::state_file::StateFile::get()
+            .daemons
+            .get(&id)
+            .and_then(|d| d.stop_signal.as_ref())
+            .and_then(|s| s.timeout)
+            .unwrap_or_else(|| settings().supervisor_stop_timeout());
+        let timeout = stop_budget + Duration::from_secs(2) + settings().ipc_request_timeout();
+        let rsp = self
+            .request_with_timeout(IpcRequest::Stop { id: id.clone() }, timeout)
+            .await?;
         match rsp {
             IpcResponse::Ok => {
                 info!("Stopped daemon {id_str}");
