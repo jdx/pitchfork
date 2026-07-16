@@ -3,7 +3,7 @@
 //! Handles automatic stopping of daemons when shells leave directories,
 //! and starting daemons configured with `boot_start = true`.
 
-use super::Supervisor;
+use super::{SUPERVISOR, Supervisor};
 use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::ipc::IpcResponse;
@@ -33,11 +33,24 @@ impl Supervisor {
                 && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
             {
                 if autostop_delay.is_zero() {
-                    // No delay configured, stop immediately
+                    // No delay configured, stop immediately. Spawned: a stop
+                    // now waits for the daemon's whole process group to exit
+                    // (up to its stop budget), and this path runs inside the
+                    // UpdateShellDir handler — blocking here would stall the
+                    // user's `cd` shell hook until the stop completes.
                     info!("autostopping {daemon}");
-                    self.stop(&daemon.id).await?;
-                    self.add_notification(Info, format!("autostopped {daemon}"))
-                        .await;
+                    let label = daemon.to_string();
+                    let daemon_id = daemon.id.clone();
+                    tokio::spawn(async move {
+                        match SUPERVISOR.stop(&daemon_id).await {
+                            Ok(_) => {
+                                SUPERVISOR
+                                    .add_notification(Info, format!("autostopped {label}"))
+                                    .await;
+                            }
+                            Err(e) => error!("failed to autostop {daemon_id}: {e}"),
+                        }
+                    });
                 } else {
                     // Schedule autostop with delay
                     let stop_at = time::Instant::now() + autostop_delay;
@@ -113,10 +126,22 @@ impl Supervisor {
                 if let Some(daemon_dir) = daemon.dir.as_ref()
                     && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
                 {
+                    // Spawned: a stop now waits for the daemon's whole process
+                    // group to exit (up to its stop budget). This path runs from
+                    // the interval watcher and the UpdateShellDir handler —
+                    // blocking here would stall the `cd` shell hook and delay
+                    // other watcher duties (e.g. retries) behind each stop.
                     info!("autostopping {daemon_id} (after delay)");
-                    self.stop(&daemon_id).await?;
-                    self.add_notification(Info, format!("autostopped {daemon_id}"))
-                        .await;
+                    tokio::spawn(async move {
+                        match SUPERVISOR.stop(&daemon_id).await {
+                            Ok(_) => {
+                                SUPERVISOR
+                                    .add_notification(Info, format!("autostopped {daemon_id}"))
+                                    .await;
+                            }
+                            Err(e) => error!("failed to autostop {daemon_id}: {e}"),
+                        }
+                    });
                 }
             }
         }

@@ -147,13 +147,21 @@ impl Procs {
     }
 
     /// Kill an entire process group with graceful shutdown strategy:
-    /// 1. Send the configured stop signal to the process group (-pgid) and wait up to ~3s
-    /// 2. If any processes remain, send SIGKILL to the group
+    /// 1. Send the configured stop signal to the process group (-pgid) and
+    ///    wait up to the stop timeout for the WHOLE group to exit
+    /// 2. If any processes remain, send SIGKILL to the group and verify
     ///
     /// Since daemons are spawned with setsid(), the daemon PID == PGID,
     /// so this atomically signals all descendant processes.
     ///
-    /// Returns `Err` if the signal could not be sent (e.g. permission denied).
+    /// The stop timeout is the graceful-shutdown budget for the entire group
+    /// (like systemd's TimeoutStopSec for a cgroup): members that are still
+    /// alive when it expires are SIGKILLed. Daemons whose teardown legitimately
+    /// takes longer (e.g. draining connections, stopping containers) should
+    /// raise `stop_signal.timeout` rather than rely on outliving the budget.
+    ///
+    /// Returns `Err` if the signal could not be sent (e.g. permission denied)
+    /// or if group members survived even SIGKILL (uninterruptible sleep).
     #[cfg(unix)]
     fn kill_process_group(
         &self,
@@ -240,8 +248,25 @@ impl Procs {
                 return Ok(true);
             }
         }
-        warn!("process group {pgid} still has members after SIGKILL");
-        Ok(true)
+        // Report failure so callers do not mark the daemon Stopped (and start
+        // a replacement) while a member is still alive.
+        Err(miette::miette!(
+            "process group {pgid} still has members after SIGKILL \
+             (possibly stuck in uninterruptible sleep)"
+        ))
+    }
+
+    /// Whether any signalable member of the daemon's process group is still
+    /// alive. The daemon PID == PGID because daemons are spawned with setsid().
+    pub fn process_group_alive(&self, pid: u32) -> bool {
+        #[cfg(unix)]
+        {
+            !process_group_terminated(pid as i32)
+        }
+        #[cfg(not(unix))]
+        {
+            self.is_running(pid)
+        }
     }
 
     #[cfg(not(unix))]
@@ -632,20 +657,24 @@ fn format_bytes_per_sec(bytes: u64) -> String {
     format!("{}/s", humanbyte::to_string(bytes, humanbyte::Format::IEC))
 }
 
-/// Check whether a process group has no remaining members.
+/// Check whether a process group has no remaining members that we could
+/// still be waiting on.
 ///
-/// `killpg(pgid, 0)` probes for any member without delivering a signal:
-/// ESRCH means the group is empty. Unreaped zombies still count as members,
-/// but they are reaped promptly (the leader by the supervisor's monitoring
-/// task via `child.wait()`, orphans by init or the container-mode reaper),
-/// so the group empties as soon as every member has actually exited.
+/// `killpg(pgid, 0)` probes for members without delivering a signal:
+/// - success: at least one member remains that we may signal — keep waiting.
+/// - ESRCH: the group is empty.
+/// - EPERM: members remain, but none that we may signal (e.g. a root-owned
+///   helper spawned inside the group). Our stop signal and SIGKILL never
+///   reached them, so waiting longer cannot make progress — treat the group
+///   as terminated, matching the previous leader-only behavior.
+///
+/// Unreaped zombies still count as members, but they are reaped promptly
+/// (the leader by the supervisor's monitoring task via `child.wait()`,
+/// orphans by init or the supervisor's PID-1 reaper), so the group empties
+/// as soon as every member has actually exited.
 #[cfg(unix)]
 fn process_group_terminated(pgid: i32) -> bool {
-    let ret = unsafe { libc::killpg(pgid, 0) };
-    if ret == 0 {
-        return false;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    unsafe { libc::killpg(pgid, 0) != 0 }
 }
 
 #[cfg(unix)]

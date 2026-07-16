@@ -91,6 +91,11 @@ pub struct Supervisor {
     pub(crate) lan_monitor_task: Mutex<Option<JoinHandle<()>>>,
     /// Cancellation token for the background state flush task.
     pub(crate) flush_cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
+    /// Per-daemon stop locks. A stop holds the daemon's lock for its whole
+    /// duration (which now includes waiting for the entire process group to
+    /// exit), and starts/orphan-cleanup acquire it first — serializing them
+    /// against in-flight stops instead of racing the Stopping window.
+    pub(crate) stop_locks: Mutex<HashMap<DaemonId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -156,7 +161,18 @@ impl Supervisor {
             mdns_publisher: Mutex::new(None),
             lan_monitor_task: Mutex::new(None),
             flush_cancel: std::sync::Mutex::new(None),
+            stop_locks: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Get (or create) the per-daemon stop lock for `id`.
+    pub(crate) async fn stop_lock(&self, id: &DaemonId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.stop_locks
+            .lock()
+            .await
+            .entry(id.clone())
+            .or_default()
+            .clone()
     }
 
     pub async fn start(
@@ -176,19 +192,18 @@ impl Supervisor {
         let pid = std::process::id();
         // Ensure PROCS has data for the supervisor PID before upsert_daemon reads title()
         PROCS.refresh_pids(&[pid]);
-        // Determine container mode: CLI flag takes priority, then settings
-        let container_mode = container || settings().supervisor.container;
+        // Determine container mode: CLI flag takes priority, then settings.
+        // Running as PID 1 always enables it: orphaned descendants of daemons
+        // re-parent to us, and without the zombie reaper they would accumulate
+        // as unreaped zombies — which also keep their process group alive,
+        // stalling whole-group stop waits indefinitely.
+        let container_mode =
+            container || settings().supervisor.container || std::process::id() == 1;
         if container_mode {
             info!("Starting supervisor in container/PID1 mode with pid {pid}");
         } else {
             info!("Starting supervisor with pid {pid}");
         }
-
-        // If the previous supervisor died uncleanly, its daemon child processes
-        // may still be alive (orphaned, re-parented to init).  Terminate them
-        // before we take over so we don't end up with duplicate processes
-        // holding the same ports.
-        cleanup_orphaned_daemons(self).await;
 
         self.upsert_daemon(
             UpsertDaemonOpts::builder(DaemonId::pitchfork())
@@ -202,11 +217,28 @@ impl Supervisor {
         #[cfg(unix)]
         fix_state_dir_permissions();
 
-        // If this is a boot start, automatically start boot_start daemons
-        if is_boot {
-            info!("Boot start mode enabled, starting boot_start daemons");
-            self.start_boot_daemons().await?;
-        }
+        // If the previous supervisor died uncleanly, its daemon child processes
+        // may still be alive (orphaned, re-parented to init).  Terminate them
+        // before starting replacements so we don't end up with duplicate
+        // processes holding the same ports.
+        //
+        // This runs in the background: each orphan kill now waits for its
+        // whole process group to exit (seconds per orphan), and doing that
+        // inline would delay IPC socket creation past the CLI's short connect
+        // budget on autostart. Per-daemon stop locks serialize the cleanup
+        // against any Run/Stop requests that arrive for the same daemon in the
+        // meantime, and boot daemons start after cleanup completes so they
+        // cannot observe an orphan as "already running".
+        let boot_after_cleanup = is_boot;
+        tokio::spawn(async move {
+            cleanup_orphaned_daemons(&SUPERVISOR).await;
+            if boot_after_cleanup {
+                info!("Boot start mode enabled, starting boot_start daemons");
+                if let Err(e) = SUPERVISOR.start_boot_daemons().await {
+                    error!("failed to start boot daemons: {e}");
+                }
+            }
+        });
 
         self.interval_watch()?;
         self.cron_watch()?;
@@ -790,6 +822,12 @@ impl Supervisor {
         // If dependency resolution fails (e.g. config changed), fall back to
         // stopping in arbitrary order so we still shut down cleanly.
         // Daemons within the same level are stopped concurrently.
+        //
+        // Each stop waits for the daemon's whole process group (bounded by its
+        // stop budget) and levels are sequential, so total shutdown time is the
+        // sum of the slowest stop per level. If an external manager (docker,
+        // systemd) kills us before this completes, cleanup_orphaned_daemons()
+        // recovers the leftover processes and stale state on the next start.
         let stop_levels = compute_reverse_stop_order(&active_ids);
         for level in &stop_levels {
             let mut tasks = Vec::new();
@@ -1075,66 +1113,44 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         candidates.len()
     );
 
-    for daemon in candidates {
-        let Some(pid) = daemon.pid else { continue };
+    // Kill orphans in parallel — each wait is bounded by that daemon's stop
+    // budget, so sequential processing would make total cleanup time the sum
+    // of the budgets.
+    let tasks: Vec<_> = candidates
+        .into_iter()
+        .map(|daemon| tokio::spawn(cleanup_orphaned_daemon(daemon)))
+        .collect();
+    for task in tasks {
+        let _ = task.await;
+    }
+}
 
-        if !PROCS.is_running(pid) {
-            // PID already dead — just reset its state
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
-            continue;
-        }
+/// Kill a single orphaned daemon process (group) and reset its state.
+///
+/// Holds the daemon's stop lock so a concurrent Run/Stop request for the same
+/// daemon (cleanup runs in the background) serializes with the orphan kill,
+/// and re-checks the recorded PID under the lock: if it changed, another path
+/// already replaced or cleaned up this record and the snapshot is stale.
+async fn cleanup_orphaned_daemon(daemon: crate::daemon::Daemon) {
+    let supervisor: &Supervisor = &SUPERVISOR;
+    let Some(pid) = daemon.pid else { return };
 
-        // Safety check: verify the process name matches what we recorded.
-        // This avoids accidentally killing an unrelated process if the PID
-        // was recycled by the kernel between state-file writes.
-        let current_title = PROCS.title(pid);
-        let matches = match (&current_title, &daemon.title) {
-            (Some(current), Some(expected)) => current == expected,
-            // If we don't have a recorded title, fall back to allowing the kill
-            // (this is a degraded but functional state — the process was probably
-            // started before title tracking was added, or the state was reset).
-            _ => true,
-        };
+    let lock = supervisor.stop_lock(&daemon.id).await;
+    let _guard = lock.lock().await;
+    let current_pid = {
+        let state = supervisor.state_file.lock().await;
+        state.daemons.get(&daemon.id).and_then(|d| d.pid)
+    };
+    if current_pid != Some(pid) {
+        debug!(
+            "orphan cleanup: daemon {} pid changed (recorded {pid}, now {current_pid:?}), skipping",
+            daemon.id
+        );
+        return;
+    }
 
-        if !matches {
-            warn!(
-                "pid {pid} for daemon {} has changed name (expected '{}', found '{}'); skipping orphan cleanup",
-                daemon.id,
-                daemon.title.as_deref().unwrap_or("?"),
-                current_title.as_deref().unwrap_or("?")
-            );
-            // Still reset state so we don't track a stale PID
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
-            continue;
-        }
-
-        info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
-
-        let stop_cfg = daemon.stop_signal.unwrap_or_default();
-        let _ = PROCS
-            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
-            .await;
-
+    if !PROCS.is_running(pid) {
+        // PID already dead — just reset its state
         let _ = supervisor
             .upsert_daemon(
                 UpsertDaemonOpts::builder(daemon.id.clone())
@@ -1146,7 +1162,61 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
                     .build(),
             )
             .await;
+        return;
     }
+
+    // Safety check: verify the process name matches what we recorded.
+    // This avoids accidentally killing an unrelated process if the PID
+    // was recycled by the kernel between state-file writes.
+    let current_title = PROCS.title(pid);
+    let matches = match (&current_title, &daemon.title) {
+        (Some(current), Some(expected)) => current == expected,
+        // If we don't have a recorded title, fall back to allowing the kill
+        // (this is a degraded but functional state — the process was probably
+        // started before title tracking was added, or the state was reset).
+        _ => true,
+    };
+
+    if !matches {
+        warn!(
+            "pid {pid} for daemon {} has changed name (expected '{}', found '{}'); skipping orphan cleanup",
+            daemon.id,
+            daemon.title.as_deref().unwrap_or("?"),
+            current_title.as_deref().unwrap_or("?")
+        );
+        // Still reset state so we don't track a stale PID
+        let _ = supervisor
+            .upsert_daemon(
+                UpsertDaemonOpts::builder(daemon.id.clone())
+                    .set(|o| {
+                        o.pid = None;
+                        o.status = DaemonStatus::Stopped;
+                        o.active_port = None;
+                    })
+                    .build(),
+            )
+            .await;
+        return;
+    }
+
+    info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
+
+    let stop_cfg = daemon.stop_signal.unwrap_or_default();
+    let _ = PROCS
+        .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
+        .await;
+
+    let _ = supervisor
+        .upsert_daemon(
+            UpsertDaemonOpts::builder(daemon.id.clone())
+                .set(|o| {
+                    o.pid = None;
+                    o.status = DaemonStatus::Stopped;
+                    o.active_port = None;
+                })
+                .build(),
+        )
+        .await;
 }
 
 /// Recursively chmod: directories → 0o755, files → 0o644.
