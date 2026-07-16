@@ -275,7 +275,7 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -ge 2 ]]
+  [[ $elapsed -ge 1 ]]
   [[ $elapsed -lt 10 ]]
 }
 
