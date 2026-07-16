@@ -43,7 +43,7 @@ jobs:
 
   bats-tests:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
@@ -85,10 +85,10 @@ jobs:
           # S2(68): logs config_fields log_store state config autostop
           # S3(70): structured_logs hooks errors depends pty interval
           case "$SHARD" in
-            0) tests="test/basic.bats test/namespace.bats test/watch.bats" ;;
+            0) tests="test/basic.bats test/proxy.bats test/cron.bats test/namespace.bats test/watch.bats" ;;
             1) tests="test/settings.bats test/supervisor.bats test/config_merge.bats test/port.bats test/migration.bats" ;;
             2) tests="test/logs.bats test/config_fields.bats test/log_store.bats test/state.bats test/config.bats test/autostop.bats" ;;
-            3) tests="test/structured_logs.bats test/hooks.bats test/errors.bats test/depends.bats test/pty.bats test/interval.bats test/proxy.bats test/cron.bats" ;;
+            3) tests="test/structured_logs.bats test/hooks.bats test/errors.bats test/depends.bats test/pty.bats test/interval.bats" ;;
           esac
           echo "Running shard $SHARD: $tests"
           test/bats/bin/bats $tests
