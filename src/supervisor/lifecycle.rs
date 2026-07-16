@@ -1220,18 +1220,11 @@ impl Supervisor {
                     .await?;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
-                    // Process already dead. If the daemon is already in a
-                    // terminal state (Errored or Stopped), don't overwrite it
-                    // with Stopped — the background retry checker needs
-                    // Errored to retry the daemon after supervisor restart.
-                    if daemon.status.is_errored() || daemon.status.is_stopped() {
-                        debug!(
-                            "daemon {id} already in terminal status {}, not overwriting",
-                            daemon.status
-                        );
-                        return Ok(IpcResponse::DaemonWasNotRunning);
-                    }
-                    // Otherwise mark as stopped (cleanup for unexpected exit)
+                    // Process already dead — transition to Stopped so the
+                    // retry checker sees a terminal state and stops
+                    // scheduling new attempts. This is important for an
+                    // explicit `pitchfork stop` on an Errored daemon: the
+                    // user wants to abort retries.
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
                             .set(|o| {
