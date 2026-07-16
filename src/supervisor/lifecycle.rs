@@ -759,11 +759,9 @@ impl Supervisor {
                 .map(|d| Box::pin(time::sleep(d)));
 
             // Setup HTTP readiness check interval and deadline
-            let mut http_check_interval = ready_http.as_ref().map(|_| {
-                let mut i = tokio::time::interval(ready_check_interval);
-                i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                i
-            });
+            let mut http_check_interval = ready_http
+                .as_ref()
+                .map(|_| tokio::time::interval(ready_check_interval));
             let mut http_deadline = ready_http
                 .as_ref()
                 .and_then(|h| h.timeout)
@@ -776,11 +774,8 @@ impl Supervisor {
             });
 
             // Setup TCP port readiness check interval and deadline
-            let mut port_check_interval = ready_port.map(|_| {
-                let mut i = tokio::time::interval(ready_check_interval);
-                i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                i
-            });
+            let mut port_check_interval =
+                ready_port.map(|_| tokio::time::interval(ready_check_interval));
             let mut port_deadline = ready_port_config
                 .as_ref()
                 .and_then(|p| p.timeout)
@@ -965,42 +960,6 @@ impl Supervisor {
                         tokio::task::yield_now().await;
                     }
                     _ = async {
-                        if let Some(ref mut interval) = http_check_interval {
-                            interval.tick().await;
-                        } else {
-                            std::future::pending::<()>().await;
-                        }
-                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
-                        if let (Some(http), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(&http.url).send().await {
-                                Ok(response) if http.accepts_status(response.status().as_u16()) => {
-                                    info!("daemon {id} ready: HTTP check passed (status {})", response.status());
-                                    ready_notified = true;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
-                                    }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    http_check_interval = None;
-                                    http_deadline = None;
-                                    stop_cmd_probe_state(&mut cmd_probe);
-                                    cmd_deadline = None;
-                                    port_deadline = None;
-                                    output_deadline = None;
-                                    if !active_port_spawned && has_port_config {
-                                        active_port_spawned = true;
-                                        detect_and_store_active_port(id.clone(), daemon_pid);
-                                    }
-                                }
-                                Ok(response) => {
-                                    trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
-                                }
-                                Err(e) => {
-                                    trace!("daemon {id} HTTP check failed: {e}");
-                                }
-                            }
-                        }
-                    }
-                    _ = async {
                         if let Some(ref mut deadline) = http_deadline {
                             deadline.await;
                         } else {
@@ -1064,35 +1023,37 @@ impl Supervisor {
                         }
                     }
                     _ = async {
-                        if let Some(ref mut interval) = port_check_interval {
+                        if let Some(ref mut interval) = http_check_interval {
                             interval.tick().await;
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_port.is_some() && !port_exhausted => {
-                        if let Some(port) = ready_port {
-                            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-                                Ok(_) => {
-                                    info!("daemon {id} ready: TCP port {port} is listening");
+                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
+                        if let (Some(http), Some(client)) = (&ready_http, &http_client) {
+                            match client.get(&http.url).send().await {
+                                Ok(response) if http.accepts_status(response.status().as_u16()) => {
+                                    info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    // Stop checking once ready
-                                    port_check_interval = None;
-                                    port_deadline = None;
-                                    stop_cmd_probe_state(&mut cmd_probe);
+                                    http_check_interval = None;
                                     http_deadline = None;
+                                    stop_cmd_probe_state(&mut cmd_probe);
                                     cmd_deadline = None;
+                                    port_deadline = None;
                                     output_deadline = None;
                                     if !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
                                     }
                                 }
-                                Err(_) => {
-                                    trace!("daemon {id} port check: port {port} not listening yet");
+                                Ok(response) => {
+                                    trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
+                                }
+                                Err(e) => {
+                                    trace!("daemon {id} HTTP check failed: {e}");
                                 }
                             }
                         }
@@ -1127,6 +1088,40 @@ impl Supervisor {
                             let stop_cfg = opts.stop_signal.unwrap_or_default();
                             let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
                             break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut interval) = port_check_interval {
+                            interval.tick().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_port.is_some() && !port_exhausted => {
+                        if let Some(port) = ready_port {
+                            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                                Ok(_) => {
+                                    info!("daemon {id} ready: TCP port {port} is listening");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                    // Stop checking once ready
+                                    port_check_interval = None;
+                                    port_deadline = None;
+                                    stop_cmd_probe_state(&mut cmd_probe);
+                                    http_deadline = None;
+                                    cmd_deadline = None;
+                                    output_deadline = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
+                                }
+                                Err(_) => {
+                                    trace!("daemon {id} port check: port {port} not listening yet");
+                                }
+                            }
                         }
                     }
                     _ = async {
