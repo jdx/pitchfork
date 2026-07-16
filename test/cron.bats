@@ -2,9 +2,9 @@
 
 setup() {
   load test_helper/common_setup
-  _common_setup
   export PITCHFORK_INTERVAL=1s
   export PITCHFORK_CRON_CHECK_INTERVAL=1s
+  _common_setup
 }
 
 teardown() {
