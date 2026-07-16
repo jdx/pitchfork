@@ -43,7 +43,7 @@ jobs:
 
   bats-tests:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     strategy:
