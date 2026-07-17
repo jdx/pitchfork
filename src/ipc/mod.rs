@@ -139,9 +139,15 @@ fn fs_name(name: &str) -> Result<Name<'_>> {
     #[cfg(windows)]
     {
         let state_dir = env::PITCHFORK_STATE_DIR.to_string_lossy();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(state_dir.as_ref(), &mut hasher);
-        let hash = std::hash::Hasher::finish(&hasher);
+        // FNV-1a hash: deterministic, stable across Rust versions.
+        // DefaultHasher's algorithm is not guaranteed stable, which would
+        // break IPC if the CLI and supervisor were ever compiled with
+        // different toolchains.
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in state_dir.bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
         let pipe_name = format!("pitchfork-{hash:016x}-{name}");
         Ok(pipe_name
             .to_ns_name::<GenericNamespaced>()

@@ -77,18 +77,9 @@ jobs:
         shell: bash
         env:
           SHARD: ${{ matrix.shard }}
+          SHARD_COUNT: 4
         run: |
           export PATH="$PWD/target/debug:$PATH"
-          # Balanced 4-way assignment (snake/serpentine by test count):
-          # S0(70): basic proxy cron namespace watch
-          # S1(67): settings supervisor config_merge port migration
-          # S2(68): logs config_fields log_store state config autostop
-          # S3(70): structured_logs hooks errors depends pty interval
-          case "$SHARD" in
-            0) tests="test/basic.bats test/proxy.bats test/cron.bats test/namespace.bats test/watch.bats" ;;
-            1) tests="test/settings.bats test/supervisor.bats test/config_merge.bats test/port.bats test/migration.bats" ;;
-            2) tests="test/logs.bats test/config_fields.bats test/log_store.bats test/state.bats test/config.bats test/autostop.bats" ;;
-            3) tests="test/structured_logs.bats test/hooks.bats test/errors.bats test/depends.bats test/pty.bats test/interval.bats" ;;
-          esac
+          tests=$(ls -1 test/*.bats | sort | awk -v t="$SHARD" -v n="$SHARD_COUNT" 'NR % n == t')
           echo "Running shard $SHARD: $tests"
           test/bats/bin/bats $tests
