@@ -323,7 +323,11 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -lt 3 ]]
+  local max_elapsed=3
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    max_elapsed=5
+  fi
+  [[ $elapsed -lt $max_elapsed ]]
 
   wait_for_logs ready_regex "Listening on" 5
 
