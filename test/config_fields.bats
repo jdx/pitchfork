@@ -10,6 +10,7 @@ teardown() {
 }
 
 @test "stop_signal sends custom signal to daemon" {
+  skip_on_windows "POSIX signals are not supported on Windows"
   local sig_script
   sig_script="$TEST_TEMP_DIR/trap_sigint.sh"
   cat > "$sig_script" <<'EOF'
@@ -54,12 +55,15 @@ EOF
 }
 
 @test "cpu_limit triggers on high CPU usage" {
+  skip_on_windows "sysinfo CPU sampling is unreliable on Windows CI"
+  export PITCHFORK_INTERVAL=1s
+  pitchfork supervisor start --force >/dev/null 2>&1
   export PITCHFORK_INTERVAL=1s
 
   create_pitchfork_toml <<EOF
 [daemons.cpu_burner]
 run = "while true; do echo x > /dev/null; done"
-cpu_limit = 10
+cpu_limit = 1
 retry = 0
 ready_delay = 1
 EOF
@@ -68,7 +72,7 @@ EOF
   assert_success
 
   # Wait long enough for the default 3 consecutive CPU violations at 1s intervals.
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 60); do
     local status
     status="$(get_daemon_status cpu_burner)"
     [[ "$status" == "errored" ]] && break

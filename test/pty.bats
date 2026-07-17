@@ -13,7 +13,11 @@ require_sqlite3() { command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not avai
 
 _log_messages() {
   local pattern="$1"
-  sqlite3 "$PITCHFORK_LOGS_DIR/logs.db" "SELECT message FROM log_entries WHERE daemon_id LIKE '%$pattern';" 2>/dev/null
+  local db_path="$PITCHFORK_LOGS_DIR/logs.db"
+  if command -v cygpath >/dev/null 2>&1; then
+    db_path="$(cygpath -m "$db_path")"
+  fi
+  sqlite3 "$db_path" "SELECT message FROM log_entries WHERE daemon_id LIKE '%$pattern';" 2>/dev/null
 }
 
 _wait_for_sqlite_message() {
@@ -32,9 +36,13 @@ _wait_for_sqlite_message() {
 
 _messages_contain_ansi() {
   local pattern="$1"
+  local db_path="$PITCHFORK_LOGS_DIR/logs.db"
+  if command -v cygpath >/dev/null 2>&1; then
+    db_path="$(cygpath -m "$db_path")"
+  fi
   python3 - <<PY
 import sqlite3, sys
-conn = sqlite3.connect("$PITCHFORK_LOGS_DIR/logs.db")
+conn = sqlite3.connect("$db_path")
 c = conn.cursor()
 c.execute("SELECT message FROM log_entries WHERE daemon_id LIKE '%$pattern'")
 for row in c.fetchall():
@@ -70,6 +78,7 @@ EOF
 }
 
 @test "pty = true allocates a pseudo-terminal" {
+  skip_on_windows "PTY allocation is not supported on Windows"
   create_pitchfork_toml <<'EOF'
 [daemons.with_pty]
 run = "if [ -t 0 ] && [ -t 1 ]; then echo HAS_TTY; else echo NO_TTY; fi && sleep 30"

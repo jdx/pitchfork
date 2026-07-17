@@ -3049,6 +3049,7 @@ dependencies = [
  "tower-http 0.7.0",
  "uuid",
  "vte",
+ "windows-sys 0.61.2",
  "x509-parser",
  "xx",
 ]

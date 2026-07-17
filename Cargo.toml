@@ -117,6 +117,9 @@ exec = "0.3"
 libc = "0.2"
 nix = { version = "0.31", features = ["signal", "process", "user", "net", "ioctl"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [build-dependencies]
 toml = "1.0"
 quote = "1.0"

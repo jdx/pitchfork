@@ -2,7 +2,11 @@ use crate::Result;
 use crate::daemon::{Daemon, RunOptions};
 use crate::daemon_id::DaemonId;
 use crate::env;
-use interprocess::local_socket::{GenericFilePath, Name, ToFsName};
+use interprocess::local_socket::Name;
+#[cfg(unix)]
+use interprocess::local_socket::{GenericFilePath, ToFsName};
+#[cfg(windows)]
+use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use miette::{Context, IntoDiagnostic};
 use std::path::PathBuf;
 
@@ -117,9 +121,38 @@ pub enum IpcResponse {
     DaemonNotFound,
 }
 fn fs_name(name: &str) -> Result<Name<'_>> {
-    let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
-    let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;
-    Ok(fs_name)
+    // Unix: use a filesystem path for the AF_UNIX socket.
+    #[cfg(unix)]
+    {
+        let path = env::IPC_SOCK_DIR.join(name).with_extension("sock");
+        let fs_name = path.to_fs_name::<GenericFilePath>().into_diagnostic()?;
+        Ok(fs_name)
+    }
+    // Windows: named pipes use a flat namespace (\\.\pipe\<name>) that
+    // cannot contain path separators. Derive a unique pipe name from the
+    // state directory to preserve test isolation when multiple supervisors
+    // run concurrently with different PITCHFORK_STATE_DIR values.
+    //
+    // Use a hash of the state directory path rather than character replacement
+    // to guarantee injectivity: `C:\a.b` and `C:\a\b` would both flatten to
+    // `C--a-b` with the old approach, causing pipe name collisions.
+    #[cfg(windows)]
+    {
+        let state_dir = env::PITCHFORK_STATE_DIR.to_string_lossy();
+        // FNV-1a hash: deterministic, stable across Rust versions.
+        // DefaultHasher's algorithm is not guaranteed stable, which would
+        // break IPC if the CLI and supervisor were ever compiled with
+        // different toolchains.
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in state_dir.bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        let pipe_name = format!("pitchfork-{hash:016x}-{name}");
+        Ok(pipe_name
+            .to_ns_name::<GenericNamespaced>()
+            .into_diagnostic()?)
+    }
 }
 
 fn serialize<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>> {

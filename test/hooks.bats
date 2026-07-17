@@ -103,6 +103,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 @test "on_output without filter or regex fires on any output line" {
+
   local counter="$TEST_TEMP_DIR/counter"
 
   create_pitchfork_toml <<EOF
@@ -128,6 +129,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 @test "on_output passes matched line via PITCHFORK_MATCHED_LINE" {
+
   local capture="$TEST_TEMP_DIR/matched_line"
 
   create_pitchfork_toml <<EOF
@@ -153,6 +155,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 @test "on_output debounce limits firing rate" {
+
   local counter="$TEST_TEMP_DIR/debounce_count"
 
   # Emit 5 lines quickly then pause; debounce of 2s should collapse them into 1 firing.
@@ -257,7 +260,8 @@ EOF
 # ===========================================================================
 
 @test "on_retry hook fires once per retry attempt" {
-  local marker="$TEST_TEMP_DIR/on_retry_marker"
+  local marker
+  marker="$(to_shell_path "$TEST_TEMP_DIR/on_retry_marker")"
 
   create_pitchfork_toml <<EOF
 [daemons.retry_hook_test]
@@ -265,7 +269,7 @@ run = "exit 1"
 retry = 2
 
 [daemons.retry_hook_test.hooks]
-on_retry = "echo retry >> $marker"
+on_retry = "echo retry >> \"$marker\""
 EOF
 
   pitchfork supervisor start
@@ -300,6 +304,7 @@ EOF
 }
 
 @test "PITCHFORK_RETRY_COUNT is incremented on retry" {
+
   local marker
   marker="$TEST_TEMP_DIR/retry_count_marker"
 
@@ -324,6 +329,7 @@ EOF
 }
 
 @test "on_fail hook receives PITCHFORK_DAEMON_ID and PITCHFORK_EXIT_CODE" {
+
   local marker="$TEST_TEMP_DIR/hook_env_marker"
 
   create_pitchfork_toml <<EOF
@@ -372,6 +378,7 @@ EOF
 }
 
 @test "on_stop hook receives PITCHFORK_EXIT_REASON=stop" {
+
   local marker="$TEST_TEMP_DIR/on_stop_reason_marker"
 
   create_pitchfork_toml <<EOF
@@ -419,6 +426,7 @@ EOF
 }
 
 @test "on_exit hook receives PITCHFORK_EXIT_REASON=fail on non-zero exit" {
+
   local marker="$TEST_TEMP_DIR/on_exit_fail_marker"
 
   create_pitchfork_toml <<EOF
@@ -438,6 +446,7 @@ EOF
 }
 
 @test "on_exit hook receives PITCHFORK_EXIT_REASON=exit on clean exit" {
+
   local marker="$TEST_TEMP_DIR/on_exit_clean_marker"
 
   create_pitchfork_toml <<EOF
@@ -456,6 +465,7 @@ EOF
 }
 
 @test "both on_stop and on_exit fire when daemon is explicitly stopped" {
+
   local stop_marker="$TEST_TEMP_DIR/both_on_stop_marker"
   local exit_marker="$TEST_TEMP_DIR/both_on_exit_marker"
 
@@ -482,6 +492,7 @@ EOF
 }
 
 @test "on_exit does not fire during retries, only after retries are exhausted" {
+
   local counter="$TEST_TEMP_DIR/on_exit_retry_count"
 
   create_pitchfork_toml <<EOF

@@ -81,7 +81,22 @@ struct CmdProbe {
 /// spawned task waits for the process to exit; if cancellation is requested, it
 /// kills the child and waits for it to reap before reporting the result.
 fn spawn_cmd_probe(id: &DaemonId, cmd: &str, dir: &std::path::Path) -> CmdProbe {
-    let mut command = Shell::default_for_platform().command(cmd);
+    // Use the configured general.shell setting (same as daemon run and hooks)
+    // instead of default_for_platform(). On Windows, default_for_platform()
+    // returns Shell::Cmd which cannot parse Unix-style commands like
+    // "sleep 1; true". Falls back to default_for_platform() if the setting
+    // is empty or unparseable.
+    let shell_setting = settings().general.shell.clone();
+    let mut command = match shell_words::split(&shell_setting) {
+        Ok(parts) if !parts.is_empty() => {
+            let (program, args) = parts.split_first().unwrap();
+            let mut c = tokio::process::Command::new(program);
+            c.args(args);
+            c.arg(cmd);
+            c
+        }
+        _ => Shell::default_for_platform().command(cmd),
+    };
     command
         .current_dir(dir)
         .stdout(std::process::Stdio::null())
@@ -852,7 +867,39 @@ impl Supervisor {
             }
 
             loop {
+                // biased: evaluate in exit → output → delay order so that
+                // process exit pre-empts both buffered output and the delay
+                // timer, preventing a dead daemon from being marked ready.
                 select! {
+                    biased;
+                    Some(result) = exit_rx.recv() => {
+                        // Process exited - save exit status and notify if not ready yet
+                        exit_status = Some(result);
+                        debug!("daemon {id} process exited, exit_status: {exit_status:?}");
+                        if !ready_notified {
+                            if let Some(tx) = ready_tx.take() {
+                                // Check if process exited successfully
+                                let is_success = exit_status.as_ref()
+                                    .and_then(|r| r.as_ref().ok())
+                                    .map(|s| s.success())
+                                    .unwrap_or(false);
+
+                                if is_success {
+                                    debug!("daemon {id} exited successfully before ready check, sending success notification");
+                                    let _ = tx.send(Ok(()));
+                                } else {
+                                    let exit_code = exit_status.as_ref()
+                                        .and_then(|r| r.as_ref().ok())
+                                        .and_then(|s| s.code());
+                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
+                                    let _ = tx.send(Err(exit_code));
+                                }
+                            }
+                        } else {
+                            debug!("daemon {id} was already marked ready, not sending notification");
+                        }
+                        break;
+                    },
                     Some(line) = output_rx.recv() => {
                         let parsed = parse_line(&line);
                         log_buffer.push(parsed);
@@ -914,70 +961,6 @@ impl Supervisor {
                         // Yield briefly so that the output readiness deadline can be
                         // evaluated even when output is produced continuously.
                         tokio::task::yield_now().await;
-                    }
-                    Some(result) = exit_rx.recv() => {
-                        // Process exited - save exit status and notify if not ready yet
-                        exit_status = Some(result);
-                        debug!("daemon {id} process exited, exit_status: {exit_status:?}");
-                        if !ready_notified {
-                            if let Some(tx) = ready_tx.take() {
-                                // Check if process exited successfully
-                                let is_success = exit_status.as_ref()
-                                    .and_then(|r| r.as_ref().ok())
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-
-                                if is_success {
-                                    debug!("daemon {id} exited successfully before ready check, sending success notification");
-                                    let _ = tx.send(Ok(()));
-                                } else {
-                                    let exit_code = exit_status.as_ref()
-                                        .and_then(|r| r.as_ref().ok())
-                                        .and_then(|s| s.code());
-                                    debug!("daemon {id} exited with failure before ready check, sending failure notification with exit_code: {exit_code:?}");
-                                    let _ = tx.send(Err(exit_code));
-                                }
-                            }
-                        } else {
-                            debug!("daemon {id} was already marked ready, not sending notification");
-                        }
-                        break;
-                    },
-                    _ = async {
-                        if let Some(ref mut interval) = http_check_interval {
-                            interval.tick().await;
-                        } else {
-                            std::future::pending::<()>().await;
-                        }
-                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
-                        if let (Some(http), Some(client)) = (&ready_http, &http_client) {
-                            match client.get(&http.url).send().await {
-                                Ok(response) if http.accepts_status(response.status().as_u16()) => {
-                                    info!("daemon {id} ready: HTTP check passed (status {})", response.status());
-                                    ready_notified = true;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
-                                    }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    http_check_interval = None;
-                                    http_deadline = None;
-                                    stop_cmd_probe_state(&mut cmd_probe);
-                                    cmd_deadline = None;
-                                    port_deadline = None;
-                                    output_deadline = None;
-                                    if !active_port_spawned && has_port_config {
-                                        active_port_spawned = true;
-                                        detect_and_store_active_port(id.clone(), daemon_pid);
-                                    }
-                                }
-                                Ok(response) => {
-                                    trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
-                                }
-                                Err(e) => {
-                                    trace!("daemon {id} HTTP check failed: {e}");
-                                }
-                            }
-                        }
                     }
                     _ = async {
                         if let Some(ref mut deadline) = http_deadline {
@@ -1043,35 +1026,37 @@ impl Supervisor {
                         }
                     }
                     _ = async {
-                        if let Some(ref mut interval) = port_check_interval {
+                        if let Some(ref mut interval) = http_check_interval {
                             interval.tick().await;
                         } else {
                             std::future::pending::<()>().await;
                         }
-                    }, if !ready_notified && ready_port.is_some() && !port_exhausted => {
-                        if let Some(port) = ready_port {
-                            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-                                Ok(_) => {
-                                    info!("daemon {id} ready: TCP port {port} is listening");
+                    }, if !ready_notified && ready_http.is_some() && !http_exhausted => {
+                        if let (Some(http), Some(client)) = (&ready_http, &http_client) {
+                            match client.get(&http.url).send().await {
+                                Ok(response) if http.accepts_status(response.status().as_u16()) => {
+                                    info!("daemon {id} ready: HTTP check passed (status {})", response.status());
                                     ready_notified = true;
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
                                     fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
-                                    // Stop checking once ready
-                                    port_check_interval = None;
-                                    port_deadline = None;
-                                    stop_cmd_probe_state(&mut cmd_probe);
+                                    http_check_interval = None;
                                     http_deadline = None;
+                                    stop_cmd_probe_state(&mut cmd_probe);
                                     cmd_deadline = None;
+                                    port_deadline = None;
                                     output_deadline = None;
                                     if !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
                                         detect_and_store_active_port(id.clone(), daemon_pid);
                                     }
                                 }
-                                Err(_) => {
-                                    trace!("daemon {id} port check: port {port} not listening yet");
+                                Ok(response) => {
+                                    trace!("daemon {id} HTTP check: status {} (not ready)", response.status());
+                                }
+                                Err(e) => {
+                                    trace!("daemon {id} HTTP check failed: {e}");
                                 }
                             }
                         }
@@ -1106,6 +1091,40 @@ impl Supervisor {
                             let stop_cfg = opts.stop_signal.unwrap_or_default();
                             let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
                             break;
+                        }
+                    }
+                    _ = async {
+                        if let Some(ref mut interval) = port_check_interval {
+                            interval.tick().await;
+                        } else {
+                            std::future::pending::<()>().await;
+                        }
+                    }, if !ready_notified && ready_port.is_some() && !port_exhausted => {
+                        if let Some(port) = ready_port {
+                            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                                Ok(_) => {
+                                    info!("daemon {id} ready: TCP port {port} is listening");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                    // Stop checking once ready
+                                    port_check_interval = None;
+                                    port_deadline = None;
+                                    stop_cmd_probe_state(&mut cmd_probe);
+                                    http_deadline = None;
+                                    cmd_deadline = None;
+                                    output_deadline = None;
+                                    if !active_port_spawned && has_port_config {
+                                        active_port_spawned = true;
+                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                    }
+                                }
+                                Err(_) => {
+                                    trace!("daemon {id} port check: port {port} not listening yet");
+                                }
+                            }
                         }
                     }
                     _ = async {
@@ -1195,12 +1214,27 @@ impl Supervisor {
                         }
                     } => {
                         if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
-                            info!("daemon {id} ready: delay elapsed");
-                            ready_notified = true;
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Ok(()));
+                            // Check if the process already exited or is exiting before
+                            // declaring it ready. On Windows, sleep(0) fires before
+                            // child.wait() detects the exit, causing pitchfork start to
+                            // return success for a daemon that already failed.
+                            if exit_status.is_some() {
+                                debug!("daemon {id} exited during ready_delay, not marking as ready");
+                            } else {
+                                // Force-refresh sysinfo for this PID before checking.
+                                // On Windows, the cached process list may be stale.
+                                PROCS.refresh_pids(&[daemon_pid]);
+                                if !PROCS.is_running(daemon_pid) {
+                                    debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
+                                } else {
+                                    info!("daemon {id} ready: delay elapsed");
+                                    ready_notified = true;
+                                    if let Some(tx) = ready_tx.take() {
+                                        let _ = tx.send(Ok(()));
+                                    }
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                }
                             }
-                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
                             // Clear all deadlines — no other checks are configured
                             // when delay fires as readiness, but clear defensively.
                             output_deadline = None;
@@ -1221,6 +1255,24 @@ impl Supervisor {
                     }
                 }
             }
+
+            // Snapshot the daemon state BEFORE draining output.
+            //
+            // The drain can take up to 5s (e.g. when child processes keep the
+            // stdout pipe open). During that time, a subsequent start() call
+            // (e.g. from `pitchfork restart`) can upsert the daemon with a new
+            // PID and Running status. If we only checked state AFTER the drain,
+            // the monitoring task would see d.pid != Some(old_pid) && !is_stopped()
+            // && !is_stopping() and return early without firing on_stop/on_exit
+            // hooks.
+            //
+            // By snapshotting is_stopping before the drain, we preserve the
+            // knowledge that stop() was called, so hooks fire correctly even
+            // if start() has since changed the state.
+            let pre_drain_daemon = SUPERVISOR.get_daemon(&id).await;
+            let pre_drain_is_stopping = pre_drain_daemon
+                .as_ref()
+                .is_some_and(|d| d.status.is_stopped() || d.status.is_stopping());
 
             // Drain any in-flight output lines that were still in the mpsc
             // channel or the OS pipe buffer when the child exited. Without
@@ -1287,25 +1339,27 @@ impl Supervisor {
             }
             let _monitor_guard = MonitorGuard;
             // Check if this monitoring task is for the current daemon process.
-            // Allow Stopped/Stopping daemons through: stop() clears pid atomically,
-            // so d.pid != Some(pid) would be true, but we still need the is_stopped()
-            // branch below to fire on_stop/on_exit hooks.
-            if current_daemon.is_none()
-                || current_daemon.as_ref().is_some_and(|d| {
-                    d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
-                })
+            // If the daemon was intentionally stopped (pre_drain_is_stopping),
+            // skip this check — we must still fire on_stop/on_exit hooks even
+            // if start() has since changed the PID and status.
+            if !pre_drain_is_stopping
+                && (current_daemon.is_none()
+                    || current_daemon.as_ref().is_some_and(|d| {
+                        d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
+                    }))
             {
                 // Another process has taken over, don't update status
                 return;
             }
-            // Capture the intentional-stop flag BEFORE any state changes.
-            // stop() transitions Stopping → Stopped and clears pid. If stop() wins the race
-            // and sets Stopped before this task runs, we still need to fire on_stop/on_exit.
-            // Treat both Stopping and Stopped as "intentional stop by pitchfork".
+            // Capture the intentional-stop flag. Combine pre-drain and
+            // post-drain state to handle both race orders:
+            //  - stop() set Stopping before drain → pre_drain_is_stopping
+            //  - stop() set Stopped during drain → current_daemon.is_stopped()
             let already_stopped = current_daemon
                 .as_ref()
                 .is_some_and(|d| d.status.is_stopped());
             let is_stopping = already_stopped
+                || pre_drain_is_stopping
                 || current_daemon
                     .as_ref()
                     .is_some_and(|d| d.status.is_stopping());
@@ -1327,8 +1381,12 @@ impl Supervisor {
                 (Err(_), false) => (-1, "fail"),
             };
 
-            // Update daemon state unless stop() already did it (won the race).
-            if !already_stopped {
+            // Update daemon state unless stop() already did it (won the race),
+            // OR the daemon was intentionally stopped before the drain
+            // (pre_drain_is_stopping). In the latter case, start() may have
+            // upserted Running during the 5s drain, and we must NOT overwrite
+            // it with Stopped — that would undo the restart.
+            if !already_stopped && !pre_drain_is_stopping {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
@@ -1470,15 +1528,18 @@ impl Supervisor {
                             .set(|o| {
                                 o.pid = None;
                                 o.status = DaemonStatus::Stopped;
-                                o.last_exit_success = Some(true); // Manual stop is considered successful
+                                o.last_exit_success = Some(true);
                             })
                             .build(),
                     )
                     .await?;
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
-                    // Process already dead, directly mark as stopped
-                    // Note that the cleanup logic is handled in monitor task
+                    // Process already dead — transition to Stopped so the
+                    // retry checker sees a terminal state and stops
+                    // scheduling new attempts. This is important for an
+                    // explicit `pitchfork stop` on an Errored daemon: the
+                    // user wants to abort retries.
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
                             .set(|o| {

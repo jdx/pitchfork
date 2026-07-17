@@ -20,6 +20,7 @@ teardown() {
   create_pitchfork_toml <<EOF
 [daemons.instant_fail]
 run = 'bash $fail_script 0'
+ready_delay = 3
 EOF
 
   run pitchfork start instant_fail
@@ -38,6 +39,7 @@ EOF
 [daemons.two_sec_fail]
 run = 'bash $fail_script 2'
 retry = 0
+ready_delay = 3
 EOF
 
   local start_time elapsed
@@ -243,13 +245,15 @@ EOF
 @test "retry succeeds on third attempt" {
   local success_script
   success_script="$(script_path success_on_third.sh)"
-  export TEST_SUCCESS_ON_THIRD_TIMESTAMP="$BATS_TEST_NAME"
 
   create_pitchfork_toml <<EOF
 [daemons.retry_success]
 run = 'bash $success_script'
 ready_delay = 1
 retry = 2
+
+[daemons.retry_success.env]
+TEST_SUCCESS_ON_THIRD_TIMESTAMP = "$BATS_TEST_NAME"
 EOF
 
   run pitchfork start retry_success
@@ -319,7 +323,11 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -lt 3 ]]
+  local max_elapsed=3
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    max_elapsed=5
+  fi
+  [[ $elapsed -lt $max_elapsed ]]
 
   wait_for_logs ready_regex "Listening on" 5
 
@@ -488,7 +496,13 @@ EOF
 
   assert_failure
   [[ $elapsed -ge 2 ]]
-  [[ $elapsed -lt 10 ]]
+  # Windows needs more time for taskkill /F /T + output drain after the
+  # ready-check timeout fires.
+  local max_elapsed=10
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    max_elapsed=30
+  fi
+  [[ $elapsed -lt $max_elapsed ]]
 
   wait_for_status port_timeout_test errored
 }
@@ -619,9 +633,7 @@ EOF
   sleep 0.5
 
   run cat "$marker"
-  local expected
-  expected="$(cd mysubdir && pwd)"
-  assert_output "$expected"
+  assert_path_equal "$(cd mysubdir && pwd)" "$output"
 
   pitchfork stop dir_test
 }
@@ -629,6 +641,7 @@ EOF
 @test "daemon dir absolute sets working directory" {
   local abs_dir marker
   abs_dir="$TEST_TEMP_DIR/absolute_dir"
+  abs_dir="$(normalize_path "$abs_dir")"
   mkdir -p "$abs_dir"
   marker="$TEST_TEMP_DIR/dir_abs_test_marker"
 
@@ -645,7 +658,7 @@ EOF
   sleep 0.5
 
   run cat "$marker"
-  assert_output "$abs_dir"
+  assert_path_equal "$abs_dir" "$output"
 
   pitchfork stop dir_abs_test
 }
@@ -724,7 +737,7 @@ EOF
   expected_dir="$(cd combined_test_dir && pwd)"
 
   run cat "$marker"
-  assert_output "8080:$expected_dir"
+  assert_path_equal "8080:$expected_dir" "$output"
 
   pitchfork stop combined_test
 }

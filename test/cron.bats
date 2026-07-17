@@ -2,9 +2,9 @@
 
 setup() {
   load test_helper/common_setup
-  _common_setup
   export PITCHFORK_INTERVAL=1s
   export PITCHFORK_CRON_CHECK_INTERVAL=1s
+  _common_setup
 }
 
 teardown() {
@@ -313,7 +313,12 @@ EOF
   wait_for_logs cron_immediate "immediate_fired" 5
 
   local count
-  count=$(pitchfork logs cron_immediate --raw 2>/dev/null | grep -c "immediate_fired" || true)
+  count=0
+  for _ in $(seq 1 15); do
+    count=$(pitchfork logs cron_immediate --raw 2>/dev/null | grep -c "immediate_fired" || true)
+    [[ "$count" -ge 2 ]] && break
+    sleep 1
+  done
   [[ "$count" -ge 2 ]]
 }
 
@@ -354,7 +359,7 @@ EOF
   # background and observe several retry attempts.
   pitchfork start retry_infinite &
   local start_pid=$!
-  sleep 5
+  sleep 10
   kill "$start_pid" 2>/dev/null || true
   wait "$start_pid" 2>/dev/null || true
 
@@ -371,13 +376,15 @@ EOF
 @test "retry with ready_output re-checks on each attempt" {
   local success_script
   success_script="$(script_path success_on_third.sh)"
-  export TEST_SUCCESS_ON_THIRD_TIMESTAMP="$BATS_TEST_NAME"
 
   create_pitchfork_toml <<EOF
 [daemons.retry_ready_output]
 run = 'bash "$success_script"'
 ready_output = "READY"
 retry = 2
+
+[daemons.retry_ready_output.env]
+TEST_SUCCESS_ON_THIRD_TIMESTAMP = "$BATS_TEST_NAME"
 EOF
 
   run pitchfork start retry_ready_output

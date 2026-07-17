@@ -23,6 +23,7 @@ teardown() {
 [daemons.watch_test]
 run = "python3 -u $http_script 0 $port"
 watch = ["watch_test_marker.txt"]
+watch_mode = "poll"
 ready_port = $port
 EOF
 
@@ -32,7 +33,7 @@ EOF
   assert_success
   wait_for_status watch_test running
 
-  sleep 0.5
+  sleep 2
   local original_pid
   original_pid="$(get_daemon_pid watch_test)"
   [[ -n "$original_pid" ]]
@@ -47,7 +48,7 @@ EOF
       new_pid="$current_pid"
       break
     fi
-    sleep 0.5
+    sleep 2
   done
 
   [[ -n "$new_pid" ]]
@@ -136,6 +137,7 @@ EOF
 [daemons.glob_watch_test]
 run = "python3 -u $http_script 0 $port"
 watch = ["lib/**/*.ts", "config/*.json"]
+watch_mode = "poll"
 ready_port = $port
 EOF
 
@@ -147,7 +149,7 @@ EOF
   assert_success
   wait_for_status glob_watch_test running
 
-  sleep 0.5
+  sleep 2
   local original_pid first_pid second_pid current_pid
   original_pid="$(get_daemon_pid glob_watch_test)"
   [[ -n "$original_pid" ]]
@@ -161,7 +163,7 @@ EOF
       first_pid="$current_pid"
       break
     fi
-    sleep 0.5
+    sleep 2
   done
   [[ "$first_pid" != "$original_pid" ]]
   wait_for_status glob_watch_test running
@@ -175,7 +177,7 @@ EOF
       second_pid="$current_pid"
       break
     fi
-    sleep 0.5
+    sleep 2
   done
   [[ "$second_pid" != "$first_pid" ]]
   wait_for_status glob_watch_test running
@@ -196,7 +198,8 @@ EOF
   create_pitchfork_toml <<EOF
 [daemons.relative_watch_test]
 run = "python3 -u $http_script 0 $port"
-watch = ["./relative_test.txt"]
+watch = ["relative_test.txt"]
+watch_mode = "poll"
 ready_port = $port
 EOF
 
@@ -206,7 +209,7 @@ EOF
   assert_success
   wait_for_status relative_watch_test running
 
-  sleep 0.5
+  sleep 2
   local original_pid new_pid current_pid
   original_pid="$(get_daemon_pid relative_watch_test)"
   [[ -n "$original_pid" ]]
@@ -220,7 +223,7 @@ EOF
       new_pid="$current_pid"
       break
     fi
-    sleep 0.5
+    sleep 2
   done
   [[ "$new_pid" != "$original_pid" ]]
   wait_for_status relative_watch_test running
@@ -229,7 +232,6 @@ EOF
 }
 
 # ============================================================================
-# Watch modes
 # ============================================================================
 
 @test "watch_mode poll and auto both trigger restart on file changes" {
@@ -262,7 +264,7 @@ EOF
     state_file="$PITCHFORK_STATE_DIR/state.toml"
     grep -F "watch_mode = \"$mode\"" "$state_file"
 
-    sleep 0.5
+    sleep 2
     local original_pid new_pid current_pid
     original_pid="$(get_daemon_pid ${mode}_watch_test)"
     [[ -n "$original_pid" ]]

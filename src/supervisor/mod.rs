@@ -120,18 +120,87 @@ pub fn start_in_background() -> Result<()> {
     if let Some(parent) = log_file.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let stderr_file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_file)
-        .into_diagnostic()?;
     #[cfg(unix)]
     fix_state_dir_permissions();
-    cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
-        .stdout_null()
-        .stderr_file(stderr_file)
-        .start()
-        .into_diagnostic()?;
+
+    // On Unix, use duct with stderr redirected to the log file.
+    #[cfg(unix)]
+    {
+        let stderr_file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_file)
+            .into_diagnostic()?;
+        cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
+            .stdin_null()
+            .stdout_null()
+            .stderr_file(stderr_file)
+            .start()
+            .into_diagnostic()?;
+    }
+
+    // On Windows, use CreateProcessW directly with bInheritHandles=FALSE.
+    // std::process::Command always sets bInheritHandles=TRUE when any stdio
+    // handle is configured (even Stdio::null()), which causes the background
+    // supervisor to inherit ALL inheritable handles from the parent —
+    // including bats' stdout capture pipe. The supervisor keeps the pipe
+    // open after the CLI exits, and bats hangs forever waiting for EOF.
+    //
+    // CreateProcessW with bInheritHandles=FALSE prevents any handle
+    // inheritance. We pass NUL device handles for stdin/stdout/stderr
+    // via STARTUPINFO without inheriting any parent handles.
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION, STARTUPINFOW,
+        };
+
+        // With bInheritHandles=FALSE, the child inherits NO parent handles.
+        // The supervisor uses its own internal file-based logger
+        // (PITCHFORK_LOG_FILE), so it doesn't need stdio from the parent.
+        // We don't set STARTF_USESTDHANDLES because that flag requires
+        // bInheritHandles=TRUE to function correctly per Microsoft docs.
+        // Without stdio handles, the detached process gets null stdio by
+        // default, which is exactly what we want.
+        let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+
+        let bin_path = &*env::PITCHFORK_BIN;
+        let mut cmd_line: Vec<u16> = format!("\"{}\" supervisor run\0", bin_path.to_string_lossy())
+            .encode_utf16()
+            .collect();
+
+        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmd_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                FALSE, // bInheritHandles = FALSE — the whole point
+                DETACHED_PROCESS | CREATE_NO_WINDOW,
+                std::ptr::null(),
+                std::ptr::null(),
+                &si,
+                &mut pi,
+            )
+        };
+
+        if ok == 0 {
+            return Err(miette::miette!(
+                "CreateProcessW failed for supervisor: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        // Close process/thread handles — we don't need them (detached process).
+        unsafe {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+    }
+
     Ok(())
 }
 
@@ -534,6 +603,16 @@ impl Supervisor {
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
 
+        // Prune shell PIDs that are no longer running. This is essential on
+        // Unix so that exited shells don't keep daemons alive forever.
+        //
+        // On Windows, skip this check: Git Bash (MSYS2) PIDs from `$$` are
+        // Cygwin-internal PIDs that are invisible to sysinfo (which sees
+        // Windows PIDs). The is_running check would always return false,
+        // immediately removing every registered shell and breaking autostop.
+        // Shell registration/deregistration relies on UpdateShellDir IPC
+        // messages instead.
+        #[cfg(unix)]
         for (dir, pids) in dirs_with_pids {
             let to_remove = pids
                 .iter()
@@ -861,6 +940,8 @@ impl Supervisor {
             }
         }
 
+        // Unix: remove the socket directory. Windows: named pipes have no filesystem component.
+        #[cfg(unix)]
         let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);
     }
 
