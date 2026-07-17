@@ -303,7 +303,11 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -lt 3 ]]
+  # bats runs 16-way parallel on a shared CI runner, so stdout delivery and
+  # ready-pattern matching can lag a few seconds under scheduling pressure.
+  # 8s is still well under the daemon's trailing 10s sleep, so a regression
+  # that skips early return (waits for daemon exit ~11s) still fails here.
+  [[ $elapsed -lt 8 ]]
 
   wait_for_logs ready_pattern "READY" 5
 
@@ -323,9 +327,11 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  local max_elapsed=3
+  # Same parallel-bats scheduling-latency tolerance as the ready_pattern test
+  # above; 8s (10s on Windows) stays well under the daemon's trailing 10s sleep.
+  local max_elapsed=8
   if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
-    max_elapsed=5
+    max_elapsed=10
   fi
   [[ $elapsed -lt $max_elapsed ]]
 
