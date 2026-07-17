@@ -1,5 +1,6 @@
 use crate::daemon::{Daemon, RunOptions};
 use crate::daemon_id::DaemonId;
+use crate::env;
 use crate::error::IpcError;
 use crate::ipc::batch::RunResult;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
@@ -30,6 +31,10 @@ impl IpcClient {
         let client = Self::connect_(&id, "main").await?;
         trace!("Connected to IPC socket");
         let client_version = env!("CARGO_PKG_VERSION").to_string();
+        // Resolve the running CLI's binary path so the restart hint points at
+        // the exact binary the user invoked, not whatever `pitchfork` resolves
+        // to on PATH (which may be a different version).
+        let exe = env::PITCHFORK_BIN.display();
 
         // Try ConnectV2 first (supervisor that knows about it will return ConnectOk with its version).
         // If the supervisor is older and doesn't recognize ConnectV2, it will return Error,
@@ -46,7 +51,7 @@ impl IpcClient {
                 if supervisor_version != client_version {
                     warn!(
                         "CLI version {client_version} differs from supervisor version {supervisor_version}. \
-                         Restart the supervisor with: pitchfork supervisor start --force"
+                         Restart the supervisor with: {exe} supervisor start --force"
                     );
                 }
             }
@@ -63,7 +68,7 @@ impl IpcClient {
                 }
                 warn!(
                     "Supervisor is running an older version. \
-                     Restart the supervisor with: pitchfork supervisor start --force"
+                     Restart the supervisor with: {exe} supervisor start --force"
                 );
             }
             _ => {
