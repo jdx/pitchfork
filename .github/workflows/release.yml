@@ -55,7 +55,7 @@ jobs:
           p12-password: ${{ secrets.CERTIFICATES_P12_PASS }}
       - name: Install cross
         if: matrix.os == 'ubuntu-latest'
-        uses: taiki-e/install-action@c93ccc03e00cd0e08e494f5fd058a6c55a6a1907 # v2.82.8
+        uses: taiki-e/install-action@c7eb1735f09259a5035e8e5d44b1406b1cddc0fb # v2.83.0
         with:
           tool: cross
       - name: Setup Rust target
