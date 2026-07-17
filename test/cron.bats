@@ -309,11 +309,16 @@ EOF
   assert_success
 
   # immediate=true should trigger the cron watcher on its first check because a
-  # scheduled time falls within the 10-second look-back window.
-  wait_for_logs cron_immediate "immediate_fired" 5
-
-  local count
-  count=$(pitchfork logs cron_immediate --raw 2>/dev/null | grep -c "immediate_fired" || true)
+  # scheduled time falls within the 10-second look-back window. The manual
+  # start logs the first line; poll until the cron-triggered second line
+  # arrives — asserting a count immediately races the cron tick and the log
+  # flush on loaded CI runners.
+  local count=0
+  for _ in $(seq 1 50); do
+    count=$(pitchfork logs cron_immediate --raw 2>/dev/null | grep -c "immediate_fired" || true)
+    [[ "$count" -ge 2 ]] && break
+    sleep 0.2
+  done
   [[ "$count" -ge 2 ]]
 }
 

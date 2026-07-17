@@ -10,6 +10,21 @@ use miette::IntoDiagnostic;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Dedupe the supervisor-side version-mismatch warning. Parallel batch clients
+/// open one dedicated connection per daemon, each performing its own handshake,
+/// which would otherwise log the warning once per connection. Keyed by client
+/// version so a different mismatched client still gets logged.
+fn version_mismatch_should_warn(client_version: &str) -> bool {
+    static WARNED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut warned = WARNED.lock().unwrap_or_else(|e| e.into_inner());
+    if warned.as_deref() == Some(client_version) {
+        false
+    } else {
+        *warned = Some(client_version.to_string());
+        true
+    }
+}
+
 impl Supervisor {
     /// Main IPC connection watch loop - reads and dispatches requests
     pub(crate) async fn conn_watch(&self, mut ipc: IpcServer) -> ! {
@@ -49,7 +64,7 @@ impl Supervisor {
                 version: client_version,
             } => {
                 debug!("received connect message (client version: {client_version})");
-                if client_version != VERSION {
+                if client_version != VERSION && version_mismatch_should_warn(&client_version) {
                     warn!(
                         "Client version {client_version} differs from supervisor version {VERSION}. \
                             Restart the supervisor with: pitchfork supervisor start --force"
