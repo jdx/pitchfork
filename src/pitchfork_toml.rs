@@ -387,7 +387,7 @@ fn namespace_from_path_with_override(path: &Path, explicit: Option<&str>) -> Res
 fn namespace_from_file(path: &Path) -> Result<String> {
     let explicit = read_namespace_override_from_file(path)?;
     let base_explicit = sibling_base_config(path)
-        .and_then(|p| if p.exists() { Some(p) } else { None })
+        .filter(|p| p.exists())
         .map(|p| read_namespace_override_from_file(&p))
         .transpose()?
         .flatten();
@@ -975,7 +975,7 @@ impl PitchforkToml {
 
         let namespace = {
             let base_explicit = sibling_base_config(path)
-                .and_then(|p| if p.exists() { Some(p) } else { None })
+                .filter(|p| p.exists())
                 .map(|p| read_namespace_override_from_file(&p))
                 .transpose()?
                 .flatten();

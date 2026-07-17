@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.0](https://github.com/jdx/pitchfork/compare/v2.16.0...v2.17.0) - 2026-07-17
+
+### Added
+
+- *(ready-check)* add optional overall timeout for all readiness check types ([#597](https://github.com/jdx/pitchfork/pull/597))
+- *(config)* support tera templates in ready check fields ([#600](https://github.com/jdx/pitchfork/pull/600))
+- *(logs)* structured log improvements ([#595](https://github.com/jdx/pitchfork/pull/595))
+- *(logs)* structured log highlighting ([#592](https://github.com/jdx/pitchfork/pull/592))
+- *(start)* allow omitting subcommand for implicit start ([#593](https://github.com/jdx/pitchfork/pull/593))
+- support structured logs ([#584](https://github.com/jdx/pitchfork/pull/584))
+
+### Fixed
+
+- *(schema)* do not require daemons field ([#605](https://github.com/jdx/pitchfork/pull/605))
+- *(deps)* update rust crate rmcp to v2 ([#590](https://github.com/jdx/pitchfork/pull/590))
+
+### Other
+
+- *(deps)* lock file maintenance ([#598](https://github.com/jdx/pitchfork/pull/598))
+- *(test)* migrate Rust e2e tests to bats with parallel execution ([#585](https://github.com/jdx/pitchfork/pull/585))
+- *(deps)* update rust crate rcgen to v0.14.8 ([#588](https://github.com/jdx/pitchfork/pull/588))
+
 ## [2.16.0](https://github.com/jdx/pitchfork/compare/v2.15.0...v2.16.0) - 2026-07-07
 
 ### Added
