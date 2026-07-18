@@ -345,21 +345,20 @@ impl StateFile {
     /// Empty per-PID subtables are pruned so the persisted TOML stays tidy.
     pub fn remove_project_session(&mut self, pid: u32, dir: &Path) -> Option<ProjectSession> {
         let pid_str = pid.to_string();
-        let removed = self
-            .project_sessions
-            .get_mut(&pid_str)
-            .and_then(|inner| inner.remove(dir));
-        if removed.is_some() {
-            if self
-                .project_sessions
-                .get(&pid_str)
-                .is_some_and(|m| m.is_empty())
-            {
-                self.project_sessions.remove(&pid_str);
+        if let std::collections::btree_map::Entry::Occupied(mut entry) =
+            self.project_sessions.entry(pid_str)
+        {
+            let removed = entry.get_mut().remove(dir);
+            if removed.is_some() {
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
+                self.mark_dirty();
             }
-            self.mark_dirty();
+            removed
+        } else {
+            None
         }
-        removed
     }
 
     /// Look up a project session for the given host PID and directory.

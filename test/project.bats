@@ -235,8 +235,16 @@ EOF
   kill "$liveness_pid"
   wait "$liveness_pid" 2>/dev/null || true
 
-  # Wait for the refresh loop to notice the dead PID and revoke both sessions.
-  sleep 5
+  # Poll until the refresh loop (PITCHFORK_INTERVAL=2s) notices the dead PID
+  # and revokes both sessions, instead of a fixed sleep.
+  local deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    if ! project_session_exists "$liveness_pid" "$dir1" \
+       && ! project_session_exists "$liveness_pid" "$dir2"; then
+      break
+    fi
+    sleep 0.5
+  done
 
   ! project_session_exists "$liveness_pid" "$dir1"
   ! project_session_exists "$liveness_pid" "$dir2"
@@ -386,21 +394,27 @@ EOF
   local proj_dir
   proj_dir="$(canonicalize "$PWD")"
 
-  # Table output (no header when piped): PID, directory, alive, title.
+  # Table output (no header when piped): PID, directory, status, title.
   # `--separate-stderr` keeps DEBUG logs (PITCHFORK_LOG=debug) out of
   # $output; the table itself goes to stdout.
   run --separate-stderr pitchfork project list
   assert_success
   assert_output --partial "$$"
   assert_output --partial "$proj_dir"
-  assert_output --partial "alive"
+  # Liveness ("alive") is only reliable on Unix; on Windows, Git Bash `$$` is
+  # a Cygwin-internal PID invisible to sysinfo, so the status reads "dead".
+  if [[ "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* ]]; then
+    assert_output --partial "alive"
+  fi
 
   # JSON output includes the same fields with alive=true.
   run --separate-stderr pitchfork project list --json
   assert_success
   assert_output --partial "\"pid\": $$"
   assert_output --partial "\"directory\": \"$proj_dir\""
-  assert_output --partial "\"alive\": true"
+  if [[ "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* ]]; then
+    assert_output --partial "\"alive\": true"
+  fi
 
   # After leaving, the list is empty (no rows when piped).
   run pitchfork project leave --pid $$

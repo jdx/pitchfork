@@ -118,10 +118,10 @@ Example output:
 
 ```bash
 $ pitchfork project list
-PID     DIRECTORY          LIVENESS
-12345   ~/projects/app     alive
-12345   ~/projects/lib     alive
-54321   ~/projects/app     alive
+PID     DIRECTORY          STATUS   TITLE
+12345   ~/projects/app     alive    code
+12345   ~/projects/lib     alive    code
+54321   ~/projects/app     alive    fish
 ```
 
 ### Example
@@ -158,4 +158,4 @@ pitchfork project leave --pid $$
 The shell variable for the current PID differs by shell: `$$` in bash/zsh, `$fish_pid` in fish, `$SHELL_PID` in nushell.
 :::
 
-If the host process crashes, the supervisor notices the PID is gone and treats the session as left, triggering the same auto-stop evaluation.
+If the host process crashes, the supervisor notices the PID is gone and treats the session as left, triggering the same auto-stop evaluation. This automatic crash cleanup relies on the host PID being visible to the process table, so it only applies on Unix. On Windows (where Git Bash `$$` is a Cygwin-internal PID invisible to the process table), sessions are not revoked automatically and must be ended with an explicit `project leave`.

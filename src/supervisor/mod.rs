@@ -220,10 +220,24 @@ fn should_remove_liveness_session(
     current_title: Option<&str>,
     is_running: bool,
 ) -> bool {
+    // If the state was updated since the snapshot (e.g., re-entered with the
+    // same PID/dir but a new title), skip removal to avoid deleting the new
+    // session.
     if session.liveness_title.as_ref() != recorded_title.as_ref() {
         return false;
     }
-    !(is_running && current_title == recorded_title.as_deref())
+    // Dead host process — evict.
+    if !is_running {
+        return true;
+    }
+    // Host is alive. Evict only on a real title mismatch (PID reuse). If no
+    // title was recorded, or the current title is unavailable, we cannot
+    // reliably detect PID reuse — keep the session rather than risk evicting
+    // a live process.
+    match (recorded_title.as_deref(), current_title) {
+        (Some(recorded), Some(current)) => recorded != current,
+        _ => false,
+    }
 }
 
 impl Supervisor {

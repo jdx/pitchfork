@@ -10,8 +10,35 @@ use crate::ipc::IpcResponse;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use log::LevelFilter::Info;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::time;
+
+/// Whether `path` is equal to or nested inside `base`.
+///
+/// Tries a direct `starts_with` first (fast path for paths that share the same
+/// representation). Falls back to canonicalizing both sides to bridge
+/// representation differences: the Windows verbatim (`\\?\`) prefix that
+/// `canonicalize()` adds versus bare paths coming from `env::CWD` / config-file
+/// parents, and symlink resolution (e.g. macOS `/tmp` -> `/private/tmp`).
+/// `canonicalize` is only invoked when the cheap string comparison already
+/// fails, so the common case stays allocation-free.
+fn is_within(base: &Path, path: &Path) -> bool {
+    if path.starts_with(base) {
+        return true;
+    }
+    canonicalize_pair(base, path).is_some_and(|(b, p)| p.starts_with(&b))
+}
+
+/// Whether `a` and `b` are equal, or one contains the other (bidirectional).
+fn dirs_overlap(a: &Path, b: &Path) -> bool {
+    is_within(a, b) || is_within(b, a)
+}
+
+/// Canonicalize both paths, returning `None` if either fails (e.g. the path no
+/// longer exists). Callers treat `None` as "no ancestry relationship known".
+fn canonicalize_pair(a: &Path, b: &Path) -> Option<(PathBuf, PathBuf)> {
+    Some((a.canonicalize().ok()?, b.canonicalize().ok()?))
+}
 
 impl Supervisor {
     /// Handle shell leaving a directory - schedule autostops for daemons
@@ -25,12 +52,12 @@ impl Supervisor {
             if !daemon.autostop {
                 continue;
             }
-            // if this daemon's dir starts with the left dir
-            // and no other active directory has this dir as a prefix
+            // if this daemon's dir is within the left dir
+            // and no other active directory is within the daemon's dir
             // schedule the daemon for autostop
             if let Some(daemon_dir) = daemon.dir.as_ref() {
-                let starts = daemon_dir.starts_with(dir);
-                let still_active = active_dirs.iter().any(|d| d.starts_with(daemon_dir));
+                let starts = is_within(dir, daemon_dir);
+                let still_active = active_dirs.iter().any(|d| is_within(daemon_dir, d));
                 debug!(
                     "leave_dir daemon={} daemon_dir={daemon_dir:?} starts_with_left={starts} still_active={still_active}",
                     daemon.id
@@ -74,7 +101,7 @@ impl Supervisor {
                     d.dir.as_ref().is_some_and(|daemon_dir| {
                         // Cancel if entering a directory inside or equal to daemon's directory
                         // OR if daemon is in a subdirectory of the entered directory
-                        dir.starts_with(daemon_dir) || daemon_dir.starts_with(dir)
+                        dirs_overlap(dir, daemon_dir)
                     })
                 })
                 .map(|(id, _)| id.clone())
@@ -115,7 +142,7 @@ impl Supervisor {
                 // Verify no active directory is in the daemon's directory
                 let active_dirs = self.get_active_directories().await;
                 if let Some(daemon_dir) = daemon.dir.as_ref() {
-                    let still_active = active_dirs.iter().any(|d| d.starts_with(daemon_dir));
+                    let still_active = active_dirs.iter().any(|d| is_within(daemon_dir, d));
                     debug!(
                         "process_pending_autostops daemon={daemon_id} daemon_dir={daemon_dir:?} active_dirs={active_dirs:?} still_active={still_active}"
                     );

@@ -438,8 +438,23 @@ impl Supervisor {
         pid: u32,
         dir: PathBuf,
     ) -> Result<Option<crate::state_file::ProjectSession>> {
+        if pid == 0 {
+            return Err(miette::miette!("invalid host PID 0"));
+        }
+        if pid > i32::MAX as u32 {
+            return Err(miette::miette!("host PID {pid} exceeds i32::MAX"));
+        }
         PROCS.refresh_pids(&[pid]);
         let liveness_title = PROCS.title(pid);
+        // On Unix, reject dead host PIDs up front so we don't register a
+        // session the refresh loop would immediately evict. On Windows, Git
+        // Bash `$$` is a Cygwin-internal PID invisible to sysinfo, so the
+        // liveness check is skipped and sessions rely on explicit
+        // `project leave`.
+        #[cfg(unix)]
+        if !PROCS.is_running(pid) {
+            return Err(miette::miette!("host PID {pid} is not running"));
+        }
         let mut state_file = self.state_file.lock().await;
         let previous = state_file.set_project_session(
             pid,

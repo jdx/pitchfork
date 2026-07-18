@@ -3,8 +3,7 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto};
 use crate::ui::table::print_table;
 use crate::{Result, env};
-use duct::cmd;
-use miette::IntoDiagnostic;
+use miette::{IntoDiagnostic, ensure};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -30,6 +29,10 @@ enum ProjectCommands {
 /// The host PID is required and is used by the supervisor to revoke the
 /// session automatically when the process dies (with a title match to guard
 /// against PID reuse).
+///
+/// On Windows, automatic revocation when the host process exits is not
+/// available (Git Bash PIDs are invisible to the process table); sessions
+/// must be ended with an explicit `project leave`.
 #[derive(Debug, clap::Args)]
 pub struct Enter {
     /// Host process PID that owns the session. Required.
@@ -125,10 +128,17 @@ impl Enter {
                 args.push(id.qualified());
             }
             if args.len() > 1 {
-                cmd(&*env::PITCHFORK_BIN, args)
-                    .dir(&target_dir)
-                    .run()
+                let status = tokio::process::Command::new(&*env::PITCHFORK_BIN)
+                    .args(&args)
+                    .current_dir(&target_dir)
+                    .status()
+                    .await
                     .into_diagnostic()?;
+                ensure!(
+                    status.success(),
+                    "pitchfork start {} exited with {status}",
+                    args[1..].join(" ")
+                );
             }
         }
 

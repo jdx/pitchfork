@@ -7,6 +7,8 @@ Enter (or replace) a project session tied to a host process.
 
 The host PID is required and is used by the supervisor to revoke the session automatically when the process dies (with a title match to guard against PID reuse).
 
+On Windows, automatic revocation when the host process exits is not available (Git Bash PIDs are invisible to the process table); sessions must be ended with an explicit `project leave`.
+
 ## Flags
 
 ### `--pid <PID>`
