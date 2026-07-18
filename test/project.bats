@@ -411,7 +411,13 @@ EOF
   run --separate-stderr pitchfork project list --json
   assert_success
   assert_output --partial "\"pid\": $$"
-  assert_output --partial "\"directory\": \"$proj_dir\""
+  # JSON escapes backslashes, so escape $proj_dir for the substring match on
+  # Windows where paths use backslashes.
+  local proj_dir_json="$proj_dir"
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    proj_dir_json="${proj_dir//\\/\\\\}"
+  fi
+  assert_output --partial "\"directory\": \"$proj_dir_json\""
   if [[ "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* ]]; then
     assert_output --partial "\"alive\": true"
   fi

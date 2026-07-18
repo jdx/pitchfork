@@ -127,12 +127,10 @@ impl Supervisor {
                 debug!("handling project enter pid {pid} dir {}", dir.display());
                 let prev = self.enter_project_session(pid, dir.clone()).await?;
                 self.cancel_pending_autostops_for_dir(&dir).await;
-                if prev.is_some() {
-                    // The previous session at (pid, dir) was replaced. Re-evaluate
-                    // the directory for autostop; the new session keeps it
-                    // active in practice, so this is a defensive no-op.
-                    self.leave_dir(&dir).await?;
-                }
+                // When re-entering (prev.is_some()), the new session keeps the
+                // directory active, so leave_dir would be a no-op. Skip it to
+                // avoid unnecessary autostop evaluation.
+                let _ = prev;
                 self.refresh().await?;
                 IpcResponse::Ok
             }

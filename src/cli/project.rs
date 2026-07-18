@@ -3,7 +3,7 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{PitchforkToml, PitchforkTomlAuto};
 use crate::ui::table::print_table;
 use crate::{Result, env};
-use miette::{IntoDiagnostic, ensure};
+use miette::IntoDiagnostic;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -88,11 +88,17 @@ impl Project {
 }
 
 /// Resolve a directory argument (or the CWD) to a canonical absolute path.
+///
+/// `dunce::simplified` strips the Windows verbatim (`\\?\`) prefix that
+/// `canonicalize()` adds, so stored paths and JSON output stay user-friendly.
+/// The non-canonical form is safe because `is_within` in autostop.rs falls
+/// back to canonicalizing both sides when a plain `starts_with` fails.
 fn resolve_directory(directory: &Option<PathBuf>) -> Result<PathBuf> {
-    match directory {
-        Some(d) => d.canonicalize().into_diagnostic(),
-        None => env::CWD.canonicalize().into_diagnostic(),
-    }
+    let canonical = match directory {
+        Some(d) => d.canonicalize().into_diagnostic()?,
+        None => env::CWD.canonicalize().into_diagnostic()?,
+    };
+    Ok(dunce::simplified(&canonical).to_path_buf())
 }
 
 impl Enter {
@@ -134,11 +140,15 @@ impl Enter {
                     .status()
                     .await
                     .into_diagnostic()?;
-                ensure!(
-                    status.success(),
-                    "pitchfork start {} exited with {status}",
-                    args[1..].join(" ")
-                );
+                if !status.success() {
+                    // Roll back the session so a failed start doesn't leave an
+                    // orphaned entry that would affect autostop on the next leave.
+                    let _ = ipc.project_leave(self.pid, target_dir).await;
+                    miette::bail!(
+                        "pitchfork start {} exited with {status}",
+                        args[1..].join(" ")
+                    );
+                }
             }
         }
 

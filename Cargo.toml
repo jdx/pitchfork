@@ -42,6 +42,7 @@ console = "0.16"
 cron = "0.17"
 dirs = "6"
 duct = "1.0"
+dunce = "1"
 exponential-backoff = "2"
 indexmap = { version = "2", features = ["serde"] }
 interprocess = { version = "2", features = ["tokio"] }

@@ -215,7 +215,6 @@ pub fn start_in_background() -> Result<()> {
 /// `liveness_pid` field to compare against.
 fn should_remove_liveness_session(
     session: &crate::state_file::ProjectSession,
-    _pid: u32,
     recorded_title: &Option<String>,
     current_title: Option<&str>,
     is_running: bool,
@@ -710,7 +709,6 @@ impl Supervisor {
                 );
                 if should_remove_liveness_session(
                     session,
-                    pid,
                     &recorded_title,
                     current_title.as_deref(),
                     is_running,
@@ -1368,7 +1366,6 @@ mod tests {
 
         assert!(!should_remove_liveness_session(
             &session,
-            1,
             &recorded_title,
             Some("new_title"),
             true,
@@ -1384,7 +1381,6 @@ mod tests {
 
         assert!(should_remove_liveness_session(
             &session,
-            1,
             &recorded_title,
             Some("different_title"),
             true,
@@ -1400,7 +1396,6 @@ mod tests {
 
         assert!(should_remove_liveness_session(
             &session,
-            1,
             &recorded_title,
             Some("recorded_title"),
             false,
@@ -1416,7 +1411,6 @@ mod tests {
 
         assert!(!should_remove_liveness_session(
             &session,
-            1,
             &recorded_title,
             Some("recorded_title"),
             true,
