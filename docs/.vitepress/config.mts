@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
 import spec from "../cli/commands.json";
 
@@ -34,7 +35,8 @@ if (!versionMatch) {
 const latestVersion = versionMatch?.[1] ?? "0.0.0";
 
 // https://vitepress.dev/reference/site-config
-export default defineConfig({
+export default withMermaid(
+  defineConfig({
   title: "pitchfork",
   description: "A devilishly good process manager for developers",
   themeConfig: {
@@ -171,4 +173,15 @@ export default defineConfig({
 
   // Ignore localhost URLs in CLI examples
   ignoreDeadLinks: [/^http:\/\/localhost/, /^http:\/\/127\.0\.0\.1/],
-});
+
+  mermaid: {
+    securityLevel: "loose",
+    // wrappingWidth: mermaid 11.16 #7354 clips long node text at default 200px.
+    // useMaxWidth: scale SVG to container width.
+    flowchart: {
+      wrappingWidth: 1000,
+      useMaxWidth: true,
+    },
+  },
+}),
+);
