@@ -1,6 +1,10 @@
 [env]
 _.path = ["target/debug", "test/bats/bin"]
 
+# For local dev, install GNU parallel to parallelize bats e2e tests (see test:bats):
+#   sudo apt install parallel  (Debian/Ubuntu)
+#   brew install parallel      (macOS)
+# Without it, bats runs sequentially (much slower).
 [tasks.test]
 depends = ["build:ui"]
 run = [
