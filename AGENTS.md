@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Architecture**: see [`ARCHITECTURE.md`](./ARCHITECTURE.md) (symlink to `docs/concepts/architecture.md`) for the full technical overview: module layout, startup sequence, background tasks, daemon states, process spawning, readiness detection, termination, monitor exit path, hooks, logging, proxy, and IPC responses.
+
 ## Build Commands
 
 ```bash
