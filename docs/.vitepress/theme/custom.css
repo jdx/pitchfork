@@ -180,6 +180,7 @@
      + larger wrappingWidth (set in config.mts) mitigate this.
    - VitePress body line-height (1.7) inflates rendered text vs measured
      height, so we reset it inside mermaid containers. */
+/* stylelint-disable selector-type-no-unknown -- Mermaid renders SVG foreignObject elements. */
 .mermaid foreignObject,
 .mermaid foreignobject {
   overflow: visible !important;
@@ -190,6 +191,7 @@
   line-height: normal !important;
   overflow: visible !important;
 }
+/* stylelint-enable selector-type-no-unknown */
 
 /* Scrollbar styling for dark theme */
 .dark ::-webkit-scrollbar-thumb {
