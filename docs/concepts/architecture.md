@@ -311,18 +311,19 @@ Strategy:
 1. Shut down IPC (stop accepting new requests).
 2. Force-flush state.
 3. Stop daemons in **dependency reverse order** (`compute_reverse_stop_order`), concurrent within each dependency layer.
-4. Wait for all in-flight monitor tasks to finish hook registration (`active_monitors` counter + `monitor_done` Notify, 30s timeout).
-5. Wait for all hook tasks to complete.
-6. Cancel proxy / web / mDNS tasks.
+4. Wait up to 5s for all monitor tasks to exit (`active_monitors` counter + `monitor_done` Notify), ensuring their drain and hook tasks have been registered.
+5. Wait for all registered output-drain tasks concurrently with a single 7s timeout. Each drain task has its own 5s receiver deadline; remaining tasks are aborted after the overall timeout.
+6. Wait for all hook tasks to complete (30s timeout per task).
+7. Cancel proxy / web / mDNS tasks.
 
 ## Monitor Task Exit Path
 
 When the spawned process exits, the monitor task performs cleanup in a specific order to handle concurrent `stop()` / `start()` races correctly:
 
-1. **Acquire `MonitorGuard`** (RAII counter via `active_monitors` + `monitor_done` Notify). Registered **before** the drain so `close()` cannot observe `active_monitors == 0` during the 5s drain window and `exit(0)` before hooks are registered.
+1. **Acquire `MonitorGuard`** (RAII counter via `active_monitors` + `monitor_done` Notify) at the start of the monitor task. It covers every task exit path, so `close()` cannot observe `active_monitors == 0` before any drain or hook task has been registered.
 2. **Snapshot `stop_intent_observed`** before any cleanup that could race with a concurrent `start()`. Computed as `was_stopped_before_cleanup || was_stopping_before_cleanup` from the pre-cleanup daemon state. This preserves the intentional-stop signal even if `start()` (e.g. from `pitchfork restart`) upserts a new PID with `Running` status during cleanup.
 3. **Flush already-buffered logs** synchronously (not a full drain; the in-flight drain is deferred to step 6).
-4. **Clear `active_port`** unless `stop_intent_observed` (so a concurrent `start()` that already stored a new port is not clobbered).
+4. **Clear `active_port`** only if the daemon record still has this monitor's PID, checked while holding the state-file lock. A concurrent `start()` with a replacement PID keeps its new `active_port`.
 5. **PID-takeover check + exit reason + hooks**: if `stop_intent_observed` is false and a new process has taken over (different PID, not `Stopping`/`Stopped`), spawn the background drain and return without updating state or firing hooks. Otherwise:
    - Combine the pre-cleanup snapshot with the current state to cover both race orders: `stop()` set `Stopping` before cleanup (`stop_intent_observed`), or `stop()` set `Stopped` during cleanup (`already_stopped`).
    - **Determine `exit_reason`**: `"stop"` (intentional), `"exit"` (clean self-exit), or `"fail"` (non-zero).
@@ -332,7 +333,7 @@ When the spawned process exits, the monitor task performs cleanup in a specific 
      - `"exit"` → `OnExit`
      - `"fail"` with retries exhausted → `OnFail` + `OnExit`
      - `"fail"` with retries remaining → no hooks (retry loop handles it)
-6. **Spawn fire-and-forget drain task** (`spawn_output_drain`) to drain remaining in-flight output for up to 5s and flush it. This keeps the 5s drain window **off the critical path** so `close()` and `start()` are not blocked by it.
+6. **Spawn and register a drain task** (`spawn_output_drain`) to drain remaining in-flight output for up to 5s. Each SQLite batch write is awaited before the next begins, and `close()` awaits the registered task with its single 7s shutdown budget. The monitor itself does not wait, so concurrent `start()` remains unblocked.
 
 ## Hooks
 
@@ -356,7 +357,7 @@ Output is captured from PTY master (merged) or stdout+stderr (merged into one ch
 
 - **Batching**: up to 100 lines or 100ms interval, flushed via `spawn_blocking` to avoid blocking the async runtime.
 - **Synchronous flush before readiness**: when `ready_output` matches, the current batch is flushed and awaited so `collect_startup_logs` sees the triggering line.
-- **Drain on exit**: after process exit, already-buffered logs are flushed synchronously; remaining in-flight output is drained in a fire-and-forget background task (`spawn_output_drain`) for up to 5s, keeping the drain off the `close()` / `start()` critical path.
+- **Drain on exit**: after process exit, already-buffered logs are flushed synchronously; remaining in-flight output is drained in a registered background task (`spawn_output_drain`) for up to 5s. Batches are written sequentially, and `close()` awaits all registered drains concurrently with one 7s timeout; normal monitor cleanup and concurrent `start()` do not wait for the drain.
 - **Retention**: `interval_watch` runs `apply_log_retention` hourly, pruning by `logs.time_retention` and `logs.line_retention`.
 
 ## Proxy Integration
