@@ -142,6 +142,40 @@ pub fn build_run_options(
     Ok(run_opts)
 }
 
+/// Render Tera templates for a single daemon config before starting it.
+///
+/// Merges top-level `[env]` defaults into the daemon's env (per-daemon wins),
+/// renders all template-enabled fields, and uses the currently-running daemons'
+/// resolved ports (read from the state file) as template context.
+///
+/// Used by single-daemon start paths (`start_daemon`, proxy auto-start) that
+/// don't go through the batch dependency-resolution path.
+pub(crate) fn render_daemon_config(
+    id: &DaemonId,
+    daemon_config: &mut PitchforkTomlDaemon,
+    pt: &PitchforkToml,
+) -> Result<()> {
+    let resolved_daemons = crate::state_file::StateFile::read(&*crate::env::PITCHFORK_STATE_FILE)
+        .map(|sf| {
+            sf.daemons
+                .iter()
+                .filter_map(|(id, d)| {
+                    if d.resolved_port.is_empty() {
+                        None
+                    } else {
+                        Some((id.clone(), d.resolved_port.clone()))
+                    }
+                })
+                .collect::<HashMap<DaemonId, Vec<u16>>>()
+        })
+        .unwrap_or_default();
+
+    let mut ctx =
+        crate::template::TemplateContext::new(id, daemon_config, &resolved_daemons, &pt.daemons);
+    crate::template::render_daemon_templates(daemon_config, &mut ctx, pt.env.as_ref())
+        .map_err(|e| miette::miette!("Template render error for daemon {id}: {e}"))
+}
+
 fn merge_ready_http_override(
     configured: Option<ReadyHttp>,
     override_url: Option<String>,
@@ -510,7 +544,7 @@ impl IpcClient {
                     if let Some(daemon_config) = pt.daemons.get(&id) {
                         // Render Tera templates with context from previously started daemons
                         let mut rendered_config = daemon_config.clone();
-                        let template_ctx = crate::template::TemplateContext::new(
+                        let mut template_ctx = crate::template::TemplateContext::new(
                             &id,
                             daemon_config,
                             &resolved_ports_map,
@@ -518,7 +552,7 @@ impl IpcClient {
                         );
                         match crate::template::render_daemon_templates(
                             &mut rendered_config,
-                            &template_ctx,
+                            &mut template_ctx,
                             pt.env.as_ref(),
                         ) {
                             Ok(()) => {}
@@ -876,11 +910,14 @@ impl IpcClient {
     ) -> Result<RunResult> {
         let pt = PitchforkToml::all_merged_all_namespaces()?;
 
-        let daemon_config = pt
+        let mut daemon_config = pt
             .daemons
             .get(id)
             .cloned()
             .ok_or_else(|| miette::miette!("Daemon config not found for {id}"))?;
+
+        // Render Tera templates and merge top-level env (per-daemon wins).
+        render_daemon_config(id, &mut daemon_config, &pt)?;
 
         let run_opts =
             build_run_options(id, &daemon_config, overrides).map_err(|e| miette::miette!("{e}"))?;
