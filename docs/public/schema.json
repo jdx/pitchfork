@@ -14,6 +14,16 @@
         }
       }
     },
+    "env": {
+      "description": "Top-level environment variables applied to all daemons as defaults.\nPer-daemon `env` overrides these on key conflicts. Values support Tera\ntemplates (e.g. `{{ daemons.api.port }}`, `{{ settings.proxy.tld }}`).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "namespace": {
       "description": "Optional explicit namespace declared in this file.\n\nThis applies to per-file read/write flows. Merged configs may contain\ndaemons from multiple namespaces and leave this as `None`.",
       "type": [

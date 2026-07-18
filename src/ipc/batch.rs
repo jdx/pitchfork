@@ -519,6 +519,7 @@ impl IpcClient {
                         match crate::template::render_daemon_templates(
                             &mut rendered_config,
                             &template_ctx,
+                            pt.env.as_ref(),
                         ) {
                             Ok(()) => {}
                             Err(e) => {

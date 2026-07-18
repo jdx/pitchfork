@@ -110,6 +110,10 @@ struct PitchforkTomlRaw {
     pub namespace: Option<String>,
     #[serde(default)]
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
+    /// Top-level environment variables applied to all daemons as defaults.
+    /// Per-daemon `env` overrides these. Values support Tera templates.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<IndexMap<String, String>>,
     #[serde(default)]
     pub settings: Option<SettingsPartial>,
     /// Slug registry (only meaningful in global config).
@@ -241,6 +245,11 @@ pub struct PitchforkToml {
     /// Map of daemon IDs to their configurations
     #[serde(default)]
     pub daemons: IndexMap<DaemonId, PitchforkTomlDaemon>,
+    /// Top-level environment variables applied to all daemons as defaults.
+    /// Per-daemon `env` overrides these on key conflicts. Values support Tera
+    /// templates (e.g. `{{ daemons.api.port }}`, `{{ settings.proxy.tld }}`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub env: Option<IndexMap<String, String>>,
     /// Optional explicit namespace declared in this file.
     ///
     /// This applies to per-file read/write flows. Merged configs may contain
@@ -953,6 +962,7 @@ impl PitchforkToml {
     pub fn new(path: PathBuf) -> Self {
         Self {
             daemons: Default::default(),
+            env: None,
             namespace: None,
             settings: SettingsPartial::default(),
             slugs: IndexMap::new(),
@@ -1116,6 +1126,9 @@ impl PitchforkToml {
             pt.settings = settings;
         }
 
+        // Copy top-level env
+        pt.env = raw_config.env;
+
         // Copy slugs registry (only meaningful in global config files)
         for (slug, entry) in raw_config.slugs {
             pt.slugs.insert(
@@ -1211,6 +1224,7 @@ impl PitchforkToml {
             // doesn't drop `[settings.*]`. Gate on is_empty to avoid a bare `[settings]`.
             let mut raw = PitchforkTomlRaw {
                 namespace: self.namespace.clone(),
+                env: self.env.clone(),
                 settings: (!self.settings.is_empty()).then(|| self.settings.clone()),
                 ..PitchforkTomlRaw::default()
             };
@@ -1342,6 +1356,13 @@ impl PitchforkToml {
     pub fn merge(&mut self, pt: Self) {
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
+        }
+        // Merge top-level env - pt's values override self's values
+        if let Some(env) = pt.env {
+            let merged = self.env.get_or_insert_with(IndexMap::new);
+            for (k, v) in env {
+                merged.insert(k, v);
+            }
         }
         // Merge slugs - pt's values override self's values
         for (slug, entry) in pt.slugs {

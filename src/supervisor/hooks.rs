@@ -259,11 +259,22 @@ async fn render_hook_template(
     };
 
     let daemon_config = pt.daemons.get(daemon_id);
-    let ctx = template::TemplateContext::new(
+    let mut ctx = template::TemplateContext::new(
         daemon_id,
         daemon_config.unwrap_or(&Default::default()),
         &resolved_daemons,
         &pt.daemons,
     );
+
+    // Merge top-level env with per-daemon env (per-daemon wins), render the
+    // values, and expose them as `{{ env.X }}` for hook templates.
+    if let Some(rendered_env) = template::render_env(
+        pt.env.as_ref(),
+        daemon_config.and_then(|d| d.env.as_ref()),
+        &ctx,
+    )? {
+        ctx.set_env(rendered_env);
+    }
+
     template::render_template(template_str, &ctx)
 }
