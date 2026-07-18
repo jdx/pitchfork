@@ -74,3 +74,88 @@ cd ~/projects/myapp
 cd ~
 # After a delay, api daemon stops (if no other terminals are in ~/projects/myapp)
 ```
+
+## IDE / Project Session Integration
+
+IDEs and other long-running project tools can opt into the same auto-start and auto-stop behavior without relying on the shell hook. A single host process can manage multiple workspaces by calling `enter` once per directory with the same `--pid`.
+
+### `pitchfork project enter`
+
+Mark a directory session as active for the given host process. Pitchfork resolves the project from the directory, then starts daemons with `auto = ["start", ...]` just as the shell hook does.
+
+```bash
+pitchfork project enter --pid 12345
+```
+
+| Option | Description |
+|--------|-------------|
+| `--pid PID` | **Required.** PID of the host process (IDE or shell). Used as a crash-cleanup anchor. |
+| `--directory DIR` | Optional. Project directory. Defaults to the current working directory. |
+
+### `pitchfork project leave`
+
+Mark a directory session as inactive for the given host process. Daemons with `auto = [..., "stop"]` become eligible for auto-stop, subject to the same delay and multi-session checks as the shell hook.
+
+```bash
+pitchfork project leave --pid 12345
+```
+
+### `pitchfork project list`
+
+List currently active project sessions. Each row shows the host PID, directory, and liveness state (`alive` while the host process is running, `dead` once it has exited but before cleanup completes).
+
+```bash
+pitchfork project list
+```
+
+Pass `--json` for machine-readable output suitable for IDE integrations and scripting:
+
+```bash
+pitchfork project list --json
+```
+
+Example output:
+
+```bash
+$ pitchfork project list
+PID     DIRECTORY          LIVENESS
+12345   ~/projects/app     alive
+12345   ~/projects/lib     alive
+54321   ~/projects/app     alive
+```
+
+### Example
+
+An IDE managing multiple folders in one window uses the same `--pid` with different `--directory` values:
+
+```bash
+# Open first folder
+pitchfork project enter --pid 12345 --directory ~/projects/app
+
+# Open second folder in the same IDE
+pitchfork project enter --pid 12345 --directory ~/projects/lib
+
+# Close first folder
+pitchfork project leave --pid 12345 --directory ~/projects/app
+
+# Close IDE entirely
+pitchfork project leave --pid 12345 --directory ~/projects/lib
+```
+
+Multiple terminals in the same project use distinct `--pid` values, so each can leave independently:
+
+```bash
+# Terminal A (bash/zsh)
+pitchfork project enter --pid $$
+pitchfork project leave --pid $$
+
+# Terminal B in the same directory
+pitchfork project enter --pid $$
+pitchfork project leave --pid $$
+```
+
+::: tip
+The shell variable for the current PID differs by shell: `$$` in bash/zsh, `$fish_pid` in fish, `$SHELL_PID` in nushell.
+:::
+
+If the host process crashes, the supervisor notices the PID is gone and treats the session as left, triggering the same auto-stop evaluation.

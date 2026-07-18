@@ -485,6 +485,49 @@ impl IpcClient {
         }
     }
 
+    /// Enter or replace a project session for a host PID in a directory.
+    pub async fn project_enter(&self, pid: u32, dir: PathBuf) -> Result<()> {
+        let rsp = self
+            .request(IpcRequest::ProjectEnter {
+                pid,
+                dir: dir.clone(),
+            })
+            .await?;
+        match rsp {
+            IpcResponse::Ok => {
+                trace!("entered project session pid {pid} in {}", dir.display());
+                Ok(())
+            }
+            rsp => Err(Self::unexpected_response("Ok", &rsp).into()),
+        }
+    }
+
+    /// Leave a project session for a host PID in a directory.
+    pub async fn project_leave(&self, pid: u32, dir: PathBuf) -> Result<()> {
+        let rsp = self
+            .request(IpcRequest::ProjectLeave {
+                pid,
+                dir: dir.clone(),
+            })
+            .await?;
+        match rsp {
+            IpcResponse::Ok => {
+                trace!("left project session pid {pid} in {}", dir.display());
+                Ok(())
+            }
+            rsp => Err(Self::unexpected_response("Ok", &rsp).into()),
+        }
+    }
+
+    /// List all tracked project sessions with live liveness status.
+    pub async fn get_project_sessions(&self) -> Result<Vec<crate::ipc::ProjectSessionInfo>> {
+        let rsp = self.request(IpcRequest::GetProjectSessions).await?;
+        match rsp {
+            IpcResponse::ProjectSessions(sessions) => Ok(sessions),
+            rsp => Err(Self::unexpected_response("ProjectSessions", &rsp).into()),
+        }
+    }
+
     /// Stop a single daemon (low-level operation)
     pub async fn stop(&self, id: DaemonId) -> Result<bool> {
         let id_str = id.qualified();

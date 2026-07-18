@@ -36,6 +36,7 @@ use std::collections::HashSet;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic;
 use std::sync::atomic::{AtomicBool, AtomicU32};
@@ -202,6 +203,27 @@ pub fn start_in_background() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Decide whether a project session should be removed during refresh.
+///
+/// `recorded_title` is the title snapshot taken at the start of refresh.
+/// `session` is the current state entry re-read under the lock. If the state
+/// has been updated since the snapshot (e.g., re-entered with the same
+/// PID/dir but a new title), we must skip removal to avoid deleting the new
+/// session. The host PID lives in the session key now, so there is no
+/// `liveness_pid` field to compare against.
+fn should_remove_liveness_session(
+    session: &crate::state_file::ProjectSession,
+    _pid: u32,
+    recorded_title: &Option<String>,
+    current_title: Option<&str>,
+    is_running: bool,
+) -> bool {
+    if session.liveness_title.as_ref() != recorded_title.as_ref() {
+        return false;
+    }
+    !(is_running && current_title == recorded_title.as_deref())
 }
 
 impl Supervisor {
@@ -598,10 +620,31 @@ impl Supervisor {
     pub(crate) async fn refresh(&self) -> Result<()> {
         trace!("refreshing");
 
+        // Collect PIDs we need to check (shell PIDs and liveness PIDs)
+        // This is more efficient than refreshing all processes on the system
         let dirs_with_pids = self.get_dirs_with_shell_pids().await;
+        let liveness_sessions = self.get_liveness_sessions().await;
+        let pids_to_check: Vec<u32> = dirs_with_pids
+            .values()
+            .flatten()
+            .copied()
+            .chain(liveness_sessions.iter().map(|(pid, _, _)| *pid))
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if pids_to_check.is_empty() {
+            // No PIDs to check, skip the expensive refresh
+            trace!("no tracked PIDs to check, skipping process refresh");
+        } else {
+            debug!("refreshing PIDs: {pids_to_check:?}");
+            PROCS.refresh_pids(&pids_to_check);
+        }
 
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
+
+        let mut dirs_to_leave: Vec<PathBuf> = Vec::new();
 
         // Prune shell PIDs that are no longer running. This is essential on
         // Unix so that exited shells don't keep daemons alive forever.
@@ -622,8 +665,55 @@ impl Supervisor {
                 self.remove_shell_pid(**pid).await?
             }
             if to_remove.len() == pids.len() {
-                self.leave_dir(&dir).await?;
+                dirs_to_leave.push(dir);
             }
+        }
+
+        // Atomically remove project sessions whose host PID has died or whose
+        // recorded title no longer matches the current process title. Every
+        // project session carries a host PID in its key, so we iterate all of
+        // them. Re-reading the sessions under the lock prevents enter/leave
+        // interleaving from deleting a session that was just replaced with a
+        // new title snapshot.
+        //
+        // Gated to Unix to mirror the shell-PID pruning above: on Windows,
+        // Git Bash (MSYS2) `$$` PIDs are Cygwin-internal and invisible to
+        // sysinfo, so the liveness check would immediately revoke every
+        // freshly-entered session. Windows relies on explicit `project leave`
+        // (or shell UpdateShellDir) for deregistration instead.
+        #[cfg(unix)]
+        {
+            let mut state = self.state_file.lock().await;
+            for (pid, dir, recorded_title) in liveness_sessions {
+                let Some(session) = state.get_project_session(pid, &dir) else {
+                    continue;
+                };
+                let current_title = PROCS.title(pid);
+                let is_running = PROCS.is_running(pid);
+                debug!(
+                    "refresh liveness session pid {pid} dir {} recorded_title={recorded_title:?} current_title={current_title:?} is_running={is_running}",
+                    dir.display()
+                );
+                if should_remove_liveness_session(
+                    session,
+                    pid,
+                    &recorded_title,
+                    current_title.as_deref(),
+                    is_running,
+                ) {
+                    warn!(
+                        "removing project session pid {pid} dir {} (liveness pid title mismatch or dead)",
+                        dir.display()
+                    );
+                    if state.remove_project_session(pid, &dir).is_some() {
+                        dirs_to_leave.push(dir);
+                    }
+                }
+            }
+        }
+
+        for dir in dirs_to_leave {
+            self.leave_dir(&dir).await?;
         }
 
         self.check_retry().await?;
@@ -1245,5 +1335,77 @@ fn chmod_recursive(dir: &std::path::Path) {
         } else {
             let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o644));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_remove_liveness_session;
+    use crate::state_file::ProjectSession;
+
+    #[test]
+    fn should_not_remove_when_state_title_differs_from_snapshot() {
+        // The session was re-entered after the snapshot was taken, producing a
+        // new title in state. The snapshot title is stale; skip removal.
+        let session = ProjectSession {
+            liveness_title: Some("new_title".to_string()),
+        };
+        let recorded_title = Some("old_title".to_string());
+
+        assert!(!should_remove_liveness_session(
+            &session,
+            1,
+            &recorded_title,
+            Some("new_title"),
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_remove_when_running_title_mismatches() {
+        let session = ProjectSession {
+            liveness_title: Some("recorded_title".to_string()),
+        };
+        let recorded_title = Some("recorded_title".to_string());
+
+        assert!(should_remove_liveness_session(
+            &session,
+            1,
+            &recorded_title,
+            Some("different_title"),
+            true,
+        ));
+    }
+
+    #[test]
+    fn should_remove_when_dead() {
+        let session = ProjectSession {
+            liveness_title: Some("recorded_title".to_string()),
+        };
+        let recorded_title = Some("recorded_title".to_string());
+
+        assert!(should_remove_liveness_session(
+            &session,
+            1,
+            &recorded_title,
+            Some("recorded_title"),
+            false,
+        ));
+    }
+
+    #[test]
+    fn should_not_remove_when_alive_and_title_matches() {
+        let session = ProjectSession {
+            liveness_title: Some("recorded_title".to_string()),
+        };
+        let recorded_title = Some("recorded_title".to_string());
+
+        assert!(!should_remove_liveness_session(
+            &session,
+            1,
+            &recorded_title,
+            Some("recorded_title"),
+            true,
+        ));
     }
 }

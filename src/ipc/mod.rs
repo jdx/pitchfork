@@ -62,11 +62,40 @@ pub enum IpcRequest {
     /// Notify the supervisor that settings have changed.
     /// The supervisor should reload settings from config files.
     ReloadConfig,
+    /// Enter or replace a project session for a host PID in a directory.
+    ProjectEnter {
+        pid: u32,
+        dir: PathBuf,
+    },
+    /// Leave a project session for a host PID in a directory.
+    ProjectLeave {
+        pid: u32,
+        dir: PathBuf,
+    },
+    /// List all tracked project sessions with live liveness status filled in
+    /// by the supervisor.
+    GetProjectSessions,
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
         error: String,
     },
+}
+
+/// A snapshot of a single project session, returned by `GetProjectSessions`.
+///
+/// `liveness_title` is the title recorded at enter time. `alive` and
+/// `current_title` are filled in by the supervisor from its `PROCS` singleton
+/// so the client does not need process introspection.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProjectSessionInfo {
+    pub pid: u32,
+    pub directory: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub liveness_title: Option<String>,
+    pub alive: bool,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub current_title: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, strum::Display, strum::EnumIs)]
@@ -119,6 +148,8 @@ pub enum IpcResponse {
     /// Daemon exists but is not running (no PID)
     DaemonNotRunning,
     DaemonNotFound,
+    /// Snapshot of all project sessions (response to `GetProjectSessions`).
+    ProjectSessions(Vec<ProjectSessionInfo>),
 }
 fn fs_name(name: &str) -> Result<Name<'_>> {
     // Unix: use a filesystem path for the AF_UNIX socket.

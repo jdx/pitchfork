@@ -17,6 +17,11 @@ pub struct StateFile {
     pub disabled: BTreeSet<DaemonId>,
     #[serde(default)]
     pub shell_dirs: BTreeMap<String, PathBuf>,
+    /// Project sessions keyed by host PID (as string, matching `shell_dirs`)
+    /// and then by canonical directory. `#[serde(default)]` keeps older
+    /// state files (that predate project sessions) parseable.
+    #[serde(default)]
+    pub project_sessions: BTreeMap<String, BTreeMap<PathBuf, ProjectSession>>,
     #[serde(skip)]
     pub(crate) path: PathBuf,
     #[serde(skip)]
@@ -29,12 +34,22 @@ pub struct StateFile {
     pub(crate) last_content: Mutex<Option<String>>,
 }
 
+/// A project session entry. The owning host PID and tracked directory live in
+/// the nested map key, so the value only needs the liveness title snapshot
+/// used to mitigate PID reuse.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ProjectSession {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub liveness_title: Option<String>,
+}
+
 impl StateFile {
     pub fn new(path: PathBuf) -> Self {
         Self {
             daemons: Default::default(),
             disabled: Default::default(),
             shell_dirs: Default::default(),
+            project_sessions: Default::default(),
             path,
             dirty: AtomicBool::new(false),
             last_content: Mutex::new(None),
@@ -309,6 +324,61 @@ impl StateFile {
             self.mark_dirty();
         }
         removed
+    }
+
+    /// Insert or replace a project session for the given host PID and directory
+    /// and mark the state dirty. Returns the previous session, if any.
+    pub fn set_project_session(
+        &mut self,
+        pid: u32,
+        dir: PathBuf,
+        session: ProjectSession,
+    ) -> Option<ProjectSession> {
+        let inner = self.project_sessions.entry(pid.to_string()).or_default();
+        let old = inner.insert(dir, session);
+        self.mark_dirty();
+        old
+    }
+
+    /// Remove a project session for the given host PID and directory and mark
+    /// the state dirty if it existed. Returns the removed session, if any.
+    /// Empty per-PID subtables are pruned so the persisted TOML stays tidy.
+    pub fn remove_project_session(&mut self, pid: u32, dir: &Path) -> Option<ProjectSession> {
+        let pid_str = pid.to_string();
+        let removed = self
+            .project_sessions
+            .get_mut(&pid_str)
+            .and_then(|inner| inner.remove(dir));
+        if removed.is_some() {
+            if self
+                .project_sessions
+                .get(&pid_str)
+                .is_some_and(|m| m.is_empty())
+            {
+                self.project_sessions.remove(&pid_str);
+            }
+            self.mark_dirty();
+        }
+        removed
+    }
+
+    /// Look up a project session for the given host PID and directory.
+    pub fn get_project_session(&self, pid: u32, dir: &Path) -> Option<&ProjectSession> {
+        self.project_sessions
+            .get(&pid.to_string())
+            .and_then(|inner| inner.get(dir))
+    }
+
+    /// Flat iterator over all project sessions yielding `(pid_str, dir, session)`
+    /// for every entry. Used by the supervisor refresh loop to evaluate liveness.
+    pub fn iter_project_sessions(&self) -> Vec<(&str, &PathBuf, &ProjectSession)> {
+        let mut out: Vec<(&str, &PathBuf, &ProjectSession)> = Vec::new();
+        for (pid_str, inner) in &self.project_sessions {
+            for (dir, session) in inner {
+                out.push((pid_str.as_str(), dir, session));
+            }
+        }
+        out
     }
 
     /// Retain only daemons matching the predicate and mark the state dirty
@@ -596,5 +666,63 @@ status = "stopped"
             .expect("preserved cmd should exist");
         assert_eq!(preserved_cmd, &vec!["echo".to_string(), "old".to_string()]);
         assert_eq!(migrated.daemons.len(), 2);
+    }
+
+    #[test]
+    fn test_project_sessions_nested_map_roundtrip() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        state.set_project_session(
+            1234,
+            PathBuf::from("/projects/a"),
+            ProjectSession {
+                liveness_title: Some("sleep".to_string()),
+            },
+        );
+        state.set_project_session(
+            1234,
+            PathBuf::from("/projects/b"),
+            ProjectSession {
+                liveness_title: None,
+            },
+        );
+        state.set_project_session(
+            5678,
+            PathBuf::from("/projects/a"),
+            ProjectSession {
+                liveness_title: Some("code".to_string()),
+            },
+        );
+
+        let toml_str = toml::to_string(&state).unwrap();
+        let parsed: StateFile = toml::from_str(&toml_str).expect("roundtrip parse");
+
+        // All three sessions survive.
+        assert_eq!(parsed.iter_project_sessions().len(), 3);
+        assert!(
+            parsed
+                .get_project_session(1234, &PathBuf::from("/projects/a"))
+                .is_some()
+        );
+        assert!(
+            parsed
+                .get_project_session(1234, &PathBuf::from("/projects/b"))
+                .is_some()
+        );
+        assert!(
+            parsed
+                .get_project_session(5678, &PathBuf::from("/projects/a"))
+                .is_some()
+        );
+
+        // Removal prunes the per-PID subtable when it becomes empty.
+        let mut state = parsed;
+        state.remove_project_session(5678, &PathBuf::from("/projects/a"));
+        assert!(
+            state
+                .get_project_session(5678, &PathBuf::from("/projects/a"))
+                .is_none()
+        );
+        assert!(!state.project_sessions.contains_key("5678"));
+        assert_eq!(state.iter_project_sessions().len(), 2);
     }
 }

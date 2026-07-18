@@ -17,8 +17,8 @@ impl Supervisor {
     /// Handle shell leaving a directory - schedule autostops for daemons
     pub(crate) async fn leave_dir(&self, dir: &Path) -> Result<()> {
         debug!("left dir {}", dir.display());
-        let shell_dirs = self.get_dirs_with_shell_pids().await;
-        let shell_dirs = shell_dirs.keys().collect::<Vec<_>>();
+        let active_dirs = self.get_active_directories().await;
+        debug!("active directories after leaving {dir:?}: {active_dirs:?}");
         let autostop_delay = settings().general_autostop_delay();
 
         for daemon in self.active_daemons().await {
@@ -26,28 +26,33 @@ impl Supervisor {
                 continue;
             }
             // if this daemon's dir starts with the left dir
-            // and no other shell pid has this dir as a prefix
+            // and no other active directory has this dir as a prefix
             // schedule the daemon for autostop
-            if let Some(daemon_dir) = daemon.dir.as_ref()
-                && daemon_dir.starts_with(dir)
-                && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
-            {
-                if autostop_delay.is_zero() {
-                    // No delay configured, stop immediately
-                    info!("autostopping {daemon}");
-                    self.stop(&daemon.id).await?;
-                    self.add_notification(Info, format!("autostopped {daemon}"))
-                        .await;
-                } else {
-                    // Schedule autostop with delay
-                    let stop_at = time::Instant::now() + autostop_delay;
-                    let mut pending = self.pending_autostops.lock().await;
-                    if !pending.contains_key(&daemon.id) {
-                        info!(
-                            "scheduling autostop for {} in {:?}",
-                            daemon.id, autostop_delay
-                        );
-                        pending.insert(daemon.id.clone(), stop_at);
+            if let Some(daemon_dir) = daemon.dir.as_ref() {
+                let starts = daemon_dir.starts_with(dir);
+                let still_active = active_dirs.iter().any(|d| d.starts_with(daemon_dir));
+                debug!(
+                    "leave_dir daemon={} daemon_dir={daemon_dir:?} starts_with_left={starts} still_active={still_active}",
+                    daemon.id
+                );
+                if starts && !still_active {
+                    if autostop_delay.is_zero() {
+                        // No delay configured, stop immediately
+                        info!("autostopping {daemon}");
+                        self.stop(&daemon.id).await?;
+                        self.add_notification(Info, format!("autostopped {daemon}"))
+                            .await;
+                    } else {
+                        // Schedule autostop with delay
+                        let stop_at = time::Instant::now() + autostop_delay;
+                        let mut pending = self.pending_autostops.lock().await;
+                        if !pending.contains_key(&daemon.id) {
+                            info!(
+                                "scheduling autostop for {} in {:?}",
+                                daemon.id, autostop_delay
+                            );
+                            pending.insert(daemon.id.clone(), stop_at);
+                        }
                     }
                 }
             }
@@ -107,12 +112,19 @@ impl Supervisor {
                 && daemon.autostop
                 && daemon.status.is_running()
             {
-                // Verify no shell is in the daemon's directory
-                let shell_dirs = self.get_dirs_with_shell_pids().await;
-                let shell_dirs = shell_dirs.keys().collect::<Vec<_>>();
-                if let Some(daemon_dir) = daemon.dir.as_ref()
-                    && !shell_dirs.iter().any(|d| d.starts_with(daemon_dir))
-                {
+                // Verify no active directory is in the daemon's directory
+                let active_dirs = self.get_active_directories().await;
+                if let Some(daemon_dir) = daemon.dir.as_ref() {
+                    let still_active = active_dirs.iter().any(|d| d.starts_with(daemon_dir));
+                    debug!(
+                        "process_pending_autostops daemon={daemon_id} daemon_dir={daemon_dir:?} active_dirs={active_dirs:?} still_active={still_active}"
+                    );
+                    if still_active {
+                        debug!(
+                            "process_pending_autostops: daemon={daemon_id} still has active directory, skipping"
+                        );
+                        continue;
+                    }
                     info!("autostopping {daemon_id} (after delay)");
                     self.stop(&daemon_id).await?;
                     self.add_notification(Info, format!("autostopped {daemon_id}"))
