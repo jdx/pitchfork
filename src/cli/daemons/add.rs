@@ -136,7 +136,7 @@ pub struct Add {
 
 impl Add {
     pub async fn run(&self) -> Result<()> {
-        let config_path = resolve_config_path(self.global, self.local, self.project).await?;
+        let config_path = resolve_config_path(self.global, self.local, self.project, false).await?;
 
         let mut pt = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
             let config_path_clone = config_path.clone();

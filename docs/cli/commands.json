@@ -694,7 +694,7 @@
               "daemons",
               "remove"
             ],
-            "usage": "daemons remove [--local] [--project] <ID>",
+            "usage": "daemons remove [FLAGS] <ID>",
             "subcommands": {},
             "args": [
               {
@@ -731,11 +731,23 @@
                 ],
                 "hide": false,
                 "global": false
+              },
+              {
+                "name": "global",
+                "usage": "--global",
+                "help": "Remove from the user-level global config (~/.config/pitchfork/config.toml)",
+                "help_first_line": "Remove from the user-level global config (~/.config/pitchfork/config.toml)",
+                "short": [],
+                "long": [
+                  "global"
+                ],
+                "hide": false,
+                "global": false
               }
             ],
             "mounts": [],
             "hide": false,
-            "help": "Remove a daemon from pitchfork.toml",
+            "help": "Remove a daemon from a pitchfork config file",
             "name": "remove",
             "aliases": [
               "rm"

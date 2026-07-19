@@ -15,4 +15,4 @@ Output in JSON format
 ## Subcommands
 
 - [`pitchfork daemons add [FLAGS] <ID> [ARGS]…`](/cli/daemons/add.md)
-- [`pitchfork daemons remove [--local] [--project] <ID>`](/cli/daemons/remove.md)
+- [`pitchfork daemons remove [FLAGS] <ID>`](/cli/daemons/remove.md)

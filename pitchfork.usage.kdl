@@ -105,10 +105,11 @@ cmd daemons help="List configured daemons from all merged config files." {
         arg <ID> help="ID of the daemon to add (e.g., \"api\" or \"namespace/api\")"
         arg "[ARGS]…" help="Arguments to pass to the daemon (alternative to --run)" required=#false double_dash=automatic var=#true
     }
-    cmd remove help="Remove a daemon from pitchfork.toml" {
+    cmd remove help="Remove a daemon from a pitchfork config file" {
         alias rm
         flag --local help="Remove from pitchfork.local.toml instead of pitchfork.toml"
         flag --project help="Remove from pitchfork.toml explicitly (default if no flag specified)"
+        flag --global help="Remove from the user-level global config (~/.config/pitchfork/config.toml)"
         arg <ID> help="The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")"
     }
 }
