@@ -1,12 +1,10 @@
 use crate::Result;
-use crate::cli::daemons::resolve_project_config_path;
+use crate::cli::daemons::resolve_config_path;
 use crate::cli::json_output::{JsonSettingEntry, print_json};
-use crate::env;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::{SETTINGS_META, SettingsPartial, settings};
 use clap::Parser;
 use miette::{IntoDiagnostic, bail};
-use std::path::PathBuf;
 
 const LOG_LEVEL_VALUES: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
@@ -671,16 +669,6 @@ fn apply_proxy_value(
     }
     let _ = typ;
     Ok(())
-}
-
-async fn resolve_config_path(global: bool, local: bool, project: bool) -> Result<PathBuf> {
-    if global && (local || project) {
-        bail!("cannot combine --global with --local or --project");
-    }
-    if global {
-        return Ok(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
-    }
-    resolve_project_config_path(local, project, false).await
 }
 
 fn levenshtein_distance(a: &str, b: &str) -> usize {

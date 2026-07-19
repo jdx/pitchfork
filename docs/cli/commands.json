@@ -664,12 +664,24 @@
                 ],
                 "hide": false,
                 "global": false
+              },
+              {
+                "name": "global",
+                "usage": "--global",
+                "help": "Write to the user-level global config (~/.config/pitchfork/config.toml)",
+                "help_first_line": "Write to the user-level global config (~/.config/pitchfork/config.toml)",
+                "short": [],
+                "long": [
+                  "global"
+                ],
+                "hide": false,
+                "global": false
               }
             ],
             "mounts": [],
             "hide": false,
             "help": "Add a new daemon to pitchfork.toml",
-            "help_long": "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork daemons add api bun run server\n                                 Add daemon using positional args\n  pitchfork daemons add api --run 'npm start'\n                                 Add daemon with explicit run command\n  pitchfork daemons add api -- bun run server\n                                 Add daemon with explicit args after --\n  pitchfork daemons add api --run 'npm start' --retry 3\n                                 Add with retry policy\n  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                 Add with file watching\n  pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                 Add with auto start/stop hooks\n  pitchfork daemons add worker --run './worker' --depends api\n                                 Add with daemon dependency\n  pitchfork daemons add api --run 'npm start' --local\n                                  Add to pitchfork.local.toml instead\n  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate\n                                  Add cron daemon that triggers immediately\n",
+            "help_long": "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n  pitchfork daemons add api bun run server\n                                 Add daemon using positional args\n  pitchfork daemons add api --run 'npm start'\n                                 Add daemon with explicit run command\n  pitchfork daemons add api -- bun run server\n                                 Add daemon with explicit args after --\n  pitchfork daemons add api --run 'npm start' --retry 3\n                                 Add with retry policy\n  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                 Add with file watching\n  pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                 Add with auto start/stop hooks\n  pitchfork daemons add worker --run './worker' --depends api\n                                 Add with daemon dependency\n  pitchfork daemons add api --run 'npm start' --local\n                                  Add to pitchfork.local.toml instead\n  pitchfork daemons add api --run 'npm start' --global\n                                  Add to ~/.config/pitchfork/config.toml instead\n  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate\n                                  Add cron daemon that triggers immediately\n",
             "name": "add",
             "aliases": [
               "a"
