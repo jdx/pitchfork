@@ -165,9 +165,12 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
 
     if filtered.is_empty() {
         let msg = if app.daemons.is_empty() {
-            "No daemons running. Start one with: pitchfork start <name>"
+            format!(
+                "No daemons running. Start one with: {} start <name>",
+                crate::env::PITCHFORK_BIN.display()
+            )
         } else {
-            "No daemons match the search query"
+            "No daemons match the search query".to_string()
         };
         let paragraph = Paragraph::new(msg)
             .alignment(Alignment::Center)

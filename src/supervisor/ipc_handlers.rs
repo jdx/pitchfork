@@ -52,7 +52,8 @@ impl Supervisor {
                 if client_version != VERSION {
                     warn!(
                         "Client version {client_version} differs from supervisor version {VERSION}. \
-                            Restart the supervisor with: pitchfork supervisor start --force"
+                            Restart the supervisor with: {} supervisor start --force",
+                        crate::env::PITCHFORK_BIN.display()
                     );
                 }
                 IpcResponse::ConnectOk {

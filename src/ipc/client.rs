@@ -139,9 +139,10 @@ impl IpcClient {
                             return Err(IpcError::ConnectionFailed {
                                 attempts: connect_attempts,
                                 source: Some(err),
-                                help:
-                                    "ensure the supervisor is running with: pitchfork supervisor start"
-                                        .to_string(),
+                                help: format!(
+                                    "ensure the supervisor is running with: {} supervisor start",
+                                    env::PITCHFORK_BIN.display()
+                                ),
                             }
                             .into());
                         }
@@ -151,8 +152,10 @@ impl IpcClient {
             Err(IpcError::ConnectionFailed {
                 attempts: connect_attempts,
                 source: None,
-                help: "ensure the supervisor is running with: pitchfork supervisor start"
-                    .to_string(),
+                help: format!(
+                    "ensure the supervisor is running with: {} supervisor start",
+                    env::PITCHFORK_BIN.display()
+                ),
             }
             .into())
         })
@@ -162,7 +165,8 @@ impl IpcClient {
                 attempts: connect_attempts,
                 source: None,
                 help: format!(
-                    "connection timed out after {connect_timeout:?}; ensure the supervisor is running with: pitchfork supervisor start"
+                    "connection timed out after {connect_timeout:?}; ensure the supervisor is running with: {} supervisor start",
+                    env::PITCHFORK_BIN.display()
                 ),
             }
             .into())
@@ -196,12 +200,16 @@ impl IpcClient {
             Err(_) => {
                 return Err(IpcError::Timeout {
                     seconds: timeout.as_secs(),
+                    bin: env::PITCHFORK_BIN.to_string_lossy().to_string(),
                 }
                 .into());
             }
         }
         if bytes.is_empty() {
-            return Err(IpcError::ConnectionClosed.into());
+            return Err(IpcError::ConnectionClosed {
+                bin: env::PITCHFORK_BIN.to_string_lossy().to_string(),
+            }
+            .into());
         }
         deserialize(&bytes).wrap_err("failed to deserialize IPC response")
     }

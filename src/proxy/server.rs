@@ -1630,7 +1630,8 @@ fn bind_error_message(port: u16, err: &std::io::Error) -> String {
         format!(
             "Failed to bind proxy server to port {port}: {err}\n\
              Hint: ports below 1024 require elevated privileges. \
-             Try: sudo pitchfork supervisor start"
+             Try: sudo {} supervisor start",
+            crate::env::PITCHFORK_BIN.display()
         )
     } else {
         format!(

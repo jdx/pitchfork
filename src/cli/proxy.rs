@@ -180,7 +180,10 @@ impl ProxyStatus {
             println!("Proxy: disabled");
             println!();
             println!("Enable with:");
-            println!("  PITCHFORK_PROXY_ENABLE=true pitchfork supervisor start");
+            println!(
+                "  PITCHFORK_PROXY_ENABLE=true {} supervisor start",
+                crate::env::PITCHFORK_BIN.display()
+            );
             println!("  # or in pitchfork.toml: [settings.proxy] / enable = true");
             return Ok(());
         }

@@ -346,20 +346,20 @@ pub enum IpcError {
         code(pitchfork::ipc::timeout),
         url("https://pitchfork.jdx.dev/supervisor"),
         help(
-            "the supervisor may be unresponsive or overloaded.\nCheck supervisor status: pitchfork supervisor status\nView logs: pitchfork logs"
+            "the supervisor may be unresponsive or overloaded.\nCheck supervisor status: {bin} supervisor status\nView logs: {bin} logs"
         )
     )]
-    Timeout { seconds: u64 },
+    Timeout { seconds: u64, bin: String },
 
     #[error("IPC connection closed unexpectedly")]
     #[diagnostic(
         code(pitchfork::ipc::connection_closed),
         url("https://pitchfork.jdx.dev/supervisor"),
         help(
-            "the supervisor may have crashed or been stopped.\nRestart with: pitchfork supervisor start"
+            "the supervisor may have crashed or been stopped.\nRestart with: {bin} supervisor start"
         )
     )]
-    ConnectionClosed,
+    ConnectionClosed { bin: String },
 
     #[error("failed to read IPC response")]
     #[diagnostic(code(pitchfork::ipc::read_failed))]
@@ -525,7 +525,10 @@ mod tests {
         assert!(err.to_string().contains("failed to connect"));
         assert!(err.to_string().contains("5 attempts"));
 
-        let err = IpcError::Timeout { seconds: 30 };
+        let err = IpcError::Timeout {
+            seconds: 30,
+            bin: "pitchfork".to_string(),
+        };
         assert!(err.to_string().contains("timed out"));
         assert!(err.to_string().contains("30s"));
 

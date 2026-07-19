@@ -137,12 +137,13 @@ pub fn install_cert(cert_path: &std::path::Path) -> Result<()> {
             "CA certificate not found at {}\n\
              \n\
              The proxy CA certificate is generated automatically when the proxy\n\
-             starts with `proxy.https = true`. Start the supervisor first:\n\
+             starts with `proxy.https = true`. Start the supervisor first.\n\
              \n\
-             pitchfork supervisor start\n\
+             {} supervisor start\n\
              \n\
              Or specify a custom certificate path with --cert.",
-            cert_path.display()
+            cert_path.display(),
+            crate::env::PITCHFORK_BIN.display()
         );
     }
 

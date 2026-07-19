@@ -86,8 +86,10 @@ pub async fn list() -> Json<Vec<ApiProxyWorktreeEntry>> {
 
         let error = if !is_registered {
             Some(format!(
-                "Namespace '{}' is not registered. Run 'pitchfork supervisor namespace add {} /path/to/dir'",
-                ns_name, ns_name
+                "Namespace '{}' is not registered. Run '{} supervisor namespace add {} /path/to/dir'",
+                ns_name,
+                crate::env::PITCHFORK_BIN.display(),
+                ns_name
             ))
         } else {
             None
