@@ -328,7 +328,8 @@ EOF
 
   assert_success
   # Same parallel-bats scheduling-latency tolerance as the ready_pattern test
-  # above; 8s (10s on Windows) stays well under the daemon's trailing 10s sleep.
+  # above. The regression path (no early return → daemon exit ~11s) still
+  # exceeds the 8s (10s on Windows) bound, preserving the detection margin.
   local max_elapsed=8
   if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
     max_elapsed=10
