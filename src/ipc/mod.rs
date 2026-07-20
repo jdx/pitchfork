@@ -62,6 +62,9 @@ pub enum IpcRequest {
     /// Notify the supervisor that settings have changed.
     /// The supervisor should reload settings from config files.
     ReloadConfig,
+    /// Ask the supervisor for the URL of the web UI, if it is running.
+    /// Reflects the actual bound address, not static config.
+    GetWebUrl,
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -112,6 +115,10 @@ pub enum IpcResponse {
     MdnsSynced,
     /// Settings reloaded from config files
     ConfigReloaded,
+    /// URL of the running web UI, or `None` if the web UI is not running
+    WebUrl {
+        url: Option<String>,
+    },
     /// Failed to kill the process (still running)
     DaemonStopFailed {
         error: String,

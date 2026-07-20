@@ -123,6 +123,9 @@ impl Supervisor {
                 .into_diagnostic()?;
                 IpcResponse::ConfigReloaded
             }
+            IpcRequest::GetWebUrl => IpcResponse::WebUrl {
+                url: crate::web::url(),
+            },
         };
         // Ensure state is flushed to disk before returning the response
         // so that CLI commands reading StateFile::get() see fresh data.
