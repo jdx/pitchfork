@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>jdx/renovate-config"]
+  "extends": ["local>jdx/renovate-config"],
+  "packageRules": [
+    {
+      "description": "Hold TypeScript at <7 until vue-tsc supports the TS7 native compiler (tsgo); tracked by vuejs/language-tools#5381, expected with TS 7.1",
+      "matchPackageNames": ["typescript"],
+      "matchFileNames": ["ui/package.json"],
+      "allowedVersions": "<7"
+    }
+  ]
 }
