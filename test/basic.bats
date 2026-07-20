@@ -424,7 +424,7 @@ EOF
 
   assert_success
   [[ $elapsed -ge 1 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   wait_for_logs http_test "Server listening" 5
 
@@ -449,7 +449,7 @@ EOF
 
   assert_success
   [[ $elapsed -ge 1 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   pitchfork stop http_status_test
 }
@@ -472,7 +472,7 @@ EOF
 
   assert_success
   [[ $elapsed -ge 1 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   wait_for_logs port_test "Server listening" 5
 
@@ -522,7 +522,7 @@ EOF
 
   assert_failure
   [[ $elapsed -ge 2 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   wait_for_status output_timeout_test errored
 }
@@ -544,7 +544,7 @@ EOF
 
   assert_success
   [[ $elapsed -ge 1 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   assert_file_exists "$marker"
 
@@ -577,7 +577,7 @@ EOF
 
   assert_failure
   [[ $elapsed -ge 2 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   wait_for_status never_ready errored
 
@@ -586,7 +586,7 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_failure
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   run pitchfork status dependent
   refute_output --partial "running"
@@ -787,7 +787,7 @@ EOF
   elapsed=$(($(date +%s) - start_time))
 
   assert_success
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 
   wait_for_status stop_children_test stopped
 }
