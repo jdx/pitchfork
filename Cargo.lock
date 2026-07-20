@@ -1384,9 +1384,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5584,18 +5586,22 @@ dependencies = [
 
 [[package]]
 name = "xx"
-version = "2.2.0"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c49281e5e82dafeb26c72c7bf4b1876401ff662c38c7517d84b641053863486d"
+checksum = "f8aff208388ac09afbb2bd20c3db8f7d253c9fbed7076e3618d598bb3deef2c5"
 dependencies = [
  "duct",
  "filetime",
  "fslock",
+ "getrandom 0.4.3",
  "homedir",
+ "libc",
  "log",
  "miette",
+ "rand 0.10.2",
  "regex",
- "sha2 0.10.9",
+ "sha2 0.11.0",
+ "strsim",
  "thiserror 2.0.18",
 ]
 
