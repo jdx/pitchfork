@@ -150,6 +150,14 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           SHARD_COUNT: 4
+          # Windows runners have slow, highly variable process/bash startup, which
+          # makes the timing-sensitive e2e assertions (ready-delay windows, elapsed
+          # bounds) flaky. Retry each failed test a couple of times so transient
+          # timing slips don't red the build; genuine failures still fail 3x.
+          # Consumed by _common_setup, which sets bats' BATS_TEST_RETRIES from it
+          # (bats resets BATS_TEST_RETRIES to 0 per file, so the env var alone
+          # would be ignored).
+          PITCHFORK_TEST_RETRIES: 2
         run: |
           export PATH="$PWD/target/debug:$PATH"
           tests=$(ls -1 test/*.bats | sort | awk -v t="$SHARD" -v n="$SHARD_COUNT" 'NR % n == t')
