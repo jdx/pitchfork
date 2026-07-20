@@ -58,6 +58,14 @@ _common_setup() {
   # Verbose logging for easier debugging
   export PITCHFORK_LOG=debug
 
+  # Retry flaky tests when the runner asks for it. Windows CI sets
+  # PITCHFORK_TEST_RETRIES because slow, highly variable process/bash startup
+  # there makes the timing-sensitive assertions (ready-delay windows, elapsed
+  # bounds) flaky. bats hardcodes BATS_TEST_RETRIES=0 per test file, so it must
+  # be (re)set here in setup rather than via the environment, which gets
+  # clobbered. Defaults to 0 (no retries) on Linux so real regressions surface.
+  export BATS_TEST_RETRIES="${PITCHFORK_TEST_RETRIES:-0}"
+
   # Work inside the temp dir so pitchfork.toml is discovered there
   cd "$TEST_TEMP_DIR" || return 1
 
