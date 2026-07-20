@@ -278,6 +278,17 @@ impl Supervisor {
         }
 
         self.interval_watch()?;
+
+        // Run the first cron check synchronously before starting the cron
+        // watcher and IPC server. This registers config-only cron daemons and
+        // fires any `immediate=true` triggers in the foreground, so they cannot
+        // race with a concurrent `pitchfork start` IPC. By the time the cron
+        // watcher's first tick runs, `last_cron_triggered` is already anchored
+        // and the immediate daemons are already running.
+        if let Err(e) = self.check_cron_schedules().await {
+            error!("failed to check cron schedules on startup: {e}");
+        }
+
         self.cron_watch()?;
         self.signals()?;
         self.daemon_file_watch()?;

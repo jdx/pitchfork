@@ -19,7 +19,7 @@ fn is_project_config_path(path: &Path) -> bool {
 /// Resolve the path to a project-level config file based on `--local`/`--project` flags.
 ///
 /// This is the shared logic used by `pf daemons add`, `pf daemons remove`, and
-/// `pf settings set` to determine which config file to write to.
+/// `pf settings set` to determine which project-level config file to write to.
 ///
 /// Resolution rules:
 /// - `--local`: Find or create `pitchfork.local.toml` next to the nearest `pitchfork.toml`.
@@ -104,6 +104,35 @@ pub(crate) async fn resolve_project_config_path(
         })
         .cloned()
         .unwrap_or_else(|| env::CWD.join("pitchfork.toml")))
+}
+
+/// Resolve the config file path based on `--global`/`--local`/`--project` flags.
+///
+/// This is the shared logic used by `pf daemons add`, `pf daemons remove`, and
+/// `pf settings set` to determine which config file to write to.
+///
+/// Resolution rules:
+/// - `--global`: Write to the user-level global config
+///   (`~/.config/pitchfork/config.toml`). Mutually exclusive with `--local`/`--project`.
+/// - `--local`/`--project`/default: Delegates to [`resolve_project_config_path`].
+///
+/// The `exists_filter` parameter is forwarded to [`resolve_project_config_path`]
+/// and only affects the project-level branches. `add` and `settings set` pass
+/// `false` (they may create new files); `remove` passes `true` (it only
+/// operates on existing files).
+pub(crate) async fn resolve_config_path(
+    global: bool,
+    local: bool,
+    project: bool,
+    exists_filter: bool,
+) -> Result<PathBuf> {
+    if global && (local || project) {
+        bail!("cannot combine --global with --local or --project");
+    }
+    if global {
+        return Ok(env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
+    }
+    resolve_project_config_path(local, project, exists_filter).await
 }
 
 /// List configured daemons from all merged config files.

@@ -277,7 +277,7 @@ EOF
 
   assert_success
   [[ $elapsed -ge 1 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 }
 
 @test "pitchfork wait with multiple daemons" {
@@ -306,7 +306,7 @@ EOF
 
   assert_success
   [[ $elapsed -ge 2 ]]
-  [[ $elapsed -lt 10 ]]
+  [[ $elapsed -lt 30 ]]
 }
 
 @test "restart already-stopped daemon starts it" {

@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::cli::daemons::resolve_project_config_path;
+use crate::cli::daemons::resolve_config_path;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::{
     CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
@@ -39,6 +39,8 @@ Examples:
                                  Add with daemon dependency
   pitchfork daemons add api --run 'npm start' --local
                                   Add to pitchfork.local.toml instead
+  pitchfork daemons add api --run 'npm start' --global
+                                  Add to ~/.config/pitchfork/config.toml instead
   pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
                                   Add cron daemon that triggers immediately
 "
@@ -127,11 +129,14 @@ pub struct Add {
     /// Write to pitchfork.toml explicitly (default if no flag specified)
     #[clap(long)]
     project: bool,
+    /// Write to the user-level global config (~/.config/pitchfork/config.toml)
+    #[clap(long)]
+    global: bool,
 }
 
 impl Add {
     pub async fn run(&self) -> Result<()> {
-        let config_path = resolve_project_config_path(self.local, self.project, false).await?;
+        let config_path = resolve_config_path(self.global, self.local, self.project, false).await?;
 
         let mut pt = if tokio::fs::try_exists(&config_path).await.unwrap_or(false) {
             let config_path_clone = config_path.clone();
