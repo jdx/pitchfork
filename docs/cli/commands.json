@@ -1488,6 +1488,170 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "project": {
+        "full_cmd": [
+          "project"
+        ],
+        "usage": "project <SUBCOMMAND>",
+        "subcommands": {
+          "enter": {
+            "full_cmd": [
+              "project",
+              "enter"
+            ],
+            "usage": "project enter <--pid <PID>> [--directory <DIRECTORY>]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "pid",
+                "usage": "--pid <PID>",
+                "help": "Host process PID that owns the session. Required",
+                "help_first_line": "Host process PID that owns the session. Required",
+                "short": [],
+                "long": [
+                  "pid"
+                ],
+                "required": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "PID",
+                  "usage": "<PID>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "directory",
+                "usage": "--directory <DIRECTORY>",
+                "help": "Project directory to associate with the session. Defaults to the current working directory and is canonicalized before tracking",
+                "help_first_line": "Project directory to associate with the session. Defaults to the current working directory and is canonicalized before tracking",
+                "short": [],
+                "long": [
+                  "directory"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIRECTORY",
+                  "usage": "<DIRECTORY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Enter (or replace) a project session tied to a host process",
+            "help_long": "Enter (or replace) a project session tied to a host process.\n\nThe host PID is required and is used by the supervisor to revoke the session automatically when the process dies (with a title match to guard against PID reuse).\n\nOn Windows, automatic revocation when the host process exits is not available (Git Bash PIDs are invisible to the process table); sessions must be ended with an explicit `project leave`.",
+            "name": "enter",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "leave": {
+            "full_cmd": [
+              "project",
+              "leave"
+            ],
+            "usage": "project leave <--pid <PID>> [--directory <DIRECTORY>]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "pid",
+                "usage": "--pid <PID>",
+                "help": "Host process PID that owns the session",
+                "help_first_line": "Host process PID that owns the session",
+                "short": [],
+                "long": [
+                  "pid"
+                ],
+                "required": true,
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "PID",
+                  "usage": "<PID>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "directory",
+                "usage": "--directory <DIRECTORY>",
+                "help": "Project directory the session was entered with. Defaults to the current working directory and is canonicalized before lookup. Must match the directory used at enter time",
+                "help_first_line": "Project directory the session was entered with. Defaults to the current working directory and is canonicalized before lookup. Must match the directory used at enter time",
+                "short": [],
+                "long": [
+                  "directory"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIRECTORY",
+                  "usage": "<DIRECTORY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "Leave a project session and evaluate its directory for autostop",
+            "name": "leave",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          },
+          "list": {
+            "full_cmd": [
+              "project",
+              "list"
+            ],
+            "usage": "project list [--json]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
+            "mounts": [],
+            "hide": false,
+            "help": "List tracked project sessions.",
+            "help_long": "List tracked project sessions\n\nDisplays a table of active project sessions with their host PID, directory,\nliveness status, and recorded process title.\n\nExample:\n  pitchfork project list\n  pitchfork project list --json",
+            "name": "list",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": []
+          }
+        },
+        "args": [],
+        "flags": [],
+        "mounts": [],
+        "hide": false,
+        "subcommand_required": true,
+        "help": "Project session management for IDE and workspace integrations.",
+        "name": "project",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "restart": {
         "full_cmd": [
           "restart"

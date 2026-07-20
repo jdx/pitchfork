@@ -77,6 +77,7 @@ EOF
 }
 
 @test "resource violation triggers retry" {
+  skip_on_windows "sysinfo memory sampling is unreliable on Windows CI"
   local eat_memory_script
   eat_memory_script="$(script_path eat_memory.sh)"
 

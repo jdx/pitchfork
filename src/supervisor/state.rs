@@ -22,7 +22,7 @@ use crate::pitchfork_toml::StopConfig;
 use crate::pitchfork_toml::WatchMode;
 use crate::procs::PROCS;
 use indexmap::IndexMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Options for upserting a daemon's state.
@@ -363,5 +363,120 @@ impl Supervisor {
         let mut state_file = self.state_file.lock().await;
         state_file.retain_daemons(|_id, d| d.pid.is_some());
         Ok(())
+    }
+
+    /// Return the union of active directories from shell tracking and project
+    /// sessions. These are the directories that should keep auto-stop daemons
+    /// alive.
+    pub(crate) async fn get_active_directories(&self) -> Vec<PathBuf> {
+        let state = self.state_file.lock().await;
+        let mut dirs: HashSet<PathBuf> = state.shell_dirs.values().cloned().collect();
+        for (_, dir, _) in state.iter_project_sessions() {
+            dirs.insert(dir.clone());
+        }
+        dirs.into_iter().collect()
+    }
+
+    /// Collect all project sessions as `(pid, dir, liveness_title)`. Every
+    /// project session carries a host PID in its key, so every session is a
+    /// liveness session. Used by the refresh loop to clean up stale sessions.
+    pub(crate) async fn get_liveness_sessions(&self) -> Vec<(u32, PathBuf, Option<String>)> {
+        self.state_file
+            .lock()
+            .await
+            .iter_project_sessions()
+            .into_iter()
+            .filter_map(|(pid_str, dir, session)| {
+                pid_str
+                    .parse()
+                    .ok()
+                    .map(|pid| (pid, dir.clone(), session.liveness_title.clone()))
+            })
+            .collect()
+    }
+
+    /// Build a snapshot of all project sessions with live liveness status
+    /// filled in from `PROCS`. Used to answer `GetProjectSessions` IPC
+    /// requests.
+    pub(crate) async fn get_project_sessions_info(&self) -> Vec<crate::ipc::ProjectSessionInfo> {
+        let sessions: Vec<(u32, PathBuf, Option<String>)> = self
+            .state_file
+            .lock()
+            .await
+            .iter_project_sessions()
+            .into_iter()
+            .filter_map(|(pid_str, dir, session)| {
+                pid_str
+                    .parse()
+                    .ok()
+                    .map(|pid| (pid, dir.clone(), session.liveness_title.clone()))
+            })
+            .collect();
+        let pids: Vec<u32> = sessions.iter().map(|(pid, _, _)| *pid).collect();
+        if !pids.is_empty() {
+            PROCS.refresh_pids(&pids);
+        }
+        sessions
+            .into_iter()
+            .map(
+                |(pid, directory, liveness_title)| crate::ipc::ProjectSessionInfo {
+                    pid,
+                    directory,
+                    liveness_title,
+                    alive: PROCS.is_running(pid),
+                    current_title: PROCS.title(pid),
+                },
+            )
+            .collect()
+    }
+
+    /// Atomically enter (or replace) a project session for `(pid, dir)`.
+    /// Returns the previous session, if any, so the caller can evaluate the
+    /// previous entry for autostop.
+    pub(crate) async fn enter_project_session(
+        &self,
+        pid: u32,
+        dir: PathBuf,
+    ) -> Result<Option<crate::state_file::ProjectSession>> {
+        if pid == 0 {
+            return Err(miette::miette!("invalid host PID 0"));
+        }
+        if pid > i32::MAX as u32 {
+            return Err(miette::miette!("host PID {pid} exceeds i32::MAX"));
+        }
+        PROCS.refresh_pids(&[pid]);
+        let liveness_title = PROCS.title(pid);
+        // On Unix, reject dead host PIDs up front so we don't register a
+        // session the refresh loop would immediately evict. On Windows, Git
+        // Bash `$$` is a Cygwin-internal PID invisible to sysinfo, so the
+        // liveness check is skipped and sessions rely on explicit
+        // `project leave`.
+        #[cfg(unix)]
+        if !PROCS.is_running(pid) {
+            return Err(miette::miette!("host PID {pid} is not running"));
+        }
+        let mut state_file = self.state_file.lock().await;
+        let previous = state_file.set_project_session(
+            pid,
+            dir,
+            crate::state_file::ProjectSession { liveness_title },
+        );
+        Ok(previous)
+    }
+
+    /// Atomically remove a project session for `(pid, dir)`. Returns the
+    /// directory of the removed session so the caller can evaluate it for
+    /// autostop.
+    pub(crate) async fn leave_project_session(
+        &self,
+        pid: u32,
+        dir: &std::path::Path,
+    ) -> Result<Option<PathBuf>> {
+        let mut state_file = self.state_file.lock().await;
+        if state_file.remove_project_session(pid, dir).is_some() {
+            Ok(Some(dir.to_path_buf()))
+        } else {
+            Ok(None)
+        }
     }
 }

@@ -223,6 +223,29 @@ cmd proxy subcommand_required=#true help="Manage the pitchfork reverse proxy" {
         arg <SLUG> help="The slug name to remove"
     }
 }
+cmd project subcommand_required=#true help="Project session management for IDE and workspace integrations." {
+    cmd enter help="Enter (or replace) a project session tied to a host process" {
+        long_help "Enter (or replace) a project session tied to a host process.\n\nThe host PID is required and is used by the supervisor to revoke the session automatically when the process dies (with a title match to guard against PID reuse).\n\nOn Windows, automatic revocation when the host process exits is not available (Git Bash PIDs are invisible to the process table); sessions must be ended with an explicit `project leave`."
+        flag --pid help="Host process PID that owns the session. Required" required=#true {
+            arg <PID>
+        }
+        flag --directory help="Project directory to associate with the session. Defaults to the current working directory and is canonicalized before tracking" {
+            arg <DIRECTORY>
+        }
+    }
+    cmd leave help="Leave a project session and evaluate its directory for autostop" {
+        flag --pid help="Host process PID that owns the session" required=#true {
+            arg <PID>
+        }
+        flag --directory help="Project directory the session was entered with. Defaults to the current working directory and is canonicalized before lookup. Must match the directory used at enter time" {
+            arg <DIRECTORY>
+        }
+    }
+    cmd list help="List tracked project sessions." {
+        long_help "List tracked project sessions\n\nDisplays a table of active project sessions with their host PID, directory,\nliveness status, and recorded process title.\n\nExample:\n  pitchfork project list\n  pitchfork project list --json"
+        flag --json help="Output in JSON format"
+    }
+}
 cmd restart help="Restarts a daemon (stops then starts it)" {
     long_help "Restarts a daemon (stops then starts it)\n\nEquivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n  pitchfork restart api           Restart a single daemon\n  pitchfork restart api worker    Restart multiple daemons\n  pitchfork restart --group backend Restart all daemons in the 'backend' group\n  pitchfork restart --all         Restart all running daemons\n  pitchfork restart -l            Restart all local daemons in pitchfork.toml\n  pitchfork restart -g            Restart all global daemons in config.toml\n  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
     flag --group help="Restart all daemons in the named group" {

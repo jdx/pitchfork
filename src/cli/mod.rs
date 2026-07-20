@@ -15,6 +15,7 @@ mod json_output;
 mod list;
 pub mod logs;
 mod mcp;
+mod project;
 mod proxy;
 mod restart;
 mod run;
@@ -52,6 +53,7 @@ enum Commands {
     Logs(logs::Logs),
     Mcp(mcp::Mcp),
     Proxy(proxy::Proxy),
+    Project(project::Project),
     Restart(restart::Restart),
     Run(run::Run),
     Schema(schema::Schema),
@@ -100,6 +102,7 @@ pub async fn run() -> Result<()> {
         Commands::Logs(logs) => logs.run().await,
         Commands::Mcp(mcp) => mcp.run().await,
         Commands::Proxy(proxy) => proxy.run().await,
+        Commands::Project(project) => project.run().await,
         Commands::Restart(restart) => restart.run().await,
         Commands::Run(run) => run.run().await,
         Commands::ApiSchema(api_schema) => api_schema.run().await,

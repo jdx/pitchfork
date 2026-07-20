@@ -123,6 +123,37 @@ impl Supervisor {
                 .into_diagnostic()?;
                 IpcResponse::ConfigReloaded
             }
+            IpcRequest::ProjectEnter { pid, dir } => {
+                debug!("handling project enter pid {pid} dir {}", dir.display());
+                let prev = self.enter_project_session(pid, dir.clone()).await?;
+                self.cancel_pending_autostops_for_dir(&dir).await;
+                // When re-entering (prev.is_some()), the new session keeps the
+                // directory active, so leave_dir would be a no-op. Skip it to
+                // avoid unnecessary autostop evaluation.
+                let _ = prev;
+                self.refresh().await?;
+                IpcResponse::Ok
+            }
+            IpcRequest::ProjectLeave { pid, dir } => {
+                debug!("handling project leave pid {pid} dir {}", dir.display());
+                if let Some(left_dir) = self.leave_project_session(pid, &dir).await? {
+                    debug!(
+                        "project leave removed session pid {pid}, evaluating {left_dir:?} for autostop"
+                    );
+                    self.leave_dir(&left_dir).await?;
+                } else {
+                    debug!(
+                        "project leave: session pid {pid} dir {} not found",
+                        dir.display()
+                    );
+                }
+                self.refresh().await?;
+                IpcResponse::Ok
+            }
+            IpcRequest::GetProjectSessions => {
+                let sessions = self.get_project_sessions_info().await;
+                IpcResponse::ProjectSessions(sessions)
+            }
         };
         // Ensure state is flushed to disk before returning the response
         // so that CLI commands reading StateFile::get() see fresh data.
