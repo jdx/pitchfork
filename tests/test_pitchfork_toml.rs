@@ -2428,3 +2428,94 @@ fn test_namespace_from_home_dot_config_local_is_not_global() {
         "Home .config/pitchfork.local.toml should derive namespace from home directory name"
     );
 }
+
+/// Test that top-level [env] is parsed correctly.
+#[test]
+fn test_top_level_env_parsed() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[env]
+GRAM_HOST = "localhost"
+GRAM_URL = "https://{{ daemons.api.slug }}.{{ settings.proxy.tld }}"
+
+[daemons.api]
+run = "go run ./cmd/api"
+"#;
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let env = pt.env.as_ref().expect("top-level env should be set");
+    assert_eq!(env.get("GRAM_HOST").unwrap(), "localhost");
+    assert_eq!(
+        env.get("GRAM_URL").unwrap(),
+        "https://{{ daemons.api.slug }}.{{ settings.proxy.tld }}"
+    );
+
+    Ok(())
+}
+
+/// Test that top-level [env] merges across config files (later wins).
+#[test]
+fn test_top_level_env_merges_across_files() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+
+    let base_path = temp_dir.path().join("base.toml");
+    fs::write(
+        &base_path,
+        r#"
+[env]
+GRAM_HOST = "localhost"
+GRAM_PORT = "3000"
+"#,
+    )
+    .unwrap();
+
+    let override_path = temp_dir.path().join("override.toml");
+    fs::write(
+        &override_path,
+        r#"
+[env]
+GRAM_HOST = "0.0.0.0"
+"#,
+    )
+    .unwrap();
+
+    let mut merged = pitchfork_toml::PitchforkToml::default();
+    merged.merge(pitchfork_toml::PitchforkToml::read(&base_path)?);
+    merged.merge(pitchfork_toml::PitchforkToml::read(&override_path)?);
+
+    let env = merged.env.as_ref().expect("env should be set");
+    // override wins
+    assert_eq!(env.get("GRAM_HOST").unwrap(), "0.0.0.0");
+    // base value preserved
+    assert_eq!(env.get("GRAM_PORT").unwrap(), "3000");
+
+    Ok(())
+}
+
+/// Test that top-level [env] survives a write-read round trip.
+#[test]
+fn test_top_level_env_round_trip() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let pt = pitchfork_toml::PitchforkToml::parse_str(
+        r#"
+[env]
+GRAM_HOST = "localhost"
+
+[daemons.api]
+run = "echo"
+"#,
+        &toml_path,
+    )?;
+    pt.write()?;
+
+    let reread = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let env = reread.env.as_ref().expect("env should survive round trip");
+    assert_eq!(env.get("GRAM_HOST").unwrap(), "localhost");
+
+    Ok(())
+}

@@ -27,6 +27,8 @@ Examples:
                                  Add with daemon dependency
   pitchfork daemons add api --run 'npm start' --local
                                   Add to pitchfork.local.toml instead
+  pitchfork daemons add api --run 'npm start' --global
+                                  Add to ~/.config/pitchfork/config.toml instead
   pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
                                   Add cron daemon that triggers immediately
 
@@ -145,3 +147,7 @@ Write to pitchfork.local.toml instead of pitchfork.toml
 ### `--project`
 
 Write to pitchfork.toml explicitly (default if no flag specified)
+
+### `--global`
+
+Write to the user-level global config (~/.config/pitchfork/config.toml)

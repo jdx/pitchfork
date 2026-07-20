@@ -593,6 +593,12 @@ impl Supervisor {
         // daemon (which wastes ~7.5 s of listeners::get_all() calls per port-less daemon).
         let has_port_config = opts.port.as_ref().is_some_and(|p| !p.expect.is_empty())
             || (settings().proxy.enable && is_daemon_slug_target(id));
+        // The first expected port, if configured. When the ready_port check
+        // succeeds on this exact port we can set active_port directly instead
+        // of spawning detect_and_store_active_port (which relies on
+        // listeners::get_all() + process-tree traversal and is unreliable on
+        // Windows where Git Bash PID mapping can break descendant lookups).
+        let expected_port: Option<u16> = opts.port.as_ref().and_then(|p| p.expect.first().copied());
         let daemon_pid = pid;
 
         // Prepare output readers before spawning the monitoring task.
@@ -1118,7 +1124,29 @@ impl Supervisor {
                                     output_deadline = None;
                                     if !active_port_spawned && has_port_config {
                                         active_port_spawned = true;
-                                        detect_and_store_active_port(id.clone(), daemon_pid);
+                                        // ready_port check just TCP-connected to this
+                                        // port, so it is definitely listening. If it
+                                        // matches the configured expected port, write
+                                        // active_port directly instead of spawning
+                                        // detect_and_store_active_port, which sleeps
+                                        // 500 ms then relies on listeners::get_all()
+                                        // + process-tree traversal — unreliable on
+                                        // Windows where Git Bash PID mapping can
+                                        // break descendant lookups.
+                                        if expected_port == Some(port) {
+                                            let mut state_file =
+                                                SUPERVISOR.state_file.lock().await;
+                                            if let Some(d) = state_file.daemons.get(&id)
+                                                && d.pid == Some(daemon_pid)
+                                            {
+                                                state_file.set_active_port(&id, port);
+                                            }
+                                        } else {
+                                            detect_and_store_active_port(
+                                                id.clone(),
+                                                daemon_pid,
+                                            );
+                                        }
                                     }
                                 }
                                 Err(_) => {
