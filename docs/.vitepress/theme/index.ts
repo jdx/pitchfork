@@ -1,6 +1,7 @@
 import DefaultTheme from "vitepress/theme";
 import type { Theme } from "vitepress";
-import { h, onMounted, onUnmounted } from "vue";
+import { useRoute } from "vitepress";
+import { h, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { initBanner } from "./banner";
 import EndevFooter from "./EndevFooter.vue";
 import EndevSponsors from "./EndevSponsors.vue";
@@ -18,6 +19,30 @@ export default {
     initBanner();
   },
   setup() {
+    const route = useRoute();
+    let mermaidObserver: MutationObserver | undefined;
+
+    // Mermaid 11.15+ #7759 lowercases `foreignObject` in themeCSS, making CSS
+    // rules miss. Mermaid renders asynchronously, so observe later node inserts.
+    const fixMermaidClipping = () => {
+      document
+        .querySelectorAll<SVGForeignObjectElement>(".mermaid foreignObject")
+        .forEach((fo) => {
+          fo.setAttribute("overflow", "visible");
+          const div = fo.querySelector("div");
+          if (div) div.style.overflow = "visible";
+        });
+    };
+    onMounted(() => {
+      fixMermaidClipping();
+      mermaidObserver = new MutationObserver(fixMermaidClipping);
+      mermaidObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+    });
+    watch(() => route.path, () => nextTick(fixMermaidClipping));
+
     let observer: MutationObserver | undefined;
     onMounted(() => {
       const addStarCount = () => {
@@ -57,6 +82,9 @@ export default {
         subtree: true,
       });
     });
-    onUnmounted(() => observer?.disconnect());
+    onUnmounted(() => {
+      observer?.disconnect();
+      mermaidObserver?.disconnect();
+    });
   },
 } satisfies Theme;
