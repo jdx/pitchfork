@@ -209,6 +209,19 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
     }));
     let header = Row::new(header_cells).height(1);
 
+    // If every visible daemon shares one namespace, hoist it into the panel
+    // title and render bare daemon names in each row. The namespace is then
+    // identical on every row (e.g. all daemons in a single project/worktree),
+    // so repeating it per row only wastes the Name column's width and, on
+    // narrow terminals, pushes the distinguishing daemon name out of view.
+    let shared_namespace: Option<&str> = {
+        let mut namespaces = filtered.iter().map(|d| d.id.namespace());
+        match namespaces.next() {
+            Some(first) if namespaces.all(|ns| ns == first) => Some(first),
+            _ => None,
+        }
+    };
+
     let rows = filtered.iter().enumerate().map(|(i, daemon)| {
         let cursor_here = i == app.selected;
         let is_multi_selected = app.is_selected(&daemon.id);
@@ -225,25 +238,20 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::White)
         };
 
-        // Create styled name with dim namespace
-        let name_line: Line = if disabled {
-            // For disabled daemons, show full name with suffix
-            let ns_style = name_style.add_modifier(Modifier::DIM);
-            Line::from(vec![
-                Span::styled(daemon.id.namespace(), ns_style),
-                Span::styled("/", ns_style),
-                Span::styled(daemon.id.name(), name_style),
-                Span::styled(" (disabled)", name_style),
-            ])
-        } else {
-            // Normal case: dim namespace, normal name
-            let ns_style = name_style.add_modifier(Modifier::DIM);
-            Line::from(vec![
-                Span::styled(daemon.id.namespace(), ns_style),
-                Span::styled("/", ns_style),
-                Span::styled(daemon.id.name(), name_style),
-            ])
-        };
+        // Styled name: dim `namespace/` prefix, then the daemon name. When the
+        // namespace is shared across all rows it's shown in the panel title
+        // instead, so drop the per-row prefix and lead with the daemon name.
+        let ns_style = name_style.add_modifier(Modifier::DIM);
+        let mut name_spans = Vec::new();
+        if shared_namespace.is_none() {
+            name_spans.push(Span::styled(daemon.id.namespace(), ns_style));
+            name_spans.push(Span::styled("/", ns_style));
+        }
+        name_spans.push(Span::styled(daemon.id.name(), name_style));
+        if disabled {
+            name_spans.push(Span::styled(" (disabled)", name_style));
+        }
+        let name_line = Line::from(name_spans);
 
         let pid = daemon
             .pid
@@ -331,13 +339,17 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let selection_count = app.multi_select.len();
-    let title = if selection_count > 0 {
+    let mut title = if selection_count > 0 {
         format!(" Daemons ({selection_count} selected) ")
     } else if !app.search_query.is_empty() {
         format!(" Daemons ({} of {}) ", filtered.len(), app.daemons.len())
     } else {
         " Daemons ".to_string()
     };
+    // Rows drop their namespace prefix when it's shared; surface it once here.
+    if let Some(ns) = shared_namespace {
+        title = format!("{} — {ns} ", title.trim_end());
+    }
 
     let table = Table::new(rows, widths).header(header).block(
         Block::default()
