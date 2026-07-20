@@ -1537,8 +1537,8 @@ async fn try_auto_start_inner(
         }
     };
 
-    let daemon_config = match pt.daemons.get(daemon_id) {
-        Some(cfg) => cfg,
+    let mut daemon_config = match pt.daemons.get(daemon_id) {
+        Some(cfg) => cfg.clone(),
         None => {
             log::debug!(
                 "Auto-start: daemon {daemon_id} not found in config at {}",
@@ -1548,12 +1548,18 @@ async fn try_auto_start_inner(
         }
     };
 
+    // Render Tera templates and merge top-level env (per-daemon wins).
+    if let Err(e) = crate::ipc::batch::render_daemon_config(daemon_id, &mut daemon_config, &pt) {
+        log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
+        return ResolveResult::Error(format!("Failed to render templates: {e}"));
+    }
+
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
         ..crate::ipc::batch::StartOptions::default()
     };
     let mut run_opts =
-        match crate::ipc::batch::build_run_options(daemon_id, daemon_config, Some(&opts)) {
+        match crate::ipc::batch::build_run_options(daemon_id, &daemon_config, Some(&opts)) {
             Ok(o) => o,
             Err(e) => {
                 log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");

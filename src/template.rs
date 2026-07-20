@@ -44,6 +44,11 @@ impl DaemonTemplateState {
 pub struct TemplateContext {
     self_state: DaemonTemplateState,
     daemon_states: HashMap<String, DaemonTemplateState>,
+    /// Rendered environment variables for the current daemon, exposed as `env`
+    /// in templates (e.g. `{{ env.GRAM_HOST }}`). Set via [`set_env`] after env
+    /// values have been rendered, so it is `None` during env-value rendering
+    /// itself (preventing self-reference cycles).
+    env: Option<IndexMap<String, String>>,
 }
 
 impl TemplateContext {
@@ -109,7 +114,16 @@ impl TemplateContext {
         Self {
             self_state,
             daemon_states,
+            env: None,
         }
+    }
+
+    /// Set the rendered environment variables to expose as `env` in templates.
+    ///
+    /// Call this **after** rendering env values so that other fields (`run`,
+    /// `hooks`, `ready_*`) can reference `{{ env.X }}` with the final value.
+    pub fn set_env(&mut self, env: IndexMap<String, String>) {
+        self.env = Some(env);
     }
 
     /// Convert this context into a Tera Context for rendering.
@@ -152,6 +166,15 @@ impl TemplateContext {
         let proxy_url = build_proxy_url(self.self_state.slug.as_deref(), &s);
         ctx.insert("proxy_url", &proxy_url);
 
+        // Rendered env for this daemon (set via set_env after env rendering)
+        if let Some(ref env) = self.env {
+            let map: serde_json::Map<String, serde_json::Value> = env
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
+            ctx.insert("env", &serde_json::Value::Object(map));
+        }
+
         ctx
     }
 }
@@ -190,6 +213,52 @@ fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<
 }
 
 // ---------------------------------------------------------------------------
+// Env merge + render helpers
+// ---------------------------------------------------------------------------
+
+/// Merge top-level env with per-daemon env. Per-daemon values win on conflicts.
+pub(crate) fn merge_env(
+    top: Option<&IndexMap<String, String>>,
+    daemon: Option<&IndexMap<String, String>>,
+) -> Option<IndexMap<String, String>> {
+    match (top, daemon) {
+        (None, None) => None,
+        (Some(t), None) => Some(t.clone()),
+        (None, Some(d)) => Some(d.clone()),
+        (Some(t), Some(d)) => {
+            let mut merged = t.clone();
+            for (k, v) in d {
+                merged.insert(k.clone(), v.clone());
+            }
+            Some(merged)
+        }
+    }
+}
+
+/// Merge top-level and per-daemon env, render template values, and return the
+/// rendered env. Used by hook rendering where the daemon config is not mutated.
+///
+/// Env values are rendered with a context that does **not** include `env`
+/// itself, preventing self-reference cycles. Callers that want `{{ env.X }}`
+/// available in subsequent rendering should set the result on the context via
+/// [`TemplateContext::set_env`].
+pub fn render_env(
+    top_env: Option<&IndexMap<String, String>>,
+    daemon_env: Option<&IndexMap<String, String>>,
+    context: &TemplateContext,
+) -> Result<Option<IndexMap<String, String>>, RenderError> {
+    let Some(merged) = merge_env(top_env, daemon_env) else {
+        return Ok(None);
+    };
+    let mut renderer = TemplateRenderer::new(context);
+    let rendered: IndexMap<String, String> = merged
+        .iter()
+        .map(|(k, v)| Ok((k.clone(), renderer.render(v)?)))
+        .collect::<Result<_, _>>()?;
+    Ok(Some(rendered))
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
@@ -203,25 +272,37 @@ pub fn render_template(template: &str, context: &TemplateContext) -> Result<Stri
 
 /// Render all template-enabled fields of a daemon config.
 ///
+/// Top-level `env` (from `[env]` in pitchfork.toml) is merged into the daemon's
+/// own `env` as defaults — per-daemon values win on key conflicts. Env values
+/// are rendered first (with a context that excludes `env` itself, preventing
+/// self-reference cycles), then the rendered env is exposed as `{{ env.X }}`
+/// for the remaining fields (`run`, `hooks`, `ready_*`).
+///
 /// Modifies the config in place. Returns the first error encountered from
 /// non-hook fields (`run`, `env`, `ready_*`). Hook template errors are
 /// logged as warnings and the hook is set to `None` — hooks are re-rendered
 /// at fire time via `fire_hook`, so pre-rendered hook strings are unused.
 pub fn render_daemon_templates(
     config: &mut PitchforkTomlDaemon,
-    context: &TemplateContext,
+    context: &mut TemplateContext,
+    top_env: Option<&IndexMap<String, String>>,
 ) -> Result<(), RenderError> {
+    // Phase 1: merge top-level env into the daemon's env (per-daemon wins) and
+    // render env values. `env` is NOT yet in the context, so env values cannot
+    // reference {{ env.* }} (preventing cycles). render_env builds its own
+    // short-lived renderer without env in scope.
+    let rendered_env = render_env(top_env, config.env.as_ref(), context)?;
+    config.env = rendered_env;
+
+    // Phase 2: expose the rendered env on the context as the authoritative
+    // state, so to_tera_context() (used by TemplateRenderer::new) includes it.
+    if let Some(ref env) = config.env {
+        context.set_env(env.clone());
+    }
+
     let mut renderer = TemplateRenderer::new(context);
 
     config.run = renderer.render(&config.run)?;
-
-    if let Some(ref env) = config.env {
-        let rendered: IndexMap<String, String> = env
-            .iter()
-            .map(|(k, v)| Ok((k.clone(), renderer.render(v)?)))
-            .collect::<Result<_, RenderError>>()?;
-        config.env = Some(rendered);
-    }
 
     if let Some(ref hooks) = config.hooks {
         let rendered = crate::config_types::PitchforkTomlHooks {
@@ -531,18 +612,18 @@ mod tests {
 
     #[test]
     fn test_render_daemon_templates_run() {
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "redis-cli -p {{ daemons.redis.port }}".to_string(),
             ..Default::default()
         };
-        render_daemon_templates(&mut config, &ctx).unwrap();
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         assert_eq!(config.run, "redis-cli -p 6379");
     }
 
     #[test]
     fn test_render_daemon_templates_env() {
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             env: Some(IndexMap::from([
@@ -554,15 +635,70 @@ mod tests {
             ])),
             ..Default::default()
         };
-        render_daemon_templates(&mut config, &ctx).unwrap();
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         let env = config.env.unwrap();
         assert_eq!(env["DATABASE_URL"], "redis://localhost:6379/0");
         assert_eq!(env["STATIC_VAR"], "unchanged");
     }
 
     #[test]
+    fn test_top_level_env_merged_as_defaults() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let top_env = IndexMap::from([
+            ("GRAM_HOST".to_string(), "localhost".to_string()),
+            (
+                "GRAM_URL".to_string(),
+                "redis://{{ daemons.redis.port }}".to_string(),
+            ),
+        ]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            env: Some(IndexMap::from([(
+                "GRAM_HOST".to_string(),
+                "0.0.0.0".to_string(),
+            )])),
+            ..Default::default()
+        };
+        render_daemon_templates(&mut config, &mut ctx, Some(&top_env)).unwrap();
+        let env = config.env.unwrap();
+        // per-daemon wins
+        assert_eq!(env["GRAM_HOST"], "0.0.0.0");
+        // top-level default with template rendered
+        assert_eq!(env["GRAM_URL"], "redis://6379");
+    }
+
+    #[test]
+    fn test_env_exposed_in_context_for_other_fields() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let top_env = IndexMap::from([("GRAM_HOST".to_string(), "localhost".to_string())]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo {{ env.GRAM_HOST }}".to_string(),
+            ..Default::default()
+        };
+        render_daemon_templates(&mut config, &mut ctx, Some(&top_env)).unwrap();
+        assert_eq!(config.run, "echo localhost");
+    }
+
+    #[test]
+    fn test_env_values_cannot_self_reference() {
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let top_env = IndexMap::from([
+            ("A".to_string(), "value-a".to_string()),
+            // env is not available while env values are rendered
+            ("B".to_string(), "{{ env.A }}".to_string()),
+        ]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            ..Default::default()
+        };
+        // Rendering env.B references {{ env.A }} which is undefined during
+        // env-value rendering -> error propagates.
+        assert!(render_daemon_templates(&mut config, &mut ctx, Some(&top_env)).is_err());
+    }
+
+    #[test]
     fn test_render_daemon_templates_on_output_run() {
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             hooks: Some(crate::config_types::PitchforkTomlHooks {
@@ -581,7 +717,7 @@ mod tests {
             ..Default::default()
         };
 
-        render_daemon_templates(&mut config, &ctx).unwrap();
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
 
         let hooks = config.hooks.unwrap();
         let on_output = hooks.on_output.unwrap();
@@ -593,7 +729,7 @@ mod tests {
     fn test_render_daemon_templates_ready_fields() {
         use crate::config_types::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
 
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             ready_cmd: Some(ReadyCmd::new("redis-cli -p {{ daemons.redis.port }} ping")),
@@ -607,7 +743,7 @@ mod tests {
             ..Default::default()
         };
 
-        render_daemon_templates(&mut config, &ctx).unwrap();
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
 
         assert_eq!(
             config.ready_cmd.as_ref().unwrap().run,
@@ -627,14 +763,14 @@ mod tests {
     fn test_render_daemon_templates_ready_port_invalid() {
         use crate::config_types::ReadyPort;
 
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             ready_port: Some(ReadyPort::from_template("{{ name }}")),
             ..Default::default()
         };
 
-        let err = render_daemon_templates(&mut config, &ctx).unwrap_err();
+        let err = render_daemon_templates(&mut config, &mut ctx, None).unwrap_err();
         assert!(matches!(err, RenderError::InvalidPort { .. }));
     }
 
@@ -642,20 +778,20 @@ mod tests {
     fn test_render_daemon_templates_ready_port_literal_untouched() {
         use crate::config_types::ReadyPort;
 
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             ready_port: Some(ReadyPort::new(8080)),
             ..Default::default()
         };
 
-        render_daemon_templates(&mut config, &ctx).unwrap();
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         assert_eq!(config.ready_port, Some(ReadyPort::new(8080)));
     }
 
     #[test]
     fn test_render_daemon_templates_hook_error_does_not_fail() {
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "echo".to_string(),
             hooks: Some(crate::config_types::PitchforkTomlHooks {
@@ -670,20 +806,20 @@ mod tests {
         };
 
         // Hook template errors are silently converted to None — daemon still starts
-        render_daemon_templates(&mut config, &ctx).unwrap();
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         let hooks = config.hooks.unwrap();
         assert!(hooks.on_ready.is_none());
     }
 
     #[test]
     fn test_render_daemon_templates_run_error_still_fails() {
-        let ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
         let mut config = PitchforkTomlDaemon {
             run: "{{ nonexistent }}".to_string(),
             ..Default::default()
         };
 
         // Non-hook template errors still propagate as Err
-        assert!(render_daemon_templates(&mut config, &ctx).is_err());
+        assert!(render_daemon_templates(&mut config, &mut ctx, None).is_err());
     }
 }
