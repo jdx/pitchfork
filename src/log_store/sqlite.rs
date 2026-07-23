@@ -626,6 +626,12 @@ impl SqliteLogStore {
                     ));
                     query_params.push(Box::new(value.clone()));
                 }
+                FieldFilter::LoggerContains(pattern) => {
+                    let param_index = query_params.len() + 1;
+                    conditions.push(format!("logger LIKE ?{param_index} ESCAPE '\\'"));
+                    let escaped = crate::log_store::escape_like_pattern(pattern);
+                    query_params.push(Box::new(format!("%{escaped}%")));
+                }
             }
         }
 
@@ -786,6 +792,51 @@ impl SqliteLogStore {
             entries.push(row.into_diagnostic()?);
         }
         Ok(entries)
+    }
+
+    /// Return distinct non-null logger values for a daemon, sorted alphabetically.
+    pub fn distinct_loggers(&self, daemon_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT logger FROM log_entries \
+                 WHERE daemon_id = ?1 AND logger IS NOT NULL \
+                 ORDER BY logger",
+            )
+            .into_diagnostic()?;
+        let rows = stmt
+            .query_map(params![daemon_id], |row| row.get::<_, String>(0))
+            .into_diagnostic()?;
+        let mut loggers = Vec::new();
+        for row in rows {
+            loggers.push(row.into_diagnostic()?);
+        }
+        Ok(loggers)
+    }
+
+    /// Return distinct keys from the `fields_json` column for a daemon.
+    ///
+    /// Uses `json_each` to extract all object keys across all structured log
+    /// entries, returning a sorted unique list. Useful for jq autocomplete.
+    pub fn distinct_field_keys(&self, daemon_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT je.key \
+                 FROM log_entries, json_each(fields_json) AS je \
+                 WHERE log_entries.daemon_id = ?1 \
+                   AND log_entries.fields_json IS NOT NULL \
+                 ORDER BY je.key",
+            )
+            .into_diagnostic()?;
+        let rows = stmt
+            .query_map(params![daemon_id], |row| row.get::<_, String>(0))
+            .into_diagnostic()?;
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row.into_diagnostic()?);
+        }
+        Ok(keys)
     }
 }
 

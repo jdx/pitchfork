@@ -1,6 +1,6 @@
 import { ref, shallowRef, watchEffect, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
-import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree } from '@/types/api'
+import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree, StructuredLogEntry } from '@/types/api'
 
 const API_BASE = (() => {
   const base = (window as any).__PITCHFORK_BASE__ as string | undefined
@@ -184,8 +184,20 @@ export function useDaemonActions() {
   return { start, stop, restart, enable, disable, acting }
 }
 
-export function useLogStream(id: Ref<string>) {
-  const lines = ref<string[]>([])
+export interface LogStreamFilters {
+  since?: string
+  until?: string
+  level?: string
+  grep?: string
+  regex?: string
+  logger?: string
+  jq?: string
+  caseSensitive?: boolean
+  lines?: number
+}
+
+export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = ref({})) {
+  const lines = ref<StructuredLogEntry[]>([])
   const error = ref<string | null>(null)
   const connected = ref(false)
   let abort: AbortController | null = null
@@ -203,9 +215,23 @@ export function useLogStream(id: Ref<string>) {
     const currentAbort = new AbortController()
     abort = currentAbort
 
+    const params = new URLSearchParams()
+    const f = filters.value
+    if (f.level) params.set('level', f.level)
+    if (f.logger) params.set('logger', f.logger)
+    if (f.grep) params.set('grep', f.grep)
+    if (f.regex) params.set('regex', f.regex)
+    if (f.since) params.set('since', f.since)
+    if (f.until) params.set('until', f.until)
+    if (f.caseSensitive) params.set('case_sensitive', 'true')
+    if (f.jq) params.set('jq', f.jq)
+    if (f.lines !== undefined) params.set('lines', String(f.lines))
+    const query = params.toString()
+
     try {
+      const url = `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail${query ? `?${query}` : ''}`
       const res = await fetch(
-        `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail`,
+        url,
         { signal: currentAbort.signal, headers: getAuthHeaders() },
       )
       if (currentAbort.signal.aborted) return
@@ -226,12 +252,26 @@ export function useLogStream(id: Ref<string>) {
         buf += decoder.decode(value, { stream: true })
         const parts = buf.split('\n')
         buf = parts.pop() ?? ''
-        lines.value.push(...parts)
+        const entries: StructuredLogEntry[] = []
+        for (const part of parts) {
+          try {
+            const parsed = JSON.parse(part) as StructuredLogEntry
+            entries.push(parsed)
+          } catch {
+            entries.push({ timestamp: '', daemon_id: '', message: part })
+          }
+        }
+        lines.value.push(...entries)
         trimLines()
       }
 
       if (buf && !currentAbort.signal.aborted) {
-        lines.value.push(buf)
+        try {
+          const parsed = JSON.parse(buf) as StructuredLogEntry
+          lines.value.push(parsed)
+        } catch {
+          lines.value.push({ timestamp: '', daemon_id: '', message: buf })
+        }
         trimLines()
       }
     } catch (e: any) {

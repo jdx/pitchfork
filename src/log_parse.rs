@@ -165,6 +165,14 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
             i += 1;
             continue;
         }
+        // Reject keys that aren't valid logfmt identifiers. Real logfmt keys
+        // are alphanumeric with '_', '.', '-'. Tokens like '2026/07/23' or
+        // '22:02:39' (from Go's standard log format) are not valid keys.
+        if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-') {
+            // Skip this token — it's not a valid logfmt key.
+            i += 1;
+            continue;
+        }
 
         // Check for '='.
         if i < bytes.len() && bytes[i] == b'=' {
@@ -206,6 +214,13 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
     }
     // Require at least one pair with '=' to distinguish from plain text.
     if !line.contains('=') {
+        return None;
+    }
+    // Reject lines that are mostly bare keys — they are likely plain text
+    // with a trailing key=value, not real logfmt. Require at least half the
+    // pairs to have a proper key=value (non-empty value or quoted value).
+    let proper = pairs.iter().filter(|(_, v)| !v.is_empty()).count();
+    if proper * 2 < pairs.len() {
         return None;
     }
     Some(pairs)

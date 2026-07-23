@@ -85,6 +85,8 @@ fn api_router(token: String) -> Router {
             post(routes::api::daemons::disable),
         )
         .route("/api/logs/{id}/tail", get(routes::api::logs::tail))
+        .route("/api/logs/{id}/loggers", get(routes::api::logs::loggers))
+        .route("/api/logs/{id}/field-keys", get(routes::api::logs::field_keys))
         .route("/api/namespaces", get(routes::api::namespaces::list))
         .route("/api/namespaces", post(routes::api::namespaces::register))
         .route(
