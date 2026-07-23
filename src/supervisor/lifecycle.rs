@@ -344,13 +344,11 @@ impl Supervisor {
             // the TCP readiness probe would immediately succeed and pitchfork
             // would falsely consider the daemon ready — routing proxy traffic to
             // the wrong process.
-            if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port()) {
-                if port > 0 {
-                    if let Some((pid, process)) = detect_port_conflict(port).await {
+            if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port())
+                && port > 0
+                    && let Some((pid, process)) = detect_port_conflict(port).await {
                         return Ok(IpcResponse::PortConflict { port, process, pid });
                     }
-                }
-            }
             (
                 Vec::new(),
                 opts.ready_port.as_ref().and_then(|p| p.as_port()),
@@ -1855,12 +1853,11 @@ async fn check_ports_available(
         }
 
         // Port is in use
-        if bump_offset == 0 && !auto_bump {
-            if let Some(port) = conflicting_port {
+        if bump_offset == 0 && !auto_bump
+            && let Some(port) = conflicting_port {
                 let (pid, process) = identify_port_owner(port).await;
                 return Err(PortError::InUse { port, process, pid }.into());
             }
-        }
     }
 
     // No available ports found after max attempts
@@ -1986,11 +1983,10 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
 
                 // Prefer the configured expected_port if the process is actually
                 // listening on it; otherwise fall back to the first port found.
-                if let Some(ep) = expected_port {
-                    if process_ports.contains(&ep) {
+                if let Some(ep) = expected_port
+                    && process_ports.contains(&ep) {
                         return Some(ep);
                     }
-                }
 
                 // No expected_port match — return the first port in the list.
                 // The list order reflects the order the OS reports listeners,

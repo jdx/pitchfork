@@ -603,11 +603,10 @@ impl<'de> Deserialize<'de> for ReadyPort {
                         "ready_port object must have either 'port' or 'template'",
                     ));
                 }
-                if let Some(port) = raw.port {
-                    if port == 0 {
+                if let Some(port) = raw.port
+                    && port == 0 {
                         return Err(serde::de::Error::custom("port must be between 1 and 65535"));
                     }
-                }
                 let timeout = parse_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
                 Ok(ReadyPort {
                     port: raw.port,

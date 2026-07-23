@@ -70,6 +70,16 @@ export interface DaemonLogLine {
   timestamp: string | null
 }
 
+export interface StructuredLogEntry {
+  timestamp: string
+  daemon_id: string
+  message: string
+  level?: string
+  msg?: string
+  logger?: string
+  fields?: Record<string, unknown>
+}
+
 export interface DaemonStats {
   cpu: number | null
   memory: number | null

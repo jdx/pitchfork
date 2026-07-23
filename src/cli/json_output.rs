@@ -1,3 +1,4 @@
+use crate::log_store::LogEntry;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -44,6 +45,24 @@ pub struct JsonLogEntry {
     /// not structured (plain text).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Value>,
+}
+
+impl From<LogEntry> for JsonLogEntry {
+    fn from(e: LogEntry) -> Self {
+        let fields = e
+            .fields_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+        JsonLogEntry {
+            timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
+            daemon_id: e.daemon_id,
+            message: console::strip_ansi_codes(&e.message).to_string(),
+            level: e.level,
+            msg: e.msg,
+            logger: e.logger,
+            fields,
+        }
+    }
 }
 
 #[derive(Serialize)]

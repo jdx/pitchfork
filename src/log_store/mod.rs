@@ -44,6 +44,8 @@ pub enum FieldFilter {
     LevelMin(String),
     /// Match entries where `json_extract(fields_json, '$.key') = value`.
     FieldEq { key: String, value: String },
+    /// Match entries where the `logger` column contains the substring.
+    LoggerContains(String),
 }
 
 /// Levels at or above the given threshold, ordered low→high.
