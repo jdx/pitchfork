@@ -4,12 +4,12 @@ use axum::{
 };
 use std::convert::Infallible;
 
+use crate::cli::json_output::JsonLogEntry;
 use crate::daemon::is_valid_daemon_id;
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogQuery, LogStore};
 use crate::settings::settings;
-use console;
 
 pub async fn stream_sse(
     Path(id): Path<String>,
@@ -86,7 +86,7 @@ pub async fn stream_sse(
                     after_id: Some(last_id),
                     message_filters: Vec::new(),
                     field_filters: Vec::new(),
-                    include_structured: false,
+                    include_structured: true,
                 })
             }).await {
                 Ok(Ok(e)) => e,
@@ -95,9 +95,9 @@ pub async fn stream_sse(
 
             for entry in entries {
                 last_id = entry.id;
-                let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
-                let stripped = console::strip_ansi_codes(&entry.message);
-                yield Ok(Event::default().event("message").data(format!("{ts} {stripped}")));
+                let json_entry: JsonLogEntry = entry.into();
+                let json_str = serde_json::to_string(&json_entry).unwrap_or_default();
+                yield Ok(Event::default().event("message").data(json_str));
             }
         }
     };

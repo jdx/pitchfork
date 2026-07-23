@@ -362,8 +362,8 @@ pub fn render_daemon_templates(
         config.ready_http = Some(http);
     }
 
-    if let Some(ref ready_port) = config.ready_port {
-        if let Some(ref template) = ready_port.template {
+    if let Some(ref ready_port) = config.ready_port
+        && let Some(ref template) = ready_port.template {
             let rendered = renderer.render(template)?;
             let port = rendered
                 .trim()
@@ -380,7 +380,6 @@ pub fn render_daemon_templates(
                 timeout: ready_port.timeout,
             });
         }
-    }
 
     Ok(())
 }

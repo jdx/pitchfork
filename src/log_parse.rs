@@ -236,11 +236,10 @@ fn unescape_logfmt_value(s: &str) -> String {
 /// (pino/syslog style). See `normalize_level_value` for the mapping.
 fn extract_level(obj: &Map<String, Value>) -> Option<String> {
     for key in &["level", "severity", "lvl", "PRIORITY", "@level"] {
-        if let Some(val) = obj.get(*key) {
-            if let Some(level) = normalize_level_value(val) {
+        if let Some(val) = obj.get(*key)
+            && let Some(level) = normalize_level_value(val) {
                 return Some(level);
             }
-        }
     }
     None
 }

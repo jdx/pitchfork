@@ -737,24 +737,7 @@ impl Logs {
             entries = entries.split_off(entries.len() - n);
         }
 
-        let json_entries: Vec<JsonLogEntry> = entries
-            .into_iter()
-            .map(|e| {
-                let fields = e
-                    .fields_json
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok());
-                JsonLogEntry {
-                    timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    daemon_id: e.daemon_id,
-                    message: console::strip_ansi_codes(&e.message).to_string(),
-                    level: e.level,
-                    msg: e.msg,
-                    logger: e.logger,
-                    fields,
-                }
-            })
-            .collect();
+        let json_entries: Vec<JsonLogEntry> = entries.into_iter().map(Into::into).collect();
 
         print_json(&json_entries)
     }

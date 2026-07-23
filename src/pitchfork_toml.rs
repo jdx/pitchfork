@@ -461,8 +461,8 @@ impl PitchforkToml {
         if let Some(entry) = global_slugs.get(user_id) {
             // Load the project's config from the slug's dir to find the daemon ID
             let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
-            if let Some(dir) = entry.resolve_dir() {
-                if let Ok(project_config) = Self::all_merged_from(&dir) {
+            if let Some(dir) = entry.resolve_dir()
+                && let Ok(project_config) = Self::all_merged_from(&dir) {
                     // Find daemon by short name in that project
                     let matches: Vec<DaemonId> = project_config
                         .daemons
@@ -486,7 +486,6 @@ impl PitchforkToml {
                         }
                     }
                 }
-            }
         }
 
         // Look for matching qualified IDs in the config
@@ -590,8 +589,8 @@ impl PitchforkToml {
         let global_slugs = Self::read_global_slugs();
         if let Some(entry) = global_slugs.get(user_id) {
             let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
-            if let Some(dir) = entry.resolve_dir() {
-                if let Ok(project_config) = Self::all_merged_from(&dir) {
+            if let Some(dir) = entry.resolve_dir()
+                && let Ok(project_config) = Self::all_merged_from(&dir) {
                     let matches: Vec<DaemonId> = project_config
                         .daemons
                         .keys()
@@ -614,7 +613,6 @@ impl PitchforkToml {
                         }
                     }
                 }
-            }
         }
 
         // Try to find the daemon in the current namespace first
@@ -1456,8 +1454,8 @@ impl PitchforkToml {
         // If caller provided a namespace that isn't yet registered,
         // auto-register it at the directory we can resolve.
         // Falls back to CWD if the slug dir cannot be resolved.
-        if let Some(ns) = namespace {
-            if !pt.namespaces.contains_key(ns) {
+        if let Some(ns) = namespace
+            && !pt.namespaces.contains_key(ns) {
                 let dir = pt
                     .slugs
                     .get(slug)
@@ -1468,7 +1466,6 @@ impl PitchforkToml {
                         .insert(ns.to_string(), NamespaceEntry { dir: d.clone() });
                 }
             }
-        }
 
         pt.slugs.insert(
             slug.to_string(),

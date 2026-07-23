@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 use std::convert::Infallible;
 
+use crate::cli::json_output::JsonLogEntry;
 use crate::daemon_id::DaemonId;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::log_store::{LogQuery, LogStore};
@@ -44,7 +45,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 after_id: None,
                 message_filters: Vec::new(),
                 field_filters: Vec::new(),
-                include_structured: false,
+                include_structured: true,
             })
         }
     })
@@ -77,8 +78,8 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         .into_iter()
         .rev()
         .map(|e| {
-            let ts = e.timestamp.format("%Y-%m-%d %H:%M:%S");
-            format!("{ts} {msg}\n", msg = e.message)
+            let entry: JsonLogEntry = e.into();
+            serde_json::to_string(&entry).unwrap_or_default() + "\n"
         })
         .collect();
 
@@ -129,7 +130,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                     after_id: Some(last_id),
                     message_filters: Vec::new(),
                     field_filters: Vec::new(),
-                    include_structured: false,
+                    include_structured: true,
                 })
             }).await {
                 Ok(Ok(e)) => e,
@@ -138,15 +139,16 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
             for entry in entries {
                 last_id = entry.id;
-                let ts = entry.timestamp.format("%Y-%m-%d %H:%M:%S");
-                yield Ok::<Vec<u8>, Infallible>(format!("{ts} {msg}\n", msg = entry.message).into_bytes());
+                let json_entry: JsonLogEntry = entry.into();
+                let line = serde_json::to_string(&json_entry).unwrap_or_default() + "\n";
+                yield Ok::<Vec<u8>, Infallible>(line.into_bytes());
             }
         }
     };
 
     Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", "text/plain")
+        .header("content-type", "application/x-ndjson")
         .body(Body::from_stream(stream))
         .unwrap()
 }
