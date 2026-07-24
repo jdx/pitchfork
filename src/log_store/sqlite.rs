@@ -230,10 +230,10 @@ impl SqliteLogStore {
                 // individual writeln! has touched the underlying pipe yet, so
                 // without this flush the failure would be lost and the entries
                 // deleted without ever being delivered to the hook.
-                if result.is_ok() {
-                    if let Err(e) = stdin.flush() {
-                        result = Err(miette::miette!("failed to flush archive hook stdin: {e}"));
-                    }
+                if result.is_ok()
+                    && let Err(e) = stdin.flush()
+                {
+                    result = Err(miette::miette!("failed to flush archive hook stdin: {e}"));
                 }
                 result
                 // BufWriter + ChildStdin drop here, closing stdin (EOF signal).
@@ -489,13 +489,13 @@ impl SqliteLogStore {
             total_migrated += self.insert_batch(daemon_id, &entries)?;
         }
 
-        if total_migrated > 0 {
-            if let Err(e) = std::fs::remove_file(&text_path) {
-                log::warn!(
-                    "failed to remove legacy log file after migration {}: {e}",
-                    text_path.display()
-                );
-            }
+        if total_migrated > 0
+            && let Err(e) = std::fs::remove_file(&text_path)
+        {
+            log::warn!(
+                "failed to remove legacy log file after migration {}: {e}",
+                text_path.display()
+            );
         }
 
         Ok(total_migrated)
@@ -763,10 +763,10 @@ impl SqliteLogStore {
             }
         }
 
-        if let Some(limit) = opts.limit {
-            if merged.len() > limit {
-                merged.truncate(limit);
-            }
+        if let Some(limit) = opts.limit
+            && merged.len() > limit
+        {
+            merged.truncate(limit);
         }
 
         Ok(merged)
@@ -886,12 +886,13 @@ impl LogStore for SqliteLogStore {
 
     fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
         // Delegate to parallel path for large single-daemon queries.
-        if Self::should_parallelize(opts) && self.path.as_os_str() != ":memory:" {
-            if let Ok(entries) = self.query_parallel(opts) {
-                return Ok(entries);
-            }
-            // Fall back to single-threaded on parallel failure.
+        if Self::should_parallelize(opts)
+            && self.path.as_os_str() != ":memory:"
+            && let Ok(entries) = self.query_parallel(opts)
+        {
+            return Ok(entries);
         }
+        // Fall back to single-threaded on parallel failure.
 
         // Single-threaded path.
         let conn = self.conn.lock().unwrap();

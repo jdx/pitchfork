@@ -26,12 +26,11 @@ pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| {
     // actually running as root). SUDO_USER can leak into non-sudo environments
     // (e.g. inherited env, containers) and would misdirect all state paths.
     #[cfg(unix)]
-    if nix::unistd::Uid::effective().is_root() {
-        if let Ok(sudo_user) = std::env::var("SUDO_USER") {
-            if let Some(home) = home_dir_for_user(&sudo_user) {
-                return home;
-            }
-        }
+    if nix::unistd::Uid::effective().is_root()
+        && let Ok(sudo_user) = std::env::var("SUDO_USER")
+        && let Some(home) = home_dir_for_user(&sudo_user)
+    {
+        return home;
     }
     dirs::home_dir().unwrap_or_else(|| {
         eprintln!("Warning: Could not determine home directory");
