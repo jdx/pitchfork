@@ -39,10 +39,10 @@ pub struct Daemon {
     pub id: DaemonId,
     pub title: Option<String>,
     pub pid: Option<u32>,
-    /// Kernel start time of the process (seconds since epoch), recorded at
-    /// spawn. Together with `pid` this identifies the process across a
-    /// supervisor crash: a recycled PID has a different start time, so orphan
-    /// cleanup can tell a genuine orphan from an unrelated process.
+    /// High-resolution kernel start token recorded at spawn. Together with
+    /// `pid` this identifies the process across a supervisor crash: a recycled
+    /// PID has a different token, so orphan cleanup can tell a genuine orphan
+    /// from an unrelated process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub start_time: Option<u64>,
     pub shell_pid: Option<u32>,

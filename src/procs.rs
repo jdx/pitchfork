@@ -4,10 +4,18 @@ use crate::settings::settings;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::os::fd::{FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::{
+    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 /// Map from parent PID to its child PIDs.
 type ParentToChildren = HashMap<u32, Vec<u32>>;
@@ -59,19 +67,16 @@ impl Procs {
             .map(|p| p.name().to_string_lossy().to_string())
     }
 
-    /// Kernel start time of the process in seconds since the epoch.
+    /// High-resolution kernel start token for the process.
     ///
-    /// Combined with the PID this forms a stable identity for the lifetime of
-    /// a process: a recycled PID always has a different start time. Requires
-    /// the process cache to be populated for `pid` (see `refresh_pids`).
+    /// Combined with the PID this forms a stable identity for the lifetime of a
+    /// process. Unlike sysinfo's seconds-since-epoch value, this preserves the
+    /// native platform resolution so same-second PID reuse cannot compare equal.
     pub fn start_time(&self, pid: u32) -> Option<u64> {
-        self.lock_system()
-            .process(sysinfo::Pid::from_u32(pid))
-            .map(|p| p.start_time())
+        process_start_token(pid)
     }
 
-    fn refresh_and_start_time_matches(&self, pid: u32, expected: u64) -> bool {
-        self.refresh_pids(&[pid]);
+    fn start_time_matches(&self, pid: u32, expected: u64) -> bool {
         self.start_time(pid) == Some(expected)
     }
 
@@ -201,8 +206,23 @@ impl Procs {
         let pgid = pid as i32;
         let signal_name = signal_name(stop_signal);
 
+        // Holding a pidfd pins the kernel PID object, so the numeric PID/PGID
+        // cannot be recycled between identity validation and killpg.
+        #[cfg(target_os = "linux")]
+        let _pidfd_guard = if expected_start_time.is_some() {
+            match open_pidfd(pid) {
+                Ok(pidfd) => Some(pidfd),
+                Err(err) => {
+                    warn!("cannot securely identify process group {pgid}: {err}");
+                    return Ok(false);
+                }
+            }
+        } else {
+            None
+        };
+
         if let Some(expected) = expected_start_time
-            && !self.refresh_and_start_time_matches(pid, expected)
+            && !self.start_time_matches(pid, expected)
         {
             debug!("process group {pgid} leader identity changed before {signal_name}");
             return Ok(false);
@@ -297,7 +317,7 @@ impl Procs {
         expected_start_time: Option<u64>,
     ) -> Result<bool> {
         if let Some(expected) = expected_start_time
-            && !self.refresh_and_start_time_matches(pid, expected)
+            && !self.start_time_matches(pid, expected)
         {
             debug!("process {pid} identity changed before taskkill");
             return Ok(false);
@@ -647,6 +667,84 @@ impl Procs {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    // Fields after the command start at field 3 (state); starttime is field 22.
+    stat.get(command_end + 1..)?
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    info.pbi_start_tvsec
+        .checked_mul(1_000_000)?
+        .checked_add(info.pbi_start_tvusec)
+}
+
+#[cfg(windows)]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+
+    let mut creation = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut exit = creation;
+    let mut kernel = creation;
+    let mut user = creation;
+    let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return None;
+    }
+
+    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let mut system = sysinfo::System::new();
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+    system.refresh_processes(ProcessesToUpdate::Some(&[sysinfo_pid]), true);
+    system
+        .process(sysinfo_pid)
+        .map(|process| process.start_time())
+}
+
+#[cfg(target_os = "linux")]
+fn open_pidfd(pid: u32) -> std::io::Result<OwnedFd> {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessStats {
     pub cpu_percent: f32,
@@ -740,7 +838,7 @@ mod format_tests {
             .start_time(pid)
             .expect("current process should have a start time");
 
-        assert!(!procs.refresh_and_start_time_matches(pid, actual.saturating_add(1)));
+        assert!(!procs.start_time_matches(pid, actual.saturating_add(1)));
     }
 
     #[test]
