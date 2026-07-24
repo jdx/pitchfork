@@ -141,10 +141,11 @@ impl ListCmd {
             return print_json(&entries);
         }
         for (key, info) in meta.iter() {
-            if let Some(ref group) = self.group {
-                if !key.starts_with(&format!("{group}.")) && key != group {
-                    continue;
-                }
+            if let Some(ref group) = self.group
+                && !key.starts_with(&format!("{group}."))
+                && key != group
+            {
+                continue;
             }
             let default = info.default_value.unwrap_or("(none)");
             let env_hint = info.env_var.map(|e| format!(" [{e}]")).unwrap_or_default();

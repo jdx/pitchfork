@@ -537,10 +537,10 @@ impl Supervisor {
                 ticker.tick().await; // first tick is immediate
                 loop {
                     ticker.tick().await;
-                    if let Some(cancel) = monitor_cancel.as_ref() {
-                        if cancel.is_cancelled() {
-                            break;
-                        }
+                    if let Some(cancel) = monitor_cancel.as_ref()
+                        && cancel.is_cancelled()
+                    {
+                        break;
                     }
                     if let Some(new_ip) =
                         crate::proxy::lan_ip::detect_lan_ip_if_changed(last_ip).await
@@ -622,10 +622,10 @@ impl Supervisor {
                     }
                 }
                 let state = SUPERVISOR.state_file.lock().await;
-                if state.is_dirty() {
-                    if let Err(e) = state.write() {
-                        warn!("failed to flush state file: {e}");
-                    }
+                if state.is_dirty()
+                    && let Err(e) = state.write()
+                {
+                    warn!("failed to flush state file: {e}");
                 }
             }
             debug!("state flush task exiting");
@@ -634,10 +634,10 @@ impl Supervisor {
 
     pub(crate) async fn flush_state(&self) {
         let state = self.state_file.lock().await;
-        if state.is_dirty() {
-            if let Err(e) = state.write() {
-                warn!("failed to flush state file: {e}");
-            }
+        if state.is_dirty()
+            && let Err(e) = state.write()
+        {
+            warn!("failed to flush state file: {e}");
         }
     }
 
@@ -1009,10 +1009,10 @@ impl Supervisor {
         // in-memory-only changes are lost.
         {
             let state = self.state_file.lock().await;
-            if state.is_dirty() {
-                if let Err(e) = state.write() {
-                    warn!("failed to flush state file during shutdown: {e}");
-                }
+            if state.is_dirty()
+                && let Err(e) = state.write()
+            {
+                warn!("failed to flush state file during shutdown: {e}");
             }
         }
 
@@ -1182,12 +1182,11 @@ fn chown_recursive(dir: &std::path::Path, uid: u32, gid: u32, skip_proxy: bool) 
         let path = entry.path();
         if path.is_dir() {
             // Skip proxy/ at the top level of the state directory
-            if skip_proxy {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "proxy" {
-                        continue;
-                    }
-                }
+            if skip_proxy
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name == "proxy"
+            {
+                continue;
             }
             chown_recursive(&path, uid, gid, false);
         } else {
@@ -1236,13 +1235,18 @@ fn chmod_safe_subtrees(state_dir: &std::path::Path) {
 /// On startup, kill any daemon processes left behind by a previous supervisor
 /// that was terminated unexpectedly (e.g. `kill -9`).
 ///
-/// This iterates the state file for daemon entries with a recorded PID.  If the
-/// PID is still alive and the process name matches the recorded `title`, it is
-/// assumed to be an orphan from the previous supervisor session and is killed.
-/// The daemon's state is then reset to `Stopped` with no PID.
+/// This iterates the state file for daemon entries with a recorded PID. If the
+/// PID is still alive and its current identity matches the recorded start time
+/// (or the recorded title for older state files), it is assumed to be an orphan
+/// from the previous supervisor session and is killed. The daemon's state is
+/// then reset to `Stopped` with no PID. If a matching live process cannot be
+/// terminated securely, its running state is retained to prevent a duplicate
+/// instance from being started.
 ///
-/// The process-name check protects against the rare case where a PID has been
-/// recycled by an unrelated process since the state file was written.
+/// Missing or mismatched identity data fails closed so a PID recycled by an
+/// unrelated process is never killed. On Unix platforms without durable
+/// process handles, orphan termination also fails closed because the PID/PGID
+/// cannot be pinned between identity validation and signaling.
 ///
 /// This is gated by the `supervisor.cleanup_orphans` setting (default: true).
 async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
@@ -1272,75 +1276,122 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
 
+        // Refresh each candidate immediately before checking it. Processing an
+        // earlier orphan can await its stop timeout, during which this PID may
+        // exit and be recycled.
+        PROCS.refresh_pids(&[pid]);
+
         if !PROCS.is_running(pid) {
             // PID already dead — just reset its state
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
+            reset_daemon_state(supervisor, &daemon.id).await;
             continue;
         }
 
-        // Safety check: verify the process name matches what we recorded.
-        // This avoids accidentally killing an unrelated process if the PID
-        // was recycled by the kernel between state-file writes.
+        // Safety check: verify the live process really is the daemon we
+        // recorded, not an unrelated process that received a recycled PID.
+        // The kernel start time is a stable identity for the lifetime of a
+        // process; fall back to comparing the process name for state files
+        // written by older versions that didn't record start_time.
+        let current_start_time = PROCS.start_time(pid);
         let current_title = PROCS.title(pid);
-        let matches = match (&current_title, &daemon.title) {
-            (Some(current), Some(expected)) => current == expected,
-            // If we don't have a recorded title, fall back to allowing the kill
-            // (this is a degraded but functional state — the process was probably
-            // started before title tracking was added, or the state was reset).
-            _ => true,
-        };
+        let matches = process_identity_matches(
+            daemon.start_time,
+            daemon.title.as_deref(),
+            current_start_time,
+            current_title.as_deref(),
+        );
 
         if !matches {
+            if daemon.start_time.is_some() && current_start_time.is_none() {
+                warn!(
+                    "could not verify start time for live pid {pid} recorded for daemon {}; retaining running state",
+                    daemon.id,
+                );
+                continue;
+            }
             warn!(
-                "pid {pid} for daemon {} has changed name (expected '{}', found '{}'); skipping orphan cleanup",
+                "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
                 daemon.id,
-                daemon.title.as_deref().unwrap_or("?"),
-                current_title.as_deref().unwrap_or("?")
             );
-            // Still reset state so we don't track a stale PID
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
+            reset_daemon_state(supervisor, &daemon.id).await;
             continue;
         }
+
+        let Some(expected_start_time) = current_start_time else {
+            warn!(
+                "could not read start time for live pid {pid} recorded for daemon {}; retaining running state",
+                daemon.id,
+            );
+            continue;
+        };
 
         info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
 
         let stop_cfg = daemon.stop_signal.unwrap_or_default();
-        let _ = PROCS
-            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
-            .await;
-
-        let _ = supervisor
-            .upsert_daemon(
-                UpsertDaemonOpts::builder(daemon.id.clone())
-                    .set(|o| {
-                        o.pid = None;
-                        o.status = DaemonStatus::Stopped;
-                        o.active_port = None;
-                    })
-                    .build(),
+        let termination_result = PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                expected_start_time,
+                stop_cfg.signal.into(),
+                stop_cfg.timeout,
             )
             .await;
+
+        match termination_result {
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(
+                    "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
+                    daemon.id
+                );
+                continue;
+            }
+            Err(err) => {
+                warn!(
+                    "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
+                    daemon.id
+                );
+                continue;
+            }
+        }
+
+        reset_daemon_state(supervisor, &daemon.id).await;
     }
+}
+
+/// Verify that live process identity matches the persisted daemon identity.
+///
+/// A recorded start time takes precedence over the legacy title field. Missing
+/// current identity data must never authorize terminating a process.
+fn process_identity_matches(
+    recorded_start_time: Option<u64>,
+    recorded_title: Option<&str>,
+    current_start_time: Option<u64>,
+    current_title: Option<&str>,
+) -> bool {
+    match recorded_start_time {
+        Some(recorded) => current_start_time == Some(recorded),
+        None => matches!(
+            (recorded_title, current_title),
+            (Some(recorded), Some(current)) if recorded == current
+        ),
+    }
+}
+
+/// Clear a daemon's runtime state (pid, status, active port) after its
+/// process is gone or no longer ours to manage.
+async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId) {
+    let _ = supervisor
+        .upsert_daemon(
+            UpsertDaemonOpts::builder(id.clone())
+                .set(|o| {
+                    o.pid = None;
+                    o.status = DaemonStatus::Stopped;
+                    o.active_port = None;
+                })
+                .build(),
+        )
+        .await;
 }
 
 /// Recursively chmod: directories → 0o755, files → 0o644.
@@ -1363,8 +1414,51 @@ fn chmod_recursive(dir: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_remove_liveness_session;
+    use super::{process_identity_matches, should_remove_liveness_session};
     use crate::state_file::ProjectSession;
+
+    #[test]
+    fn orphan_identity_does_not_match_when_current_identity_is_missing() {
+        assert!(!process_identity_matches(
+            Some(123),
+            Some("daemon"),
+            None,
+            None,
+        ));
+        assert!(!process_identity_matches(None, Some("daemon"), None, None,));
+    }
+
+    #[test]
+    fn orphan_identity_requires_recorded_start_time_when_available() {
+        assert!(process_identity_matches(
+            Some(123),
+            Some("old-title"),
+            Some(123),
+            Some("new-title"),
+        ));
+        assert!(!process_identity_matches(
+            Some(123),
+            Some("same-title"),
+            Some(456),
+            Some("same-title"),
+        ));
+    }
+
+    #[test]
+    fn orphan_identity_falls_back_to_title_for_legacy_state() {
+        assert!(process_identity_matches(
+            None,
+            Some("daemon"),
+            Some(123),
+            Some("daemon"),
+        ));
+        assert!(!process_identity_matches(
+            None,
+            Some("daemon"),
+            Some(123),
+            Some("unrelated"),
+        ));
+    }
 
     #[test]
     fn should_not_remove_when_state_title_differs_from_snapshot() {

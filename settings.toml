@@ -757,8 +757,16 @@ description = "Kill orphaned daemon processes when supervisor starts"
 docs = """
 When enabled, the supervisor scans the state file on startup for daemon
 processes left behind by a previous supervisor instance that was killed
-unexpectedly (for example, with `kill -9`). Any matching live processes are
-terminated so the new supervisor starts with a clean slate.
+unexpectedly (for example, with `kill -9`). On supported platforms, matching
+live processes are terminated so the new supervisor starts with a clean slate.
+
+Before terminating, the recorded process identity (PID plus kernel start
+time) is verified. Linux and Windows also pin that identity with a pidfd or
+open process handle while terminating, so a recycled PID cannot target an
+unrelated process. On Unix platforms without durable process handles, cleanup
+fails closed: the live process and its running state are retained rather than
+risk signaling a recycled process group or allowing a duplicate instance to
+start.
 
 This is recommended for local development where an unclean shutdown (IDE
 restart, system crash, etc.) would otherwise leave stale processes holding

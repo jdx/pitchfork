@@ -255,19 +255,19 @@ impl Supervisor {
             // Check memory limit (RSS) — immediate kill, no grace period.
             // Memory violations are not transient: once RSS exceeds the limit
             // the process is unlikely to release it without intervention.
-            if let Some(mem_limit) = daemon.memory_limit {
-                if stats.memory_bytes > mem_limit.0 {
-                    warn!(
-                        "daemon {} (pid {}) exceeded memory limit: {} > {}, stopping",
-                        daemon.id,
-                        pid,
-                        stats.memory_display(),
-                        mem_limit,
-                    );
-                    cpu_violation_counts.remove(&daemon.id);
-                    self.stop_for_resource_violation(&daemon.id, pid).await;
-                    continue; // Don't check CPU if we're already killing
-                }
+            if let Some(mem_limit) = daemon.memory_limit
+                && stats.memory_bytes > mem_limit.0
+            {
+                warn!(
+                    "daemon {} (pid {}) exceeded memory limit: {} > {}, stopping",
+                    daemon.id,
+                    pid,
+                    stats.memory_display(),
+                    mem_limit,
+                );
+                cpu_violation_counts.remove(&daemon.id);
+                self.stop_for_resource_violation(&daemon.id, pid).await;
+                continue; // Don't check CPU if we're already killing
             }
 
             // Check CPU limit (percentage) with consecutive-sample threshold.
@@ -624,12 +624,12 @@ impl Supervisor {
                             // immediate=false (default): anchor last_cron_triggered to now
                             // so the next scheduled time is picked up, without firing now.
                             let mut state_file = self.state_file.lock().await;
-                            if state_file.set_last_cron_triggered(&id, now) {
-                                if let Err(e) = state_file.write() {
-                                    error!(
-                                        "failed to persist last_cron_triggered for daemon {id}: {e}"
-                                    );
-                                }
+                            if state_file.set_last_cron_triggered(&id, now)
+                                && let Err(e) = state_file.write()
+                            {
+                                error!(
+                                    "failed to persist last_cron_triggered for daemon {id}: {e}"
+                                );
                             }
                             continue;
                         }
@@ -651,12 +651,10 @@ impl Supervisor {
                     // re-fire the cron job immediately.
                     {
                         let mut state_file = self.state_file.lock().await;
-                        if state_file.set_last_cron_triggered(&id, now) {
-                            if let Err(e) = state_file.write() {
-                                error!(
-                                    "failed to persist last_cron_triggered for daemon {id}: {e}"
-                                );
-                            }
+                        if state_file.set_last_cron_triggered(&id, now)
+                            && let Err(e) = state_file.write()
+                        {
+                            error!("failed to persist last_cron_triggered for daemon {id}: {e}");
                         }
                     }
 

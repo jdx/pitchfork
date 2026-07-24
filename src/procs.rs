@@ -4,10 +4,18 @@ use crate::settings::settings;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::{
+    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 /// Map from parent PID to its child PIDs.
 type ParentToChildren = HashMap<u32, Vec<u32>>;
@@ -57,6 +65,20 @@ impl Procs {
         self.lock_system()
             .process(sysinfo::Pid::from_u32(pid))
             .map(|p| p.name().to_string_lossy().to_string())
+    }
+
+    /// High-resolution kernel start token for the process.
+    ///
+    /// Combined with the PID this forms a stable identity for the lifetime of a
+    /// process. Unlike sysinfo's seconds-since-epoch value, this preserves the
+    /// native platform resolution so same-second PID reuse cannot compare equal.
+    pub fn start_time(&self, pid: u32) -> Option<u64> {
+        process_start_token(pid)
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    fn start_time_matches(&self, pid: u32, expected: u64) -> bool {
+        self.start_time(pid) == Some(expected)
     }
 
     pub fn is_running(&self, pid: u32) -> bool {
@@ -142,7 +164,27 @@ impl Procs {
         stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
         tokio::task::spawn_blocking(move || {
-            PROCS.kill_process_group(pid, stop_signal, stop_timeout)
+            PROCS.kill_process_group(pid, stop_signal, stop_timeout, None)
+        })
+        .await
+        .into_diagnostic()?
+    }
+
+    /// Kill a process group only while its leader still has `expected_start_time`.
+    ///
+    /// Identity is refreshed inside the blocking kill operation, immediately
+    /// before signaling. Linux holds a pidfd and Windows holds an open process
+    /// handle across termination so the validated PID cannot be recycled.
+    /// Unix platforms without a durable process handle fail closed.
+    pub async fn kill_process_group_if_start_time_matches_async(
+        &self,
+        pid: u32,
+        expected_start_time: u64,
+        stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
+    ) -> Result<bool> {
+        tokio::task::spawn_blocking(move || {
+            PROCS.kill_process_group(pid, stop_signal, stop_timeout, Some(expected_start_time))
         })
         .await
         .into_diagnostic()?
@@ -162,9 +204,26 @@ impl Procs {
         pid: u32,
         stop_signal: i32,
         stop_timeout: Option<std::time::Duration>,
+        expected_start_time: Option<u64>,
     ) -> Result<bool> {
         let pgid = pid as i32;
         let signal_name = signal_name(stop_signal);
+
+        #[cfg(target_os = "linux")]
+        if let Some(expected) = expected_start_time {
+            return self.kill_process_group_with_pidfds(pid, expected, stop_signal, stop_timeout);
+        }
+
+        // A start-time check alone cannot prevent the numeric PID/PGID from
+        // being recycled before killpg. Linux closes that race with a pidfd;
+        // other Unix platforms must refuse identity-checked termination.
+        #[cfg(not(target_os = "linux"))]
+        if expected_start_time.is_some() {
+            warn!(
+                "cannot securely identify process group {pgid} on this platform; refusing to signal it"
+            );
+            return Ok(false);
+        }
 
         debug!("killing process group {pgid} with {signal_name}");
 
@@ -232,13 +291,121 @@ impl Procs {
         Ok(true)
     }
 
+    #[cfg(target_os = "linux")]
+    fn kill_process_group_with_pidfds(
+        &self,
+        pid: u32,
+        expected_start_time: u64,
+        _stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
+    ) -> Result<bool> {
+        let leader = match open_pidfd(pid) {
+            Ok(pidfd) => pidfd,
+            Err(err) => {
+                warn!("cannot securely identify process group {pid}: {err}");
+                return Ok(false);
+            }
+        };
+        if !self.start_time_matches(pid, expected_start_time) {
+            debug!("process group {pid} leader identity changed before signaling");
+            return Ok(false);
+        }
+
+        let mut members = vec![(pid, leader)];
+        if let Err(err) = stop_pidfds(&members) {
+            let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+            return Err(err);
+        }
+        if !pidfd_is_running(&members[0].1) {
+            debug!("process group {pid} leader exited before it could be frozen");
+            return Ok(false);
+        }
+
+        // Stop newly discovered members before rescanning. Once a scan adds
+        // nothing, every process capable of forking into this group is frozen,
+        // so the pinned set is complete and the PGID cannot be recycled.
+        loop {
+            let known_members = members.len();
+            let added = match extend_process_group_pidfds(pid as i32, &mut members) {
+                Ok(added) => added,
+                Err(err) => {
+                    let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+                    return Err(miette::miette!(
+                        "failed to scan pinned process group {pid}: {err}"
+                    ));
+                }
+            };
+            if added == 0 {
+                break;
+            }
+            if let Err(err) = stop_pidfds(&members[known_members..]) {
+                let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+                return Err(err);
+            }
+        }
+
+        warn!(
+            "force-terminating {} pinned orphan process(es) in group {pid}",
+            members.len()
+        );
+        if let Err(err) = signal_pidfds(&members, libc::SIGKILL, "SIGKILL") {
+            let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+            return Err(err);
+        }
+
+        let exit_timeout = stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
+        let checks = ((exit_timeout.as_millis().max(1) + 49) / 50) as usize;
+        for _ in 0..checks {
+            if members.iter().all(|(_, pidfd)| !pidfd_is_running(pidfd)) {
+                return Ok(true);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if members.iter().all(|(_, pidfd)| !pidfd_is_running(pidfd)) {
+            return Ok(true);
+        }
+
+        warn!("one or more pinned processes in orphan group {pid} remained alive after SIGKILL");
+        let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+        Ok(false)
+    }
+
     #[cfg(not(unix))]
     fn kill_process_group(
         &self,
         pid: u32,
         _stop_signal: i32,
         _stop_timeout: Option<std::time::Duration>,
+        expected_start_time: Option<u64>,
     ) -> Result<bool> {
+        // Keep the Windows process object alive through taskkill so its
+        // numeric PID cannot be recycled after identity validation.
+        #[cfg(windows)]
+        let _identity_handle = if let Some(expected) = expected_start_time {
+            let handle = match open_process_handle(pid) {
+                Ok(handle) => handle,
+                Err(err) => {
+                    warn!("cannot securely identify process {pid}: {err}");
+                    return Ok(false);
+                }
+            };
+            if process_start_token_from_handle(handle.0) != Some(expected) {
+                debug!("process {pid} identity changed before taskkill");
+                return Ok(false);
+            }
+            Some(handle)
+        } else {
+            None
+        };
+
+        #[cfg(not(windows))]
+        if let Some(expected) = expected_start_time
+            && !self.start_time_matches(pid, expected)
+        {
+            debug!("process {pid} identity changed before termination");
+            return Ok(false);
+        }
+
         self.kill(pid, 0, None)
     }
 
@@ -584,6 +751,242 @@ impl Procs {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    // Fields after the command start at field 3 (state); starttime is field 22.
+    stat.get(command_end + 1..)?
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    info.pbi_start_tvsec
+        .checked_mul(1_000_000)?
+        .checked_add(info.pbi_start_tvusec)
+}
+
+#[cfg(windows)]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let handle = open_process_handle(pid).ok()?;
+    process_start_token_from_handle(handle.0)
+}
+
+#[cfg(windows)]
+fn process_start_token_from_handle(handle: HANDLE) -> Option<u64> {
+    let mut creation = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut exit = creation;
+    let mut kernel = creation;
+    let mut user = creation;
+    let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    if ok == 0 {
+        return None;
+    }
+
+    Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+#[cfg(windows)]
+struct ProcessHandle(HANDLE);
+
+#[cfg(windows)]
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(ProcessHandle(handle))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn process_start_token(pid: u32) -> Option<u64> {
+    let mut system = sysinfo::System::new();
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+    system.refresh_processes(ProcessesToUpdate::Some(&[sysinfo_pid]), true);
+    system
+        .process(sysinfo_pid)
+        .map(|process| process.start_time())
+}
+
+#[cfg(target_os = "linux")]
+fn open_pidfd(pid: u32) -> std::io::Result<OwnedFd> {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
+#[cfg(target_os = "linux")]
+fn pidfd_is_running(pidfd: &OwnedFd) -> bool {
+    match try_pidfd_is_running(pidfd) {
+        Ok(running) => running,
+        Err(err) => {
+            warn!("failed to poll pidfd {}: {err}", pidfd.as_raw_fd());
+            true
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn try_pidfd_is_running(pidfd: &OwnedFd) -> std::io::Result<bool> {
+    let mut pollfd = libc::pollfd {
+        fd: pidfd.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let result = unsafe { libc::poll(&mut pollfd, 1, 0) };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(result == 0)
+}
+
+#[cfg(target_os = "linux")]
+fn signal_pidfds(members: &[(u32, OwnedFd)], signal: i32, signal_name: &str) -> Result<()> {
+    for (pid, pidfd) in members {
+        if !pidfd_is_running(pidfd) {
+            continue;
+        }
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                pidfd.as_raw_fd(),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if result == -1 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                continue;
+            }
+            return Err(miette::miette!(
+                "failed to send {signal_name} to pinned process {pid}: {err}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn stop_pidfds(members: &[(u32, OwnedFd)]) -> Result<()> {
+    signal_pidfds(members, libc::SIGSTOP, "SIGSTOP")?;
+    for _ in 0..200 {
+        if members.iter().all(|(pid, pidfd)| {
+            !pidfd_is_running(pidfd) || matches!(linux_process_state(*pid), Some('T' | 't'))
+        }) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    Err(miette::miette!(
+        "timed out while freezing orphan process group"
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn extend_process_group_pidfds(
+    pgid: i32,
+    members: &mut Vec<(u32, OwnedFd)>,
+) -> std::io::Result<usize> {
+    let entries = std::fs::read_dir("/proc")?;
+    let mut added = 0;
+    for entry in entries {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Some(observed_identity) = linux_process_identity(pid) else {
+            continue;
+        };
+        if observed_identity.0 != pgid {
+            continue;
+        }
+        let mut already_pinned = false;
+        for (known_pid, pidfd) in members.iter() {
+            if *known_pid == pid && try_pidfd_is_running(pidfd)? {
+                already_pinned = true;
+                break;
+            }
+        }
+        if already_pinned {
+            continue;
+        }
+
+        let pidfd = match open_pidfd(pid) {
+            Ok(pidfd) => pidfd,
+            Err(err) if err.raw_os_error() == Some(libc::ESRCH) => continue,
+            Err(err) => return Err(err),
+        };
+        if linux_process_identity(pid) != Some(observed_identity) {
+            return Err(std::io::Error::other(format!(
+                "process {pid} identity changed while pinning group {pgid}"
+            )));
+        }
+        members.push((pid, pidfd));
+        added += 1;
+    }
+    Ok(added)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_identity(pid: u32) -> Option<(i32, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    let fields: Vec<_> = stat.get(command_end + 1..)?.split_whitespace().collect();
+    // Fields after the command start at field 3. pgrp is field 5 and the
+    // scheduler-tick start token is field 22.
+    Some((fields.get(2)?.parse().ok()?, fields.get(19)?.parse().ok()?))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_state(pid: u32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    stat.get(command_end + 1..)?
+        .split_whitespace()
+        .next()?
+        .chars()
+        .next()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessStats {
     pub cpu_percent: f32,
@@ -669,6 +1072,18 @@ mod format_tests {
     use super::*;
 
     #[test]
+    fn process_start_time_check_rejects_mismatch() {
+        let procs = Procs::new();
+        let pid = std::process::id();
+        procs.refresh_pids(&[pid]);
+        let actual = procs
+            .start_time(pid)
+            .expect("current process should have a start time");
+
+        assert_ne!(procs.start_time(pid), Some(actual.saturating_add(1)));
+    }
+
+    #[test]
     fn test_format_bytes() {
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(1024), "1.0 KiB");
@@ -703,6 +1118,90 @@ mod tests {
             let _ = unsafe { libc::killpg(pid, libc::SIGKILL) };
             let _ = self.0.wait();
         }
+    }
+
+    #[tokio::test]
+    async fn orphan_identity_checked_group_kill_rejects_mismatch() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = command.spawn().expect("failed to spawn test process");
+        let pid = child.id();
+        let _child = ChildGuard(child);
+
+        PROCS.refresh_pids(&[pid]);
+        let actual_start_time = PROCS
+            .start_time(pid)
+            .expect("test process should have a start time");
+
+        let killed = PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                actual_start_time.saturating_add(1),
+                libc::SIGTERM,
+                Some(Duration::from_millis(100)),
+            )
+            .await
+            .expect("identity-checked kill should not error");
+
+        assert!(!killed);
+        assert!(PROCS.is_running(pid), "mismatched process must survive");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[tokio::test]
+    async fn orphan_identity_checked_group_kill_fails_closed_without_pidfd() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = command.spawn().expect("failed to spawn test process");
+        let pid = child.id();
+        let _child = ChildGuard(child);
+
+        PROCS.refresh_pids(&[pid]);
+        let actual_start_time = PROCS
+            .start_time(pid)
+            .expect("test process should have a start time");
+
+        let killed = PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                actual_start_time,
+                libc::SIGTERM,
+                Some(Duration::from_millis(100)),
+            )
+            .await
+            .expect("identity-checked kill should not error");
+
+        assert!(!killed);
+        assert!(
+            PROCS.is_running(pid),
+            "process must survive when identity cannot be pinned"
+        );
     }
 
     #[test]
