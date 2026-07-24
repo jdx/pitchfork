@@ -631,8 +631,14 @@ impl Supervisor {
             error!("Failed to capture stdout/stderr for daemon {id}");
         }
 
+        // Register the daemon as monitored BEFORE spawning the task so orphan
+        // reconciliation never observes a supervised daemon without a monitor
+        // entry. The guard is moved into the task and unregisters on exit.
+        let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), daemon_pid);
+
         tokio::spawn(async move {
             let id = id_clone;
+            let _monitored_guard = monitored_guard;
 
             // Merge all output sources (PTY master OR stdout+stderr) into a single channel.
             let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<String>(256);

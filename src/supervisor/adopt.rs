@@ -1,0 +1,440 @@
+//! Re-adoption of orphaned daemons
+//!
+//! When the supervisor dies uncleanly (e.g. `kill -9`), its daemon child
+//! processes survive, re-parented to init. On restart, daemons whose recorded
+//! identity (PID + kernel start time) still matches a live process can be
+//! re-adopted: their state is kept and supervision resumes.
+//!
+//! An adopted process is no longer a child of the supervisor, so `wait()`
+//! based monitoring is impossible — a poll monitor watches liveness instead,
+//! anchored to the verified start time so a recycled PID is never mistaken
+//! for the daemon. Two consequences follow, both documented in the
+//! `orphan_policy` setting:
+//!
+//! - stdout/stderr capture cannot be restored (the pipes died with the old
+//!   supervisor); log capture resumes on the daemon's next restart
+//! - exit codes cannot be observed; an adopted daemon that dies unexpectedly
+//!   is marked `Errored(-1)` ("unknown exit code"), making it eligible for
+//!   its configured retries
+
+use super::Supervisor;
+use super::hooks::{HookType, fire_hook};
+use crate::daemon::Daemon;
+use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
+use crate::procs::PROCS;
+use crate::settings::settings;
+use crate::supervisor::SUPERVISOR;
+use crate::supervisor::state::UpsertDaemonOpts;
+use std::sync::atomic;
+use std::time::Duration;
+use tokio::time;
+
+/// How often the poll monitor checks that an adopted process is still alive.
+/// Chosen to roughly match the responsiveness of `child.wait()` monitoring
+/// without adding measurable load.
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Why the poll monitor stopped watching an adopted process.
+enum PollOutcome {
+    /// The adopted process exited (or its PID was recycled, which means the
+    /// process exited unnoticed) while the daemon record still pointed at it.
+    ProcessDied,
+    /// `stop()` finished first: the record shows no PID and status `Stopped`.
+    /// State is already final, but the stop hooks still need to fire — the
+    /// regular child monitor fires them, `stop()` itself never does.
+    StoppedExternally,
+    /// Another process took over the daemon record (e.g. a restart spawned a
+    /// fresh child with its own monitor) or the record was removed. State is
+    /// the successor's to manage; touch nothing.
+    TakenOver,
+}
+
+/// RAII registration of a daemon in the supervisor's `monitored` map.
+///
+/// Created *synchronously* before the monitoring task is spawned so there is
+/// no window in which a supervised daemon looks unmonitored to the orphan
+/// reconciler. Dropped by the monitoring task when it finishes; the entry is
+/// only removed if it still refers to this guard's PID, so a monitor that
+/// outlives a restart (e.g. during the post-exit drain) cannot unregister
+/// its successor.
+pub(crate) struct MonitoredGuard {
+    id: DaemonId,
+    pid: u32,
+}
+
+impl MonitoredGuard {
+    pub(crate) fn register(id: DaemonId, pid: u32) -> Self {
+        SUPERVISOR
+            .monitored
+            .lock()
+            .expect("monitored lock poisoned")
+            .insert(id.clone(), pid);
+        Self { id, pid }
+    }
+}
+
+impl Drop for MonitoredGuard {
+    fn drop(&mut self) {
+        let mut monitored = SUPERVISOR
+            .monitored
+            .lock()
+            .expect("monitored lock poisoned");
+        if monitored.get(&self.id) == Some(&self.pid) {
+            monitored.remove(&self.id);
+        }
+    }
+}
+
+impl Supervisor {
+    /// Whether `id` currently has a live monitoring task watching `pid`.
+    pub(crate) fn is_monitored(&self, id: &DaemonId, pid: u32) -> bool {
+        self.monitored
+            .lock()
+            .expect("monitored lock poisoned")
+            .get(id)
+            == Some(&pid)
+    }
+
+    /// Interval-watcher reconciliation: find state-`running` daemons that no
+    /// live monitoring task is watching and bring state and reality back in
+    /// line. This covers windows the startup scan cannot see (e.g. a state
+    /// file restored from backup, or an orphan that appeared after startup).
+    ///
+    /// Mirrors the startup scan's fail-closed identity handling, then applies
+    /// `supervisor.orphan_policy` exactly like startup does:
+    ///
+    /// - dead PID → mark `Errored(-1)` so retry/cron/autostop logic behaves
+    /// - recycled PID → the daemon died unnoticed; mark `Errored(-1)`
+    /// - unverifiable identity → retain running state, touch nothing
+    /// - live and verified → adopt, or terminate under the `kill` policy
+    pub(crate) async fn reconcile_unmonitored_daemons(&self) {
+        if !settings().supervisor.cleanup_orphans {
+            return;
+        }
+
+        let candidates: Vec<Daemon> = {
+            let state = self.state_file.lock().await;
+            state
+                .daemons
+                .values()
+                .filter(|d| {
+                    d.id != DaemonId::pitchfork()
+                        && d.status.is_running()
+                        && d.pid.is_some_and(|pid| !self.is_monitored(&d.id, pid))
+                })
+                .cloned()
+                .collect()
+        };
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let policy = super::orphan_policy();
+
+        for daemon in candidates {
+            let Some(pid) = daemon.pid else { continue };
+            // Re-check under current state: a monitor may have registered
+            // between the snapshot and now.
+            if self.is_monitored(&daemon.id, pid) {
+                continue;
+            }
+
+            // Refresh each candidate immediately before checking it, matching
+            // the startup scan: processing an earlier candidate can await a
+            // stop timeout, during which this PID may exit and be recycled.
+            PROCS.refresh_pids(&[pid]);
+
+            if !PROCS.is_running(pid) {
+                // The monitor that would have observed this exit died with a
+                // previous supervisor; the exit status is unobservable.
+                warn!(
+                    "daemon {} (pid {pid}) died while unmonitored; marking errored",
+                    daemon.id
+                );
+                self.mark_unmonitored_death(&daemon.id).await;
+                continue;
+            }
+
+            let current_start_time = PROCS.start_time(pid);
+            let current_title = PROCS.title(pid);
+            let matches = super::process_identity_matches(
+                daemon.start_time,
+                daemon.title.as_deref(),
+                current_start_time,
+                current_title.as_deref(),
+            );
+
+            if !matches {
+                if daemon.start_time.is_some() && current_start_time.is_none() {
+                    warn!(
+                        "could not verify start time for live pid {pid} recorded for daemon {}; retaining running state",
+                        daemon.id,
+                    );
+                    continue;
+                }
+                // The PID belongs to a different process now, which means the
+                // daemon itself died unnoticed. Never touch the new process.
+                warn!(
+                    "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking errored",
+                    daemon.id,
+                );
+                self.mark_unmonitored_death(&daemon.id).await;
+                continue;
+            }
+
+            let Some(expected_start_time) = current_start_time else {
+                warn!(
+                    "could not read start time for live pid {pid} recorded for daemon {}; retaining running state",
+                    daemon.id,
+                );
+                continue;
+            };
+
+            if policy == "adopt" {
+                self.adopt_daemon(&daemon, pid, expected_start_time).await;
+                continue;
+            }
+
+            // `kill` policy applies on the interval path too — otherwise an
+            // unmonitored live daemon found at runtime would stay running
+            // unsupervised even though startup would have terminated it.
+            info!(
+                "terminating unmonitored orphaned daemon {} (pid {pid})",
+                daemon.id
+            );
+            let stop_cfg = daemon.stop_signal.unwrap_or_default();
+            match PROCS
+                .kill_process_group_if_start_time_matches_async(
+                    pid,
+                    expected_start_time,
+                    stop_cfg.signal.into(),
+                    stop_cfg.timeout,
+                )
+                .await
+            {
+                Ok(true) => {
+                    let _ = self
+                        .upsert_daemon(
+                            UpsertDaemonOpts::builder(daemon.id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = DaemonStatus::Stopped;
+                                    o.active_port = None;
+                                })
+                                .build(),
+                        )
+                        .await;
+                }
+                Ok(false) => {
+                    warn!(
+                        "could not securely terminate unmonitored orphaned daemon {} (pid {pid}); retaining running state",
+                        daemon.id
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to terminate unmonitored orphaned daemon {} (pid {pid}): {err}; retaining running state",
+                        daemon.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// Mark a daemon whose process died (or was recycled) while unmonitored.
+    /// No hooks fire — the monitor that would have observed the exit died
+    /// with a previous supervisor, mirroring the startup scan's handling.
+    async fn mark_unmonitored_death(&self, id: &DaemonId) {
+        let _ = self
+            .upsert_daemon(
+                UpsertDaemonOpts::builder(id.clone())
+                    .set(|o| {
+                        o.pid = None;
+                        o.status = DaemonStatus::Errored(-1);
+                        o.last_exit_success = Some(false);
+                        o.active_port = None;
+                    })
+                    .build(),
+            )
+            .await;
+    }
+
+    /// Resume supervision of a live orphaned daemon process whose identity
+    /// has been verified against `expected_start_time`.
+    ///
+    /// The daemon's state (status, ports, proxy routing) is kept as-is; a
+    /// poll monitor takes over for the `child.wait()` monitor that died with
+    /// the previous supervisor.
+    pub(crate) async fn adopt_daemon(&self, daemon: &Daemon, pid: u32, expected_start_time: u64) {
+        info!("re-adopting orphaned daemon {} (pid {pid})", daemon.id);
+
+        // Legacy records matched by title have no persisted start_time.
+        // Re-upsert while the process cache is fresh so the identity fields
+        // are recorded for future scans and crashes.
+        if daemon.start_time.is_none() {
+            let _ = self
+                .upsert_daemon(
+                    UpsertDaemonOpts::builder(daemon.id.clone())
+                        .set(|o| {
+                            o.pid = Some(pid);
+                            o.status = DaemonStatus::Running;
+                        })
+                        .build(),
+                )
+                .await;
+        }
+
+        let guard = MonitoredGuard::register(daemon.id.clone(), pid);
+        let id = daemon.id.clone();
+        let daemon_dir = daemon
+            .dir
+            .clone()
+            .unwrap_or_else(|| crate::env::CWD.clone());
+        let hook_env = daemon.env.clone();
+        let hook_retry = daemon.retry;
+        let hook_retry_count = daemon.retry_count;
+
+        tokio::spawn(async move {
+            let _guard = guard;
+
+            let outcome = loop {
+                time::sleep(POLL_INTERVAL).await;
+
+                let Some(current) = SUPERVISOR.get_daemon(&id).await else {
+                    break PollOutcome::TakenOver;
+                };
+
+                if current.pid == Some(pid) {
+                    // Still ours — check liveness and identity. A start time
+                    // that no longer matches means our process died and the
+                    // OS recycled its PID: treat as death, and never touch
+                    // the unrelated new process.
+                    PROCS.refresh_pids(&[pid]);
+                    if !PROCS.is_running(pid) {
+                        break PollOutcome::ProcessDied;
+                    }
+                    match PROCS.start_time(pid) {
+                        Some(current_start_time) if current_start_time != expected_start_time => {
+                            break PollOutcome::ProcessDied;
+                        }
+                        None => {
+                            // Transient identity read failure: keep watching
+                            // on liveness alone. Treating this as death could
+                            // start a duplicate next to a live process.
+                            debug!(
+                                "could not read start time for adopted daemon {id} (pid {pid}); continuing on liveness only"
+                            );
+                        }
+                        _ => {}
+                    }
+                } else if current.status.is_stopping() {
+                    // stop() in flight — wait for it to finish so the exit
+                    // path below can fire the stop hooks.
+                } else if current.pid.is_none() && current.status.is_stopped() {
+                    break PollOutcome::StoppedExternally;
+                } else {
+                    break PollOutcome::TakenOver;
+                }
+            };
+
+            if matches!(outcome, PollOutcome::TakenOver) {
+                debug!("adopted daemon {id} was taken over or removed; poll monitor exiting");
+                return;
+            }
+
+            // Mirror the child monitor's exit path, minus everything that
+            // requires the (long-gone) stdio pipes.
+            SUPERVISOR
+                .active_monitors
+                .fetch_add(1, atomic::Ordering::Release);
+            struct MonitorGuard;
+            impl Drop for MonitorGuard {
+                fn drop(&mut self) {
+                    SUPERVISOR
+                        .active_monitors
+                        .fetch_sub(1, atomic::Ordering::Release);
+                    SUPERVISOR.monitor_done.notify_waiters();
+                }
+            }
+            let _monitor_guard = MonitorGuard;
+
+            // Re-read state and verify this monitor still owns the record
+            // before mutating anything. A restart can spawn a successor
+            // between observing the death and reaching this point; its
+            // state (PID, status, active port) is not ours to touch.
+            let current = SUPERVISOR.get_daemon(&id).await;
+            let owns_pid = current.as_ref().is_some_and(|d| d.pid == Some(pid));
+            let is_stopping = current.as_ref().is_some_and(|d| d.status.is_stopping());
+            let stopped_cleared = current
+                .as_ref()
+                .is_some_and(|d| d.pid.is_none() && d.status.is_stopped());
+            if !owns_pid && !is_stopping && !stopped_cleared {
+                debug!("adopted daemon {id} has a successor; skipping exit handling");
+                return;
+            }
+
+            // Exit codes of non-child processes cannot be observed.
+            let intentional =
+                is_stopping || stopped_cleared || matches!(outcome, PollOutcome::StoppedExternally);
+            let (exit_code, exit_reason) = if intentional {
+                (-1, "stop")
+            } else {
+                (-1, "fail")
+            };
+            info!("adopted daemon {id} (pid {pid}) exited ({exit_reason}, exit status unknown)");
+
+            // Update state unless stop() already finalized it.
+            if (owns_pid || is_stopping) && !stopped_cleared {
+                {
+                    let mut state_file = SUPERVISOR.state_file.lock().await;
+                    state_file.clear_active_port(&id);
+                }
+                let new_status = match exit_reason {
+                    "stop" => DaemonStatus::Stopped,
+                    _ => DaemonStatus::Errored(exit_code),
+                };
+                let last_exit_success = exit_reason == "stop";
+                if let Err(e) = SUPERVISOR
+                    .upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = new_status;
+                                o.last_exit_success = Some(last_exit_success);
+                            })
+                            .build(),
+                    )
+                    .await
+                {
+                    error!("failed to update state for adopted daemon {id}: {e}");
+                }
+            }
+
+            let hook_extra_env = vec![
+                ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
+                ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
+            ];
+            let hooks_to_fire: Vec<HookType> = match exit_reason {
+                "stop" => vec![HookType::OnStop, HookType::OnExit],
+                // "fail": fire on_fail + on_exit only when retries are exhausted
+                _ if hook_retry_count >= hook_retry.count() => {
+                    vec![HookType::OnFail, HookType::OnExit]
+                }
+                _ => vec![],
+            };
+            for hook_type in hooks_to_fire {
+                fire_hook(
+                    hook_type,
+                    id.clone(),
+                    daemon_dir.clone(),
+                    hook_retry_count,
+                    hook_env.clone(),
+                    hook_extra_env.clone(),
+                )
+                .await;
+            }
+        });
+    }
+}
