@@ -430,31 +430,40 @@ impl Supervisor {
             };
             info!("adopted daemon {id} (pid {pid}) exited ({exit_reason}, exit status unknown)");
 
-            // Update state unless stop() already finalized it. Gated strictly
-            // on owning the PID so a successor's record is never written to.
+            // Update state unless stop() already finalized it. Ownership is
+            // re-validated inside the same state-lock critical section that
+            // performs the write, so a successor starting between the checks
+            // above and the mutation cannot have its record overwritten —
+            // its own upsert would be serialized after ours and we would see
+            // its PID here and stand down.
             if owns_pid {
-                {
-                    let mut state_file = SUPERVISOR.state_file.lock().await;
-                    state_file.clear_active_port(&id);
-                }
                 let new_status = match exit_reason {
                     "stop" => DaemonStatus::Stopped,
                     _ => DaemonStatus::Errored(exit_code),
                 };
                 let last_exit_success = exit_reason == "stop";
-                if let Err(e) = SUPERVISOR
-                    .upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = new_status;
-                                o.last_exit_success = Some(last_exit_success);
-                            })
-                            .build(),
-                    )
-                    .await
-                {
-                    error!("failed to update state for adopted daemon {id}: {e}");
+                let mut state_file = SUPERVISOR.state_file.lock().await;
+                let still_ours = SUPERVISOR.is_monitored(&id, pid)
+                    && state_file
+                        .daemons
+                        .get(&id)
+                        .is_some_and(|d| d.pid == Some(pid));
+                if !still_ours {
+                    debug!(
+                        "adopted daemon {id} was claimed by a successor; skipping exit handling"
+                    );
+                    return;
+                }
+                state_file.clear_active_port(&id);
+                if let Some(d) = state_file.daemons.get(&id) {
+                    let mut d = d.clone();
+                    d.pid = None;
+                    d.title = None;
+                    d.start_time = None;
+                    d.status = new_status;
+                    d.last_exit_success = Some(last_exit_success);
+                    d.active_port = None;
+                    state_file.insert_daemon(&id, d);
                 }
             }
 
