@@ -1445,12 +1445,25 @@ fn process_identity_matches(
 /// `last_exit_success` that cron `retrigger = "success" | "fail"` reads.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExitObservation {
-    /// Nobody saw how the run ended — the monitor that would have died with a
-    /// previous supervisor. The recorded outcome is cleared: fabricating a
-    /// result would corrupt those retrigger decisions, and keeping the
-    /// previous value is just as wrong, since it would attribute an earlier
-    /// run's outcome to this one. `None` restores the "no result yet" reading
-    /// both retriggers already handle.
+    /// Nobody saw how the run ended, because the monitor that would have
+    /// observed it died with a previous supervisor. The recorded outcome is
+    /// cleared to `None`.
+    ///
+    /// Every option here is imperfect, so this picks the one that asserts
+    /// nothing false. `Some(false)` would fabricate a failure, silently
+    /// breaking a `retrigger = "success"` chain whose run may well have
+    /// succeeded; `Some(true)` fabricates the opposite; keeping the previous
+    /// value attributes an earlier run's outcome to this one. `None` says
+    /// "unknown", reusing the reading the cron watcher already applies to a
+    /// daemon that has never run.
+    ///
+    /// The tradeoff is that `None` satisfies both `retrigger = "success"`
+    /// (`unwrap_or(true)`) and `retrigger = "fail"` (`!unwrap_or(false)`), so
+    /// such a daemon fires once at its next scheduled time regardless of which
+    /// it configured. That is schedule-gated rather than a loop, and it biases
+    /// toward running the daemon over leaving it permanently untriggered.
+    /// Distinguishing "unknown" from "never ran" would require a third cron
+    /// state and is deliberately left out of scope here.
     Unobserved,
     /// We terminated the process ourselves, so the outcome is not a mystery:
     /// it stopped because we asked it to. Recorded as a success, matching the
