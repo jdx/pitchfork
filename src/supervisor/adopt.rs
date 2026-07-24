@@ -55,31 +55,47 @@ enum PollOutcome {
     TakenOver,
 }
 
+/// Monotonic token distinguishing individual monitor registrations. PIDs are
+/// not sufficient: the OS can recycle a dead daemon's PID for its own
+/// successor, and two guards carrying the same (id, pid) pair would then be
+/// indistinguishable — the stale one could unregister the live one.
+static NEXT_MONITOR_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A registration in the supervisor's `monitored` map: which PID is being
+/// watched and by which registration (token).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MonitorEntry {
+    pub(crate) pid: u32,
+    pub(crate) token: u64,
+}
+
 /// RAII registration of a daemon in the supervisor's `monitored` map.
 ///
 /// Created *synchronously* before the monitoring task is spawned so there is
 /// no window in which a supervised daemon looks unmonitored to the orphan
 /// reconciler. Dropped by the monitoring task when it finishes; the entry is
-/// only removed if it still refers to this guard's PID, so a monitor that
+/// only removed if it still carries this guard's token, so a monitor that
 /// outlives a restart (e.g. during the post-exit drain) cannot unregister
-/// its successor.
+/// its successor — even a successor that recycled the same numeric PID.
 pub(crate) struct MonitoredGuard {
     id: DaemonId,
-    pid: u32,
+    token: u64,
 }
 
 impl MonitoredGuard {
     /// Unconditionally claim the daemon's registry entry, displacing any
     /// previous monitor. Used by `run_once` when spawning a child: a fresh
     /// process legitimately supersedes whatever monitor came before, and the
-    /// overwrite is what lets stale monitors detect the succession.
+    /// overwrite (new token) is what lets stale monitors detect the
+    /// succession.
     pub(crate) fn register(id: DaemonId, pid: u32) -> Self {
+        let token = NEXT_MONITOR_TOKEN.fetch_add(1, atomic::Ordering::Relaxed);
         SUPERVISOR
             .monitored
             .lock()
             .expect("monitored lock poisoned")
-            .insert(id.clone(), pid);
-        Self { id, pid }
+            .insert(id.clone(), MonitorEntry { pid, token });
+        Self { id, token }
     }
 
     /// Claim the daemon's registry entry only if no monitor currently holds
@@ -95,8 +111,15 @@ impl MonitoredGuard {
         if monitored.contains_key(&id) {
             return None;
         }
-        monitored.insert(id.clone(), pid);
-        Some(Self { id, pid })
+        let token = NEXT_MONITOR_TOKEN.fetch_add(1, atomic::Ordering::Relaxed);
+        monitored.insert(id.clone(), MonitorEntry { pid, token });
+        Some(Self { id, token })
+    }
+
+    /// The unique token of this registration, compared by monitors to detect
+    /// having been superseded.
+    pub(crate) fn token(&self) -> u64 {
+        self.token
     }
 }
 
@@ -106,7 +129,7 @@ impl Drop for MonitoredGuard {
             .monitored
             .lock()
             .expect("monitored lock poisoned");
-        if monitored.get(&self.id) == Some(&self.pid) {
+        if monitored.get(&self.id).map(|e| e.token) == Some(self.token) {
             monitored.remove(&self.id);
         }
     }
@@ -119,7 +142,18 @@ impl Supervisor {
             .lock()
             .expect("monitored lock poisoned")
             .get(id)
-            == Some(&pid)
+            .is_some_and(|e| e.pid == pid)
+    }
+
+    /// Whether the registry entry for `id` still belongs to the registration
+    /// identified by `token`. Unlike `is_monitored` this cannot be confused
+    /// by a successor that recycled the same numeric PID.
+    fn monitor_token_valid(&self, id: &DaemonId, token: u64) -> bool {
+        self.monitored
+            .lock()
+            .expect("monitored lock poisoned")
+            .get(id)
+            .is_some_and(|e| e.token == token)
     }
 
     /// Interval-watcher reconciliation: find state-`running` daemons that no
@@ -179,7 +213,8 @@ impl Supervisor {
                     "daemon {} (pid {pid}) died while unmonitored; marking errored",
                     daemon.id
                 );
-                self.mark_unmonitored_death(&daemon.id).await;
+                self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Errored(-1), Some(false))
+                    .await;
                 continue;
             }
 
@@ -206,7 +241,8 @@ impl Supervisor {
                     "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking errored",
                     daemon.id,
                 );
-                self.mark_unmonitored_death(&daemon.id).await;
+                self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Errored(-1), Some(false))
+                    .await;
                 continue;
             }
 
@@ -241,16 +277,7 @@ impl Supervisor {
                 .await
             {
                 Ok(true) => {
-                    let _ = self
-                        .upsert_daemon(
-                            UpsertDaemonOpts::builder(daemon.id.clone())
-                                .set(|o| {
-                                    o.pid = None;
-                                    o.status = DaemonStatus::Stopped;
-                                    o.active_port = None;
-                                })
-                                .build(),
-                        )
+                    self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Stopped, None)
                         .await;
                 }
                 Ok(false) => {
@@ -269,22 +296,42 @@ impl Supervisor {
         }
     }
 
-    /// Mark a daemon whose process died (or was recycled) while unmonitored.
-    /// No hooks fire — the monitor that would have observed the exit died
-    /// with a previous supervisor, mirroring the startup scan's handling.
-    async fn mark_unmonitored_death(&self, id: &DaemonId) {
-        let _ = self
-            .upsert_daemon(
-                UpsertDaemonOpts::builder(id.clone())
-                    .set(|o| {
-                        o.pid = None;
-                        o.status = DaemonStatus::Errored(-1);
-                        o.last_exit_success = Some(false);
-                        o.active_port = None;
-                    })
-                    .build(),
-            )
-            .await;
+    /// Finalize a daemon's terminal state only if its record still names
+    /// `pid`. The ownership re-check and the mutation share one state-lock
+    /// critical section, so a successor installed after the caller's
+    /// snapshot is never overwritten — its upsert serializes after ours and
+    /// the in-lock check stands down. No hooks fire from these transitions —
+    /// the monitor that would have observed the exit died with a previous
+    /// supervisor, mirroring the startup scan's handling.
+    ///
+    /// Returns whether the write happened.
+    async fn finalize_if_pid(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+        last_exit_success: Option<bool>,
+    ) -> bool {
+        let mut state_file = self.state_file.lock().await;
+        let Some(d) = state_file.daemons.get(id) else {
+            return false;
+        };
+        if d.pid != Some(pid) {
+            debug!("daemon {id} was claimed by a successor; skipping finalization");
+            return false;
+        }
+        let mut d = d.clone();
+        d.pid = None;
+        d.title = None;
+        d.start_time = None;
+        d.status = status;
+        if let Some(les) = last_exit_success {
+            d.last_exit_success = Some(les);
+        }
+        d.active_port = None;
+        state_file.clear_active_port(id);
+        state_file.insert_daemon(id, d);
+        true
     }
 
     /// Resume supervision of a live orphaned daemon process whose identity
@@ -337,6 +384,7 @@ impl Supervisor {
         let hook_retry_count = daemon.retry_count;
 
         tokio::spawn(async move {
+            let token = guard.token();
             let _guard = guard;
 
             let outcome = loop {
@@ -345,11 +393,12 @@ impl Supervisor {
                 // The monitored registry doubles as a generation marker:
                 // run_once overwrites this daemon's entry synchronously
                 // before any successor spawns, and each monitor's guard only
-                // removes its own value. If the entry no longer names our
-                // PID, a successor existed at some point — even one that
-                // already ran its full lifecycle between our polls — and its
+                // removes its own registration. If the entry no longer
+                // carries our token, a successor existed at some point —
+                // even one that already ran its full lifecycle between our
+                // polls, or one that recycled our numeric PID — and its
                 // monitor owns the record's transitions and hooks.
-                if !SUPERVISOR.is_monitored(&id, pid) {
+                if !SUPERVISOR.monitor_token_valid(&id, token) {
                     break PollOutcome::TakenOver;
                 }
 
@@ -428,7 +477,7 @@ impl Supervisor {
             // our entry. Without this, a successor's complete start+stop
             // between two polls would be misattributed to our process and
             // its stop hooks fired twice.
-            if !SUPERVISOR.is_monitored(&id, pid) {
+            if !SUPERVISOR.monitor_token_valid(&id, token) {
                 debug!("adopted daemon {id} was superseded; skipping exit handling");
                 return;
             }
@@ -473,7 +522,7 @@ impl Supervisor {
                 };
                 let last_exit_success = exit_reason == "stop";
                 let mut state_file = SUPERVISOR.state_file.lock().await;
-                let still_ours = SUPERVISOR.is_monitored(&id, pid)
+                let still_ours = SUPERVISOR.monitor_token_valid(&id, token)
                     && state_file
                         .daemons
                         .get(&id)

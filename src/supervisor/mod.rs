@@ -96,9 +96,10 @@ pub struct Supervisor {
     pub(crate) flush_cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
     /// Daemons that currently have a live monitoring task (child `wait()`
     /// monitor or adopted-orphan poll monitor), keyed to the PID being
-    /// monitored. Lets orphan reconciliation tell a supervised daemon from
-    /// one whose monitor died with a previous supervisor process.
-    pub(crate) monitored: std::sync::Mutex<HashMap<DaemonId, u32>>,
+    /// monitored plus a unique registration token. Lets orphan
+    /// reconciliation tell a supervised daemon from one whose monitor died
+    /// with a previous supervisor process.
+    pub(crate) monitored: std::sync::Mutex<HashMap<DaemonId, adopt::MonitorEntry>>,
 }
 
 pub(crate) fn interval_duration() -> Duration {
