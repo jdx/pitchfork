@@ -197,6 +197,10 @@ impl Supervisor {
                         .and_then(|d| d.start_time)
                 })
             }),
+            // Boot time is a system-wide constant, so it needs no cache
+            // fallback — it is recorded for any daemon with a live PID and
+            // dropped when the PID is cleared.
+            boot_time: opts.pid.map(|_| PROCS.boot_time()),
             pid: opts.pid,
             status: opts.status,
             shell_pid: opts.shell_pid,

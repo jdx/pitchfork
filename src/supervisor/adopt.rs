@@ -192,6 +192,7 @@ impl Supervisor {
         }
 
         let policy = super::orphan_policy();
+        let boot_time = PROCS.boot_time();
 
         for daemon in candidates {
             let Some(pid) = daemon.pid else { continue };
@@ -209,11 +210,22 @@ impl Supervisor {
             if !PROCS.is_running(pid) {
                 // The monitor that would have observed this exit died with a
                 // previous supervisor; the exit status is unobservable.
+                // Any daemon this pass sees is Running with no live monitor,
+                // so whatever was watching it is gone and its exit went
+                // unobserved by definition. Records left by a *clean*
+                // shutdown cannot reach here: the startup scan already
+                // resolved those out of Running before this ever runs.
+                let status = super::unobserved_exit_status(
+                    &daemon.status,
+                    daemon.boot_time,
+                    boot_time,
+                    true,
+                );
                 warn!(
-                    "daemon {} (pid {pid}) died while unmonitored; marking errored",
+                    "daemon {} (pid {pid}) died while unmonitored; marking {status}",
                     daemon.id
                 );
-                self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Errored(-1), Some(false))
+                self.finalize_if_pid(&daemon.id, pid, status, super::ExitObservation::Unobserved)
                     .await;
                 continue;
             }
@@ -237,11 +249,22 @@ impl Supervisor {
                 }
                 // The PID belongs to a different process now, which means the
                 // daemon itself died unnoticed. Never touch the new process.
+                // Any daemon this pass sees is Running with no live monitor,
+                // so whatever was watching it is gone and its exit went
+                // unobserved by definition. Records left by a *clean*
+                // shutdown cannot reach here: the startup scan already
+                // resolved those out of Running before this ever runs.
+                let status = super::unobserved_exit_status(
+                    &daemon.status,
+                    daemon.boot_time,
+                    boot_time,
+                    true,
+                );
                 warn!(
-                    "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking errored",
+                    "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking {status}",
                     daemon.id,
                 );
-                self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Errored(-1), Some(false))
+                self.finalize_if_pid(&daemon.id, pid, status, super::ExitObservation::Unobserved)
                     .await;
                 continue;
             }
@@ -277,8 +300,13 @@ impl Supervisor {
                 .await
             {
                 Ok(true) => {
-                    self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Stopped, None)
-                        .await;
+                    self.finalize_if_pid(
+                        &daemon.id,
+                        pid,
+                        DaemonStatus::Stopped,
+                        super::ExitObservation::Terminated,
+                    )
+                    .await;
                 }
                 Ok(false) => {
                     warn!(
@@ -302,7 +330,9 @@ impl Supervisor {
     /// snapshot is never overwritten — its upsert serializes after ours and
     /// the in-lock check stands down. No hooks fire from these transitions —
     /// the monitor that would have observed the exit died with a previous
-    /// supervisor, mirroring the startup scan's handling.
+    /// supervisor, mirroring the startup scan's handling. `observation`
+    /// decides what happens to the recorded `last_exit_success`, exactly as in
+    /// the startup scan.
     ///
     /// Returns whether the write happened.
     async fn finalize_if_pid(
@@ -310,7 +340,7 @@ impl Supervisor {
         id: &DaemonId,
         pid: u32,
         status: DaemonStatus,
-        last_exit_success: Option<bool>,
+        observation: super::ExitObservation,
     ) -> bool {
         let mut state_file = self.state_file.lock().await;
         // A monitor entry appearing since the caller's snapshot means a live
@@ -337,10 +367,9 @@ impl Supervisor {
         d.pid = None;
         d.title = None;
         d.start_time = None;
+        d.boot_time = None;
         d.status = status;
-        if let Some(les) = last_exit_success {
-            d.last_exit_success = Some(les);
-        }
+        d.last_exit_success = observation.last_exit_success();
         d.active_port = None;
         state_file.clear_active_port(id);
         state_file.insert_daemon(id, d);
@@ -552,7 +581,12 @@ impl Supervisor {
                     d.pid = None;
                     d.title = None;
                     d.start_time = None;
+                    d.boot_time = None;
                     d.status = new_status;
+                    // The poll monitor did observe this process die (it just
+                    // cannot read the exit code of a non-child), so unlike the
+                    // unobserved startup/reconciler cases it is meaningful to
+                    // record whether the last run ended intentionally.
                     d.last_exit_success = Some(last_exit_success);
                     d.active_port = None;
                     state_file.insert_daemon(&id, d);

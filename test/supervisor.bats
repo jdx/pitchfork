@@ -252,9 +252,135 @@ EOF
 
   run pitchfork status recycled/victim
   assert_success
+  # The crafted record has no boot_time (as written by versions before the
+  # field existed), so the unobserved exit fails closed to stopped.
   assert_output --partial "stopped"
 
   { kill -9 "$bystander_pid" && wait "$bystander_pid"; } 2>/dev/null || true
+}
+
+@test "daemon that dies during a supervisor crash is retried on restart" {
+  skip_on_windows "relies on SIGKILL semantics for both supervisor and daemon"
+  export PITCHFORK_INTERVAL=1s
+
+  create_pitchfork_toml <<EOF
+[daemons.crash_retry]
+run = "sleep 120"
+ready_delay = 1
+retry = 1
+EOF
+
+  run pitchfork start crash_retry
+  assert_success
+  wait_for_status crash_retry running
+
+  local daemon_pid sup_pid
+  daemon_pid="$(get_daemon_pid crash_retry)"
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+
+  # Crash the supervisor, then kill the daemon while nothing is watching it,
+  # so its exit is never observed by any monitor.
+  kill_pid "$sup_pid"
+  sleep 1
+  kill_pid "$daemon_pid"
+  sleep 1
+
+  run pitchfork supervisor start
+  assert_success
+
+  # The unobserved death is recorded as errored, which makes the daemon
+  # eligible for its configured retry — it comes back on its own.
+  wait_for_status crash_retry running 30
+  local new_pid
+  new_pid="$(get_daemon_pid crash_retry)"
+  [[ -n "$new_pid" ]]
+  [[ "$new_pid" != "$daemon_pid" ]]
+
+  pitchfork stop crash_retry
+}
+
+@test "supervisor stop clears the supervisor record on every platform" {
+  # Orphan reconciliation reads the presence of this record as evidence that
+  # the previous supervisor died unexpectedly. A deliberate stop must always
+  # clear it, whether the supervisor handles the stop signal itself (Unix) or
+  # is force-terminated by the stop command (Windows) — otherwise the next
+  # supervisor reports intentionally stopped daemons as failures.
+  create_pitchfork_toml <<EOF
+[daemons.stop_marker]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start stop_marker
+  assert_success
+  wait_for_status stop_marker running
+  grep -q '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml"
+
+  run pitchfork supervisor stop
+  assert_success
+  sleep 1
+
+  run grep -q '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml"
+  assert_failure
+
+  # And the daemon reads as stopped rather than errored after the restart.
+  # Poll rather than sleeping: this test also runs on Windows, where startup
+  # plus orphan reconciliation plus state persistence is slowest.
+  run pitchfork supervisor start
+  assert_success
+  wait_for_status stop_marker stopped
+}
+
+@test "daemon record from a previous boot is not retried" {
+  skip_on_windows "state file crafting relies on Unix signal semantics"
+  export PITCHFORK_INTERVAL=1s
+
+  # A PID that is definitely dead: start a process and kill it.
+  sleep 60 >/dev/null 2>&1 &
+  local dead_pid=$!
+  kill -9 "$dead_pid" 2>/dev/null || true
+  wait "$dead_pid" 2>/dev/null || true
+
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  # The leftover supervisor entry is what marks the previous shutdown as
+  # unclean. Without it the unclean check short-circuits to stopped and this
+  # test would pass even with the boot-time rule deleted; with it, boot_time
+  # is the only reason the daemon stays stopped. Orphan cleanup skips the
+  # supervisor's own id, and start() overwrites the entry immediately.
+  #
+  # boot_time = 1 marks the daemon record as belonging to a long-gone boot:
+  # the process died with the machine, not under a crashed supervisor.
+  cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."global/pitchfork"]
+id = "global/pitchfork"
+pid = $dead_pid
+status = "running"
+autostop = false
+
+[daemons."prevboot/svc"]
+id = "prevboot/svc"
+title = "sleep"
+pid = $dead_pid
+start_time = 1
+boot_time = 1
+status = "running"
+autostop = false
+retry = 3
+cmd = ["sleep", "120"]
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # Stopped, not errored — so the retry checker leaves it alone instead of
+  # resurrecting a daemon the user never asked to start at boot.
+  run pitchfork status prevboot/svc
+  assert_success
+  assert_output --partial "stopped"
+  [[ "$(get_daemon_pid prevboot/svc)" == "" ]]
 }
 
 @test "crashed supervisor re-adopts running daemon by default" {

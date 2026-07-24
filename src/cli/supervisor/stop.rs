@@ -19,6 +19,17 @@ impl Stop {
         };
         match outcome {
             KillOrStopOutcome::Killed => {
+                // Record that this shutdown was deliberate. On Unix the
+                // supervisor handles the stop signal and removes its own entry
+                // in `close()`; Windows has no POSIX signals, so the process is
+                // force-terminated and never gets to. Without this the next
+                // supervisor would read the leftover entry as evidence of a
+                // crash and treat daemons it finds stopped as failures.
+                if let Ok(mut sf) = StateFile::read(&*env::PITCHFORK_STATE_FILE)
+                    && sf.daemons.remove(&DaemonId::pitchfork()).is_some()
+                {
+                    let _ = sf.write();
+                }
                 info!("Stopped pitchfork daemon with pid {pid}");
             }
             KillOrStopOutcome::AlreadyDead => {
