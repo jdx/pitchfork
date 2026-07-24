@@ -3,11 +3,13 @@
 //! This module is split into focused submodules:
 //! - `state`: State access layer (get/set operations)
 //! - `lifecycle`: Daemon start/stop operations
+//! - `adopt`: Re-adoption of orphaned daemons after a supervisor crash
 //! - `autostop`: Autostop logic and boot daemon startup
 //! - `retry`: Retry logic with backoff
 //! - `watchers`: Background tasks (interval, cron, file watching)
 //! - `ipc_handlers`: IPC request dispatch
 
+mod adopt;
 mod autostop;
 mod hooks;
 mod ipc_handlers;
@@ -92,6 +94,11 @@ pub struct Supervisor {
     pub(crate) lan_monitor_task: Mutex<Option<JoinHandle<()>>>,
     /// Cancellation token for the background state flush task.
     pub(crate) flush_cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
+    /// Daemons that currently have a live monitoring task (child `wait()`
+    /// monitor or adopted-orphan poll monitor), keyed to the PID being
+    /// monitored. Lets orphan reconciliation tell a supervised daemon from
+    /// one whose monitor died with a previous supervisor process.
+    pub(crate) monitored: std::sync::Mutex<HashMap<DaemonId, u32>>,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -260,6 +267,7 @@ impl Supervisor {
             mdns_publisher: Mutex::new(None),
             lan_monitor_task: Mutex::new(None),
             flush_cancel: std::sync::Mutex::new(None),
+            monitored: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -738,6 +746,12 @@ impl Supervisor {
         for dir in dirs_to_leave {
             self.leave_dir(&dir).await?;
         }
+
+        // Catch state-`running` daemons that lost their monitor (e.g. the
+        // monitor died with a previous supervisor): mark dead ones errored
+        // and re-adopt live ones. Runs before check_retry so a daemon marked
+        // errored here is retried on this same tick.
+        self.reconcile_unmonitored_daemons().await;
 
         self.check_retry().await?;
         self.process_pending_autostops().await?;
@@ -1275,6 +1289,8 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
     let pids: Vec<u32> = candidates.iter().filter_map(|d| d.pid).collect();
     PROCS.refresh_pids(&pids);
 
+    let policy = orphan_policy();
+
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
 
@@ -1286,21 +1302,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
 
         // Safety check: verify the live process really is the daemon we
         // recorded, not an unrelated process that received a recycled PID.
-        // The kernel start time is a stable identity for the lifetime of a
-        // process; fall back to comparing the process name for state files
-        // written by older versions that didn't record start_time.
-        let matches = match (daemon.start_time, PROCS.start_time(pid)) {
-            (Some(recorded), Some(current)) => recorded == current,
-            _ => match (PROCS.title(pid), &daemon.title) {
-                (Some(current), Some(expected)) => current == *expected,
-                // No recorded identity at all (the process was started before
-                // identity tracking was added, or the state was reset) —
-                // degraded but functional: allow the kill.
-                _ => true,
-            },
-        };
-
-        if !matches {
+        if !adopt::process_identity_matches(&daemon, pid) {
             warn!(
                 "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
                 daemon.id,
@@ -1309,14 +1311,37 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             continue;
         }
 
-        info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
+        // Identity verified — the process really is our orphaned daemon.
+        // The policy decides whether supervision resumes or the slate is
+        // wiped clean.
+        match policy.as_str() {
+            "kill" => {
+                info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
 
-        let stop_cfg = daemon.stop_signal.unwrap_or_default();
-        let _ = PROCS
-            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
-            .await;
+                let stop_cfg = daemon.stop_signal.unwrap_or_default();
+                let _ = PROCS
+                    .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
+                    .await;
 
-        reset_daemon_state(supervisor, &daemon.id).await;
+                reset_daemon_state(supervisor, &daemon.id).await;
+            }
+            _ => {
+                supervisor.adopt_daemon(&daemon, pid);
+            }
+        }
+    }
+}
+
+/// Effective `supervisor.orphan_policy`, warning once per startup scan on an
+/// unrecognized value (which falls back to the default of adopting).
+fn orphan_policy() -> String {
+    let policy = settings().supervisor.orphan_policy.clone();
+    match policy.as_str() {
+        "adopt" | "kill" => policy,
+        other => {
+            warn!("unknown supervisor.orphan_policy '{other}', defaulting to 'adopt'");
+            "adopt".to_string()
+        }
     }
 }
 

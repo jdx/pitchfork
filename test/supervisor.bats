@@ -108,7 +108,9 @@ get_supervisor_pid() {
   kill_port 18998
 }
 
-@test "orphaned daemons are cleaned up on supervisor restart" {
+@test "orphan_policy=kill terminates orphaned daemons on supervisor restart" {
+  # The default policy re-adopts orphans; this test pins the kill policy.
+  export PITCHFORK_ORPHAN_POLICY=kill
 
   create_pitchfork_toml <<EOF
 [daemons.orphan_test]
@@ -197,6 +199,87 @@ EOF
   assert_output --partial "stopped"
 
   { kill -9 "$bystander_pid" && wait "$bystander_pid"; } 2>/dev/null || true
+}
+
+@test "crashed supervisor re-adopts running daemon by default" {
+
+  create_pitchfork_toml <<EOF
+[daemons.adopt_test]
+run = "sleep 120"
+ready_delay = 1
+EOF
+
+  run pitchfork start adopt_test
+  assert_success
+  wait_for_status adopt_test running
+
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid adopt_test)"
+  [[ -n "$daemon_pid" ]]
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  # SIGKILL the supervisor so its daemon child is left orphaned.
+  kill_pid "$sup_pid"
+  sleep 1
+  pid_alive "$daemon_pid"
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # The SAME process is still alive and supervised again — not killed,
+  # not restarted, not duplicated.
+  pid_alive "$daemon_pid"
+  wait_for_status adopt_test running
+  [[ "$(get_daemon_pid adopt_test)" == "$daemon_pid" ]]
+
+  run pitchfork start adopt_test
+  assert_output --partial "already running"
+
+  # Stopping an adopted daemon terminates the process and the poll
+  # monitor completes the stopped transition.
+  run pitchfork stop adopt_test
+  assert_success
+  wait_for_status adopt_test stopped
+  run pid_alive "$daemon_pid"
+  assert_failure
+}
+
+@test "adopted daemon death is detected and marked errored" {
+
+  create_pitchfork_toml <<EOF
+[daemons.adopt_exit]
+run = "sleep 120"
+ready_delay = 1
+EOF
+
+  run pitchfork start adopt_exit
+  assert_success
+  wait_for_status adopt_exit running
+
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid adopt_exit)"
+  [[ -n "$daemon_pid" ]]
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 1
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+  wait_for_status adopt_exit running
+
+  # Kill the adopted process externally; the poll monitor cannot observe
+  # the exit status of a non-child, so the daemon is marked errored.
+  kill_pid "$daemon_pid"
+  wait_for_status adopt_exit errored 30
 }
 
 # ============================================================================

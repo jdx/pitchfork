@@ -753,23 +753,50 @@ Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`
 type = "Bool"
 env = "PITCHFORK_CLEANUP_ORPHANS"
 default = "true"
-description = "Kill orphaned daemon processes when supervisor starts"
+description = "Reconcile orphaned daemon processes when supervisor starts"
 docs = """
 When enabled, the supervisor scans the state file on startup for daemon
 processes left behind by a previous supervisor instance that was killed
-unexpectedly (for example, with `kill -9`). Any matching live processes are
-terminated so the new supervisor starts with a clean slate.
+unexpectedly (for example, with `kill -9`) and reconciles them according
+to `supervisor.orphan_policy` (re-adopt by default, or terminate).
 
-Before terminating, the recorded process identity (PID plus kernel start
+Before acting, the recorded process identity (PID plus kernel start
 time) is verified so that a PID recycled by the OS to an unrelated process
-is never killed — in that case only the stale state entry is cleared.
+is never adopted or killed — in that case only the stale state entry is
+cleared.
 
-This is recommended for local development where an unclean shutdown (IDE
-restart, system crash, etc.) would otherwise leave stale processes holding
-ports and consuming resources.
+Disabling this leaves orphaned processes and their state entries
+completely untouched. This is a legacy escape hatch; prefer
+`orphan_policy = "adopt"` (the default), which keeps daemons running
+across a supervisor crash while resuming supervision.
+"""
 
-Disable this on long-lived servers where you want daemons to survive a
-supervisor restart without interruption.
+[supervisor.orphan_policy]
+type = "String"
+env = "PITCHFORK_ORPHAN_POLICY"
+default = "adopt"
+description = "What to do with live orphaned daemons on supervisor startup: adopt or kill"
+docs = """
+When the supervisor starts and finds daemons in the state file whose
+processes are still alive from a previous supervisor instance that died
+uncleanly, this policy decides what happens (after the process identity
+is verified via PID plus kernel start time):
+
+- `adopt` (default): keep the process running and resume supervision.
+  The daemon keeps its state (status, ports, proxy routing) and is
+  monitored by polling. Since the process is no longer a child of the
+  supervisor, its stdout/stderr capture cannot be restored — log capture
+  resumes the next time the daemon restarts. Exit codes of adopted
+  daemons cannot be observed; an adopted daemon that dies unexpectedly
+  is marked `errored` with an unknown exit code, which makes it eligible
+  for its configured retries.
+- `kill`: terminate the orphaned process group so the new supervisor
+  starts with a clean slate, matching pre-adoption behavior.
+
+Daemons whose recorded PID is dead, or whose PID now belongs to a
+different process, have their state reset under either policy.
+
+This setting has no effect when `cleanup_orphans` is disabled.
 """
 
 
