@@ -1235,13 +1235,14 @@ fn chmod_safe_subtrees(state_dir: &std::path::Path) {
 /// On startup, kill any daemon processes left behind by a previous supervisor
 /// that was terminated unexpectedly (e.g. `kill -9`).
 ///
-/// This iterates the state file for daemon entries with a recorded PID.  If the
-/// PID is still alive and the process name matches the recorded `title`, it is
-/// assumed to be an orphan from the previous supervisor session and is killed.
-/// The daemon's state is then reset to `Stopped` with no PID.
+/// This iterates the state file for daemon entries with a recorded PID. If the
+/// PID is still alive and its current identity matches the recorded start time
+/// (or the recorded title for older state files), it is assumed to be an orphan
+/// from the previous supervisor session and is killed. The daemon's state is
+/// then reset to `Stopped` with no PID.
 ///
-/// The process-name check protects against the rare case where a PID has been
-/// recycled by an unrelated process since the state file was written.
+/// Missing or mismatched identity data fails closed so a PID recycled by an
+/// unrelated process is never killed.
 ///
 /// This is gated by the `supervisor.cleanup_orphans` setting (default: true).
 async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
@@ -1289,16 +1290,14 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         // The kernel start time is a stable identity for the lifetime of a
         // process; fall back to comparing the process name for state files
         // written by older versions that didn't record start_time.
-        let matches = match (daemon.start_time, PROCS.start_time(pid)) {
-            (Some(recorded), Some(current)) => recorded == current,
-            _ => match (PROCS.title(pid), &daemon.title) {
-                (Some(current), Some(expected)) => current == *expected,
-                // No recorded identity at all (the process was started before
-                // identity tracking was added, or the state was reset) —
-                // degraded but functional: allow the kill.
-                _ => true,
-            },
-        };
+        let current_start_time = PROCS.start_time(pid);
+        let current_title = PROCS.title(pid);
+        let matches = process_identity_matches(
+            daemon.start_time,
+            daemon.title.as_deref(),
+            current_start_time,
+            current_title.as_deref(),
+        );
 
         if !matches {
             warn!(
@@ -1317,6 +1316,25 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             .await;
 
         reset_daemon_state(supervisor, &daemon.id).await;
+    }
+}
+
+/// Verify that live process identity matches the persisted daemon identity.
+///
+/// A recorded start time takes precedence over the legacy title field. Missing
+/// current identity data must never authorize terminating a process.
+fn process_identity_matches(
+    recorded_start_time: Option<u64>,
+    recorded_title: Option<&str>,
+    current_start_time: Option<u64>,
+    current_title: Option<&str>,
+) -> bool {
+    match recorded_start_time {
+        Some(recorded) => current_start_time == Some(recorded),
+        None => matches!(
+            (recorded_title, current_title),
+            (Some(recorded), Some(current)) if recorded == current
+        ),
     }
 }
 
@@ -1356,8 +1374,51 @@ fn chmod_recursive(dir: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_remove_liveness_session;
+    use super::{process_identity_matches, should_remove_liveness_session};
     use crate::state_file::ProjectSession;
+
+    #[test]
+    fn orphan_identity_does_not_match_when_current_identity_is_missing() {
+        assert!(!process_identity_matches(
+            Some(123),
+            Some("daemon"),
+            None,
+            None,
+        ));
+        assert!(!process_identity_matches(None, Some("daemon"), None, None,));
+    }
+
+    #[test]
+    fn orphan_identity_requires_recorded_start_time_when_available() {
+        assert!(process_identity_matches(
+            Some(123),
+            Some("old-title"),
+            Some(123),
+            Some("new-title"),
+        ));
+        assert!(!process_identity_matches(
+            Some(123),
+            Some("same-title"),
+            Some(456),
+            Some("same-title"),
+        ));
+    }
+
+    #[test]
+    fn orphan_identity_falls_back_to_title_for_legacy_state() {
+        assert!(process_identity_matches(
+            None,
+            Some("daemon"),
+            Some(123),
+            Some("daemon"),
+        ));
+        assert!(!process_identity_matches(
+            None,
+            Some("daemon"),
+            Some(123),
+            Some("unrelated"),
+        ));
+    }
 
     #[test]
     fn should_not_remove_when_state_title_differs_from_snapshot() {
