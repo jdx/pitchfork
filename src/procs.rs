@@ -366,6 +366,7 @@ impl Procs {
         }
 
         warn!("one or more pinned processes in orphan group {pid} remained alive after SIGKILL");
+        let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
         Ok(false)
     }
 
