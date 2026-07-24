@@ -70,6 +70,11 @@ impl Procs {
             .map(|p| p.start_time())
     }
 
+    fn refresh_and_start_time_matches(&self, pid: u32, expected: u64) -> bool {
+        self.refresh_pids(&[pid]);
+        self.start_time(pid) == Some(expected)
+    }
+
     pub fn is_running(&self, pid: u32) -> bool {
         // Use kill(pid, 0) on Unix for an O(1) liveness check that does not
         // depend on the process cache being populated. This avoids the need
@@ -196,12 +201,11 @@ impl Procs {
         let pgid = pid as i32;
         let signal_name = signal_name(stop_signal);
 
-        if let Some(expected) = expected_start_time {
-            self.refresh_pids(&[pid]);
-            if self.start_time(pid) != Some(expected) {
-                debug!("process group {pgid} leader identity changed before {signal_name}");
-                return Ok(false);
-            }
+        if let Some(expected) = expected_start_time
+            && !self.refresh_and_start_time_matches(pid, expected)
+        {
+            debug!("process group {pgid} leader identity changed before {signal_name}");
+            return Ok(false);
         }
 
         debug!("killing process group {pgid} with {signal_name}");
@@ -290,8 +294,14 @@ impl Procs {
         pid: u32,
         _stop_signal: i32,
         _stop_timeout: Option<std::time::Duration>,
-        _expected_start_time: Option<u64>,
+        expected_start_time: Option<u64>,
     ) -> Result<bool> {
+        if let Some(expected) = expected_start_time
+            && !self.refresh_and_start_time_matches(pid, expected)
+        {
+            debug!("process {pid} identity changed before taskkill");
+            return Ok(false);
+        }
         self.kill(pid, 0, None)
     }
 
@@ -720,6 +730,18 @@ fn signal_name(sig: i32) -> &'static str {
 #[cfg(test)]
 mod format_tests {
     use super::*;
+
+    #[test]
+    fn process_start_time_check_rejects_mismatch() {
+        let procs = Procs::new();
+        let pid = std::process::id();
+        procs.refresh_pids(&[pid]);
+        let actual = procs
+            .start_time(pid)
+            .expect("current process should have a start time");
+
+        assert!(!procs.refresh_and_start_time_matches(pid, actual.saturating_add(1)));
+    }
 
     #[test]
     fn test_format_bytes() {
