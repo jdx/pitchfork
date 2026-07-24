@@ -192,6 +192,7 @@ impl Supervisor {
         }
 
         let policy = super::orphan_policy();
+        let boot_time = PROCS.boot_time();
 
         for daemon in candidates {
             let Some(pid) = daemon.pid else { continue };
@@ -209,12 +210,13 @@ impl Supervisor {
             if !PROCS.is_running(pid) {
                 // The monitor that would have observed this exit died with a
                 // previous supervisor; the exit status is unobservable.
+                let status =
+                    super::unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
                 warn!(
-                    "daemon {} (pid {pid}) died while unmonitored; marking errored",
+                    "daemon {} (pid {pid}) died while unmonitored; marking {status}",
                     daemon.id
                 );
-                self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Errored(-1), Some(false))
-                    .await;
+                self.finalize_if_pid(&daemon.id, pid, status).await;
                 continue;
             }
 
@@ -237,12 +239,13 @@ impl Supervisor {
                 }
                 // The PID belongs to a different process now, which means the
                 // daemon itself died unnoticed. Never touch the new process.
+                let status =
+                    super::unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
                 warn!(
-                    "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking errored",
+                    "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking {status}",
                     daemon.id,
                 );
-                self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Errored(-1), Some(false))
-                    .await;
+                self.finalize_if_pid(&daemon.id, pid, status).await;
                 continue;
             }
 
@@ -277,7 +280,7 @@ impl Supervisor {
                 .await
             {
                 Ok(true) => {
-                    self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Stopped, None)
+                    self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Stopped)
                         .await;
                 }
                 Ok(false) => {
@@ -302,16 +305,13 @@ impl Supervisor {
     /// snapshot is never overwritten — its upsert serializes after ours and
     /// the in-lock check stands down. No hooks fire from these transitions —
     /// the monitor that would have observed the exit died with a previous
-    /// supervisor, mirroring the startup scan's handling.
+    /// supervisor, mirroring the startup scan's handling. `last_exit_success`
+    /// is left untouched for the same reason: these exits were never
+    /// observed, and fabricating a result would corrupt the cron
+    /// `retrigger = "success" | "fail"` decisions that read it.
     ///
     /// Returns whether the write happened.
-    async fn finalize_if_pid(
-        &self,
-        id: &DaemonId,
-        pid: u32,
-        status: DaemonStatus,
-        last_exit_success: Option<bool>,
-    ) -> bool {
+    async fn finalize_if_pid(&self, id: &DaemonId, pid: u32, status: DaemonStatus) -> bool {
         let mut state_file = self.state_file.lock().await;
         // A monitor entry appearing since the caller's snapshot means a live
         // monitor now owns this daemon — including a successor that recycled
@@ -337,10 +337,8 @@ impl Supervisor {
         d.pid = None;
         d.title = None;
         d.start_time = None;
+        d.boot_time = None;
         d.status = status;
-        if let Some(les) = last_exit_success {
-            d.last_exit_success = Some(les);
-        }
         d.active_port = None;
         state_file.clear_active_port(id);
         state_file.insert_daemon(id, d);
@@ -552,7 +550,12 @@ impl Supervisor {
                     d.pid = None;
                     d.title = None;
                     d.start_time = None;
+                    d.boot_time = None;
                     d.status = new_status;
+                    // The poll monitor did observe this process die (it just
+                    // cannot read the exit code of a non-child), so unlike the
+                    // unobserved startup/reconciler cases it is meaningful to
+                    // record whether the last run ended intentionally.
                     d.last_exit_success = Some(last_exit_success);
                     d.active_port = None;
                     state_file.insert_daemon(&id, d);

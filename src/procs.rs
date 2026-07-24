@@ -67,6 +67,16 @@ impl Procs {
             .map(|p| p.name().to_string_lossy().to_string())
     }
 
+    /// Time the system booted, in seconds since the epoch.
+    ///
+    /// Constant for the lifetime of a boot, so recording it alongside a
+    /// daemon's PID makes it possible to tell later whether that record
+    /// belongs to the current boot. Note this is *not* comparable with
+    /// `start_time`, whose units are platform-specific.
+    pub fn boot_time(&self) -> u64 {
+        sysinfo::System::boot_time()
+    }
+
     /// High-resolution kernel start token for the process.
     ///
     /// Combined with the PID this forms a stable identity for the lifetime of a

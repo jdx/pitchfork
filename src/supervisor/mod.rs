@@ -1291,6 +1291,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
     );
 
     let policy = orphan_policy();
+    let boot_time = PROCS.boot_time();
 
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
@@ -1301,8 +1302,11 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         PROCS.refresh_pids(&[pid]);
 
         if !PROCS.is_running(pid) {
-            // PID already dead — just reset its state
-            reset_daemon_state(supervisor, &daemon.id).await;
+            // PID already dead — the daemon exited while unsupervised, so
+            // record a terminal status that reflects whether it died under a
+            // crashed supervisor (retryable) or with the machine.
+            let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
+            reset_daemon_state(supervisor, &daemon.id, status).await;
             continue;
         }
 
@@ -1332,7 +1336,10 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
                 "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
                 daemon.id,
             );
-            reset_daemon_state(supervisor, &daemon.id).await;
+            // The daemon died at some unknown point and the OS handed its PID
+            // to something else — same unobserved exit as a dead PID.
+            let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
+            reset_daemon_state(supervisor, &daemon.id, status).await;
             continue;
         }
 
@@ -1387,7 +1394,9 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             }
         }
 
-        reset_daemon_state(supervisor, &daemon.id).await;
+        // We terminated the orphan ourselves, so this is an observed,
+        // intentional stop rather than an unobserved exit.
+        reset_daemon_state(supervisor, &daemon.id, DaemonStatus::Stopped).await;
     }
 }
 
@@ -1425,18 +1434,54 @@ fn process_identity_matches(
 
 /// Clear a daemon's runtime state (pid, status, active port) after its
 /// process is gone or no longer ours to manage.
-async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId) {
+///
+/// `last_exit_success` is deliberately left untouched: these transitions
+/// cover exits nobody observed, and fabricating a result would corrupt the
+/// cron `retrigger = "success" | "fail"` decisions that read it.
+async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId, status: DaemonStatus) {
     let _ = supervisor
         .upsert_daemon(
             UpsertDaemonOpts::builder(id.clone())
                 .set(|o| {
                     o.pid = None;
-                    o.status = DaemonStatus::Stopped;
+                    o.status = status;
                     o.active_port = None;
                 })
                 .build(),
         )
         .await;
+}
+
+/// Boot times this far apart are treated as different boots. Generous enough
+/// to absorb any platform jitter in `boot_time()` (Windows derives it from a
+/// tick count), while far below the gap any real reboot produces.
+const BOOT_TIME_TOLERANCE_SECS: u64 = 60;
+
+/// Terminal status for a daemon whose process is gone and whose exit was
+/// never observed, because the monitor that would have seen it died with a
+/// previous supervisor.
+///
+/// A daemon recorded `Running` was expected to still be alive, so it died
+/// under the crashed supervisor: `Errored(-1)` ("unknown exit code") makes it
+/// eligible for its configured retries. Two cases stay `Stopped` instead:
+///
+/// - records from an earlier boot, whose processes died with the machine —
+///   auto-restarting those is what `boot_start` is for, and reviving every
+///   retry-configured daemon after a reboot would be a surprise
+/// - any other status (in practice `Stopping`), i.e. an intentional stop that
+///   completed while the supervisor was gone
+pub(crate) fn unobserved_exit_status(
+    status: &DaemonStatus,
+    recorded_boot_time: Option<u64>,
+    current_boot_time: u64,
+) -> DaemonStatus {
+    let same_boot = recorded_boot_time
+        .is_some_and(|recorded| recorded.abs_diff(current_boot_time) <= BOOT_TIME_TOLERANCE_SECS);
+    if status.is_running() && same_boot {
+        DaemonStatus::Errored(-1)
+    } else {
+        DaemonStatus::Stopped
+    }
 }
 
 /// Recursively chmod: directories → 0o755, files → 0o644.
@@ -1459,8 +1504,68 @@ fn chmod_recursive(dir: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{process_identity_matches, should_remove_liveness_session};
+    use super::{
+        BOOT_TIME_TOLERANCE_SECS, process_identity_matches, should_remove_liveness_session,
+        unobserved_exit_status,
+    };
+    use crate::daemon_status::DaemonStatus;
     use crate::state_file::ProjectSession;
+
+    const BOOT: u64 = 1_700_000_000;
+
+    #[test]
+    fn unobserved_running_death_in_current_boot_is_retryable() {
+        // Died under a crashed supervisor during this boot: Errored(-1) makes
+        // the daemon eligible for its configured retries.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT),
+            DaemonStatus::Errored(-1)
+        ));
+    }
+
+    #[test]
+    fn unobserved_running_death_from_previous_boot_is_stopped() {
+        // The process died with the machine; reviving every retry-configured
+        // daemon after a reboot is what boot_start is for.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - 86_400), BOOT),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_tolerates_boot_time_jitter() {
+        let within = BOOT + BOOT_TIME_TOLERANCE_SECS;
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(within), BOOT),
+            DaemonStatus::Errored(-1)
+        ));
+        let beyond = BOOT + BOOT_TIME_TOLERANCE_SECS + 1;
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(beyond), BOOT),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_without_recorded_boot_time_is_stopped() {
+        // Legacy state files predating the field fail closed to today's
+        // behavior rather than triggering surprise retries.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, None, BOOT),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_of_stopping_daemon_is_stopped() {
+        // An intentional stop that completed while the supervisor was gone is
+        // not a failure, even within the same boot.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Stopping, Some(BOOT), BOOT),
+            DaemonStatus::Stopped
+        ));
+    }
 
     #[test]
     fn orphan_identity_does_not_match_when_current_identity_is_missing() {

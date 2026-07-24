@@ -45,6 +45,13 @@ pub struct Daemon {
     /// from an unrelated process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub start_time: Option<u64>,
+    /// System boot time (seconds since epoch) recorded at spawn. Lets orphan
+    /// reconciliation tell a daemon that died under a crashed supervisor
+    /// during this boot from one whose process died with the machine, which
+    /// need different terminal states. Unlike `start_time` this is a
+    /// wall-clock value comparable across processes and platforms.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub boot_time: Option<u64>,
     pub shell_pid: Option<u32>,
     pub status: DaemonStatus,
     pub dir: Option<PathBuf>,
