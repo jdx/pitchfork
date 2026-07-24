@@ -313,6 +313,19 @@ impl Supervisor {
         last_exit_success: Option<bool>,
     ) -> bool {
         let mut state_file = self.state_file.lock().await;
+        // A monitor entry appearing since the caller's snapshot means a live
+        // monitor now owns this daemon — including a successor that recycled
+        // the same numeric PID, which always registers before its Running
+        // state becomes visible. Its monitor handles its lifecycle.
+        if self
+            .monitored
+            .lock()
+            .expect("monitored lock poisoned")
+            .contains_key(id)
+        {
+            debug!("daemon {id} gained a monitor since the snapshot; skipping finalization");
+            return false;
+        }
         let Some(d) = state_file.daemons.get(id) else {
             return false;
         };
