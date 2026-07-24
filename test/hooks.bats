@@ -282,6 +282,35 @@ EOF
   [[ "$count" -eq 2 ]]
 }
 
+@test "on_retry hook fires for a background retry" {
+  local marker
+  marker="$(to_shell_path "$TEST_TEMP_DIR/background_retry_marker")"
+
+  create_pitchfork_toml <<EOF
+[daemons.background_retry_hook]
+run = "sleep 1; exit 1"
+ready_delay = 0
+retry = 1
+
+[daemons.background_retry_hook.hooks]
+on_retry = "echo retry >> \"$marker\""
+EOF
+
+  run pitchfork start background_retry_hook
+  assert_success
+
+  for _ in $(seq 1 150); do
+    [[ -e "$marker" ]] && break
+    sleep 0.1
+  done
+  assert_file_exists "$marker"
+  # Let the retried process exit so a delayed duplicate hook would be visible.
+  sleep 2
+  local count
+  count=$(wc -l < "$marker" | tr -d ' ')
+  [[ "$count" -eq 1 ]]
+}
+
 # ===========================================================================
 # Lifecycle hooks – environment variables
 # ===========================================================================

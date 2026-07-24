@@ -954,21 +954,21 @@ impl IpcClient {
             .map(|d| d.id.clone())
             .collect();
 
-        // Filter to only running daemons
-        let requested_ids: Vec<DaemonId> = ids
+        // Only active roots participate in dependency expansion. Explicitly
+        // requested inactive roots are forwarded separately below because one
+        // may be backing off between readiness retries with no current PID.
+        let active_requested_ids: Vec<DaemonId> = ids
             .iter()
-            .filter(|id| {
-                if !running_daemons.contains(*id) {
-                    warn!("Daemon {id} is not running");
-                    false
-                } else {
-                    true
-                }
-            })
+            .filter(|id| running_daemons.contains(*id))
+            .cloned()
+            .collect();
+        let inactive_requested_ids: Vec<DaemonId> = ids
+            .iter()
+            .filter(|id| !running_daemons.contains(*id))
             .cloned()
             .collect();
 
-        if requested_ids.is_empty() {
+        if ids.is_empty() {
             info!("No running daemons to stop");
             return Ok(StopResult { any_failed: false });
         }
@@ -976,22 +976,27 @@ impl IpcClient {
         let mut any_failed = false;
 
         // Use shared reverse dependency ordering
-        let stop_levels = compute_reverse_stop_order(&requested_ids);
+        let active_stop_levels: Vec<Vec<DaemonId>> =
+            compute_reverse_stop_order(&active_requested_ids)
+                .into_iter()
+                .map(|level| {
+                    level
+                        .into_iter()
+                        .filter(|id| running_daemons.contains(id))
+                        .collect()
+                })
+                .filter(|level: &Vec<DaemonId>| !level.is_empty())
+                .collect();
+        let mut stop_levels = Vec::new();
+        if !inactive_requested_ids.is_empty() {
+            stop_levels.push(inactive_requested_ids);
+        }
+        stop_levels.extend(active_stop_levels);
 
         for level in stop_levels {
-            // Filter to only running daemons in this level
-            let to_stop: Vec<DaemonId> = level
-                .into_iter()
-                .filter(|id| running_daemons.contains(id))
-                .collect();
-
-            if to_stop.is_empty() {
-                continue;
-            }
-
             // Stop all daemons in this level concurrently
             let mut tasks = Vec::new();
-            for id in to_stop {
+            for id in level {
                 let task = Self::spawn_stop_task(self.clone(), id);
                 tasks.push(task);
             }

@@ -209,6 +209,14 @@ pub struct RunOptions {
 }
 
 impl Daemon {
+    /// Whether the persisted daemon state is eligible for another retry.
+    pub(crate) fn needs_retry(&self) -> bool {
+        self.status.is_errored()
+            && self.pid.is_none()
+            && self.retry.count() > 0
+            && self.retry_count < self.retry.count()
+    }
+
     /// Build RunOptions from persisted daemon state.
     ///
     /// Carries over all configuration fields from the daemon state.

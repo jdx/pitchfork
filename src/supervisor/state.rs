@@ -296,6 +296,54 @@ impl Supervisor {
         self.state_file.lock().await.daemons.get(id).cloned()
     }
 
+    /// Update status without allowing a stale lifecycle action to restore an old PID.
+    pub(crate) async fn set_daemon_status_if_owned(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+    ) -> bool {
+        self.state_file
+            .lock()
+            .await
+            .set_daemon_status_if_owned(id, pid, status)
+    }
+
+    /// Record an exit without allowing a stale monitor to overwrite a replacement process.
+    pub(crate) async fn record_daemon_exit(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+        last_exit_success: bool,
+    ) -> bool {
+        self.state_file
+            .lock()
+            .await
+            .record_daemon_exit(id, pid, status, last_exit_success)
+    }
+
+    /// Record an explicit stop without overwriting a terminal state from another owner.
+    pub(crate) async fn record_daemon_stop(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        last_exit_success: Option<bool>,
+    ) -> bool {
+        self.state_file
+            .lock()
+            .await
+            .record_daemon_stop(id, pid, last_exit_success)
+    }
+
+    /// Record an explicit stop while no process owns the daemon state.
+    pub(crate) async fn record_daemon_stop_if_no_process(&self, id: &DaemonId) -> bool {
+        self.state_file
+            .lock()
+            .await
+            .record_daemon_stop_if_no_process(id)
+    }
+
     /// Get all active daemons (those with PIDs, excluding pitchfork itself)
     pub(crate) async fn active_daemons(&self) -> Vec<Daemon> {
         let pitchfork_id = DaemonId::pitchfork();

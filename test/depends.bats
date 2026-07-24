@@ -273,6 +273,29 @@ EOF
   done
 }
 
+@test "stopping an inactive daemon does not stop its running dependency" {
+  create_pitchfork_toml <<EOF
+[daemons.db]
+run = "echo db started && sleep 30"
+ready_delay = 1
+
+[daemons.api]
+run = "echo api started && sleep 30"
+depends = ["db"]
+ready_delay = 1
+EOF
+
+  run pitchfork start db
+  assert_success
+  wait_for_status db running
+
+  run pitchfork stop api
+  assert_success
+
+  wait_for_status db running
+  pitchfork stop db
+}
+
 @test "stop --all succeeds when no daemons are running" {
   create_pitchfork_toml <<EOF
 [daemons.db]

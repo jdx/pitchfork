@@ -39,7 +39,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic;
-use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
@@ -62,12 +63,75 @@ pub(crate) static REAPED_STATUSES: Lazy<Mutex<HashMap<u32, i32>>> =
 // Re-export types needed by other modules
 pub(crate) use state::UpsertDaemonOpts;
 
+pub(crate) struct DaemonLifecycle {
+    transition: Arc<Mutex<DaemonLifecycleState>>,
+}
+
+pub(crate) struct DaemonLifecycleState {
+    generation: u64,
+    active_readiness_retries: Vec<Weak<ReadinessRetryActivity>>,
+}
+
+pub(crate) struct BackgroundRetryStarted {
+    attempt: u32,
+    limit: u32,
+}
+
+pub(crate) struct ReadinessRetryActivity {
+    // Production loads and stores occur while the corresponding lifecycle
+    // transition mutex is held. The atomic makes the Arc/Weak marker Sync;
+    // Relaxed ordering is sufficient because the lifecycle mutex orders access.
+    generation: AtomicU64,
+}
+
+impl DaemonLifecycleState {
+    fn has_readiness_retry_for_current_generation(&mut self) -> bool {
+        self.active_readiness_retries
+            .retain(|retry| retry.strong_count() > 0);
+        self.active_readiness_retries.iter().any(|retry| {
+            retry
+                .upgrade()
+                .is_some_and(|retry| retry.generation() == self.generation)
+        })
+    }
+}
+
+impl ReadinessRetryActivity {
+    fn new(generation: u64) -> Self {
+        Self {
+            generation: AtomicU64::new(generation),
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(atomic::Ordering::Relaxed)
+    }
+
+    fn set_generation(&self, generation: u64) {
+        self.generation.store(generation, atomic::Ordering::Relaxed);
+    }
+}
+
+impl DaemonLifecycle {
+    fn new() -> Self {
+        Self {
+            transition: Arc::new(Mutex::new(DaemonLifecycleState {
+                generation: 0,
+                active_readiness_retries: Vec::new(),
+            })),
+        }
+    }
+}
+
 pub struct Supervisor {
     pub(crate) state_file: Mutex<StateFile>,
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
+    /// Per-daemon state serializing lifecycle transitions and invalidating stale retries.
+    /// Weak references let unused daemon IDs fall out of the map on the next access.
+    pub(crate) daemon_lifecycles: Mutex<HashMap<DaemonId, Weak<DaemonLifecycle>>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete
@@ -251,6 +315,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
+            daemon_lifecycles: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),
@@ -1363,8 +1428,27 @@ fn chmod_recursive(dir: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_remove_liveness_session;
+    use super::{DaemonLifecycleState, ReadinessRetryActivity, should_remove_liveness_session};
     use crate::state_file::ProjectSession;
+    use std::sync::Arc;
+
+    #[test]
+    fn superseded_readiness_retry_does_not_block_current_generation() {
+        let old_retry = Arc::new(ReadinessRetryActivity::new(1));
+        let mut lifecycle = DaemonLifecycleState {
+            generation: 2,
+            active_readiness_retries: vec![Arc::downgrade(&old_retry)],
+        };
+
+        assert!(!lifecycle.has_readiness_retry_for_current_generation());
+
+        old_retry.set_generation(2);
+        assert!(lifecycle.has_readiness_retry_for_current_generation());
+
+        drop(old_retry);
+        assert!(!lifecycle.has_readiness_retry_for_current_generation());
+        assert!(lifecycle.active_readiness_retries.is_empty());
+    }
 
     #[test]
     fn should_not_remove_when_state_title_differs_from_snapshot() {

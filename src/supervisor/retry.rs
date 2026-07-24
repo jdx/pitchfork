@@ -2,11 +2,9 @@
 //!
 //! Handles automatic retrying of failed daemons based on retry configuration.
 
-use super::Supervisor;
-use super::hooks::{HookType, fire_hook};
+use super::{BackgroundRetryStarted, Supervisor};
+use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::supervisor::state::UpsertDaemonOpts;
-use crate::{Result, env};
 
 impl Supervisor {
     /// Check for daemons that need retrying and attempt to restart them
@@ -17,73 +15,18 @@ impl Supervisor {
             state_file
                 .daemons
                 .iter()
-                .filter(|(_id, d)| {
-                    // Daemon is errored, not currently running, and has retries remaining
-                    d.status.is_errored()
-                        && d.pid.is_none()
-                        && d.retry.count() > 0
-                        && d.retry_count < d.retry.count()
-                })
+                .filter(|(_id, daemon)| daemon.needs_retry())
                 .map(|(id, _d)| id.clone())
                 .collect()
         };
 
         for id in ids_to_retry {
-            // Look up daemon when needed and re-verify retry criteria
-            // (state may have changed since we collected IDs)
-            let daemon = {
-                let state_file = self.state_file.lock().await;
-                match state_file.daemons.get(&id) {
-                    Some(d)
-                        if d.status.is_errored()
-                            && d.pid.is_none()
-                            && d.retry.count() > 0
-                            && d.retry_count < d.retry.count() =>
-                    {
-                        d.clone()
-                    }
-                    _ => continue, // Daemon was removed or no longer needs retry
+            match self.try_start_background_retry(&id).await {
+                Ok(Some(BackgroundRetryStarted { attempt, limit })) => {
+                    info!("started retry for daemon {id} ({attempt}/{limit} attempts)");
                 }
-            };
-            info!(
-                "retrying daemon {} ({}/{} attempts)",
-                id,
-                daemon.retry_count + 1,
-                daemon.retry.count()
-            );
-
-            // Use the persisted command from daemon state
-            let cmd = match daemon.cmd.clone() {
-                Some(cmd) => cmd,
-                None => {
-                    warn!("no run command found in state for daemon {id}, cannot retry");
-                    // Mark as exhausted to prevent infinite retry loop, preserving error status
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id)
-                            .set(|o| {
-                                o.status = daemon.status.clone();
-                                o.retry_count = Some(daemon.retry.count());
-                            })
-                            .build(),
-                    )
-                    .await?;
-                    continue;
-                }
-            };
-            let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
-            fire_hook(
-                HookType::OnRetry,
-                id.clone(),
-                dir.clone(),
-                daemon.retry_count + 1,
-                daemon.env.clone(),
-                vec![],
-            )
-            .await;
-            let mut retry_opts = daemon.to_run_options(cmd);
-            retry_opts.retry_count = daemon.retry_count + 1;
-            if let Err(e) = self.run(retry_opts).await {
-                error!("failed to retry daemon {id}: {e}");
+                Ok(None) => {}
+                Err(error) => error!("failed to retry daemon {id}: {error}"),
             }
         }
 

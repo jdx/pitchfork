@@ -3,7 +3,10 @@
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
 use super::hooks::{self, HookType, fire_hook};
-use super::{SUPERVISOR, Supervisor};
+use super::{
+    BackgroundRetryStarted, DaemonLifecycle, DaemonLifecycleState, ReadinessRetryActivity,
+    SUPERVISOR, Supervisor,
+};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
@@ -27,12 +30,65 @@ use std::sync::{Arc, atomic};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::select;
-use tokio::sync::oneshot;
+use tokio::sync::{OwnedMutexGuard, oneshot};
 use tokio::time;
 
 /// Cache for compiled regex patterns to avoid recompilation on daemon restarts
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+struct RunAttempt {
+    response: IpcResponse,
+    pid: Option<u32>,
+}
+
+impl RunAttempt {
+    fn before_spawn(response: IpcResponse) -> Self {
+        Self {
+            response,
+            pid: None,
+        }
+    }
+
+    fn started(response: IpcResponse, pid: u32) -> Self {
+        Self {
+            response,
+            pid: Some(pid),
+        }
+    }
+}
+
+struct LifecycleRunAttempt {
+    response: IpcResponse,
+    pid: Option<u32>,
+    generation: u64,
+}
+
+impl LifecycleRunAttempt {
+    fn new(attempt: RunAttempt, generation: u64) -> Self {
+        Self {
+            response: attempt.response,
+            pid: attempt.pid,
+            generation,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RetryToken {
+    pid: u32,
+    generation: u64,
+}
+
+fn blocking_stop_response(response: IpcResponse) -> Option<IpcResponse> {
+    match response {
+        IpcResponse::Ok
+        | IpcResponse::DaemonWasNotRunning
+        | IpcResponse::DaemonNotRunning
+        | IpcResponse::DaemonNotFound => None,
+        response => Some(response),
+    }
+}
 
 #[cfg(unix)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,53 +224,254 @@ fn any_ready_check_remaining(
 }
 
 impl Supervisor {
+    async fn daemon_lifecycle(&self, id: &DaemonId) -> Arc<DaemonLifecycle> {
+        let mut lifecycles = self.daemon_lifecycles.lock().await;
+        lifecycles.retain(|_, lifecycle| lifecycle.strong_count() > 0);
+        if let Some(lifecycle) = lifecycles.get(id).and_then(std::sync::Weak::upgrade) {
+            lifecycle
+        } else {
+            let lifecycle = Arc::new(DaemonLifecycle::new());
+            lifecycles.insert(id.clone(), Arc::downgrade(&lifecycle));
+            lifecycle
+        }
+    }
+
+    fn advance_lifecycle_generation(lifecycle: &mut DaemonLifecycleState) -> u64 {
+        lifecycle.generation = lifecycle.generation.wrapping_add(1);
+        lifecycle.generation
+    }
+
+    async fn lifecycle_guard(lifecycle: &DaemonLifecycle) -> OwnedMutexGuard<DaemonLifecycleState> {
+        Arc::clone(&lifecycle.transition).lock_owned().await
+    }
+
+    async fn register_active_readiness_retry(
+        lifecycle: &DaemonLifecycle,
+    ) -> Arc<ReadinessRetryActivity> {
+        let mut lifecycle_guard = Self::lifecycle_guard(lifecycle).await;
+        let activity = Arc::new(ReadinessRetryActivity::new(lifecycle_guard.generation));
+        lifecycle_guard
+            .active_readiness_retries
+            .retain(|retry| retry.strong_count() > 0);
+        lifecycle_guard
+            .active_readiness_retries
+            .push(Arc::downgrade(&activity));
+        activity
+    }
+
+    fn retry_superseded_response(id: &DaemonId) -> IpcResponse {
+        IpcResponse::DaemonFailed {
+            error: format!("retry for daemon {id} was superseded by a newer lifecycle request"),
+        }
+    }
+
+    async fn stop_before_replacement(&self, id: &DaemonId) -> Result<Option<IpcResponse>> {
+        Ok(blocking_stop_response(self.stop_inner(id).await?))
+    }
+
+    async fn clear_pending_autostop(&self, id: &DaemonId) {
+        let mut pending = self.pending_autostops.lock().await;
+        if pending.remove(id).is_some() {
+            info!("cleared pending autostop for {id} (daemon starting)");
+        }
+    }
+
+    async fn run_once_serialized(
+        &self,
+        lifecycle: &Arc<DaemonLifecycle>,
+        opts: RunOptions,
+        retry: Option<RetryToken>,
+        retry_activity: Option<&ReadinessRetryActivity>,
+    ) -> Result<LifecycleRunAttempt> {
+        let mut lifecycle_guard = Self::lifecycle_guard(lifecycle).await;
+        let id = &opts.id;
+        let current_generation = lifecycle_guard.generation;
+
+        if let Some(retry) = retry
+            && current_generation != retry.generation
+        {
+            warn!(
+                "daemon {id} retry generation {} was superseded by lifecycle generation {current_generation}",
+                retry.generation
+            );
+            return Ok(LifecycleRunAttempt::new(
+                RunAttempt::before_spawn(Self::retry_superseded_response(id)),
+                current_generation,
+            ));
+        }
+
+        let mut generation = retry.map_or(current_generation, |retry| retry.generation);
+        let mut began_new_lifecycle = retry.is_some();
+
+        if let Some(daemon) = self.get_daemon(id).await
+            && let Some(pid) = daemon.pid
+            && !daemon.status.is_stopped()
+        {
+            if let Some(retry) = retry {
+                if pid == retry.pid {
+                    // Readiness failure is reported before graceful shutdown
+                    // necessarily completes. Finish stopping this exact attempt
+                    // before replacing it, even if its PID is still live.
+                    if let Some(response) = self.stop_before_replacement(id).await? {
+                        return Ok(LifecycleRunAttempt::new(
+                            RunAttempt::before_spawn(response),
+                            generation,
+                        ));
+                    }
+                    info!("run: retry stop completed for daemon {id} pid {pid}");
+                } else {
+                    warn!(
+                        "daemon {id} was replaced while waiting to retry (old pid {}, current pid {pid})",
+                        retry.pid
+                    );
+                    return Ok(LifecycleRunAttempt::new(
+                        RunAttempt::before_spawn(Self::retry_superseded_response(id)),
+                        current_generation,
+                    ));
+                }
+            } else if opts.force {
+                generation = Self::advance_lifecycle_generation(&mut lifecycle_guard);
+                began_new_lifecycle = true;
+                if let Some(response) = self.stop_before_replacement(id).await? {
+                    return Ok(LifecycleRunAttempt::new(
+                        RunAttempt::before_spawn(response),
+                        generation,
+                    ));
+                }
+                info!("run: stop completed for daemon {id}");
+            } else {
+                warn!("daemon {id} already running with pid {pid}");
+                return Ok(LifecycleRunAttempt::new(
+                    RunAttempt::before_spawn(IpcResponse::DaemonAlreadyRunning),
+                    current_generation,
+                ));
+            }
+        }
+
+        if !began_new_lifecycle {
+            generation = Self::advance_lifecycle_generation(&mut lifecycle_guard);
+        }
+        if let Some(retry_activity) = retry_activity {
+            retry_activity.set_generation(generation);
+        }
+
+        Ok(LifecycleRunAttempt::new(
+            self.run_once(opts, lifecycle_guard).await?,
+            generation,
+        ))
+    }
+
+    pub(super) async fn try_start_background_retry(
+        &self,
+        id: &DaemonId,
+    ) -> Result<Option<BackgroundRetryStarted>> {
+        let lifecycle = self.daemon_lifecycle(id).await;
+        let mut lifecycle_guard = Self::lifecycle_guard(&lifecycle).await;
+
+        if lifecycle_guard.has_readiness_retry_for_current_generation() {
+            debug!(
+                "skipping background retry for daemon {id} while a start request owns readiness retries"
+            );
+            return Ok(None);
+        }
+
+        let mut state_file = self.state_file.lock().await;
+        let Some(daemon) = state_file
+            .daemons
+            .get(id)
+            .filter(|daemon| daemon.needs_retry())
+            .cloned()
+        else {
+            debug!("skipping background retry for daemon {id} after lifecycle re-check");
+            return Ok(None);
+        };
+
+        let Some(cmd) = daemon.cmd.clone() else {
+            warn!("no run command found in state for daemon {id}, cannot retry");
+            state_file.exhaust_daemon_retries_if_eligible(id);
+            return Ok(None);
+        };
+        drop(state_file);
+
+        let mut opts = daemon.to_run_options(cmd);
+        opts.retry_count = daemon.retry_count + 1;
+        Self::advance_lifecycle_generation(&mut lifecycle_guard);
+        self.clear_pending_autostop(id).await;
+        let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+        fire_hook(
+            HookType::OnRetry,
+            id.clone(),
+            dir,
+            opts.retry_count,
+            daemon.env.clone(),
+            vec![],
+        )
+        .await;
+        let attempt = self.run_once(opts, lifecycle_guard).await?;
+        if attempt.pid.is_none() {
+            warn!(
+                "background retry for daemon {id} did not start: {:?}",
+                attempt.response
+            );
+            return Ok(None);
+        }
+
+        Ok(Some(BackgroundRetryStarted {
+            attempt: daemon.retry_count + 1,
+            limit: daemon.retry.count(),
+        }))
+    }
+
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
+        let lifecycle = self.daemon_lifecycle(id).await;
 
-        // Clear any pending autostop for this daemon since it's being started
-        {
-            let mut pending = self.pending_autostops.lock().await;
-            if pending.remove(id).is_some() {
-                info!("cleared pending autostop for {id} (daemon starting)");
-            }
-        }
-
-        let daemon = self.get_daemon(id).await;
-        if let Some(daemon) = daemon {
-            // Stopping state is treated as "not running" - the monitoring task will clean it up
-            // Only check for Running state with a valid PID
-            if !daemon.status.is_stopping()
-                && !daemon.status.is_stopped()
-                && let Some(pid) = daemon.pid
-            {
-                if opts.force {
-                    self.stop(id).await?;
-                    info!("run: stop completed for daemon {id}");
-                } else {
-                    warn!("daemon {id} already running with pid {pid}");
-                    return Ok(IpcResponse::DaemonAlreadyRunning);
-                }
-            }
-        }
+        // Clear any pending autostop for this daemon since it's being started.
+        self.clear_pending_autostop(id).await;
 
         // If wait_ready is true and retry is configured, implement retry loop
         if opts.wait_ready && opts.retry.count() > 0 {
+            // Keep the background retry watcher from starting an independent
+            // attempt while this request owns readiness retries. The weak
+            // registration disappears automatically if the request is cancelled.
+            let _active_readiness_retry = Self::register_active_readiness_retry(&lifecycle).await;
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
+            let mut retry = None;
             for attempt in 0..max_attempts {
                 let mut retry_opts = opts.clone();
                 retry_opts.retry_count = attempt;
                 retry_opts.cmd = cmd.clone();
+                let result = self
+                    .run_once_serialized(
+                        &lifecycle,
+                        retry_opts,
+                        retry,
+                        Some(&_active_readiness_retry),
+                    )
+                    .await?;
 
-                let result = self.run_once(retry_opts).await?;
-
-                match result {
+                match result.response {
                     IpcResponse::DaemonReady { daemon } => {
                         return Ok(IpcResponse::DaemonReady { daemon });
                     }
                     IpcResponse::DaemonFailedWithCode { exit_code } => {
+                        let Some(pid) = result.pid else {
+                            error!(
+                                "daemon {id} failed after spawning but its PID was not retained"
+                            );
+                            return Ok(IpcResponse::DaemonFailed {
+                                error: format!(
+                                    "daemon {id} failed after spawning but its PID was not retained"
+                                ),
+                            });
+                        };
+                        retry = Some(RetryToken {
+                            pid,
+                            generation: result.generation,
+                        });
                         if attempt < opts.retry.count() {
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
@@ -245,11 +502,18 @@ impl Supervisor {
         }
 
         // No retry or wait_ready is false
-        self.run_once(opts).await
+        Ok(self
+            .run_once_serialized(&lifecycle, opts, None, None)
+            .await?
+            .response)
     }
 
     /// Run a daemon once (single attempt)
-    pub(crate) async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
+    async fn run_once(
+        &self,
+        opts: RunOptions,
+        lifecycle_guard: OwnedMutexGuard<DaemonLifecycleState>,
+    ) -> Result<RunAttempt> {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
@@ -316,26 +580,28 @@ impl Supervisor {
                     if let Some(port_error) = e.downcast_ref::<PortError>() {
                         match port_error {
                             PortError::InUse { port, process, pid } => {
-                                return Ok(IpcResponse::PortConflict {
+                                return Ok(RunAttempt::before_spawn(IpcResponse::PortConflict {
                                     port: *port,
                                     process: process.clone(),
                                     pid: *pid,
-                                });
+                                }));
                             }
                             PortError::NoAvailablePort {
                                 start_port,
                                 attempts,
                             } => {
-                                return Ok(IpcResponse::NoAvailablePort {
-                                    start_port: *start_port,
-                                    attempts: *attempts,
-                                });
+                                return Ok(RunAttempt::before_spawn(
+                                    IpcResponse::NoAvailablePort {
+                                        start_port: *start_port,
+                                        attempts: *attempts,
+                                    },
+                                ));
                             }
                         }
                     }
-                    return Ok(IpcResponse::DaemonFailed {
+                    return Ok(RunAttempt::before_spawn(IpcResponse::DaemonFailed {
                         error: e.to_string(),
-                    });
+                    }));
                 }
             }
         } else {
@@ -347,7 +613,11 @@ impl Supervisor {
             if let Some(port) = opts.ready_port.as_ref().and_then(|p| p.as_port()) {
                 if port > 0 {
                     if let Some((pid, process)) = detect_port_conflict(port).await {
-                        return Ok(IpcResponse::PortConflict { port, process, pid });
+                        return Ok(RunAttempt::before_spawn(IpcResponse::PortConflict {
+                            port,
+                            process,
+                            pid,
+                        }));
                     }
                 }
             }
@@ -364,14 +634,14 @@ impl Supervisor {
         let shell_parts = match shell_words::split(&shell_setting) {
             Ok(parts) if !parts.is_empty() => parts,
             Ok(_) => {
-                return Ok(IpcResponse::DaemonFailed {
+                return Ok(RunAttempt::before_spawn(IpcResponse::DaemonFailed {
                     error: "general.shell setting is empty".to_string(),
-                });
+                }));
             }
             Err(e) => {
-                return Ok(IpcResponse::DaemonFailed {
+                return Ok(RunAttempt::before_spawn(IpcResponse::DaemonFailed {
                     error: format!("failed to parse general.shell setting {shell_setting:?}: {e}"),
-                });
+                }));
             }
         };
         let (shell_program, shell_args) = shell_parts.split_first().unwrap();
@@ -412,9 +682,9 @@ impl Supervisor {
         let run_identity = match resolve_effective_run_identity(opts.user.as_deref()) {
             Ok(identity) => identity,
             Err(e) => {
-                return Ok(IpcResponse::DaemonFailed {
+                return Ok(RunAttempt::before_spawn(IpcResponse::DaemonFailed {
                     error: e.to_string(),
-                });
+                }));
             }
         };
         info!("run: spawning daemon {id} with {program} {args:?}");
@@ -541,9 +811,9 @@ impl Supervisor {
             Some(p) => p,
             None => {
                 warn!("Daemon {id} exited before PID could be captured");
-                return Ok(IpcResponse::DaemonFailed {
+                return Ok(RunAttempt::before_spawn(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
-                });
+                }));
             }
         };
         info!("started daemon {id} with pid {pid}");
@@ -1328,12 +1598,6 @@ impl Supervisor {
                 let _ = handle.await;
             }
 
-            // Clear active_port since the process is no longer running
-            {
-                let mut state_file = SUPERVISOR.state_file.lock().await;
-                state_file.clear_active_port(&id);
-            }
-
             // Get the final exit status
             let exit_status = if let Some(status) = exit_status {
                 status
@@ -1409,12 +1673,10 @@ impl Supervisor {
                 (Err(_), false) => (-1, "fail"),
             };
 
-            // Update daemon state unless stop() already did it (won the race),
-            // OR the daemon was intentionally stopped before the drain
-            // (pre_drain_is_stopping). In the latter case, start() may have
-            // upserted Running during the 5s drain, and we must NOT overwrite
-            // it with Stopped — that would undo the restart.
-            if !already_stopped && !pre_drain_is_stopping {
+            // Update daemon state unless stop() already did it. PID ownership is
+            // checked atomically with the update so a late monitor can never
+            // overwrite a replacement process started during exit cleanup.
+            if !already_stopped {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
@@ -1425,19 +1687,18 @@ impl Supervisor {
                     ),
                     _ => (DaemonStatus::Errored(exit_code), false),
                 };
-                if let Err(e) = SUPERVISOR
-                    .upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = new_status;
-                                o.last_exit_success = Some(last_exit_success);
-                            })
-                            .build(),
-                    )
+                let new_status_display = new_status.to_string();
+                if SUPERVISOR
+                    .record_daemon_exit(&id, pid, new_status, last_exit_success)
                     .await
                 {
-                    error!("Failed to update daemon state for {id}: {e}");
+                    info!(
+                        "recorded daemon {id} exit from pid {pid} with status {new_status_display}"
+                    );
+                } else {
+                    debug!(
+                        "daemon {id} exit from pid {pid} ignored because the state no longer belongs to that process"
+                    );
                 }
             }
 
@@ -1471,29 +1732,53 @@ impl Supervisor {
             }
         });
 
+        // The process is registered and its monitor is installed. Other
+        // lifecycle commands may now safely act on this daemon while this
+        // request continues waiting for readiness.
+        drop(lifecycle_guard);
+
         // If wait_ready is true, wait for readiness notification
         if let Some(ready_rx) = ready_rx {
             match ready_rx.await {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
-                    Ok(IpcResponse::DaemonReady { daemon })
+                    Ok(RunAttempt::started(
+                        IpcResponse::DaemonReady { daemon },
+                        pid,
+                    ))
                 }
                 Ok(Err(exit_code)) => {
                     error!("daemon {id} failed before becoming ready");
-                    Ok(IpcResponse::DaemonFailedWithCode { exit_code })
+                    Ok(RunAttempt::started(
+                        IpcResponse::DaemonFailedWithCode { exit_code },
+                        pid,
+                    ))
                 }
                 Err(_) => {
                     error!("readiness channel closed unexpectedly for daemon {id}");
-                    Ok(IpcResponse::DaemonStart { daemon })
+                    Ok(RunAttempt::started(
+                        IpcResponse::DaemonStart { daemon },
+                        pid,
+                    ))
                 }
             }
         } else {
-            Ok(IpcResponse::DaemonStart { daemon })
+            Ok(RunAttempt::started(
+                IpcResponse::DaemonStart { daemon },
+                pid,
+            ))
         }
     }
 
     /// Stop a running daemon
     pub async fn stop(&self, id: &DaemonId) -> Result<IpcResponse> {
+        let lifecycle = self.daemon_lifecycle(id).await;
+        let mut lifecycle_guard = Self::lifecycle_guard(&lifecycle).await;
+        Self::advance_lifecycle_generation(&mut lifecycle_guard);
+        self.stop_inner(id).await
+    }
+
+    async fn stop_inner(&self, id: &DaemonId) -> Result<IpcResponse> {
         let pitchfork_id = DaemonId::pitchfork();
         if *id == pitchfork_id {
             return Ok(IpcResponse::Error(
@@ -1507,15 +1792,15 @@ impl Supervisor {
                 trace!("killing pid: {pid}");
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = Some(pid);
-                                o.status = DaemonStatus::Stopping;
-                            })
-                            .build(),
-                    )
-                    .await?;
+                    if !self
+                        .set_daemon_status_if_owned(id, pid, DaemonStatus::Stopping)
+                        .await
+                    {
+                        debug!(
+                            "stop request for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                        );
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
 
                     // Kill the entire process group atomically (daemon PID == PGID
                     // because we called setsid() at spawn time)
@@ -1530,15 +1815,14 @@ impl Supervisor {
                         if PROCS.is_running(pid) {
                             // Process still running after kill attempt - set back to Running
                             debug!("failed to stop pid {pid}: process still running after kill");
-                            self.upsert_daemon(
-                                UpsertDaemonOpts::builder(id.clone())
-                                    .set(|o| {
-                                        o.pid = Some(pid); // Preserve PID to avoid orphaning the process
-                                        o.status = DaemonStatus::Running;
-                                    })
-                                    .build(),
-                            )
-                            .await?;
+                            if !self
+                                .set_daemon_status_if_owned(id, pid, DaemonStatus::Running)
+                                .await
+                            {
+                                debug!(
+                                    "failed-stop recovery for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                                );
+                            }
                             return Ok(IpcResponse::DaemonStopFailed {
                                 error: format!(
                                     "process {pid} still running after kill attempt: {e}"
@@ -1551,16 +1835,15 @@ impl Supervisor {
                     // Note: kill_async uses SIGTERM -> wait ~3s -> SIGKILL strategy,
                     // and also detects zombie processes, so by the time it returns,
                     // the process should be fully terminated.
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Stopped;
-                                o.last_exit_success = Some(true);
-                            })
-                            .build(),
-                    )
-                    .await?;
+                    if self.record_daemon_stop(id, pid, Some(true)).await {
+                        info!(
+                            "recorded explicit stop for daemon {id} pid {pid} with a successful exit result"
+                        );
+                    } else {
+                        debug!(
+                            "stop result for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                        );
+                    }
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
                     // Process already dead — transition to Stopped so the
@@ -1568,21 +1851,29 @@ impl Supervisor {
                     // scheduling new attempts. This is important for an
                     // explicit `pitchfork stop` on an Errored daemon: the
                     // user wants to abort retries.
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Stopped;
-                            })
-                            .build(),
-                    )
-                    .await?;
+                    if self.record_daemon_stop(id, pid, None).await {
+                        info!(
+                            "recorded explicit stop for already-dead daemon {id} pid {pid}, preserving its previous exit result"
+                        );
+                    } else {
+                        debug!(
+                            "stop result for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                        );
+                    }
                     return Ok(IpcResponse::DaemonWasNotRunning);
                 }
                 Ok(IpcResponse::Ok)
             } else {
                 debug!("daemon {id} not running");
-                Ok(IpcResponse::DaemonNotRunning)
+                if self.record_daemon_stop_if_no_process(id).await {
+                    info!(
+                        "recorded explicit stop for daemon {id} without a current process, cancelling pending retries"
+                    );
+                    Ok(IpcResponse::Ok)
+                } else {
+                    debug!("stop result for daemon {id} without a PID made no state change");
+                    Ok(IpcResponse::DaemonNotRunning)
+                }
             }
         } else {
             debug!("daemon {id} not found");
@@ -2207,6 +2498,74 @@ fn build_pitchfork_url(slug: &Option<String>, s: &crate::settings::Settings) -> 
     let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
     let tld = if lan_enabled { "local" } else { &s.proxy.tld };
     Some(format!("{scheme}://{slug}.{tld}{port_suffix}",))
+}
+
+#[cfg(test)]
+mod lifecycle_response_tests {
+    use super::*;
+    use crate::daemon::Daemon;
+
+    #[test]
+    fn only_successful_or_already_stopped_responses_allow_replacement() {
+        for response in [
+            IpcResponse::Ok,
+            IpcResponse::DaemonWasNotRunning,
+            IpcResponse::DaemonNotRunning,
+            IpcResponse::DaemonNotFound,
+        ] {
+            assert!(blocking_stop_response(response).is_none());
+        }
+
+        let failed = blocking_stop_response(IpcResponse::DaemonStopFailed {
+            error: "still running".to_string(),
+        });
+        assert!(matches!(
+            failed,
+            Some(IpcResponse::DaemonStopFailed { error }) if error == "still running"
+        ));
+
+        let unexpected = blocking_stop_response(IpcResponse::Error("denied".to_string()));
+        assert!(matches!(
+            unexpected,
+            Some(IpcResponse::Error(error)) if error == "denied"
+        ));
+    }
+
+    #[tokio::test]
+    async fn background_retry_yields_to_foreground_readiness_owner() {
+        let supervisor = Supervisor::new().unwrap();
+        let id = DaemonId::new("test", "background-retry-marker");
+        {
+            let mut state_file = supervisor.state_file.lock().await;
+            state_file.insert_daemon(
+                &id,
+                Daemon {
+                    id: id.clone(),
+                    pid: None,
+                    status: DaemonStatus::Errored(1),
+                    cmd: Some(vec!["true".to_string()]),
+                    retry: 2u32.into(),
+                    retry_count: 0,
+                    ..Daemon::default()
+                },
+            );
+        }
+
+        let lifecycle = supervisor.daemon_lifecycle(&id).await;
+        let _foreground_retry = Supervisor::register_active_readiness_retry(&lifecycle).await;
+
+        assert!(
+            supervisor
+                .try_start_background_retry(&id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let state_file = supervisor.state_file.lock().await;
+        let daemon = state_file.daemons.get(&id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert_eq!(daemon.retry_count, 0);
+    }
 }
 
 #[cfg(test)]
