@@ -760,6 +760,10 @@ processes left behind by a previous supervisor instance that was killed
 unexpectedly (for example, with `kill -9`). Any matching live processes are
 terminated so the new supervisor starts with a clean slate.
 
+Before terminating, the recorded process identity (PID plus kernel start
+time) is verified so that a PID recycled by the OS to an unrelated process
+is never killed — in that case only the stale state entry is cleared.
+
 This is recommended for local development where an unclean shutdown (IDE
 restart, system crash, etc.) would otherwise leave stale processes holding
 ports and consuming resources.

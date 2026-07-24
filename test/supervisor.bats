@@ -123,6 +123,10 @@ EOF
   assert_success
   wait_for_status orphan_test running
 
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid orphan_test)"
+  [[ -n "$daemon_pid" ]]
+
   local sup_pid
   sup_pid="$(get_supervisor_pid)"
   [[ -n "$sup_pid" ]]
@@ -131,6 +135,9 @@ EOF
   kill_pid "$sup_pid"
   sleep 1
 
+  # The daemon survives the crash as an orphan (reparented to init).
+  pid_alive "$daemon_pid"
+
   run pitchfork supervisor start
   assert_success
   sleep 3
@@ -138,6 +145,58 @@ EOF
   run pitchfork status orphan_test
   assert_success
   assert_output --partial "stopped"
+
+  # The orphan process itself must be terminated — a state entry that merely
+  # says "stopped" while the process lives on would allow silent duplicates.
+  run pid_alive "$daemon_pid"
+  assert_failure
+
+  # Starting again must yield exactly one fresh instance, not a duplicate.
+  run pitchfork start orphan_test
+  assert_success
+  wait_for_status orphan_test running
+
+  local new_pid
+  new_pid="$(get_daemon_pid orphan_test)"
+  [[ -n "$new_pid" ]]
+  [[ "$new_pid" != "$daemon_pid" ]]
+
+  pitchfork stop orphan_test
+}
+
+@test "orphan cleanup does not kill unrelated process with recycled PID" {
+  skip_on_windows "state file crafting relies on Unix signal semantics"
+
+  # An unrelated long-running process standing in for a recycled PID.
+  sleep 300 >/dev/null 2>&1 &
+  local bystander_pid=$!
+
+  # Stop the supervisor, then plant a state entry claiming a daemon owns the
+  # bystander's PID with a mismatching identity (different start time/title).
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."recycled/victim"]
+id = "recycled/victim"
+title = "definitely-not-sleep"
+pid = $bystander_pid
+start_time = 1
+status = "running"
+autostop = false
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # The unrelated process must survive; only the stale state entry is reset.
+  pid_alive "$bystander_pid"
+
+  run pitchfork status recycled/victim
+  assert_success
+  assert_output --partial "stopped"
+
+  { kill -9 "$bystander_pid" && wait "$bystander_pid"; } 2>/dev/null || true
 }
 
 # ============================================================================

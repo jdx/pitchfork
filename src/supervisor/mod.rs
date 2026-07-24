@@ -537,10 +537,10 @@ impl Supervisor {
                 ticker.tick().await; // first tick is immediate
                 loop {
                     ticker.tick().await;
-                    if let Some(cancel) = monitor_cancel.as_ref() {
-                        if cancel.is_cancelled() {
-                            break;
-                        }
+                    if let Some(cancel) = monitor_cancel.as_ref()
+                        && cancel.is_cancelled()
+                    {
+                        break;
                     }
                     if let Some(new_ip) =
                         crate::proxy::lan_ip::detect_lan_ip_if_changed(last_ip).await
@@ -622,10 +622,10 @@ impl Supervisor {
                     }
                 }
                 let state = SUPERVISOR.state_file.lock().await;
-                if state.is_dirty() {
-                    if let Err(e) = state.write() {
-                        warn!("failed to flush state file: {e}");
-                    }
+                if state.is_dirty()
+                    && let Err(e) = state.write()
+                {
+                    warn!("failed to flush state file: {e}");
                 }
             }
             debug!("state flush task exiting");
@@ -634,10 +634,10 @@ impl Supervisor {
 
     pub(crate) async fn flush_state(&self) {
         let state = self.state_file.lock().await;
-        if state.is_dirty() {
-            if let Err(e) = state.write() {
-                warn!("failed to flush state file: {e}");
-            }
+        if state.is_dirty()
+            && let Err(e) = state.write()
+        {
+            warn!("failed to flush state file: {e}");
         }
     }
 
@@ -1009,10 +1009,10 @@ impl Supervisor {
         // in-memory-only changes are lost.
         {
             let state = self.state_file.lock().await;
-            if state.is_dirty() {
-                if let Err(e) = state.write() {
-                    warn!("failed to flush state file during shutdown: {e}");
-                }
+            if state.is_dirty()
+                && let Err(e) = state.write()
+            {
+                warn!("failed to flush state file during shutdown: {e}");
             }
         }
 
@@ -1182,12 +1182,11 @@ fn chown_recursive(dir: &std::path::Path, uid: u32, gid: u32, skip_proxy: bool) 
         let path = entry.path();
         if path.is_dir() {
             // Skip proxy/ at the top level of the state directory
-            if skip_proxy {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "proxy" {
-                        continue;
-                    }
-                }
+            if skip_proxy
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && name == "proxy"
+            {
+                continue;
             }
             chown_recursive(&path, uid, gid, false);
         } else {
@@ -1269,56 +1268,44 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         candidates.len()
     );
 
+    // Populate the process cache for all candidate PIDs in one pass so the
+    // identity checks below (start_time/title) see live data. Without this
+    // the cache is empty at supervisor startup and every lookup returns None,
+    // which would defeat the recycled-PID safety check entirely.
+    let pids: Vec<u32> = candidates.iter().filter_map(|d| d.pid).collect();
+    PROCS.refresh_pids(&pids);
+
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
 
         if !PROCS.is_running(pid) {
             // PID already dead — just reset its state
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
+            reset_daemon_state(supervisor, &daemon.id).await;
             continue;
         }
 
-        // Safety check: verify the process name matches what we recorded.
-        // This avoids accidentally killing an unrelated process if the PID
-        // was recycled by the kernel between state-file writes.
-        let current_title = PROCS.title(pid);
-        let matches = match (&current_title, &daemon.title) {
-            (Some(current), Some(expected)) => current == expected,
-            // If we don't have a recorded title, fall back to allowing the kill
-            // (this is a degraded but functional state — the process was probably
-            // started before title tracking was added, or the state was reset).
-            _ => true,
+        // Safety check: verify the live process really is the daemon we
+        // recorded, not an unrelated process that received a recycled PID.
+        // The kernel start time is a stable identity for the lifetime of a
+        // process; fall back to comparing the process name for state files
+        // written by older versions that didn't record start_time.
+        let matches = match (daemon.start_time, PROCS.start_time(pid)) {
+            (Some(recorded), Some(current)) => recorded == current,
+            _ => match (PROCS.title(pid), &daemon.title) {
+                (Some(current), Some(expected)) => current == *expected,
+                // No recorded identity at all (the process was started before
+                // identity tracking was added, or the state was reset) —
+                // degraded but functional: allow the kill.
+                _ => true,
+            },
         };
 
         if !matches {
             warn!(
-                "pid {pid} for daemon {} has changed name (expected '{}', found '{}'); skipping orphan cleanup",
+                "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
                 daemon.id,
-                daemon.title.as_deref().unwrap_or("?"),
-                current_title.as_deref().unwrap_or("?")
             );
-            // Still reset state so we don't track a stale PID
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
+            reset_daemon_state(supervisor, &daemon.id).await;
             continue;
         }
 
@@ -1329,18 +1316,24 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
             .await;
 
-        let _ = supervisor
-            .upsert_daemon(
-                UpsertDaemonOpts::builder(daemon.id.clone())
-                    .set(|o| {
-                        o.pid = None;
-                        o.status = DaemonStatus::Stopped;
-                        o.active_port = None;
-                    })
-                    .build(),
-            )
-            .await;
+        reset_daemon_state(supervisor, &daemon.id).await;
     }
+}
+
+/// Clear a daemon's runtime state (pid, status, active port) after its
+/// process is gone or no longer ours to manage.
+async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId) {
+    let _ = supervisor
+        .upsert_daemon(
+            UpsertDaemonOpts::builder(id.clone())
+                .set(|o| {
+                    o.pid = None;
+                    o.status = DaemonStatus::Stopped;
+                    o.active_port = None;
+                })
+                .build(),
+        )
+        .await;
 }
 
 /// Recursively chmod: directories → 0o755, files → 0o644.

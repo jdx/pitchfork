@@ -59,6 +59,17 @@ impl Procs {
             .map(|p| p.name().to_string_lossy().to_string())
     }
 
+    /// Kernel start time of the process in seconds since the epoch.
+    ///
+    /// Combined with the PID this forms a stable identity for the lifetime of
+    /// a process: a recycled PID always has a different start time. Requires
+    /// the process cache to be populated for `pid` (see `refresh_pids`).
+    pub fn start_time(&self, pid: u32) -> Option<u64> {
+        self.lock_system()
+            .process(sysinfo::Pid::from_u32(pid))
+            .map(|p| p.start_time())
+    }
+
     pub fn is_running(&self, pid: u32) -> bool {
         // Use kill(pid, 0) on Unix for an O(1) liveness check that does not
         // depend on the process cache being populated. This avoids the need

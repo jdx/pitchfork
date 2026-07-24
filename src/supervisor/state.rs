@@ -178,7 +178,25 @@ impl Supervisor {
         let existing = state_file.daemons.get(&opts.id);
         let daemon = Daemon {
             id: opts.id.clone(),
-            title: opts.pid.and_then(|pid| PROCS.title(pid)),
+            // title/start_time identify the process for orphan cleanup after a
+            // supervisor crash. They are looked up from the process cache; if
+            // the cache has no entry (e.g. an upsert between refreshes) fall
+            // back to the existing values as long as the PID is unchanged, so
+            // the recorded identity is not wiped mid-lifetime.
+            title: opts.pid.and_then(|pid| {
+                PROCS.title(pid).or_else(|| {
+                    existing
+                        .filter(|d| d.pid == Some(pid))
+                        .and_then(|d| d.title.clone())
+                })
+            }),
+            start_time: opts.pid.and_then(|pid| {
+                PROCS.start_time(pid).or_else(|| {
+                    existing
+                        .filter(|d| d.pid == Some(pid))
+                        .and_then(|d| d.start_time)
+                })
+            }),
             pid: opts.pid,
             status: opts.status,
             shell_pid: opts.shell_pid,
