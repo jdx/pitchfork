@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.18.0](https://github.com/jdx/pitchfork/compare/v2.17.0...v2.18.0) - 2026-07-24
+
+### Added
+
+- *(project)* add project enter/leave/list for IDE session management ([#619](https://github.com/jdx/pitchfork/pull/619))
+- *(config)* add top-level env with tera template injection ([#618](https://github.com/jdx/pitchfork/pull/618))
+- *(daemons)* add --global flag to daemons add ([#621](https://github.com/jdx/pitchfork/pull/621))
+- full Windows support with CI ([#602](https://github.com/jdx/pitchfork/pull/602))
+
+### Fixed
+
+- *(supervisor)* verify process identity before killing orphaned daemons ([#632](https://github.com/jdx/pitchfork/pull/632))
+- *(web)* resolve spa assets from app root on nested routes ([#603](https://github.com/jdx/pitchfork/pull/603))
+- *(tui)* hoist shared namespace into the daemons panel title ([#622](https://github.com/jdx/pitchfork/pull/622))
+
+### Other
+
+- *(deps)* update rust crate tokio to v1.53.0 ([#653](https://github.com/jdx/pitchfork/pull/653))
+- *(deps)* update rust crate uuid to v1.24.0 ([#651](https://github.com/jdx/pitchfork/pull/651))
+- *(deps)* update rust crate http-body-util to v0.1.4 ([#643](https://github.com/jdx/pitchfork/pull/643))
+- *(deps)* update rust crate rustls to v0.23.42 ([#646](https://github.com/jdx/pitchfork/pull/646))
+- *(deps)* update rust crate syn to v2.0.119 ([#647](https://github.com/jdx/pitchfork/pull/647))
+- *(deps)* update rust crate tokio to v1.52.4 ([#648](https://github.com/jdx/pitchfork/pull/648))
+- *(deps)* update rust crate mdns-sd to v0.20.2 ([#644](https://github.com/jdx/pitchfork/pull/644))
+- *(deps)* update rust crate regex to v1.13.1 ([#645](https://github.com/jdx/pitchfork/pull/645))
+- *(deps)* update rust crate globset to v0.4.19 ([#642](https://github.com/jdx/pitchfork/pull/642))
+- *(deps)* update rust crate clx to v2.1.1 ([#641](https://github.com/jdx/pitchfork/pull/641))
+- *(deps)* update rust crate clap to v4.6.2 ([#640](https://github.com/jdx/pitchfork/pull/640))
+- *(deps)* update rust crate xx to v2.6.1 ([#611](https://github.com/jdx/pitchfork/pull/611))
+- *(deps)* update rust crate ratatui to v0.30.2 ([#609](https://github.com/jdx/pitchfork/pull/609))
+- *(deps)* update rust crate rcgen to v0.14.8 ([#610](https://github.com/jdx/pitchfork/pull/610))
+- raise MSRV to Rust 1.88 ([#624](https://github.com/jdx/pitchfork/pull/624))
+
 ## [2.17.0](https://github.com/jdx/pitchfork/compare/v2.16.0...v2.17.0) - 2026-07-17
 
 ### Added
