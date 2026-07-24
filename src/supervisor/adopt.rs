@@ -210,8 +210,17 @@ impl Supervisor {
             if !PROCS.is_running(pid) {
                 // The monitor that would have observed this exit died with a
                 // previous supervisor; the exit status is unobservable.
-                let status =
-                    super::unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
+                // Any daemon this pass sees is Running with no live monitor,
+                // so whatever was watching it is gone and its exit went
+                // unobserved by definition. Records left by a *clean*
+                // shutdown cannot reach here: the startup scan already
+                // resolved those out of Running before this ever runs.
+                let status = super::unobserved_exit_status(
+                    &daemon.status,
+                    daemon.boot_time,
+                    boot_time,
+                    true,
+                );
                 warn!(
                     "daemon {} (pid {pid}) died while unmonitored; marking {status}",
                     daemon.id
@@ -239,8 +248,17 @@ impl Supervisor {
                 }
                 // The PID belongs to a different process now, which means the
                 // daemon itself died unnoticed. Never touch the new process.
-                let status =
-                    super::unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
+                // Any daemon this pass sees is Running with no live monitor,
+                // so whatever was watching it is gone and its exit went
+                // unobserved by definition. Records left by a *clean*
+                // shutdown cannot reach here: the startup scan already
+                // resolved those out of Running before this ever runs.
+                let status = super::unobserved_exit_status(
+                    &daemon.status,
+                    daemon.boot_time,
+                    boot_time,
+                    true,
+                );
                 warn!(
                     "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking {status}",
                     daemon.id,
@@ -306,9 +324,10 @@ impl Supervisor {
     /// the in-lock check stands down. No hooks fire from these transitions —
     /// the monitor that would have observed the exit died with a previous
     /// supervisor, mirroring the startup scan's handling. `last_exit_success`
-    /// is left untouched for the same reason: these exits were never
-    /// observed, and fabricating a result would corrupt the cron
-    /// `retrigger = "success" | "fail"` decisions that read it.
+    /// is cleared for the same reason: the run's outcome was never observed,
+    /// so neither fabricating a result nor keeping the previous run's (which
+    /// the cron `retrigger = "success" | "fail"` decisions would then read as
+    /// this run's) is correct.
     ///
     /// Returns whether the write happened.
     async fn finalize_if_pid(&self, id: &DaemonId, pid: u32, status: DaemonStatus) -> bool {
@@ -339,6 +358,7 @@ impl Supervisor {
         d.start_time = None;
         d.boot_time = None;
         d.status = status;
+        d.last_exit_success = None;
         d.active_port = None;
         state_file.clear_active_port(id);
         state_file.insert_daemon(id, d);

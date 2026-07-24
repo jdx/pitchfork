@@ -300,6 +300,39 @@ EOF
   pitchfork stop crash_retry
 }
 
+@test "supervisor stop clears the supervisor record on every platform" {
+  # Orphan reconciliation reads the presence of this record as evidence that
+  # the previous supervisor died unexpectedly. A deliberate stop must always
+  # clear it, whether the supervisor handles the stop signal itself (Unix) or
+  # is force-terminated by the stop command (Windows) — otherwise the next
+  # supervisor reports intentionally stopped daemons as failures.
+  create_pitchfork_toml <<EOF
+[daemons.stop_marker]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start stop_marker
+  assert_success
+  wait_for_status stop_marker running
+  grep -q '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml"
+
+  run pitchfork supervisor stop
+  assert_success
+  sleep 1
+
+  run grep -q '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml"
+  assert_failure
+
+  # And the daemon reads as stopped rather than errored after the restart.
+  run pitchfork supervisor start
+  assert_success
+  sleep 2
+  run pitchfork status stop_marker
+  assert_success
+  assert_output --partial "stopped"
+}
+
 @test "daemon record from a previous boot is not retried" {
   skip_on_windows "state file crafting relies on Unix signal semantics"
   export PITCHFORK_INTERVAL=1s

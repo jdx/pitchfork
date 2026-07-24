@@ -1292,6 +1292,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
 
     let policy = orphan_policy();
     let boot_time = PROCS.boot_time();
+    let unclean = supervisor_exited_uncleanly(supervisor).await;
 
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
@@ -1305,7 +1306,8 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             // PID already dead — the daemon exited while unsupervised, so
             // record a terminal status that reflects whether it died under a
             // crashed supervisor (retryable) or with the machine.
-            let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
+            let status =
+                unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
             reset_daemon_state(supervisor, &daemon.id, status).await;
             continue;
         }
@@ -1338,7 +1340,8 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             );
             // The daemon died at some unknown point and the OS handed its PID
             // to something else — same unobserved exit as a dead PID.
-            let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time);
+            let status =
+                unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
             reset_daemon_state(supervisor, &daemon.id, status).await;
             continue;
         }
@@ -1432,30 +1435,49 @@ fn process_identity_matches(
     }
 }
 
-/// Clear a daemon's runtime state (pid, status, active port) after its
-/// process is gone or no longer ours to manage.
+/// Clear a daemon's runtime state (pid, process identity, active port) after
+/// its process is gone or is no longer ours to manage.
 ///
-/// `last_exit_success` is deliberately left untouched: these transitions
-/// cover exits nobody observed, and fabricating a result would corrupt the
-/// cron `retrigger = "success" | "fail"` decisions that read it.
+/// `last_exit_success` is cleared rather than set or preserved. These
+/// transitions cover runs whose outcome nobody observed: fabricating a result
+/// would corrupt the cron `retrigger = "success" | "fail"` decisions that read
+/// it, and keeping the previous value is just as wrong — it would attribute an
+/// earlier run's outcome to this one. `None` restores the "no result yet"
+/// reading, which those retriggers already handle.
+///
+/// Config fields are preserved by cloning the existing record, so a reset can
+/// never drop a daemon's command, retry policy, or schedule.
 async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId, status: DaemonStatus) {
-    let _ = supervisor
-        .upsert_daemon(
-            UpsertDaemonOpts::builder(id.clone())
-                .set(|o| {
-                    o.pid = None;
-                    o.status = status;
-                    o.active_port = None;
-                })
-                .build(),
-        )
-        .await;
+    let mut state_file = supervisor.state_file.lock().await;
+    let Some(existing) = state_file.daemons.get(id) else {
+        return;
+    };
+    let mut daemon = existing.clone();
+    daemon.pid = None;
+    daemon.title = None;
+    daemon.start_time = None;
+    daemon.boot_time = None;
+    daemon.status = status;
+    daemon.last_exit_success = None;
+    daemon.active_port = None;
+    state_file.clear_active_port(id);
+    state_file.insert_daemon(id, daemon);
 }
 
-/// Boot times this far apart are treated as different boots. Generous enough
-/// to absorb any platform jitter in `boot_time()` (Windows derives it from a
-/// tick count), while far below the gap any real reboot produces.
-const BOOT_TIME_TOLERANCE_SECS: u64 = 60;
+/// Boot times this far apart are treated as different boots.
+///
+/// Sized to the only platform that reports a jittery value: Windows derives
+/// boot time as `now - GetTickCount64()`, sampling two clocks independently,
+/// so consecutive calls within one boot can differ by about a second. Linux
+/// (`/proc/stat` btime) and macOS (`kern.boottime`) report stable values.
+///
+/// Deliberately kept this tight so a genuine reboot can never fall inside it:
+/// a prior session would have to boot, start the supervisor, spawn a daemon,
+/// have that daemon die, and complete a reboot inside two seconds, which no
+/// real boot cycle reaches. A larger window would misread a short-lived
+/// previous boot (e.g. a device in a reboot loop) as the current one and
+/// resurrect daemons a reboot should have left stopped.
+const BOOT_TIME_TOLERANCE_SECS: u64 = 2;
 
 /// Terminal status for a daemon whose process is gone and whose exit was
 /// never observed, because the monitor that would have seen it died with a
@@ -1474,14 +1496,36 @@ pub(crate) fn unobserved_exit_status(
     status: &DaemonStatus,
     recorded_boot_time: Option<u64>,
     current_boot_time: u64,
+    supervisor_exited_uncleanly: bool,
 ) -> DaemonStatus {
     let same_boot = recorded_boot_time
         .is_some_and(|recorded| recorded.abs_diff(current_boot_time) <= BOOT_TIME_TOLERANCE_SECS);
-    if status.is_running() && same_boot {
+    if status.is_running() && same_boot && supervisor_exited_uncleanly {
         DaemonStatus::Errored(-1)
     } else {
         DaemonStatus::Stopped
     }
+}
+
+/// Whether the supervisor that owned this state file failed to shut down
+/// cleanly, meaning any daemon it left behind stopped for reasons nobody
+/// recorded.
+///
+/// A clean shutdown removes the supervisor's own entry: `close()` does it on
+/// Unix, where the stop signal is delivered and handled, and the
+/// `supervisor stop` command does it on Windows, which has no POSIX signals
+/// and force-terminates the process instead. A crash, an external `kill -9`,
+/// or a `--force` replacement all leave the entry behind.
+///
+/// This must be read before the starting supervisor records itself, which is
+/// why `cleanup_orphaned_daemons` runs first in `start()`.
+async fn supervisor_exited_uncleanly(supervisor: &Supervisor) -> bool {
+    supervisor
+        .state_file
+        .lock()
+        .await
+        .daemons
+        .contains_key(&DaemonId::pitchfork())
 }
 
 /// Recursively chmod: directories → 0o755, files → 0o644.
@@ -1518,7 +1562,7 @@ mod tests {
         // Died under a crashed supervisor during this boot: Errored(-1) makes
         // the daemon eligible for its configured retries.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT),
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, true),
             DaemonStatus::Errored(-1)
         ));
     }
@@ -1528,23 +1572,53 @@ mod tests {
         // The process died with the machine; reviving every retry-configured
         // daemon after a reboot is what boot_start is for.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - 86_400), BOOT),
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - 86_400), BOOT, true),
             DaemonStatus::Stopped
         ));
     }
 
     #[test]
     fn unobserved_exit_tolerates_boot_time_jitter() {
+        // Windows recomputes boot time as now - GetTickCount64(), which can
+        // drift about a second between samples within one boot.
         let within = BOOT + BOOT_TIME_TOLERANCE_SECS;
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(within), BOOT),
+            unobserved_exit_status(&DaemonStatus::Running, Some(within), BOOT, true),
             DaemonStatus::Errored(-1)
         ));
         let beyond = BOOT + BOOT_TIME_TOLERANCE_SECS + 1;
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(beyond), BOOT),
+            unobserved_exit_status(&DaemonStatus::Running, Some(beyond), BOOT, true),
             DaemonStatus::Stopped
         ));
+    }
+
+    #[test]
+    fn unobserved_exit_after_clean_shutdown_is_stopped() {
+        // A deliberate `supervisor stop` can leave running records behind on
+        // platforms where the supervisor cannot handle the stop signal. Those
+        // daemons were stopped on purpose, so they must not be reported as
+        // failures or resurrected by the retry checker.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, false),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_treats_short_previous_boot_as_previous() {
+        // A device in a reboot loop can produce consecutive boots seconds
+        // apart. The jitter window must stay far below that so those records
+        // are still recognised as belonging to an earlier boot.
+        for gap in [5, 30, 59, 60] {
+            assert!(
+                matches!(
+                    unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - gap), BOOT, true),
+                    DaemonStatus::Stopped
+                ),
+                "boot {gap}s earlier should be treated as a previous boot"
+            );
+        }
     }
 
     #[test]
@@ -1552,7 +1626,7 @@ mod tests {
         // Legacy state files predating the field fail closed to today's
         // behavior rather than triggering surprise retries.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, None, BOOT),
+            unobserved_exit_status(&DaemonStatus::Running, None, BOOT, true),
             DaemonStatus::Stopped
         ));
     }
@@ -1562,7 +1636,7 @@ mod tests {
         // An intentional stop that completed while the supervisor was gone is
         // not a failure, even within the same boot.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Stopping, Some(BOOT), BOOT),
+            unobserved_exit_status(&DaemonStatus::Stopping, Some(BOOT), BOOT, true),
             DaemonStatus::Stopped
         ));
     }
