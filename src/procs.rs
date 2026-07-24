@@ -296,8 +296,8 @@ impl Procs {
         &self,
         pid: u32,
         expected_start_time: u64,
-        stop_signal: i32,
-        stop_timeout: Option<std::time::Duration>,
+        _stop_signal: i32,
+        _stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
         let leader = match open_pidfd(pid) {
             Ok(pidfd) => pidfd,
@@ -312,62 +312,38 @@ impl Procs {
         }
 
         let mut members = vec![(pid, leader)];
-        extend_process_group_pidfds(pid as i32, &mut members);
-
-        // Candidate membership was read through numeric PIDs. Only use those
-        // handles if the validated leader remained alive for the full scan, so
-        // the numeric process-group ID could not have been recycled.
+        if let Err(err) = stop_pidfds(&members) {
+            let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+            return Err(err);
+        }
         if !pidfd_is_running(&members[0].1) {
-            debug!("process group {pid} leader exited before signaling");
+            debug!("process group {pid} leader exited before it could be frozen");
             return Ok(false);
         }
 
-        let signal_name = signal_name(stop_signal);
-        debug!(
-            "killing {} pinned process(es) in group {pid} with {signal_name}",
-            members.len()
-        );
-        signal_pidfds(&members, stop_signal, signal_name)?;
-
-        let stop_timeout = stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
-        let fast_ms = 10u64;
-        let slow_ms = 50u64;
-        let total_ms = stop_timeout.as_millis().max(1) as u64;
-        let fast_count = ((total_ms / fast_ms) as usize).min(10);
-        let fast_total_ms = fast_ms * fast_count as u64;
-        let remaining_ms = total_ms.saturating_sub(fast_total_ms);
-        let slow_count = (remaining_ms / slow_ms) as usize;
-        let fast_checks =
-            std::iter::repeat_n(std::time::Duration::from_millis(fast_ms), fast_count);
-        let slow_checks =
-            std::iter::repeat_n(std::time::Duration::from_millis(slow_ms), slow_count);
-        let mut elapsed_ms = 0u64;
-
-        for sleep_duration in fast_checks.chain(slow_checks) {
-            std::thread::sleep(sleep_duration);
-            elapsed_ms += sleep_duration.as_millis() as u64;
-            if members.iter().all(|(_, fd)| !pidfd_is_running(fd)) {
-                debug!("process group {pid} terminated after {signal_name} ({elapsed_ms} ms)");
-                return Ok(true);
+        // Stop newly discovered members before rescanning. Once a scan adds
+        // nothing, every process capable of forking into this group is frozen,
+        // so the pinned set is complete and the PGID cannot be recycled.
+        loop {
+            let known_members = members.len();
+            extend_process_group_pidfds(pid as i32, &mut members);
+            if members.len() == known_members {
+                break;
+            }
+            if let Err(err) = stop_pidfds(&members[known_members..]) {
+                let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+                return Err(err);
             }
         }
 
-        // At least one pinned member still anchors the original group, so it
-        // is safe to discover children that appeared during graceful shutdown.
-        let anchored_members = members.len();
-        extend_process_group_pidfds(pid as i32, &mut members);
-        if members[..anchored_members]
-            .iter()
-            .all(|(_, fd)| !pidfd_is_running(fd))
-        {
-            debug!("all pinned members of process group {pid} exited before escalation");
-            return Ok(true);
-        }
         warn!(
-            "process group {pid} did not respond to {signal_name} after {}ms, sending SIGKILL",
-            stop_timeout.as_millis()
+            "force-terminating {} pinned orphan process(es) in group {pid}",
+            members.len()
         );
-        signal_pidfds(&members, libc::SIGKILL, "SIGKILL")?;
+        if let Err(err) = signal_pidfds(&members, libc::SIGKILL, "SIGKILL") {
+            let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+            return Err(err);
+        }
         std::thread::sleep(std::time::Duration::from_millis(100));
         Ok(true)
     }
@@ -898,6 +874,22 @@ fn signal_pidfds(members: &[(u32, OwnedFd)], signal: i32, signal_name: &str) -> 
 }
 
 #[cfg(target_os = "linux")]
+fn stop_pidfds(members: &[(u32, OwnedFd)]) -> Result<()> {
+    signal_pidfds(members, libc::SIGSTOP, "SIGSTOP")?;
+    for _ in 0..200 {
+        if members.iter().all(|(pid, pidfd)| {
+            !pidfd_is_running(pidfd) || matches!(linux_process_state(*pid), Some('T' | 't'))
+        }) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    Err(miette::miette!(
+        "timed out while freezing orphan process group"
+    ))
+}
+
+#[cfg(target_os = "linux")]
 fn extend_process_group_pidfds(pgid: i32, members: &mut Vec<(u32, OwnedFd)>) {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return;
@@ -932,6 +924,17 @@ fn linux_process_group(pid: u32) -> Option<i32> {
         .nth(2)?
         .parse()
         .ok()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_state(pid: u32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    stat.get(command_end + 1..)?
+        .split_whitespace()
+        .next()?
+        .chars()
+        .next()
 }
 
 #[derive(Debug, Clone, Copy)]
