@@ -555,6 +555,7 @@ impl Supervisor {
         // guard unregisters on any early-error path below and is otherwise
         // handed to the monitoring task.
         let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), pid);
+        let monitor_token = monitored_guard.token();
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -1435,19 +1436,22 @@ impl Supervisor {
                     ),
                     _ => (DaemonStatus::Errored(exit_code), false),
                 };
-                if let Err(e) = SUPERVISOR
-                    .upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = new_status;
-                                o.last_exit_success = Some(last_exit_success);
-                            })
-                            .build(),
+                // Revalidate ownership inside the same state-lock section that
+                // performs the write. The snapshot above was taken without
+                // holding the lock, so a restart running on another thread can
+                // install a successor in between; overwriting its record would
+                // clear a live daemon's PID and undo the restart.
+                if !SUPERVISOR
+                    .finalize_monitored_exit(
+                        &id,
+                        pid,
+                        monitor_token,
+                        new_status,
+                        Some(last_exit_success),
                     )
                     .await
                 {
-                    error!("Failed to update daemon state for {id}: {e}");
+                    debug!("daemon {id} exit state was not written; a successor owns the record");
                 }
             }
 

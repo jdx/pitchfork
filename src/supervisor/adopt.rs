@@ -335,6 +335,50 @@ impl Supervisor {
     /// the startup scan.
     ///
     /// Returns whether the write happened.
+    /// Write a daemon's terminal state on behalf of the monitor identified by
+    /// `token`, but only if that monitor still owns the record: the registry
+    /// entry must still carry the token, and the record must still name `pid`.
+    ///
+    /// Both checks and the write share one state-lock critical section, so a
+    /// successor installed after the caller's own ownership snapshot cannot be
+    /// overwritten — it registers before its running state becomes visible, so
+    /// either we see its token here and stand down, or its upsert serializes
+    /// after ours.
+    ///
+    /// Returns whether the write happened.
+    pub(crate) async fn finalize_monitored_exit(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        token: u64,
+        status: DaemonStatus,
+        last_exit_success: Option<bool>,
+    ) -> bool {
+        let mut state_file = self.state_file.lock().await;
+        if !self.monitor_token_valid(id, token) {
+            debug!("daemon {id} was superseded; skipping exit finalization");
+            return false;
+        }
+        let Some(d) = state_file.daemons.get(id) else {
+            return false;
+        };
+        if d.pid != Some(pid) {
+            debug!("daemon {id} was claimed by a successor; skipping exit finalization");
+            return false;
+        }
+        let mut d = d.clone();
+        d.pid = None;
+        d.title = None;
+        d.start_time = None;
+        d.boot_time = None;
+        d.status = status;
+        d.last_exit_success = last_exit_success;
+        d.active_port = None;
+        state_file.clear_active_port(id);
+        state_file.insert_daemon(id, d);
+        true
+    }
+
     async fn finalize_if_pid(
         &self,
         id: &DaemonId,
@@ -562,34 +606,16 @@ impl Supervisor {
                     "stop" => DaemonStatus::Stopped,
                     _ => DaemonStatus::Errored(exit_code),
                 };
+                // The poll monitor did observe this process die (it just cannot
+                // read the exit code of a non-child), so unlike the unobserved
+                // startup/reconciler cases it is meaningful to record whether
+                // the run ended intentionally.
                 let last_exit_success = exit_reason == "stop";
-                let mut state_file = SUPERVISOR.state_file.lock().await;
-                let still_ours = SUPERVISOR.monitor_token_valid(&id, token)
-                    && state_file
-                        .daemons
-                        .get(&id)
-                        .is_some_and(|d| d.pid == Some(pid));
-                if !still_ours {
-                    debug!(
-                        "adopted daemon {id} was claimed by a successor; skipping exit handling"
-                    );
+                if !SUPERVISOR
+                    .finalize_monitored_exit(&id, pid, token, new_status, Some(last_exit_success))
+                    .await
+                {
                     return;
-                }
-                state_file.clear_active_port(&id);
-                if let Some(d) = state_file.daemons.get(&id) {
-                    let mut d = d.clone();
-                    d.pid = None;
-                    d.title = None;
-                    d.start_time = None;
-                    d.boot_time = None;
-                    d.status = new_status;
-                    // The poll monitor did observe this process die (it just
-                    // cannot read the exit code of a non-child), so unlike the
-                    // unobserved startup/reconciler cases it is meaningful to
-                    // record whether the last run ended intentionally.
-                    d.last_exit_success = Some(last_exit_success);
-                    d.active_port = None;
-                    state_file.insert_daemon(&id, d);
                 }
             }
 
