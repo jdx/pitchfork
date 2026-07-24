@@ -185,6 +185,82 @@ EOF
   pitchfork stop hooktest
 }
 
+@test "concurrent restarts leave one tracked process" {
+  skip_on_windows "requires POSIX process groups and signal handling"
+
+  create_pitchfork_toml <<EOF
+[daemons.concurrent_restart]
+run = "trap 'sleep 1; exit 0' TERM; while true; do sleep 60; done"
+ready_delay = 0
+retry = 0
+EOF
+
+  run pitchfork start concurrent_restart
+  assert_success
+  wait_for_status concurrent_restart running
+
+  pitchfork restart concurrent_restart >"$TEST_TEMP_DIR/restart_1.log" 2>&1 &
+  local restart_1=$!
+  # The delayed TERM handler holds the first restart in Stopping long enough
+  # to deterministically overlap a second forced start.
+  wait_for_status concurrent_restart stopping
+  pitchfork restart concurrent_restart >"$TEST_TEMP_DIR/restart_2.log" 2>&1 &
+  local restart_2=$!
+
+  local restart_1_status=0
+  local restart_2_status=0
+  wait "$restart_1" || restart_1_status=$?
+  wait "$restart_2" || restart_2_status=$?
+  [[ "$restart_1_status" -eq 0 || "$restart_2_status" -eq 0 ]]
+  wait_for_status concurrent_restart running
+
+  local tracked_pid
+  tracked_pid="$(get_daemon_pid concurrent_restart)"
+  [[ -n "$tracked_pid" ]]
+  kill -0 "$tracked_pid"
+
+  # Supervisor logs each PID before a lifecycle request can release its lock,
+  # so this catches every spawned process even if it was stopped before its
+  # command body began executing.
+  local started_pids
+  started_pids="$TEST_TEMP_DIR/concurrent_restart_started_pids"
+  local supervisor_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
+  [[ -f "$supervisor_log" ]]
+  grep 'started daemon .*/concurrent_restart with pid' "$supervisor_log" \
+    | sed -E 's/.* with pid ([0-9]+).*/\1/' \
+    | sort -u >"$started_pids"
+  [[ "$(wc -l <"$started_pids")" -ge 3 ]]
+
+  local started_pid
+  while IFS= read -r started_pid; do
+    if [[ "$started_pid" != "$tracked_pid" ]]; then
+      ! kill -0 "$started_pid" 2>/dev/null
+    fi
+  done <"$started_pids"
+
+  pitchfork stop concurrent_restart
+}
+
+@test "retry replaces its still-terminating failed attempt" {
+  skip_on_windows "requires POSIX process groups and signal handling"
+
+  create_pitchfork_toml <<EOF
+[daemons.retry_live_owner]
+run = "trap '' TERM; echo attempt-\$PITCHFORK_RETRY_COUNT; while true; do sleep 60; done"
+ready_output = { pattern = "READY", timeout = "100ms" }
+retry = 1
+stop_signal = { signal = "TERM", timeout = "2s" }
+EOF
+
+  run pitchfork start retry_live_owner
+  assert_failure
+
+  wait_for_logs retry_live_owner "attempt-0" 10
+  # The one-second retry backoff expires while attempt 0 still ignores TERM.
+  # The retry must recognize and finish stopping its own PID, then start again.
+  wait_for_logs retry_live_owner "attempt-1" 10
+}
+
 @test "retry count persists across supervisor restart" {
   skip_on_windows "exponential backoff + state persistence timing is unreliable on Windows CI"
 

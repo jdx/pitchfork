@@ -1,5 +1,6 @@
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
 use crate::error::FileError;
 use crate::{Result, env};
 use once_cell::sync::Lazy;
@@ -282,16 +283,31 @@ impl StateFile {
         }
     }
 
-    /// Clear the active port for a daemon and mark the state dirty.
-    /// Returns true if the daemon was found and updated.
-    pub fn clear_active_port(&mut self, id: &DaemonId) -> bool {
-        if let Some(d) = self.daemons.get_mut(id) {
-            d.active_port = None;
-            self.mark_dirty();
-            true
-        } else {
-            false
+    /// Record a daemon process exit only if the state still belongs to that PID.
+    ///
+    /// A replacement process may be started before the old process monitor
+    /// finishes its exit path. Checking and updating under the same state lock
+    /// prevents the old monitor from overwriting the replacement's state.
+    pub fn record_daemon_exit(
+        &mut self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+        last_exit_success: bool,
+    ) -> bool {
+        let Some(daemon) = self.daemons.get_mut(id) else {
+            return false;
+        };
+        if daemon.pid != Some(pid) {
+            return false;
         }
+
+        daemon.pid = None;
+        daemon.status = status;
+        daemon.last_exit_success = Some(last_exit_success);
+        daemon.active_port = None;
+        self.mark_dirty();
+        true
     }
 
     /// Update the last cron trigger time for a daemon and mark the state dirty.
@@ -508,6 +524,84 @@ mod tests {
             .get(&DaemonId::new("project", "test"))
             .unwrap();
         assert_eq!(daemon.user.as_deref(), Some("postgres"));
+    }
+
+    #[test]
+    fn record_daemon_exit_does_not_overwrite_replacement_process() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: Some(200),
+                status: DaemonStatus::Running,
+                last_exit_success: None,
+                active_port: Some(4321),
+                ..Daemon::default()
+            },
+        );
+
+        // The old PID 100 monitor completes after PID 200 has replaced it.
+        assert!(!state.is_dirty());
+        assert!(!state.record_daemon_exit(&daemon_id, 100, DaemonStatus::Stopped, true));
+        assert!(!state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, Some(200));
+        assert!(daemon.status.is_running());
+        assert_eq!(daemon.last_exit_success, None);
+        assert_eq!(daemon.active_port, Some(4321));
+    }
+
+    #[test]
+    fn record_daemon_exit_updates_matching_process() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: Some(100),
+                status: DaemonStatus::Stopping,
+                active_port: Some(4321),
+                ..Daemon::default()
+            },
+        );
+
+        assert!(!state.is_dirty());
+        assert!(state.record_daemon_exit(&daemon_id, 100, DaemonStatus::Stopped, true,));
+        assert!(state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert!(daemon.status.is_stopped());
+        assert_eq!(daemon.last_exit_success, Some(true));
+        assert_eq!(daemon.active_port, None);
+    }
+
+    #[test]
+    fn record_daemon_exit_ignores_process_already_cleared_by_stop() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: None,
+                status: DaemonStatus::Stopped,
+                last_exit_success: Some(true),
+                ..Daemon::default()
+            },
+        );
+
+        assert!(!state.record_daemon_exit(&daemon_id, 100, DaemonStatus::Errored(1), false,));
+        assert!(!state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert!(daemon.status.is_stopped());
+        assert_eq!(daemon.last_exit_success, Some(true));
     }
 
     #[test]

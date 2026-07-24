@@ -296,6 +296,20 @@ impl Supervisor {
         self.state_file.lock().await.daemons.get(id).cloned()
     }
 
+    /// Record an exit without allowing a stale monitor to overwrite a replacement process.
+    pub(crate) async fn record_daemon_exit(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+        last_exit_success: bool,
+    ) -> bool {
+        self.state_file
+            .lock()
+            .await
+            .record_daemon_exit(id, pid, status, last_exit_success)
+    }
+
     /// Get all active daemons (those with PIDs, excluding pitchfork itself)
     pub(crate) async fn active_daemons(&self) -> Vec<Daemon> {
         let pitchfork_id = DaemonId::pitchfork();

@@ -38,6 +38,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::exit;
+use std::sync::Weak;
 use std::sync::atomic;
 use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
@@ -68,6 +69,9 @@ pub struct Supervisor {
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
+    /// Per-daemon locks serializing each check/stop/spawn lifecycle transition.
+    /// Weak references let unused daemon IDs fall out of the map on the next access.
+    pub(crate) daemon_lifecycle_locks: Mutex<HashMap<DaemonId, Weak<Mutex<()>>>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete
@@ -251,6 +255,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
+            daemon_lifecycle_locks: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),
