@@ -283,6 +283,25 @@ impl StateFile {
         }
     }
 
+    /// Update a daemon's status only while the state still belongs to that PID.
+    pub fn set_daemon_status_if_owned(
+        &mut self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+    ) -> bool {
+        let Some(daemon) = self.daemons.get_mut(id) else {
+            return false;
+        };
+        if daemon.pid != Some(pid) {
+            return false;
+        }
+
+        daemon.status = status;
+        self.mark_dirty();
+        true
+    }
+
     /// Record a daemon process exit only if the state still belongs to that PID.
     ///
     /// A replacement process may be started before the old process monitor
@@ -295,6 +314,29 @@ impl StateFile {
         status: DaemonStatus,
         last_exit_success: bool,
     ) -> bool {
+        self.record_daemon_terminal_state(id, pid, status, Some(last_exit_success))
+    }
+
+    /// Record an explicit stop only if the state still belongs to that PID.
+    ///
+    /// `last_exit_success` is optional because the already-dead branch cannot
+    /// infer a new outcome and must preserve the existing historical result.
+    pub fn record_daemon_stop(
+        &mut self,
+        id: &DaemonId,
+        pid: u32,
+        last_exit_success: Option<bool>,
+    ) -> bool {
+        self.record_daemon_terminal_state(id, pid, DaemonStatus::Stopped, last_exit_success)
+    }
+
+    fn record_daemon_terminal_state(
+        &mut self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+        last_exit_success: Option<bool>,
+    ) -> bool {
         let Some(daemon) = self.daemons.get_mut(id) else {
             return false;
         };
@@ -304,7 +346,9 @@ impl StateFile {
 
         daemon.pid = None;
         daemon.status = status;
-        daemon.last_exit_success = Some(last_exit_success);
+        if let Some(last_exit_success) = last_exit_success {
+            daemon.last_exit_success = Some(last_exit_success);
+        }
         daemon.active_port = None;
         self.mark_dirty();
         true
@@ -602,6 +646,106 @@ mod tests {
         assert_eq!(daemon.pid, None);
         assert!(daemon.status.is_stopped());
         assert_eq!(daemon.last_exit_success, Some(true));
+    }
+
+    #[test]
+    fn record_daemon_stop_preserves_existing_exit_result() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: Some(100),
+                status: DaemonStatus::Errored(1),
+                last_exit_success: Some(false),
+                active_port: Some(4321),
+                ..Daemon::default()
+            },
+        );
+
+        assert!(state.record_daemon_stop(&daemon_id, 100, None));
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert!(daemon.status.is_stopped());
+        assert_eq!(daemon.last_exit_success, Some(false));
+        assert_eq!(daemon.active_port, None);
+    }
+
+    #[test]
+    fn record_daemon_stop_does_not_overwrite_replacement_process() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: Some(200),
+                status: DaemonStatus::Running,
+                last_exit_success: None,
+                active_port: Some(4321),
+                ..Daemon::default()
+            },
+        );
+
+        assert!(!state.record_daemon_stop(&daemon_id, 100, Some(true)));
+        assert!(!state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, Some(200));
+        assert!(daemon.status.is_running());
+        assert_eq!(daemon.last_exit_success, None);
+        assert_eq!(daemon.active_port, Some(4321));
+    }
+
+    #[test]
+    fn record_daemon_stop_does_not_overwrite_monitor_result() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: None,
+                status: DaemonStatus::Errored(1),
+                last_exit_success: Some(false),
+                active_port: None,
+                ..Daemon::default()
+            },
+        );
+
+        assert!(!state.record_daemon_stop(&daemon_id, 100, None));
+        assert!(!state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert!(matches!(&daemon.status, DaemonStatus::Errored(1)));
+        assert_eq!(daemon.last_exit_success, Some(false));
+    }
+
+    #[test]
+    fn set_daemon_status_if_owned_does_not_restore_cleared_process() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: None,
+                status: DaemonStatus::Errored(1),
+                last_exit_success: Some(false),
+                ..Daemon::default()
+            },
+        );
+
+        assert!(!state.set_daemon_status_if_owned(&daemon_id, 100, DaemonStatus::Running));
+        assert!(!state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert!(matches!(&daemon.status, DaemonStatus::Errored(1)));
+        assert_eq!(daemon.last_exit_success, Some(false));
     }
 
     #[test]

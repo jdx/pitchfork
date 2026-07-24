@@ -1699,15 +1699,15 @@ impl Supervisor {
                 trace!("killing pid: {pid}");
                 if PROCS.is_running(pid) {
                     // First set status to Stopping (preserve PID for monitoring task)
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = Some(pid);
-                                o.status = DaemonStatus::Stopping;
-                            })
-                            .build(),
-                    )
-                    .await?;
+                    if !self
+                        .set_daemon_status_if_owned(id, pid, DaemonStatus::Stopping)
+                        .await
+                    {
+                        debug!(
+                            "stop request for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                        );
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
 
                     // Kill the entire process group atomically (daemon PID == PGID
                     // because we called setsid() at spawn time)
@@ -1722,15 +1722,14 @@ impl Supervisor {
                         if PROCS.is_running(pid) {
                             // Process still running after kill attempt - set back to Running
                             debug!("failed to stop pid {pid}: process still running after kill");
-                            self.upsert_daemon(
-                                UpsertDaemonOpts::builder(id.clone())
-                                    .set(|o| {
-                                        o.pid = Some(pid); // Preserve PID to avoid orphaning the process
-                                        o.status = DaemonStatus::Running;
-                                    })
-                                    .build(),
-                            )
-                            .await?;
+                            if !self
+                                .set_daemon_status_if_owned(id, pid, DaemonStatus::Running)
+                                .await
+                            {
+                                debug!(
+                                    "failed-stop recovery for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                                );
+                            }
                             return Ok(IpcResponse::DaemonStopFailed {
                                 error: format!(
                                     "process {pid} still running after kill attempt: {e}"
@@ -1743,16 +1742,15 @@ impl Supervisor {
                     // Note: kill_async uses SIGTERM -> wait ~3s -> SIGKILL strategy,
                     // and also detects zombie processes, so by the time it returns,
                     // the process should be fully terminated.
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Stopped;
-                                o.last_exit_success = Some(true);
-                            })
-                            .build(),
-                    )
-                    .await?;
+                    if self.record_daemon_stop(id, pid, Some(true)).await {
+                        info!(
+                            "recorded explicit stop for daemon {id} pid {pid} with a successful exit result"
+                        );
+                    } else {
+                        debug!(
+                            "stop result for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                        );
+                    }
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
                     // Process already dead — transition to Stopped so the
@@ -1760,15 +1758,15 @@ impl Supervisor {
                     // scheduling new attempts. This is important for an
                     // explicit `pitchfork stop` on an Errored daemon: the
                     // user wants to abort retries.
-                    self.upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = DaemonStatus::Stopped;
-                            })
-                            .build(),
-                    )
-                    .await?;
+                    if self.record_daemon_stop(id, pid, None).await {
+                        info!(
+                            "recorded explicit stop for already-dead daemon {id} pid {pid}, preserving its previous exit result"
+                        );
+                    } else {
+                        debug!(
+                            "stop result for daemon {id} pid {pid} ignored because the state no longer belongs to that process"
+                        );
+                    }
                     return Ok(IpcResponse::DaemonWasNotRunning);
                 }
                 Ok(IpcResponse::Ok)
