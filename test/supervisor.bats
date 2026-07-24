@@ -109,6 +109,9 @@ get_supervisor_pid() {
 }
 
 @test "orphaned daemons are cleaned up on supervisor restart" {
+  if [[ "$(uname -s)" != "Linux" && "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* ]]; then
+    skip "secure process-group termination is unavailable on this Unix platform"
+  fi
 
   create_pitchfork_toml <<EOF
 [daemons.orphan_test]
@@ -162,6 +165,59 @@ EOF
   [[ "$new_pid" != "$daemon_pid" ]]
 
   pitchfork stop orphan_test
+}
+
+@test "orphan cleanup fails closed without durable process handles" {
+  if [[ "$(uname -s)" == "Linux" || "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    skip "only applies to non-Linux Unix platforms"
+  fi
+
+  create_pitchfork_toml <<EOF
+[daemons.orphan_test]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+
+  run pitchfork start orphan_test
+  assert_success
+  wait_for_status orphan_test running
+
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid orphan_test)"
+  [[ -n "$daemon_pid" ]]
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 1
+  pid_alive "$daemon_pid"
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # Both the orphan and its running state survive because the platform cannot
+  # pin its identity across killpg. Retaining state prevents duplicate starts.
+  pid_alive "$daemon_pid"
+
+  run pitchfork status orphan_test
+  assert_success
+  assert_output --partial "running"
+
+  run pitchfork start orphan_test
+  assert_success
+  assert_output --partial "already running"
+
+  local retained_pid
+  retained_pid="$(get_daemon_pid orphan_test)"
+  [[ "$retained_pid" == "$daemon_pid" ]]
+
+  kill_pid "$daemon_pid"
 }
 
 @test "orphan cleanup does not kill unrelated process with recycled PID" {

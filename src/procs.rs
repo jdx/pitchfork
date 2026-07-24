@@ -11,7 +11,7 @@ use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use sysinfo::ProcessesToUpdate;
 #[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -172,7 +172,9 @@ impl Procs {
     /// Kill a process group only while its leader still has `expected_start_time`.
     ///
     /// Identity is refreshed inside the blocking kill operation, immediately
-    /// before signaling, and checked again before escalation to SIGKILL.
+    /// before signaling. Linux holds a pidfd and Windows holds an open process
+    /// handle across termination so the validated PID cannot be recycled.
+    /// Unix platforms without a durable process handle fail closed.
     pub async fn kill_process_group_if_start_time_matches_async(
         &self,
         pid: u32,
@@ -205,6 +207,17 @@ impl Procs {
     ) -> Result<bool> {
         let pgid = pid as i32;
         let signal_name = signal_name(stop_signal);
+
+        // A start-time check alone cannot prevent the numeric PID/PGID from
+        // being recycled before killpg. Linux closes that race with a pidfd;
+        // other Unix platforms must refuse identity-checked termination.
+        #[cfg(not(target_os = "linux"))]
+        if expected_start_time.is_some() {
+            warn!(
+                "cannot securely identify process group {pgid} on this platform; refusing to signal it"
+            );
+            return Ok(false);
+        }
 
         // Holding a pidfd pins the kernel PID object, so the numeric PID/PGID
         // cannot be recycled between identity validation and killpg.
@@ -329,12 +342,34 @@ impl Procs {
         _stop_timeout: Option<std::time::Duration>,
         expected_start_time: Option<u64>,
     ) -> Result<bool> {
+        // Keep the Windows process object alive through taskkill so its
+        // numeric PID cannot be recycled after identity validation.
+        #[cfg(windows)]
+        let _identity_handle = if let Some(expected) = expected_start_time {
+            let handle = match open_process_handle(pid) {
+                Ok(handle) => handle,
+                Err(err) => {
+                    warn!("cannot securely identify process {pid}: {err}");
+                    return Ok(false);
+                }
+            };
+            if process_start_token_from_handle(handle.0) != Some(expected) {
+                debug!("process {pid} identity changed before taskkill");
+                return Ok(false);
+            }
+            Some(handle)
+        } else {
+            None
+        };
+
+        #[cfg(not(windows))]
         if let Some(expected) = expected_start_time
             && !self.start_time_matches(pid, expected)
         {
-            debug!("process {pid} identity changed before taskkill");
+            debug!("process {pid} identity changed before termination");
             return Ok(false);
         }
+
         self.kill(pid, 0, None)
     }
 
@@ -716,11 +751,12 @@ fn process_start_token(pid: u32) -> Option<u64> {
 
 #[cfg(windows)]
 fn process_start_token(pid: u32) -> Option<u64> {
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if handle.is_null() {
-        return None;
-    }
+    let handle = open_process_handle(pid).ok()?;
+    process_start_token_from_handle(handle.0)
+}
 
+#[cfg(windows)]
+fn process_start_token_from_handle(handle: HANDLE) -> Option<u64> {
     let mut creation = FILETIME {
         dwLowDateTime: 0,
         dwHighDateTime: 0,
@@ -729,14 +765,32 @@ fn process_start_token(pid: u32) -> Option<u64> {
     let mut kernel = creation;
     let mut user = creation;
     let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
-    unsafe {
-        CloseHandle(handle);
-    }
     if ok == 0 {
         return None;
     }
 
     Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+}
+
+#[cfg(windows)]
+struct ProcessHandle(HANDLE);
+
+#[cfg(windows)]
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn open_process_handle(pid: u32) -> std::io::Result<ProcessHandle> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(ProcessHandle(handle))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -937,6 +991,50 @@ mod tests {
 
         assert!(!killed);
         assert!(PROCS.is_running(pid), "mismatched process must survive");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[tokio::test]
+    async fn orphan_identity_checked_group_kill_fails_closed_without_pidfd() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = command.spawn().expect("failed to spawn test process");
+        let pid = child.id();
+        let _child = ChildGuard(child);
+
+        PROCS.refresh_pids(&[pid]);
+        let actual_start_time = PROCS
+            .start_time(pid)
+            .expect("test process should have a start time");
+
+        let killed = PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                actual_start_time,
+                libc::SIGTERM,
+                Some(Duration::from_millis(100)),
+            )
+            .await
+            .expect("identity-checked kill should not error");
+
+        assert!(!killed);
+        assert!(
+            PROCS.is_running(pid),
+            "process must survive when identity cannot be pinned"
+        );
     }
 
     #[test]

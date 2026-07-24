@@ -1239,10 +1239,14 @@ fn chmod_safe_subtrees(state_dir: &std::path::Path) {
 /// PID is still alive and its current identity matches the recorded start time
 /// (or the recorded title for older state files), it is assumed to be an orphan
 /// from the previous supervisor session and is killed. The daemon's state is
-/// then reset to `Stopped` with no PID.
+/// then reset to `Stopped` with no PID. If a matching live process cannot be
+/// terminated securely, its running state is retained to prevent a duplicate
+/// instance from being started.
 ///
 /// Missing or mismatched identity data fails closed so a PID recycled by an
-/// unrelated process is never killed.
+/// unrelated process is never killed. On Unix platforms without durable
+/// process handles, orphan termination also fails closed because the PID/PGID
+/// cannot be pinned between identity validation and signaling.
 ///
 /// This is gated by the `supervisor.cleanup_orphans` setting (default: true).
 async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
@@ -1318,7 +1322,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
 
         let stop_cfg = daemon.stop_signal.unwrap_or_default();
-        let _ = PROCS
+        let termination_result = PROCS
             .kill_process_group_if_start_time_matches_async(
                 pid,
                 expected_start_time,
@@ -1326,6 +1330,24 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
                 stop_cfg.timeout,
             )
             .await;
+
+        if !matches!(termination_result, Ok(true)) {
+            PROCS.refresh_pids(&[pid]);
+            if PROCS.is_running(pid) && PROCS.start_time(pid) == Some(expected_start_time) {
+                match termination_result {
+                    Ok(false) => warn!(
+                        "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
+                        daemon.id
+                    ),
+                    Err(err) => warn!(
+                        "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
+                        daemon.id
+                    ),
+                    Ok(true) => unreachable!(),
+                }
+                continue;
+            }
+        }
 
         reset_daemon_state(supervisor, &daemon.id).await;
     }
