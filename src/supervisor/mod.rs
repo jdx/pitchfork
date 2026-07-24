@@ -1302,6 +1302,13 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         );
 
         if !matches {
+            if daemon.start_time.is_some() && current_start_time.is_none() {
+                warn!(
+                    "could not verify start time for live pid {pid} recorded for daemon {}; retaining running state",
+                    daemon.id,
+                );
+                continue;
+            }
             warn!(
                 "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
                 daemon.id,
@@ -1312,10 +1319,9 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
 
         let Some(expected_start_time) = current_start_time else {
             warn!(
-                "could not read start time for pid {pid} recorded for daemon {}; resetting state without killing",
+                "could not read start time for live pid {pid} recorded for daemon {}; retaining running state",
                 daemon.id,
             );
-            reset_daemon_state(supervisor, &daemon.id).await;
             continue;
         };
 
