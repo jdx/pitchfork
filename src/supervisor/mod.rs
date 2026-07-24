@@ -1308,7 +1308,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             // crashed supervisor (retryable) or with the machine.
             let status =
                 unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
-            reset_daemon_state(supervisor, &daemon.id, status).await;
+            reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
             continue;
         }
 
@@ -1342,7 +1342,7 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             // to something else — same unobserved exit as a dead PID.
             let status =
                 unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
-            reset_daemon_state(supervisor, &daemon.id, status).await;
+            reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
             continue;
         }
 
@@ -1399,7 +1399,13 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
 
         // We terminated the orphan ourselves, so this is an observed,
         // intentional stop rather than an unobserved exit.
-        reset_daemon_state(supervisor, &daemon.id, DaemonStatus::Stopped).await;
+        reset_daemon_state(
+            supervisor,
+            &daemon.id,
+            DaemonStatus::Stopped,
+            ExitObservation::Terminated,
+        )
+        .await;
     }
 }
 
@@ -1435,19 +1441,44 @@ fn process_identity_matches(
     }
 }
 
+/// How a daemon's run ended, which decides what happens to the recorded
+/// `last_exit_success` that cron `retrigger = "success" | "fail"` reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitObservation {
+    /// Nobody saw how the run ended — the monitor that would have died with a
+    /// previous supervisor. The recorded outcome is cleared: fabricating a
+    /// result would corrupt those retrigger decisions, and keeping the
+    /// previous value is just as wrong, since it would attribute an earlier
+    /// run's outcome to this one. `None` restores the "no result yet" reading
+    /// both retriggers already handle.
+    Unobserved,
+    /// We terminated the process ourselves, so the outcome is not a mystery:
+    /// it stopped because we asked it to. Recorded as a success, matching the
+    /// convention `Supervisor::stop` already uses for a deliberate stop.
+    Terminated,
+}
+
+impl ExitObservation {
+    /// The `last_exit_success` value this observation implies.
+    pub(crate) fn last_exit_success(self) -> Option<bool> {
+        match self {
+            ExitObservation::Unobserved => None,
+            ExitObservation::Terminated => Some(true),
+        }
+    }
+}
+
 /// Clear a daemon's runtime state (pid, process identity, active port) after
 /// its process is gone or is no longer ours to manage.
 ///
-/// `last_exit_success` is cleared rather than set or preserved. These
-/// transitions cover runs whose outcome nobody observed: fabricating a result
-/// would corrupt the cron `retrigger = "success" | "fail"` decisions that read
-/// it, and keeping the previous value is just as wrong — it would attribute an
-/// earlier run's outcome to this one. `None` restores the "no result yet"
-/// reading, which those retriggers already handle.
-///
 /// Config fields are preserved by cloning the existing record, so a reset can
 /// never drop a daemon's command, retry policy, or schedule.
-async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId, status: DaemonStatus) {
+async fn reset_daemon_state(
+    supervisor: &Supervisor,
+    id: &DaemonId,
+    status: DaemonStatus,
+    observation: ExitObservation,
+) {
     let mut state_file = supervisor.state_file.lock().await;
     let Some(existing) = state_file.daemons.get(id) else {
         return;
@@ -1458,7 +1489,7 @@ async fn reset_daemon_state(supervisor: &Supervisor, id: &DaemonId, status: Daem
     daemon.start_time = None;
     daemon.boot_time = None;
     daemon.status = status;
-    daemon.last_exit_success = None;
+    daemon.last_exit_success = observation.last_exit_success();
     daemon.active_port = None;
     state_file.clear_active_port(id);
     state_file.insert_daemon(id, daemon);

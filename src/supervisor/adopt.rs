@@ -225,7 +225,8 @@ impl Supervisor {
                     "daemon {} (pid {pid}) died while unmonitored; marking {status}",
                     daemon.id
                 );
-                self.finalize_if_pid(&daemon.id, pid, status).await;
+                self.finalize_if_pid(&daemon.id, pid, status, super::ExitObservation::Unobserved)
+                    .await;
                 continue;
             }
 
@@ -263,7 +264,8 @@ impl Supervisor {
                     "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking {status}",
                     daemon.id,
                 );
-                self.finalize_if_pid(&daemon.id, pid, status).await;
+                self.finalize_if_pid(&daemon.id, pid, status, super::ExitObservation::Unobserved)
+                    .await;
                 continue;
             }
 
@@ -298,8 +300,13 @@ impl Supervisor {
                 .await
             {
                 Ok(true) => {
-                    self.finalize_if_pid(&daemon.id, pid, DaemonStatus::Stopped)
-                        .await;
+                    self.finalize_if_pid(
+                        &daemon.id,
+                        pid,
+                        DaemonStatus::Stopped,
+                        super::ExitObservation::Terminated,
+                    )
+                    .await;
                 }
                 Ok(false) => {
                     warn!(
@@ -323,14 +330,18 @@ impl Supervisor {
     /// snapshot is never overwritten — its upsert serializes after ours and
     /// the in-lock check stands down. No hooks fire from these transitions —
     /// the monitor that would have observed the exit died with a previous
-    /// supervisor, mirroring the startup scan's handling. `last_exit_success`
-    /// is cleared for the same reason: the run's outcome was never observed,
-    /// so neither fabricating a result nor keeping the previous run's (which
-    /// the cron `retrigger = "success" | "fail"` decisions would then read as
-    /// this run's) is correct.
+    /// supervisor, mirroring the startup scan's handling. `observation`
+    /// decides what happens to the recorded `last_exit_success`, exactly as in
+    /// the startup scan.
     ///
     /// Returns whether the write happened.
-    async fn finalize_if_pid(&self, id: &DaemonId, pid: u32, status: DaemonStatus) -> bool {
+    async fn finalize_if_pid(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        status: DaemonStatus,
+        observation: super::ExitObservation,
+    ) -> bool {
         let mut state_file = self.state_file.lock().await;
         // A monitor entry appearing since the caller's snapshot means a live
         // monitor now owns this daemon — including a successor that recycled
@@ -358,7 +369,7 @@ impl Supervisor {
         d.start_time = None;
         d.boot_time = None;
         d.status = status;
-        d.last_exit_success = None;
+        d.last_exit_success = observation.last_exit_success();
         d.active_port = None;
         state_file.clear_active_port(id);
         state_file.insert_daemon(id, d);

@@ -325,12 +325,11 @@ EOF
   assert_failure
 
   # And the daemon reads as stopped rather than errored after the restart.
+  # Poll rather than sleeping: this test also runs on Windows, where startup
+  # plus orphan reconciliation plus state persistence is slowest.
   run pitchfork supervisor start
   assert_success
-  sleep 2
-  run pitchfork status stop_marker
-  assert_success
-  assert_output --partial "stopped"
+  wait_for_status stop_marker stopped
 }
 
 @test "daemon record from a previous boot is not retried" {
@@ -345,9 +344,21 @@ EOF
 
   pitchfork supervisor stop 2>/dev/null || true
   sleep 1
-  # boot_time = 1 marks this record as belonging to a long-gone boot: the
-  # process died with the machine, not under a crashed supervisor.
+  # The leftover supervisor entry is what marks the previous shutdown as
+  # unclean. Without it the unclean check short-circuits to stopped and this
+  # test would pass even with the boot-time rule deleted; with it, boot_time
+  # is the only reason the daemon stays stopped. Orphan cleanup skips the
+  # supervisor's own id, and start() overwrites the entry immediately.
+  #
+  # boot_time = 1 marks the daemon record as belonging to a long-gone boot:
+  # the process died with the machine, not under a crashed supervisor.
   cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."global/pitchfork"]
+id = "global/pitchfork"
+pid = $dead_pid
+status = "running"
+autostop = false
+
 [daemons."prevboot/svc"]
 id = "prevboot/svc"
 title = "sleep"
