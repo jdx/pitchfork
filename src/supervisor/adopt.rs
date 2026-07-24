@@ -312,6 +312,17 @@ impl Supervisor {
             let outcome = loop {
                 time::sleep(POLL_INTERVAL).await;
 
+                // The monitored registry doubles as a generation marker:
+                // run_once overwrites this daemon's entry synchronously
+                // before any successor spawns, and each monitor's guard only
+                // removes its own value. If the entry no longer names our
+                // PID, a successor existed at some point — even one that
+                // already ran its full lifecycle between our polls — and its
+                // monitor owns the record's transitions and hooks.
+                if !SUPERVISOR.is_monitored(&id, pid) {
+                    break PollOutcome::TakenOver;
+                }
+
                 let Some(current) = SUPERVISOR.get_daemon(&id).await else {
                     break PollOutcome::TakenOver;
                 };
@@ -382,6 +393,16 @@ impl Supervisor {
             // the record still names our PID, or was finalized with no PID
             // at all (stop() observed our dead process and completed the
             // transition itself).
+            // Re-check the generation marker: a PID-less stopped record only
+            // belongs to this monitor if no successor ever registered over
+            // our entry. Without this, a successor's complete start+stop
+            // between two polls would be misattributed to our process and
+            // its stop hooks fired twice.
+            if !SUPERVISOR.is_monitored(&id, pid) {
+                debug!("adopted daemon {id} was superseded; skipping exit handling");
+                return;
+            }
+
             let current = SUPERVISOR.get_daemon(&id).await;
             let owns_pid = current.as_ref().is_some_and(|d| d.pid == Some(pid));
             let finalized_ours = current.as_ref().is_some_and(|d| {
