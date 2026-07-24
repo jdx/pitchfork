@@ -547,6 +547,14 @@ impl Supervisor {
         };
         info!("started daemon {id} with pid {pid}");
         PROCS.refresh_pids(&[pid]);
+        // Register the daemon as monitored BEFORE persisting the Running
+        // state. The orphan reconciler treats any running, unmonitored PID
+        // as an orphan; if the state became visible first, a concurrent
+        // reconciliation pass could adopt — or under the kill policy,
+        // terminate — a daemon that was just legitimately started. The RAII
+        // guard unregisters on any early-error path below and is otherwise
+        // handed to the monitoring task.
+        let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), pid);
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -633,6 +641,9 @@ impl Supervisor {
 
         tokio::spawn(async move {
             let id = id_clone;
+            // Registered before the Running upsert above; unregisters when
+            // this monitoring task ends.
+            let _monitored_guard = monitored_guard;
 
             // Merge all output sources (PTY master OR stdout+stderr) into a single channel.
             let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<String>(256);
