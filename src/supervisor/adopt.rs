@@ -39,14 +39,19 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 enum PollOutcome {
     /// The adopted process exited (or its PID was recycled, which means the
     /// process exited unnoticed) while the daemon record still pointed at it.
-    ProcessDied,
-    /// `stop()` finished first: the record shows no PID and status `Stopped`.
-    /// State is already final, but the stop hooks still need to fire — the
-    /// regular child monitor fires them, `stop()` itself never does.
+    /// `was_stopping` snapshots whether `stop()` was in flight at the moment
+    /// death was observed, tying stop intent to the observation the way the
+    /// child monitor's pre-drain snapshot does.
+    ProcessDied { was_stopping: bool },
+    /// `stop()` finished first: the record shows no PID and status `Stopped`,
+    /// and every prior observation belonged to this monitor's PID (a foreign
+    /// PID would have broken out as `TakenOver` instead). State is already
+    /// final, but the stop hooks still need to fire — the regular child
+    /// monitor fires them, `stop()` itself never does.
     StoppedExternally,
     /// Another process took over the daemon record (e.g. a restart spawned a
-    /// fresh child with its own monitor) or the record was removed. State is
-    /// the successor's to manage; touch nothing.
+    /// fresh child with its own monitor) or the record was removed. State and
+    /// hooks are the successor's to manage; touch nothing.
     TakenOver,
 }
 
@@ -272,14 +277,19 @@ impl Supervisor {
 
         // Legacy records matched by title have no persisted start_time.
         // Re-upsert while the process cache is fresh so the identity fields
-        // are recorded for future scans and crashes.
+        // are recorded for future scans and crashes. active_port must be
+        // carried over explicitly: upsert_daemon intentionally never inherits
+        // it (a restarted process hasn't bound its port yet), but this
+        // process never stopped — wiping it would break proxy routing.
         if daemon.start_time.is_none() {
+            let active_port = daemon.active_port;
             let _ = self
                 .upsert_daemon(
                     UpsertDaemonOpts::builder(daemon.id.clone())
                         .set(|o| {
                             o.pid = Some(pid);
                             o.status = DaemonStatus::Running;
+                            o.active_port = active_port;
                         })
                         .build(),
                 )
@@ -311,13 +321,14 @@ impl Supervisor {
                     // that no longer matches means our process died and the
                     // OS recycled its PID: treat as death, and never touch
                     // the unrelated new process.
+                    let was_stopping = current.status.is_stopping();
                     PROCS.refresh_pids(&[pid]);
                     if !PROCS.is_running(pid) {
-                        break PollOutcome::ProcessDied;
+                        break PollOutcome::ProcessDied { was_stopping };
                     }
                     match PROCS.start_time(pid) {
                         Some(current_start_time) if current_start_time != expected_start_time => {
-                            break PollOutcome::ProcessDied;
+                            break PollOutcome::ProcessDied { was_stopping };
                         }
                         None => {
                             // Transient identity read failure: keep watching
@@ -329,9 +340,11 @@ impl Supervisor {
                         }
                         _ => {}
                     }
-                } else if current.status.is_stopping() {
-                    // stop() in flight — wait for it to finish so the exit
-                    // path below can fire the stop hooks.
+                } else if current.pid.is_none() && current.status.is_stopping() {
+                    // Transitional: a stop of our record is mid-flight — wait
+                    // for it to settle so the exit path can fire stop hooks.
+                    // (A Stopping record with a *different* PID is a successor
+                    // and falls through to TakenOver below.)
                 } else if current.pid.is_none() && current.status.is_stopped() {
                     break PollOutcome::StoppedExternally;
                 } else {
@@ -363,21 +376,32 @@ impl Supervisor {
             // Re-read state and verify this monitor still owns the record
             // before mutating anything. A restart can spawn a successor
             // between observing the death and reaching this point; its
-            // state (PID, status, active port) is not ours to touch.
+            // state (PID, status, active port) and hooks are not ours to
+            // touch — even if the successor is itself Stopping or Stopped,
+            // its own monitor handles that lifecycle. Ownership here means
+            // the record still names our PID, or was finalized with no PID
+            // at all (stop() observed our dead process and completed the
+            // transition itself).
             let current = SUPERVISOR.get_daemon(&id).await;
             let owns_pid = current.as_ref().is_some_and(|d| d.pid == Some(pid));
-            let is_stopping = current.as_ref().is_some_and(|d| d.status.is_stopping());
-            let stopped_cleared = current
-                .as_ref()
-                .is_some_and(|d| d.pid.is_none() && d.status.is_stopped());
-            if !owns_pid && !is_stopping && !stopped_cleared {
+            let finalized_ours = current.as_ref().is_some_and(|d| {
+                d.pid.is_none() && (d.status.is_stopped() || d.status.is_stopping())
+            });
+            if !owns_pid && !finalized_ours {
                 debug!("adopted daemon {id} has a successor; skipping exit handling");
                 return;
             }
 
-            // Exit codes of non-child processes cannot be observed.
-            let intentional =
-                is_stopping || stopped_cleared || matches!(outcome, PollOutcome::StoppedExternally);
+            // Exit codes of non-child processes cannot be observed. Stop
+            // intent comes from the snapshot taken when death was observed,
+            // or from the record having been finalized by stop() since.
+            let was_stopping = matches!(outcome, PollOutcome::ProcessDied { was_stopping: true });
+            let intentional = was_stopping
+                || finalized_ours
+                || matches!(outcome, PollOutcome::StoppedExternally)
+                || current
+                    .as_ref()
+                    .is_some_and(|d| d.status.is_stopping() || d.status.is_stopped());
             let (exit_code, exit_reason) = if intentional {
                 (-1, "stop")
             } else {
@@ -385,8 +409,9 @@ impl Supervisor {
             };
             info!("adopted daemon {id} (pid {pid}) exited ({exit_reason}, exit status unknown)");
 
-            // Update state unless stop() already finalized it.
-            if (owns_pid || is_stopping) && !stopped_cleared {
+            // Update state unless stop() already finalized it. Gated strictly
+            // on owning the PID so a successor's record is never written to.
+            if owns_pid {
                 {
                     let mut state_file = SUPERVISOR.state_file.lock().await;
                     state_file.clear_active_port(&id);
