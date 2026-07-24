@@ -3,7 +3,9 @@
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
 use super::hooks::{self, HookType, fire_hook};
-use super::{DaemonLifecycle, DaemonLifecycleState, SUPERVISOR, Supervisor};
+use super::{
+    DaemonLifecycle, DaemonLifecycleState, ReadinessRetryActivity, SUPERVISOR, Supervisor,
+};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
@@ -242,6 +244,26 @@ impl Supervisor {
         Arc::clone(&lifecycle.transition).lock_owned().await
     }
 
+    async fn register_active_readiness_retry(
+        lifecycle: &DaemonLifecycle,
+    ) -> Arc<ReadinessRetryActivity> {
+        let mut lifecycle_guard = Self::lifecycle_guard(lifecycle).await;
+        let activity = Arc::new(ReadinessRetryActivity::new(lifecycle_guard.generation));
+        lifecycle_guard
+            .active_readiness_retries
+            .retain(|retry| retry.strong_count() > 0);
+        lifecycle_guard
+            .active_readiness_retries
+            .push(Arc::downgrade(&activity));
+        activity
+    }
+
+    pub(super) async fn has_readiness_retry_for_current_generation(&self, id: &DaemonId) -> bool {
+        let lifecycle = self.daemon_lifecycle(id).await;
+        let mut lifecycle_guard = Self::lifecycle_guard(&lifecycle).await;
+        lifecycle_guard.has_readiness_retry_for_current_generation()
+    }
+
     fn retry_superseded_response(id: &DaemonId) -> IpcResponse {
         IpcResponse::DaemonFailed {
             error: format!("retry for daemon {id} was superseded by a newer lifecycle request"),
@@ -257,6 +279,7 @@ impl Supervisor {
         lifecycle: &Arc<DaemonLifecycle>,
         opts: RunOptions,
         retry: Option<RetryToken>,
+        retry_activity: Option<&ReadinessRetryActivity>,
     ) -> Result<LifecycleRunAttempt> {
         let mut lifecycle_guard = Self::lifecycle_guard(lifecycle).await;
         let id = &opts.id;
@@ -326,6 +349,9 @@ impl Supervisor {
         if !began_new_lifecycle {
             generation = Self::advance_lifecycle_generation(&mut lifecycle_guard);
         }
+        if let Some(retry_activity) = retry_activity {
+            retry_activity.set_generation(generation);
+        }
 
         Ok(LifecycleRunAttempt::new(
             self.run_once(opts, lifecycle_guard).await?,
@@ -349,6 +375,10 @@ impl Supervisor {
 
         // If wait_ready is true and retry is configured, implement retry loop
         if opts.wait_ready && opts.retry.count() > 0 {
+            // Keep the background retry watcher from starting an independent
+            // attempt while this request owns readiness retries. The weak
+            // registration disappears automatically if the request is cancelled.
+            let _active_readiness_retry = Self::register_active_readiness_retry(&lifecycle).await;
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
             let mut retry = None;
@@ -357,7 +387,12 @@ impl Supervisor {
                 retry_opts.retry_count = attempt;
                 retry_opts.cmd = cmd.clone();
                 let result = self
-                    .run_once_serialized(&lifecycle, retry_opts, retry)
+                    .run_once_serialized(
+                        &lifecycle,
+                        retry_opts,
+                        retry,
+                        Some(&_active_readiness_retry),
+                    )
                     .await?;
 
                 match result.response {
@@ -410,7 +445,7 @@ impl Supervisor {
 
         // No retry or wait_ready is false
         Ok(self
-            .run_once_serialized(&lifecycle, opts, None)
+            .run_once_serialized(&lifecycle, opts, None, None)
             .await?
             .response)
     }

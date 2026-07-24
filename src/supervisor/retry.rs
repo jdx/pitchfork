@@ -45,6 +45,12 @@ impl Supervisor {
                     _ => continue, // Daemon was removed or no longer needs retry
                 }
             };
+            if self.has_readiness_retry_for_current_generation(&id).await {
+                debug!(
+                    "skipping background retry for daemon {id} while a start request owns readiness retries"
+                );
+                continue;
+            }
             info!(
                 "retrying daemon {} ({}/{} attempts)",
                 id,
