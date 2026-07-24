@@ -354,7 +354,7 @@ impl Procs {
         }
 
         let exit_timeout = stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
-        let checks = ((exit_timeout.as_millis().max(1) + 49) / 50) as usize;
+        let checks = exit_timeout.as_millis().max(1).div_ceil(50) as usize;
         for _ in 0..checks {
             if members.iter().all(|(_, pidfd)| !pidfd_is_running(pidfd)) {
                 return Ok(true);
