@@ -461,29 +461,29 @@ impl PitchforkToml {
         if let Some(entry) = global_slugs.get(user_id) {
             // Load the project's config from the slug's dir to find the daemon ID
             let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
-            if let Some(dir) = entry.resolve_dir() {
-                if let Ok(project_config) = Self::all_merged_from(&dir) {
-                    // Find daemon by short name in that project
-                    let matches: Vec<DaemonId> = project_config
-                        .daemons
-                        .keys()
-                        .filter(|id| id.name() == daemon_name)
-                        .cloned()
-                        .collect();
-                    match matches.as_slice() {
-                        [] => {}
-                        [id] => return Ok(vec![id.clone()]),
-                        _ => {
-                            let mut candidates: Vec<String> =
-                                matches.iter().map(|id| id.qualified()).collect();
-                            candidates.sort();
-                            return Err(miette::miette!(
-                                "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
-                                user_id,
-                                daemon_name,
-                                candidates.join(", ")
-                            ));
-                        }
+            if let Some(dir) = entry.resolve_dir()
+                && let Ok(project_config) = Self::all_merged_from(&dir)
+            {
+                // Find daemon by short name in that project
+                let matches: Vec<DaemonId> = project_config
+                    .daemons
+                    .keys()
+                    .filter(|id| id.name() == daemon_name)
+                    .cloned()
+                    .collect();
+                match matches.as_slice() {
+                    [] => {}
+                    [id] => return Ok(vec![id.clone()]),
+                    _ => {
+                        let mut candidates: Vec<String> =
+                            matches.iter().map(|id| id.qualified()).collect();
+                        candidates.sort();
+                        return Err(miette::miette!(
+                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                            user_id,
+                            daemon_name,
+                            candidates.join(", ")
+                        ));
                     }
                 }
             }
@@ -590,28 +590,28 @@ impl PitchforkToml {
         let global_slugs = Self::read_global_slugs();
         if let Some(entry) = global_slugs.get(user_id) {
             let daemon_name = entry.daemon.as_deref().unwrap_or(user_id);
-            if let Some(dir) = entry.resolve_dir() {
-                if let Ok(project_config) = Self::all_merged_from(&dir) {
-                    let matches: Vec<DaemonId> = project_config
-                        .daemons
-                        .keys()
-                        .filter(|id| id.name() == daemon_name)
-                        .cloned()
-                        .collect();
-                    match matches.as_slice() {
-                        [] => {}
-                        [id] => return Ok(id.clone()),
-                        _ => {
-                            let mut candidates: Vec<String> =
-                                matches.iter().map(|id| id.qualified()).collect();
-                            candidates.sort();
-                            return Err(miette::miette!(
-                                "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
-                                user_id,
-                                daemon_name,
-                                candidates.join(", ")
-                            ));
-                        }
+            if let Some(dir) = entry.resolve_dir()
+                && let Ok(project_config) = Self::all_merged_from(&dir)
+            {
+                let matches: Vec<DaemonId> = project_config
+                    .daemons
+                    .keys()
+                    .filter(|id| id.name() == daemon_name)
+                    .cloned()
+                    .collect();
+                match matches.as_slice() {
+                    [] => {}
+                    [id] => return Ok(id.clone()),
+                    _ => {
+                        let mut candidates: Vec<String> =
+                            matches.iter().map(|id| id.qualified()).collect();
+                        candidates.sort();
+                        return Err(miette::miette!(
+                            "slug '{}' maps to daemon '{}' which matches multiple daemons: {}",
+                            user_id,
+                            daemon_name,
+                            candidates.join(", ")
+                        ));
                     }
                 }
             }
@@ -1456,17 +1456,17 @@ impl PitchforkToml {
         // If caller provided a namespace that isn't yet registered,
         // auto-register it at the directory we can resolve.
         // Falls back to CWD if the slug dir cannot be resolved.
-        if let Some(ns) = namespace {
-            if !pt.namespaces.contains_key(ns) {
-                let dir = pt
-                    .slugs
-                    .get(slug)
-                    .and_then(|e| e.resolve_dir())
-                    .or_else(|| namespace.and_then(|_| env::CWD.as_path().canonicalize().ok()));
-                if let Some(ref d) = dir {
-                    pt.namespaces
-                        .insert(ns.to_string(), NamespaceEntry { dir: d.clone() });
-                }
+        if let Some(ns) = namespace
+            && !pt.namespaces.contains_key(ns)
+        {
+            let dir = pt
+                .slugs
+                .get(slug)
+                .and_then(|e| e.resolve_dir())
+                .or_else(|| namespace.and_then(|_| env::CWD.as_path().canonicalize().ok()));
+            if let Some(ref d) = dir {
+                pt.namespaces
+                    .insert(ns.to_string(), NamespaceEntry { dir: d.clone() });
             }
         }
 

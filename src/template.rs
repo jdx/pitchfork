@@ -362,24 +362,24 @@ pub fn render_daemon_templates(
         config.ready_http = Some(http);
     }
 
-    if let Some(ref ready_port) = config.ready_port {
-        if let Some(ref template) = ready_port.template {
-            let rendered = renderer.render(template)?;
-            let port = rendered
-                .trim()
-                .parse::<u16>()
-                .ok()
-                .filter(|&p| p > 0)
-                .ok_or_else(|| RenderError::InvalidPort {
-                    template: template.clone(),
-                    rendered: rendered.clone(),
-                })?;
-            config.ready_port = Some(crate::config_types::ReadyPort {
-                port: Some(port),
-                template: None,
-                timeout: ready_port.timeout,
-            });
-        }
+    if let Some(ref ready_port) = config.ready_port
+        && let Some(ref template) = ready_port.template
+    {
+        let rendered = renderer.render(template)?;
+        let port = rendered
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| p > 0)
+            .ok_or_else(|| RenderError::InvalidPort {
+                template: template.clone(),
+                rendered: rendered.clone(),
+            })?;
+        config.ready_port = Some(crate::config_types::ReadyPort {
+            port: Some(port),
+            template: None,
+            timeout: ready_port.timeout,
+        });
     }
 
     Ok(())
