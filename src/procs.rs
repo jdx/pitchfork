@@ -330,7 +330,7 @@ impl Procs {
                 Ok(added) => added,
                 Err(err) => {
                     let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
-                    return Err(err);
+                    return Err(err.into());
                 }
             };
             if added == 0 {
