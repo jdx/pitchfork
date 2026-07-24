@@ -38,9 +38,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::exit;
-use std::sync::Weak;
 use std::sync::atomic;
 use std::sync::atomic::{AtomicBool, AtomicU32};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
@@ -63,15 +63,31 @@ pub(crate) static REAPED_STATUSES: Lazy<Mutex<HashMap<u32, i32>>> =
 // Re-export types needed by other modules
 pub(crate) use state::UpsertDaemonOpts;
 
+pub(crate) struct DaemonLifecycle {
+    transition: Arc<Mutex<DaemonLifecycleState>>,
+}
+
+pub(crate) struct DaemonLifecycleState {
+    generation: u64,
+}
+
+impl DaemonLifecycle {
+    fn new() -> Self {
+        Self {
+            transition: Arc::new(Mutex::new(DaemonLifecycleState { generation: 0 })),
+        }
+    }
+}
+
 pub struct Supervisor {
     pub(crate) state_file: Mutex<StateFile>,
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
-    /// Per-daemon locks serializing each check/stop/spawn lifecycle transition.
+    /// Per-daemon state serializing lifecycle transitions and invalidating stale retries.
     /// Weak references let unused daemon IDs fall out of the map on the next access.
-    pub(crate) daemon_lifecycle_locks: Mutex<HashMap<DaemonId, Weak<Mutex<()>>>>,
+    pub(crate) daemon_lifecycles: Mutex<HashMap<DaemonId, Weak<DaemonLifecycle>>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete
@@ -255,7 +271,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
-            daemon_lifecycle_locks: Mutex::new(HashMap::new()),
+            daemon_lifecycles: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),

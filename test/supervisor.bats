@@ -261,6 +261,46 @@ EOF
   wait_for_logs retry_live_owner "attempt-1" 10
 }
 
+@test "stopping a superseding owner cancels an older retry" {
+  skip_on_windows "requires POSIX process groups and signal handling"
+
+  local ready_marker
+  ready_marker="$(to_shell_path "$TEST_TEMP_DIR/retry_superseded_ready")"
+
+  create_pitchfork_toml <<EOF
+[daemons.retry_superseded]
+run = "echo attempt-\$PITCHFORK_RETRY_COUNT; if [ -f '$ready_marker' ]; then echo replacement-ready; fi; sleep 60"
+ready_output = { pattern = "replacement-ready", timeout = "1s" }
+retry = 4
+EOF
+
+  pitchfork start retry_superseded >"$TEST_TEMP_DIR/older_start.log" 2>&1 &
+  local older_start=$!
+
+  # Attempt 3 enters an eight-second backoff before attempt 4. During that gap,
+  # install a newer owner and explicitly stop it, leaving no current PID that
+  # could otherwise tell the older retry it has been superseded.
+  wait_for_logs retry_superseded "attempt-3" 20
+  wait_for_status retry_superseded errored
+  touch "$ready_marker"
+
+  run pitchfork start retry_superseded
+  assert_success
+  wait_for_status retry_superseded running
+
+  run pitchfork stop retry_superseded
+  assert_success
+
+  local older_start_status=0
+  wait "$older_start" || older_start_status=$?
+  [[ "$older_start_status" -ne 0 ]]
+  wait_for_status retry_superseded stopped
+
+  run pitchfork logs retry_superseded --raw
+  assert_success
+  refute_output --partial "attempt-4"
+}
+
 @test "retry count persists across supervisor restart" {
   skip_on_windows "exponential backoff + state persistence timing is unreliable on Windows CI"
 

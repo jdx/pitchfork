@@ -3,7 +3,7 @@
 //! Contains the core `run()`, `run_once()`, and `stop()` methods for daemon process management.
 
 use super::hooks::{self, HookType, fire_hook};
-use super::{SUPERVISOR, Supervisor};
+use super::{DaemonLifecycle, DaemonLifecycleState, SUPERVISOR, Supervisor};
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
@@ -53,6 +53,28 @@ impl RunAttempt {
             pid: Some(pid),
         }
     }
+}
+
+struct LifecycleRunAttempt {
+    response: IpcResponse,
+    pid: Option<u32>,
+    generation: u64,
+}
+
+impl LifecycleRunAttempt {
+    fn new(attempt: RunAttempt, generation: u64) -> Self {
+        Self {
+            response: attempt.response,
+            pid: attempt.pid,
+            generation,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RetryToken {
+    pid: u32,
+    generation: u64,
 }
 
 fn blocking_stop_response(response: IpcResponse) -> Option<IpcResponse> {
@@ -199,19 +221,31 @@ fn any_ready_check_remaining(
 }
 
 impl Supervisor {
-    async fn daemon_lifecycle_guard(&self, id: &DaemonId) -> OwnedMutexGuard<()> {
-        let lock = {
-            let mut locks = self.daemon_lifecycle_locks.lock().await;
-            locks.retain(|_, lock| lock.strong_count() > 0);
-            if let Some(lock) = locks.get(id).and_then(std::sync::Weak::upgrade) {
-                lock
-            } else {
-                let lock = Arc::new(tokio::sync::Mutex::new(()));
-                locks.insert(id.clone(), Arc::downgrade(&lock));
-                lock
-            }
-        };
-        lock.lock_owned().await
+    async fn daemon_lifecycle(&self, id: &DaemonId) -> Arc<DaemonLifecycle> {
+        let mut lifecycles = self.daemon_lifecycles.lock().await;
+        lifecycles.retain(|_, lifecycle| lifecycle.strong_count() > 0);
+        if let Some(lifecycle) = lifecycles.get(id).and_then(std::sync::Weak::upgrade) {
+            lifecycle
+        } else {
+            let lifecycle = Arc::new(DaemonLifecycle::new());
+            lifecycles.insert(id.clone(), Arc::downgrade(&lifecycle));
+            lifecycle
+        }
+    }
+
+    fn advance_lifecycle_generation(lifecycle: &mut DaemonLifecycleState) -> u64 {
+        lifecycle.generation = lifecycle.generation.wrapping_add(1);
+        lifecycle.generation
+    }
+
+    async fn lifecycle_guard(lifecycle: &DaemonLifecycle) -> OwnedMutexGuard<DaemonLifecycleState> {
+        Arc::clone(&lifecycle.transition).lock_owned().await
+    }
+
+    fn retry_superseded_response(id: &DaemonId) -> IpcResponse {
+        IpcResponse::DaemonFailed {
+            error: format!("retry for daemon {id} was superseded by a newer lifecycle request"),
+        }
     }
 
     async fn stop_before_replacement(&self, id: &DaemonId) -> Result<Option<IpcResponse>> {
@@ -220,49 +254,90 @@ impl Supervisor {
 
     async fn run_once_serialized(
         &self,
+        lifecycle: &Arc<DaemonLifecycle>,
         opts: RunOptions,
-        retry_owner: Option<u32>,
-    ) -> Result<RunAttempt> {
-        let lifecycle_guard = self.daemon_lifecycle_guard(&opts.id).await;
+        retry: Option<RetryToken>,
+    ) -> Result<LifecycleRunAttempt> {
+        let mut lifecycle_guard = Self::lifecycle_guard(lifecycle).await;
         let id = &opts.id;
+        let current_generation = lifecycle_guard.generation;
+
+        if let Some(retry) = retry
+            && current_generation != retry.generation
+        {
+            warn!(
+                "daemon {id} retry generation {} was superseded by lifecycle generation {current_generation}",
+                retry.generation
+            );
+            return Ok(LifecycleRunAttempt::new(
+                RunAttempt::before_spawn(Self::retry_superseded_response(id)),
+                current_generation,
+            ));
+        }
+
+        let mut generation = retry.map_or(current_generation, |retry| retry.generation);
+        let mut began_new_lifecycle = retry.is_some();
 
         if let Some(daemon) = self.get_daemon(id).await
             && let Some(pid) = daemon.pid
             && !daemon.status.is_stopped()
         {
-            if let Some(retry_owner) = retry_owner {
-                if pid == retry_owner {
+            if let Some(retry) = retry {
+                if pid == retry.pid {
                     // Readiness failure is reported before graceful shutdown
                     // necessarily completes. Finish stopping this exact attempt
                     // before replacing it, even if its PID is still live.
                     if let Some(response) = self.stop_before_replacement(id).await? {
-                        return Ok(RunAttempt::before_spawn(response));
+                        return Ok(LifecycleRunAttempt::new(
+                            RunAttempt::before_spawn(response),
+                            generation,
+                        ));
                     }
                     info!("run: retry stop completed for daemon {id} pid {pid}");
                 } else {
                     warn!(
-                        "daemon {id} was replaced while waiting to retry (old pid {retry_owner}, current pid {pid})"
+                        "daemon {id} was replaced while waiting to retry (old pid {}, current pid {pid})",
+                        retry.pid
                     );
-                    return Ok(RunAttempt::before_spawn(IpcResponse::DaemonAlreadyRunning));
+                    return Ok(LifecycleRunAttempt::new(
+                        RunAttempt::before_spawn(Self::retry_superseded_response(id)),
+                        current_generation,
+                    ));
                 }
             } else if opts.force {
+                generation = Self::advance_lifecycle_generation(&mut lifecycle_guard);
+                began_new_lifecycle = true;
                 if let Some(response) = self.stop_before_replacement(id).await? {
-                    return Ok(RunAttempt::before_spawn(response));
+                    return Ok(LifecycleRunAttempt::new(
+                        RunAttempt::before_spawn(response),
+                        generation,
+                    ));
                 }
                 info!("run: stop completed for daemon {id}");
             } else {
                 warn!("daemon {id} already running with pid {pid}");
-                return Ok(RunAttempt::before_spawn(IpcResponse::DaemonAlreadyRunning));
+                return Ok(LifecycleRunAttempt::new(
+                    RunAttempt::before_spawn(IpcResponse::DaemonAlreadyRunning),
+                    current_generation,
+                ));
             }
         }
 
-        self.run_once(opts, lifecycle_guard).await
+        if !began_new_lifecycle {
+            generation = Self::advance_lifecycle_generation(&mut lifecycle_guard);
+        }
+
+        Ok(LifecycleRunAttempt::new(
+            self.run_once(opts, lifecycle_guard).await?,
+            generation,
+        ))
     }
 
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
+        let lifecycle = self.daemon_lifecycle(id).await;
 
         // Clear any pending autostop for this daemon since it's being started
         {
@@ -276,19 +351,34 @@ impl Supervisor {
         if opts.wait_ready && opts.retry.count() > 0 {
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
-            let mut retry_owner = None;
+            let mut retry = None;
             for attempt in 0..max_attempts {
                 let mut retry_opts = opts.clone();
                 retry_opts.retry_count = attempt;
                 retry_opts.cmd = cmd.clone();
-                let result = self.run_once_serialized(retry_opts, retry_owner).await?;
+                let result = self
+                    .run_once_serialized(&lifecycle, retry_opts, retry)
+                    .await?;
 
                 match result.response {
                     IpcResponse::DaemonReady { daemon } => {
                         return Ok(IpcResponse::DaemonReady { daemon });
                     }
                     IpcResponse::DaemonFailedWithCode { exit_code } => {
-                        retry_owner = result.pid;
+                        let Some(pid) = result.pid else {
+                            error!(
+                                "daemon {id} failed after spawning but its PID was not retained"
+                            );
+                            return Ok(IpcResponse::DaemonFailed {
+                                error: format!(
+                                    "daemon {id} failed after spawning but its PID was not retained"
+                                ),
+                            });
+                        };
+                        retry = Some(RetryToken {
+                            pid,
+                            generation: result.generation,
+                        });
                         if attempt < opts.retry.count() {
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
@@ -319,14 +409,17 @@ impl Supervisor {
         }
 
         // No retry or wait_ready is false
-        Ok(self.run_once_serialized(opts, None).await?.response)
+        Ok(self
+            .run_once_serialized(&lifecycle, opts, None)
+            .await?
+            .response)
     }
 
     /// Run a daemon once (single attempt)
     async fn run_once(
         &self,
         opts: RunOptions,
-        lifecycle_guard: OwnedMutexGuard<()>,
+        lifecycle_guard: OwnedMutexGuard<DaemonLifecycleState>,
     ) -> Result<RunAttempt> {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
@@ -1586,7 +1679,9 @@ impl Supervisor {
 
     /// Stop a running daemon
     pub async fn stop(&self, id: &DaemonId) -> Result<IpcResponse> {
-        let _lifecycle_guard = self.daemon_lifecycle_guard(id).await;
+        let lifecycle = self.daemon_lifecycle(id).await;
+        let mut lifecycle_guard = Self::lifecycle_guard(&lifecycle).await;
+        Self::advance_lifecycle_generation(&mut lifecycle_guard);
         self.stop_inner(id).await
     }
 
