@@ -220,6 +220,10 @@ impl Procs {
         } else {
             None
         };
+        #[cfg(target_os = "linux")]
+        let identity_pinned = _pidfd_guard.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let identity_pinned = false;
 
         if let Some(expected) = expected_start_time
             && !self.start_time_matches(pid, expected)
@@ -270,6 +274,13 @@ impl Procs {
             std::thread::sleep(sleep_duration);
             self.refresh_pids(&[pid]);
             elapsed_ms += sleep_duration.as_millis() as u64;
+            if identity_pinned {
+                if !process_group_is_running(pgid) {
+                    debug!("process group {pgid} terminated after {signal_name} ({elapsed_ms} ms)",);
+                    return Ok(true);
+                }
+                continue;
+            }
             if let Some(expected) = expected_start_time
                 && self.start_time(pid) != Some(expected)
             {
@@ -282,7 +293,9 @@ impl Procs {
             }
         }
 
-        if let Some(expected) = expected_start_time {
+        if let Some(expected) = expected_start_time
+            && !identity_pinned
+        {
             self.refresh_pids(&[pid]);
             if self.start_time(pid) != Some(expected) {
                 debug!("original process group {pgid} leader exited before SIGKILL");
@@ -743,6 +756,14 @@ fn open_pidfd(pid: u32) -> std::io::Result<OwnedFd> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+}
+
+#[cfg(unix)]
+fn process_group_is_running(pgid: i32) -> bool {
+    if unsafe { libc::killpg(pgid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[derive(Debug, Clone, Copy)]
