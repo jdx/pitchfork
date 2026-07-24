@@ -153,7 +153,25 @@ impl Procs {
         stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
         tokio::task::spawn_blocking(move || {
-            PROCS.kill_process_group(pid, stop_signal, stop_timeout)
+            PROCS.kill_process_group(pid, stop_signal, stop_timeout, None)
+        })
+        .await
+        .into_diagnostic()?
+    }
+
+    /// Kill a process group only while its leader still has `expected_start_time`.
+    ///
+    /// Identity is refreshed inside the blocking kill operation, immediately
+    /// before signaling, and checked again before escalation to SIGKILL.
+    pub async fn kill_process_group_if_start_time_matches_async(
+        &self,
+        pid: u32,
+        expected_start_time: u64,
+        stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
+    ) -> Result<bool> {
+        tokio::task::spawn_blocking(move || {
+            PROCS.kill_process_group(pid, stop_signal, stop_timeout, Some(expected_start_time))
         })
         .await
         .into_diagnostic()?
@@ -173,9 +191,18 @@ impl Procs {
         pid: u32,
         stop_signal: i32,
         stop_timeout: Option<std::time::Duration>,
+        expected_start_time: Option<u64>,
     ) -> Result<bool> {
         let pgid = pid as i32;
         let signal_name = signal_name(stop_signal);
+
+        if let Some(expected) = expected_start_time {
+            self.refresh_pids(&[pid]);
+            if self.start_time(pid) != Some(expected) {
+                debug!("process group {pgid} leader identity changed before {signal_name}");
+                return Ok(false);
+            }
+        }
 
         debug!("killing process group {pgid} with {signal_name}");
 
@@ -219,8 +246,22 @@ impl Procs {
             std::thread::sleep(sleep_duration);
             self.refresh_pids(&[pid]);
             elapsed_ms += sleep_duration.as_millis() as u64;
+            if let Some(expected) = expected_start_time
+                && self.start_time(pid) != Some(expected)
+            {
+                debug!("original process group {pgid} leader exited after {signal_name}");
+                return Ok(true);
+            }
             if self.is_terminated_or_zombie(sysinfo::Pid::from_u32(pid)) {
                 debug!("process group {pgid} terminated after {signal_name} ({elapsed_ms} ms)",);
+                return Ok(true);
+            }
+        }
+
+        if let Some(expected) = expected_start_time {
+            self.refresh_pids(&[pid]);
+            if self.start_time(pid) != Some(expected) {
+                debug!("original process group {pgid} leader exited before SIGKILL");
                 return Ok(true);
             }
         }
@@ -249,6 +290,7 @@ impl Procs {
         pid: u32,
         _stop_signal: i32,
         _stop_timeout: Option<std::time::Duration>,
+        _expected_start_time: Option<u64>,
     ) -> Result<bool> {
         self.kill(pid, 0, None)
     }
@@ -714,6 +756,46 @@ mod tests {
             let _ = unsafe { libc::killpg(pid, libc::SIGKILL) };
             let _ = self.0.wait();
         }
+    }
+
+    #[tokio::test]
+    async fn orphan_identity_checked_group_kill_rejects_mismatch() {
+        let mut command = Command::new("sleep");
+        command
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let child = command.spawn().expect("failed to spawn test process");
+        let pid = child.id();
+        let _child = ChildGuard(child);
+
+        PROCS.refresh_pids(&[pid]);
+        let actual_start_time = PROCS
+            .start_time(pid)
+            .expect("test process should have a start time");
+
+        let killed = PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                actual_start_time.saturating_add(1),
+                libc::SIGTERM,
+                Some(Duration::from_millis(100)),
+            )
+            .await
+            .expect("identity-checked kill should not error");
+
+        assert!(!killed);
+        assert!(PROCS.is_running(pid), "mismatched process must survive");
     }
 
     #[test]

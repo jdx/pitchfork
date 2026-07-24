@@ -1269,15 +1269,13 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         candidates.len()
     );
 
-    // Populate the process cache for all candidate PIDs in one pass so the
-    // identity checks below (start_time/title) see live data. Without this
-    // the cache is empty at supervisor startup and every lookup returns None,
-    // which would defeat the recycled-PID safety check entirely.
-    let pids: Vec<u32> = candidates.iter().filter_map(|d| d.pid).collect();
-    PROCS.refresh_pids(&pids);
-
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
+
+        // Refresh each candidate immediately before checking it. Processing an
+        // earlier orphan can await its stop timeout, during which this PID may
+        // exit and be recycled.
+        PROCS.refresh_pids(&[pid]);
 
         if !PROCS.is_running(pid) {
             // PID already dead — just reset its state
@@ -1308,11 +1306,25 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             continue;
         }
 
+        let Some(expected_start_time) = current_start_time else {
+            warn!(
+                "could not read start time for pid {pid} recorded for daemon {}; resetting state without killing",
+                daemon.id,
+            );
+            reset_daemon_state(supervisor, &daemon.id).await;
+            continue;
+        };
+
         info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
 
         let stop_cfg = daemon.stop_signal.unwrap_or_default();
         let _ = PROCS
-            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                expected_start_time,
+                stop_cfg.signal.into(),
+                stop_cfg.timeout,
+            )
             .await;
 
         reset_daemon_state(supervisor, &daemon.id).await;
