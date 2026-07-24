@@ -326,8 +326,14 @@ impl Procs {
         // so the pinned set is complete and the PGID cannot be recycled.
         loop {
             let known_members = members.len();
-            extend_process_group_pidfds(pid as i32, &mut members);
-            if members.len() == known_members {
+            let added = match extend_process_group_pidfds(pid as i32, &mut members) {
+                Ok(added) => added,
+                Err(err) => {
+                    let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
+                    return Err(err);
+                }
+            };
+            if added == 0 {
                 break;
             }
             if let Err(err) = stop_pidfds(&members[known_members..]) {
@@ -828,6 +834,17 @@ fn open_pidfd(pid: u32) -> std::io::Result<OwnedFd> {
 
 #[cfg(target_os = "linux")]
 fn pidfd_is_running(pidfd: &OwnedFd) -> bool {
+    match try_pidfd_is_running(pidfd) {
+        Ok(running) => running,
+        Err(err) => {
+            warn!("failed to poll pidfd {}: {err}", pidfd.as_raw_fd());
+            true
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn try_pidfd_is_running(pidfd: &OwnedFd) -> std::io::Result<bool> {
     let mut pollfd = libc::pollfd {
         fd: pidfd.as_raw_fd(),
         events: libc::POLLIN,
@@ -835,14 +852,9 @@ fn pidfd_is_running(pidfd: &OwnedFd) -> bool {
     };
     let result = unsafe { libc::poll(&mut pollfd, 1, 0) };
     if result < 0 {
-        warn!(
-            "failed to poll pidfd {}: {}",
-            pidfd.as_raw_fd(),
-            std::io::Error::last_os_error()
-        );
-        return true;
+        return Err(std::io::Error::last_os_error());
     }
-    result == 0
+    Ok(result == 0)
 }
 
 #[cfg(target_os = "linux")]
@@ -890,11 +902,14 @@ fn stop_pidfds(members: &[(u32, OwnedFd)]) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn extend_process_group_pidfds(pgid: i32, members: &mut Vec<(u32, OwnedFd)>) {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return;
-    };
-    for entry in entries.flatten() {
+fn extend_process_group_pidfds(
+    pgid: i32,
+    members: &mut Vec<(u32, OwnedFd)>,
+) -> std::io::Result<usize> {
+    let entries = std::fs::read_dir("/proc")?;
+    let mut added = 0;
+    for entry in entries {
+        let entry = entry?;
         let Some(pid) = entry
             .file_name()
             .to_str()
@@ -902,28 +917,47 @@ fn extend_process_group_pidfds(pgid: i32, members: &mut Vec<(u32, OwnedFd)>) {
         else {
             continue;
         };
-        if members.iter().any(|(known_pid, _)| *known_pid == pid) {
-            continue;
-        }
-        let Ok(pidfd) = open_pidfd(pid) else {
+        let Some(observed_identity) = linux_process_identity(pid) else {
             continue;
         };
-        if linux_process_group(pid) == Some(pgid) {
-            members.push((pid, pidfd));
+        if observed_identity.0 != pgid {
+            continue;
         }
+        let mut already_pinned = false;
+        for (known_pid, pidfd) in members.iter() {
+            if *known_pid == pid && try_pidfd_is_running(pidfd)? {
+                already_pinned = true;
+                break;
+            }
+        }
+        if already_pinned {
+            continue;
+        }
+
+        let pidfd = match open_pidfd(pid) {
+            Ok(pidfd) => pidfd,
+            Err(err) if err.raw_os_error() == Some(libc::ESRCH) => continue,
+            Err(err) => return Err(err),
+        };
+        if linux_process_identity(pid) != Some(observed_identity) {
+            return Err(std::io::Error::other(format!(
+                "process {pid} identity changed while pinning group {pgid}"
+            )));
+        }
+        members.push((pid, pidfd));
+        added += 1;
     }
+    Ok(added)
 }
 
 #[cfg(target_os = "linux")]
-fn linux_process_group(pid: u32) -> Option<i32> {
+fn linux_process_identity(pid: u32) -> Option<(i32, u64)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let command_end = stat.rfind(')')?;
-    // Fields after the command start at field 3: state, ppid, then pgrp.
-    stat.get(command_end + 1..)?
-        .split_whitespace()
-        .nth(2)?
-        .parse()
-        .ok()
+    let fields: Vec<_> = stat.get(command_end + 1..)?.split_whitespace().collect();
+    // Fields after the command start at field 3. pgrp is field 5 and the
+    // scheduler-tick start token is field 22.
+    Some((fields.get(2)?.parse().ok()?, fields.get(19)?.parse().ok()?))
 }
 
 #[cfg(target_os = "linux")]
