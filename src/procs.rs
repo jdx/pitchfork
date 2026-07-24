@@ -297,7 +297,7 @@ impl Procs {
         pid: u32,
         expected_start_time: u64,
         _stop_signal: i32,
-        _stop_timeout: Option<std::time::Duration>,
+        stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
         let leader = match open_pidfd(pid) {
             Ok(pidfd) => pidfd,
@@ -352,8 +352,21 @@ impl Procs {
             let _ = signal_pidfds(&members, libc::SIGCONT, "SIGCONT");
             return Err(err);
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        Ok(true)
+
+        let exit_timeout = stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
+        let checks = ((exit_timeout.as_millis().max(1) + 49) / 50) as usize;
+        for _ in 0..checks {
+            if members.iter().all(|(_, pidfd)| !pidfd_is_running(pidfd)) {
+                return Ok(true);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if members.iter().all(|(_, pidfd)| !pidfd_is_running(pidfd)) {
+            return Ok(true);
+        }
+
+        warn!("one or more pinned processes in orphan group {pid} remained alive after SIGKILL");
+        Ok(false)
     }
 
     #[cfg(not(unix))]

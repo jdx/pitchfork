@@ -1337,20 +1337,20 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
             )
             .await;
 
-        if !matches!(termination_result, Ok(true)) {
-            PROCS.refresh_pids(&[pid]);
-            if PROCS.is_running(pid) && PROCS.start_time(pid) == Some(expected_start_time) {
-                match termination_result {
-                    Ok(false) => warn!(
-                        "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
-                        daemon.id
-                    ),
-                    Err(err) => warn!(
-                        "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
-                        daemon.id
-                    ),
-                    Ok(true) => unreachable!(),
-                }
+        match termination_result {
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(
+                    "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
+                    daemon.id
+                );
+                continue;
+            }
+            Err(err) => {
+                warn!(
+                    "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
+                    daemon.id
+                );
                 continue;
             }
         }
