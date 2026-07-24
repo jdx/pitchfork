@@ -69,6 +69,10 @@ pub(crate) struct MonitoredGuard {
 }
 
 impl MonitoredGuard {
+    /// Unconditionally claim the daemon's registry entry, displacing any
+    /// previous monitor. Used by `run_once` when spawning a child: a fresh
+    /// process legitimately supersedes whatever monitor came before, and the
+    /// overwrite is what lets stale monitors detect the succession.
     pub(crate) fn register(id: DaemonId, pid: u32) -> Self {
         SUPERVISOR
             .monitored
@@ -76,6 +80,23 @@ impl MonitoredGuard {
             .expect("monitored lock poisoned")
             .insert(id.clone(), pid);
         Self { id, pid }
+    }
+
+    /// Claim the daemon's registry entry only if no monitor currently holds
+    /// it. Used by adoption, which must never displace a live monitor: this
+    /// check-and-insert is atomic under the registry lock, making it the
+    /// authoritative gate against two concurrent reconciliation passes
+    /// adopting the same process twice.
+    pub(crate) fn try_register(id: DaemonId, pid: u32) -> Option<Self> {
+        let mut monitored = SUPERVISOR
+            .monitored
+            .lock()
+            .expect("monitored lock poisoned");
+        if monitored.contains_key(&id) {
+            return None;
+        }
+        monitored.insert(id.clone(), pid);
+        Some(Self { id, pid })
     }
 }
 
@@ -273,6 +294,17 @@ impl Supervisor {
     /// poll monitor takes over for the `child.wait()` monitor that died with
     /// the previous supervisor.
     pub(crate) async fn adopt_daemon(&self, daemon: &Daemon, pid: u32, expected_start_time: u64) {
+        // Claim the registry entry BEFORE any await so two concurrent
+        // reconciliation passes (or startup scan + interval tick) cannot
+        // both adopt the same process and spawn duplicate poll monitors.
+        // The earlier is_monitored checks are advisory; this is the gate.
+        let Some(guard) = MonitoredGuard::try_register(daemon.id.clone(), pid) else {
+            debug!(
+                "daemon {} (pid {pid}) is already monitored; skipping duplicate adoption",
+                daemon.id
+            );
+            return;
+        };
         info!("re-adopting orphaned daemon {} (pid {pid})", daemon.id);
 
         // Legacy records matched by title have no persisted start_time.
@@ -295,8 +327,6 @@ impl Supervisor {
                 )
                 .await;
         }
-
-        let guard = MonitoredGuard::register(daemon.id.clone(), pid);
         let id = daemon.id.clone();
         let daemon_dir = daemon
             .dir
