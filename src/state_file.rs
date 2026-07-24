@@ -244,6 +244,20 @@ impl StateFile {
         self.mark_dirty();
     }
 
+    /// Exhaust retries only while the daemon remains eligible for retry.
+    pub fn exhaust_daemon_retries_if_eligible(&mut self, id: &DaemonId) -> bool {
+        let Some(daemon) = self.daemons.get_mut(id) else {
+            return false;
+        };
+        if !daemon.needs_retry() {
+            return false;
+        }
+
+        daemon.retry_count = daemon.retry.count();
+        self.mark_dirty();
+        true
+    }
+
     /// Remove a daemon entry and mark the state dirty if the daemon existed.
     pub fn remove_daemon(&mut self, id: &DaemonId) {
         if self.daemons.remove(id).is_some() {
@@ -746,6 +760,58 @@ mod tests {
         assert_eq!(daemon.pid, None);
         assert!(matches!(&daemon.status, DaemonStatus::Errored(1)));
         assert_eq!(daemon.last_exit_success, Some(false));
+    }
+
+    #[test]
+    fn exhausting_retries_does_not_overwrite_a_replacement_process() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: Some(200),
+                status: DaemonStatus::Running,
+                retry: 2u32.into(),
+                retry_count: 0,
+                ..Daemon::default()
+            },
+        );
+
+        assert!(!state.exhaust_daemon_retries_if_eligible(&daemon_id));
+        assert!(!state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, Some(200));
+        assert!(matches!(&daemon.status, DaemonStatus::Running));
+        assert_eq!(daemon.retry_count, 0);
+    }
+
+    #[test]
+    fn exhausting_retries_updates_only_retry_count() {
+        let mut state = StateFile::new(PathBuf::from("/tmp/test.toml"));
+        let daemon_id = DaemonId::new("project", "worker");
+        state.daemons.insert(
+            daemon_id.clone(),
+            Daemon {
+                id: daemon_id.clone(),
+                pid: None,
+                status: DaemonStatus::Errored(7),
+                last_exit_success: Some(false),
+                retry: 2u32.into(),
+                retry_count: 0,
+                ..Daemon::default()
+            },
+        );
+
+        assert!(state.exhaust_daemon_retries_if_eligible(&daemon_id));
+        assert!(state.is_dirty());
+
+        let daemon = state.daemons.get(&daemon_id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert!(matches!(&daemon.status, DaemonStatus::Errored(7)));
+        assert_eq!(daemon.last_exit_success, Some(false));
+        assert_eq!(daemon.retry_count, 2);
     }
 
     #[test]

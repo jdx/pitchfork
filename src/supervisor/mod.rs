@@ -72,6 +72,11 @@ pub(crate) struct DaemonLifecycleState {
     active_readiness_retries: Vec<Weak<ReadinessRetryActivity>>,
 }
 
+pub(crate) struct BackgroundRetryStarted {
+    attempt: u32,
+    limit: u32,
+}
+
 pub(crate) struct ReadinessRetryActivity {
     // Production loads and stores occur while the corresponding lifecycle
     // transition mutex is held. The atomic makes the Arc/Weak marker Sync;

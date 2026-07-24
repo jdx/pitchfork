@@ -4,7 +4,8 @@
 
 use super::hooks::{self, HookType, fire_hook};
 use super::{
-    DaemonLifecycle, DaemonLifecycleState, ReadinessRetryActivity, SUPERVISOR, Supervisor,
+    BackgroundRetryStarted, DaemonLifecycle, DaemonLifecycleState, ReadinessRetryActivity,
+    SUPERVISOR, Supervisor,
 };
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
@@ -258,12 +259,6 @@ impl Supervisor {
         activity
     }
 
-    pub(super) async fn has_readiness_retry_for_current_generation(&self, id: &DaemonId) -> bool {
-        let lifecycle = self.daemon_lifecycle(id).await;
-        let mut lifecycle_guard = Self::lifecycle_guard(&lifecycle).await;
-        lifecycle_guard.has_readiness_retry_for_current_generation()
-    }
-
     fn retry_superseded_response(id: &DaemonId) -> IpcResponse {
         IpcResponse::DaemonFailed {
             error: format!("retry for daemon {id} was superseded by a newer lifecycle request"),
@@ -272,6 +267,13 @@ impl Supervisor {
 
     async fn stop_before_replacement(&self, id: &DaemonId) -> Result<Option<IpcResponse>> {
         Ok(blocking_stop_response(self.stop_inner(id).await?))
+    }
+
+    async fn clear_pending_autostop(&self, id: &DaemonId) {
+        let mut pending = self.pending_autostops.lock().await;
+        if pending.remove(id).is_some() {
+            info!("cleared pending autostop for {id} (daemon starting)");
+        }
     }
 
     async fn run_once_serialized(
@@ -359,19 +361,75 @@ impl Supervisor {
         ))
     }
 
+    pub(super) async fn try_start_background_retry(
+        &self,
+        id: &DaemonId,
+    ) -> Result<Option<BackgroundRetryStarted>> {
+        let lifecycle = self.daemon_lifecycle(id).await;
+        let mut lifecycle_guard = Self::lifecycle_guard(&lifecycle).await;
+
+        if lifecycle_guard.has_readiness_retry_for_current_generation() {
+            debug!(
+                "skipping background retry for daemon {id} while a start request owns readiness retries"
+            );
+            return Ok(None);
+        }
+
+        let mut state_file = self.state_file.lock().await;
+        let Some(daemon) = state_file
+            .daemons
+            .get(id)
+            .filter(|daemon| daemon.needs_retry())
+            .cloned()
+        else {
+            debug!("skipping background retry for daemon {id} after lifecycle re-check");
+            return Ok(None);
+        };
+
+        let Some(cmd) = daemon.cmd.clone() else {
+            warn!("no run command found in state for daemon {id}, cannot retry");
+            state_file.exhaust_daemon_retries_if_eligible(id);
+            return Ok(None);
+        };
+        drop(state_file);
+
+        let mut opts = daemon.to_run_options(cmd);
+        opts.retry_count = daemon.retry_count + 1;
+        Self::advance_lifecycle_generation(&mut lifecycle_guard);
+        self.clear_pending_autostop(id).await;
+        let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
+        fire_hook(
+            HookType::OnRetry,
+            id.clone(),
+            dir,
+            opts.retry_count,
+            daemon.env.clone(),
+            vec![],
+        )
+        .await;
+        let attempt = self.run_once(opts, lifecycle_guard).await?;
+        if attempt.pid.is_none() {
+            warn!(
+                "background retry for daemon {id} did not start: {:?}",
+                attempt.response
+            );
+            return Ok(None);
+        }
+
+        Ok(Some(BackgroundRetryStarted {
+            attempt: daemon.retry_count + 1,
+            limit: daemon.retry.count(),
+        }))
+    }
+
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
         let lifecycle = self.daemon_lifecycle(id).await;
 
-        // Clear any pending autostop for this daemon since it's being started
-        {
-            let mut pending = self.pending_autostops.lock().await;
-            if pending.remove(id).is_some() {
-                info!("cleared pending autostop for {id} (daemon starting)");
-            }
-        }
+        // Clear any pending autostop for this daemon since it's being started.
+        self.clear_pending_autostop(id).await;
 
         // If wait_ready is true and retry is configured, implement retry loop
         if opts.wait_ready && opts.retry.count() > 0 {
@@ -2437,6 +2495,7 @@ fn build_pitchfork_url(slug: &Option<String>, s: &crate::settings::Settings) -> 
 #[cfg(test)]
 mod lifecycle_response_tests {
     use super::*;
+    use crate::daemon::Daemon;
 
     #[test]
     fn only_successful_or_already_stopped_responses_allow_replacement() {
@@ -2462,6 +2521,42 @@ mod lifecycle_response_tests {
             unexpected,
             Some(IpcResponse::Error(error)) if error == "denied"
         ));
+    }
+
+    #[tokio::test]
+    async fn background_retry_yields_to_foreground_readiness_owner() {
+        let supervisor = Supervisor::new().unwrap();
+        let id = DaemonId::new("test", "background-retry-marker");
+        {
+            let mut state_file = supervisor.state_file.lock().await;
+            state_file.insert_daemon(
+                &id,
+                Daemon {
+                    id: id.clone(),
+                    pid: None,
+                    status: DaemonStatus::Errored(1),
+                    cmd: Some(vec!["true".to_string()]),
+                    retry: 2u32.into(),
+                    retry_count: 0,
+                    ..Daemon::default()
+                },
+            );
+        }
+
+        let lifecycle = supervisor.daemon_lifecycle(&id).await;
+        let _foreground_retry = Supervisor::register_active_readiness_retry(&lifecycle).await;
+
+        assert!(
+            supervisor
+                .try_start_background_retry(&id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let state_file = supervisor.state_file.lock().await;
+        let daemon = state_file.daemons.get(&id).unwrap();
+        assert_eq!(daemon.pid, None);
+        assert_eq!(daemon.retry_count, 0);
     }
 }
 
