@@ -244,28 +244,6 @@ impl PitchforkServer {
         let ids = PitchforkToml::resolve_ids(&params.id)
             .map_err(|e| internal_err(format!("Failed to resolve daemon IDs: {e}")))?;
 
-        // Snapshot running daemons before stop to determine what was actually stopped
-        let running_before: std::collections::HashSet<_> = ipc
-            .get_running_daemons()
-            .await
-            .map_err(|e| internal_err(format!("Failed to query running daemons: {e}")))?
-            .into_iter()
-            .collect();
-
-        let actually_running: Vec<_> = ids
-            .iter()
-            .filter(|id| running_before.contains(id))
-            .cloned()
-            .collect();
-
-        if actually_running.is_empty() {
-            let names: Vec<String> = ids.iter().map(|id| id.qualified()).collect();
-            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "No daemons were running: {}",
-                names.join(", ")
-            ))]));
-        }
-
         let result = ipc
             .stop_daemons(&ids)
             .await
@@ -276,9 +254,9 @@ impl PitchforkServer {
                 "Some daemons failed to stop",
             )]))
         } else {
-            let names: Vec<String> = actually_running.iter().map(|id| id.qualified()).collect();
+            let names: Vec<String> = ids.iter().map(|id| id.qualified()).collect();
             Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "Stopped: {}",
+                "Stop processed: {}",
                 names.join(", ")
             ))]))
         }

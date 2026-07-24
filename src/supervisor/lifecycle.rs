@@ -1865,7 +1865,15 @@ impl Supervisor {
                 Ok(IpcResponse::Ok)
             } else {
                 debug!("daemon {id} not running");
-                Ok(IpcResponse::DaemonNotRunning)
+                if self.record_daemon_stop_if_no_process(id).await {
+                    info!(
+                        "recorded explicit stop for daemon {id} without a current process, cancelling pending retries"
+                    );
+                    Ok(IpcResponse::Ok)
+                } else {
+                    debug!("stop result for daemon {id} without a PID made no state change");
+                    Ok(IpcResponse::DaemonNotRunning)
+                }
             }
         } else {
             debug!("daemon {id} not found");

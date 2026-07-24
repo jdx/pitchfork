@@ -304,6 +304,8 @@ EOF
     sleep 0.1
   done
   assert_file_exists "$marker"
+  # Let the retried process exit so a delayed duplicate hook would be visible.
+  sleep 2
   local count
   count=$(wc -l < "$marker" | tr -d ' ')
   [[ "$count" -eq 1 ]]

@@ -301,6 +301,33 @@ EOF
   refute_output --partial "attempt-4"
 }
 
+@test "explicit stop during retry backoff prevents resurrection" {
+  create_pitchfork_toml <<EOF
+[daemons.retry_stop_backoff]
+run = "echo attempt-\$PITCHFORK_RETRY_COUNT; sleep 60"
+ready_output = { pattern = "READY", timeout = "100ms" }
+retry = 4
+EOF
+
+  pitchfork start retry_stop_backoff >"$TEST_TEMP_DIR/retry_stop_backoff.log" 2>&1 &
+  local older_start=$!
+
+  wait_for_logs retry_stop_backoff "attempt-3" 20
+  wait_for_status retry_stop_backoff errored
+
+  run pitchfork stop retry_stop_backoff
+  assert_success
+
+  local older_start_status=0
+  wait "$older_start" || older_start_status=$?
+  [[ "$older_start_status" -ne 0 ]]
+  wait_for_status retry_stop_backoff stopped
+
+  run pitchfork logs retry_stop_backoff --raw
+  assert_success
+  refute_output --partial "attempt-4"
+}
+
 @test "retry count persists across supervisor restart" {
   skip_on_windows "exponential backoff + state persistence timing is unreliable on Windows CI"
 

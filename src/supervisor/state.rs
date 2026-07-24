@@ -336,6 +336,14 @@ impl Supervisor {
             .record_daemon_stop(id, pid, last_exit_success)
     }
 
+    /// Record an explicit stop while no process owns the daemon state.
+    pub(crate) async fn record_daemon_stop_if_no_process(&self, id: &DaemonId) -> bool {
+        self.state_file
+            .lock()
+            .await
+            .record_daemon_stop_if_no_process(id)
+    }
+
     /// Get all active daemons (those with PIDs, excluding pitchfork itself)
     pub(crate) async fn active_daemons(&self) -> Vec<Daemon> {
         let pitchfork_id = DaemonId::pitchfork();
