@@ -66,6 +66,42 @@ pub struct SqliteLogStore {
 /// overhead exceeds the query savings.
 const PARALLEL_QUERY_THRESHOLD: usize = 200_000;
 
+/// How long a statement waits for a contended lock before giving up. Generous
+/// enough to outlast any batch insert or retention prune, short enough that a
+/// genuinely stuck writer still surfaces as an error rather than hanging.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Put the database into WAL mode, tolerating a lost race.
+///
+/// Switching journal modes needs an exclusive lock and, unlike ordinary
+/// statements, does not consult the busy handler — so concurrent opens collide
+/// here no matter how large `busy_timeout` is. WAL is recorded in the database
+/// header and persists across connections, so only the first open has to
+/// succeed: retry briefly in case a peer is mid-switch, and if it still has not
+/// taken, carry on rather than fail. A connection that never personally set WAL
+/// still works correctly; refusing to open the log store over a transient
+/// pragma race would be far worse than running one connection unoptimised.
+fn enable_wal(conn: &Connection) {
+    const ATTEMPTS: usize = 5;
+    for attempt in 0..ATTEMPTS {
+        match conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0)) {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return,
+            Ok(_) => {}
+            Err(e) => {
+                debug!("could not read journal_mode: {e}");
+                return;
+            }
+        }
+        if conn.execute_batch("PRAGMA journal_mode = WAL;").is_ok() {
+            return;
+        }
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    debug!("log store is not in WAL mode; another connection may be switching it");
+}
+
 impl SqliteLogStore {
     /// Open or create the SQLite log store at the given path.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
@@ -74,10 +110,22 @@ impl SqliteLogStore {
             std::fs::create_dir_all(parent).into_diagnostic()?;
         }
         let conn = Connection::open(&path).into_diagnostic()?;
+
+        // A contended write must wait for the lock rather than fail: WAL
+        // allows concurrent readers but still serializes writers, and a writer
+        // with no timeout takes SQLITE_BUSY immediately and drops its work.
+        // rusqlite already defaults to this value, but state it explicitly so
+        // the requirement is visible here and does not rest on a dependency's
+        // default. Set before anything else, since the statements below take
+        // locks of their own.
+        conn.busy_timeout(BUSY_TIMEOUT).into_diagnostic()?;
+
         add_regexp_function(&conn)?;
+
+        enable_wal(&conn);
+
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
+            "PRAGMA synchronous = NORMAL;
              PRAGMA mmap_size = 268435456;",
         )
         .into_diagnostic()?;
@@ -1134,4 +1182,100 @@ fn auto_migrate_legacy_logs(store: &SqliteLogStore) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log_store::LogStore;
+
+    /// A writer that finds the lock held must wait for it, not give up. WAL
+    /// serializes writers, so without `busy_timeout` the second writer takes
+    /// SQLITE_BUSY immediately and silently discards its batch.
+    #[test]
+    fn write_waits_for_a_contended_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs.db");
+        let store = SqliteLogStore::open(&path).unwrap();
+
+        // Hold the write lock from a second connection, then release it after a
+        // delay that a non-waiting writer could never survive.
+        let blocker = Connection::open(&path).unwrap();
+        blocker.busy_timeout(BUSY_TIMEOUT).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            blocker.execute_batch("COMMIT").unwrap();
+        });
+
+        let id = DaemonId::try_new("test", "blocked").unwrap();
+        let entries = vec![crate::log_parse::parse("held-lock-line", "text")];
+        store
+            .append_structured_batch(&id, &entries)
+            .expect("a contended write must wait for the lock, not fail");
+
+        releaser.join().unwrap();
+        let found = store
+            .query(&LogQuery {
+                daemon_ids: vec![id.qualified()],
+                ..Default::default()
+            })
+            .unwrap()
+            .len();
+        assert_eq!(found, 1, "the batch written under contention was lost");
+    }
+
+    /// Two processes writing the same store is the normal case, not an edge
+    /// case: daemon output and retention pruning already collide, and a
+    /// per-daemon writer multiplies the opportunities. WAL serializes writers,
+    /// so without `busy_timeout` the loser of that race takes SQLITE_BUSY
+    /// immediately and silently discards its batch.
+    #[test]
+    fn concurrent_writers_do_not_lose_batches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs.db");
+
+        const WRITERS: usize = 4;
+        const BATCHES: usize = 15;
+        const PER_BATCH: usize = 10;
+
+        std::thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let path = path.clone();
+                scope.spawn(move || {
+                    // A separate connection per writer, as separate processes
+                    // would have.
+                    let store = SqliteLogStore::open(&path).unwrap();
+                    let id = DaemonId::try_new("test", format!("w{writer}")).unwrap();
+                    for batch in 0..BATCHES {
+                        let entries: Vec<ParsedLog> = (0..PER_BATCH)
+                            .map(|i| {
+                                crate::log_parse::parse(&format!("w{writer}-{batch}-{i}"), "text")
+                            })
+                            .collect();
+                        store
+                            .append_structured_batch(&id, &entries)
+                            .expect("concurrent batch write must not fail");
+                    }
+                });
+            }
+        });
+
+        let store = SqliteLogStore::open(&path).unwrap();
+        for writer in 0..WRITERS {
+            let id = DaemonId::try_new("test", format!("w{writer}")).unwrap();
+            let found = store
+                .query(&LogQuery {
+                    daemon_ids: vec![id.qualified()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .len();
+            assert_eq!(
+                found,
+                BATCHES * PER_BATCH,
+                "writer {writer} lost entries: got {found}"
+            );
+        }
+    }
 }
