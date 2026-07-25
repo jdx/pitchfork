@@ -33,8 +33,10 @@ retrigger = "finish"
 immediate = true
 EOF
 
+  # The task fails immediately, so starting it reports failure. What this test
+  # is about is what the cron schedule does next.
   run pitchfork start cron_finish_fail
-  assert_success
+  assert_failure
 
   local count=0
   for _ in $(seq 1 65); do
@@ -64,8 +66,10 @@ retrigger = "always"
 immediate = true
 EOF
 
+  # The task fails immediately, so starting it reports failure. What this test
+  # is about is what the cron schedule does next.
   run pitchfork start cron_always_fail
-  assert_success
+  assert_failure
 
   local count=0
   for _ in $(seq 1 65); do
@@ -95,8 +99,10 @@ retrigger = "success"
 immediate = true
 EOF
 
+  # The task fails immediately, so starting it reports failure. What this test
+  # is about is what the cron schedule does next.
   run pitchfork start cron_success_fail
-  assert_success
+  assert_failure
 
   local count=0
   for _ in $(seq 1 65); do
@@ -126,8 +132,10 @@ retrigger = "fail"
 immediate = true
 EOF
 
+  # The task fails immediately, so starting it reports failure. What this test
+  # is about is what the cron schedule does next.
   run pitchfork start cron_fail_fail
-  assert_success
+  assert_failure
 
   local count=0
   for _ in $(seq 1 65); do
@@ -192,8 +200,10 @@ retrigger = "always"
 immediate = true
 EOF
 
+  # No assertion on the exit status: `retrigger = "always"` force-restarts the
+  # daemon every second, so it can be replaced while `start` is still waiting
+  # for it and either outcome is legitimate.
   run pitchfork start cron_always_long
-  assert_success
 
   local count=0
   for _ in $(seq 1 65); do
