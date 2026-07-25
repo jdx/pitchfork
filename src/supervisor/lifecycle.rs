@@ -603,7 +603,7 @@ impl Supervisor {
                 // its way to end of file: let it finish writing before reporting,
                 // then reap whatever is left of it.
                 if sink_child.is_some() {
-                    super::log_sink::wait_for_output(&id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+                    super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
                 }
                 return Ok(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
