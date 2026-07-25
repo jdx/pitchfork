@@ -13,6 +13,7 @@ mod disable;
 mod enable;
 mod json_output;
 mod list;
+pub mod log_sink;
 pub mod logs;
 mod mcp;
 mod project;
@@ -50,6 +51,7 @@ enum Commands {
     Disable(disable::Disable),
     Enable(enable::Enable),
     List(list::List),
+    LogSink(log_sink::LogSink),
     Logs(logs::Logs),
     Mcp(mcp::Mcp),
     Proxy(proxy::Proxy),
@@ -99,6 +101,7 @@ pub async fn run() -> Result<()> {
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,
         Commands::List(list) => list.run().await,
+        Commands::LogSink(log_sink) => log_sink.run().await,
         Commands::Logs(logs) => logs.run().await,
         Commands::Mcp(mcp) => mcp.run().await,
         Commands::Proxy(proxy) => proxy.run().await,

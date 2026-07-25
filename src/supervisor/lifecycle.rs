@@ -167,6 +167,12 @@ fn any_ready_check_remaining(
         || ready_cmd.is_some_and(|c| c.timeout.is_none() || !cmd_exhausted)
 }
 
+/// How long a failed start waits for the daemon's output to become queryable
+/// before reporting. Typically satisfied in a few dozen milliseconds; a daemon
+/// that failed without printing anything waits the whole of it, so keep it
+/// short.
+const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
+
 impl Supervisor {
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
@@ -435,6 +441,35 @@ impl Supervisor {
             None
         };
 
+        // Set up out-of-process capture before building the command, so the
+        // daemon can be handed the pipe's write end directly.
+        let mut sink_pipe = None;
+        let mut sink_writer = None;
+        let mut sink_child = None;
+        if super::log_sink::is_supported(&opts) {
+            let log_format = opts
+                .log_format
+                .clone()
+                .unwrap_or_else(|| settings().logs.log_format.clone());
+            match super::log_sink::SinkPipe::new(log_format) {
+                Ok((pipe, writer)) => match pipe.start(id) {
+                    Ok(child) => {
+                        sink_child = Some(super::log_sink::PendingSink::new(child));
+                        sink_pipe = Some(pipe);
+                        sink_writer = Some(writer);
+                    }
+                    Err(e) => {
+                        warn!("could not start log sink for {id}, capturing in-process: {e}");
+                    }
+                },
+                Err(e) => {
+                    // Fall back to in-process capture rather than refusing to
+                    // start the daemon.
+                    warn!("could not create log pipe for {id}, capturing in-process: {e}");
+                }
+            }
+        }
+
         let mut cmd = tokio::process::Command::new(&program);
 
         #[cfg(unix)]
@@ -454,13 +489,27 @@ impl Supervisor {
                 |e| miette::miette!("failed to clone slave PTY fd for stdout: {e}"),
             )?));
             cmd.stderr(std::process::Stdio::from(slave_file));
+        } else if let Some(writer) = sink_writer.take() {
+            // Capture belongs to a sibling sink process, so the daemon writes
+            // to a pipe this process does not read. See supervisor::log_sink.
+            let dup = writer
+                .try_clone()
+                .map_err(|e| miette::miette!("failed to dup log pipe for stderr: {e}"))?;
+            cmd.stdout(std::process::Stdio::from(writer))
+                .stderr(std::process::Stdio::from(dup));
         } else {
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
         }
 
         #[cfg(not(unix))]
-        {
+        if let Some(writer) = sink_writer.take() {
+            let dup = writer
+                .try_clone()
+                .map_err(|e| miette::miette!("failed to dup log pipe for stderr: {e}"))?;
+            cmd.stdout(std::process::Stdio::from(writer))
+                .stderr(std::process::Stdio::from(dup));
+        } else {
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
         }
@@ -535,11 +584,27 @@ impl Supervisor {
             }
         }
 
+        // Timestamp the run so a failed start can wait for this attempt's output
+        // specifically, rather than seeing an earlier attempt's.
+        let spawn_time = chrono::Local::now();
+        // A sink is already running at this point. Both bail-outs below have to
+        // reap it explicitly: dropping the handle only reaps on a best-effort
+        // basis, and run_once runs once per retry attempt, so a daemon that
+        // consistently fails to spawn would otherwise accumulate sinks.
+        // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
         let pid = match child.id() {
             Some(p) => p,
             None => {
                 warn!("Daemon {id} exited before PID could be captured");
+                // Unlike a daemon that never started, this one ran and may have
+                // said why it gave up, and its output is the only diagnosis
+                // available. Its write end is already closed, so the sink is on
+                // its way to end of file: let it finish writing before reporting,
+                // then reap whatever is left of it.
+                if sink_child.is_some() {
+                    super::log_sink::wait_for_output(&id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+                }
                 return Ok(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
                 });
@@ -556,6 +621,17 @@ impl Supervisor {
         // handed to the monitoring task.
         let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), pid);
         let monitor_token = monitored_guard.token();
+
+        // Hand the retained read end to a sink and keep one running for as long
+        // as this daemon is monitored.
+        let using_sink = sink_pipe.is_some();
+        // Take the sink out of the guard only once there is a pipe to supervise
+        // it with, so it is never left running unsupervised.
+        if let Some(pipe) = sink_pipe.take()
+            && let Some(child) = sink_child.as_mut().and_then(|pending| pending.take())
+        {
+            pipe.supervise(id.clone(), monitor_token, child);
+        }
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -636,7 +712,10 @@ impl Supervisor {
             None
         };
 
-        if pty_reader.is_none() && (stdout_reader.is_none() || stderr_reader.is_none()) {
+        if !using_sink
+            && pty_reader.is_none()
+            && (stdout_reader.is_none() || stderr_reader.is_none())
+        {
             error!("Failed to capture stdout/stderr for daemon {id}");
         }
 
@@ -1494,6 +1573,20 @@ impl Supervisor {
                 }
                 Ok(Err(exit_code)) => {
                     error!("daemon {id} failed before becoming ready");
+                    // The caller reports this by querying the log store for
+                    // what the daemon printed, so wait for the sink's final
+                    // write first. The in-process path got this ordering by
+                    // flushing synchronously before signalling.
+                    //
+                    // Only on the attempt that gives up: `run` retries inline,
+                    // and waiting after every attempt would both delay the
+                    // backoff and widen the window in which the daemon looks
+                    // errored and idle — long enough for the background retry
+                    // checker to start an attempt of its own alongside it.
+                    let last_attempt = opts.retry_count >= opts.retry.count();
+                    if using_sink && last_attempt {
+                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+                    }
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })
                 }
                 Err(_) => {

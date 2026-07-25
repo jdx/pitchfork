@@ -8,11 +8,9 @@
 //! An adopted process is no longer a child of the supervisor, so `wait()`
 //! based monitoring is impossible — a poll monitor watches liveness instead,
 //! anchored to the verified start time so a recycled PID is never mistaken
-//! for the daemon. Two consequences follow, both documented in the
+//! for the daemon. One consequence follows, documented in the
 //! `orphan_policy` setting:
 //!
-//! - stdout/stderr capture cannot be restored (the pipes died with the old
-//!   supervisor); log capture resumes on the daemon's next restart
 //! - exit codes cannot be observed; an adopted daemon that dies unexpectedly
 //!   is marked `Errored(-1)` ("unknown exit code"), making it eligible for
 //!   its configured retries
@@ -148,7 +146,7 @@ impl Supervisor {
     /// Whether the registry entry for `id` still belongs to the registration
     /// identified by `token`. Unlike `is_monitored` this cannot be confused
     /// by a successor that recycled the same numeric PID.
-    fn monitor_token_valid(&self, id: &DaemonId, token: u64) -> bool {
+    pub(crate) fn monitor_token_valid(&self, id: &DaemonId, token: u64) -> bool {
         self.monitored
             .lock()
             .expect("monitored lock poisoned")

@@ -788,12 +788,12 @@ is verified via PID plus kernel start time):
 
 - `adopt` (default): keep the process running and resume supervision.
   The daemon keeps its state (status, ports, proxy routing) and is
-  monitored by polling. Since the process is no longer a child of the
-  supervisor, its stdout/stderr capture cannot be restored — log capture
-  resumes the next time the daemon restarts. Exit codes of adopted
-  daemons cannot be observed; an adopted daemon that dies unexpectedly
-  is marked `errored` with an unknown exit code, which makes it eligible
-  for its configured retries.
+  monitored by polling. Log capture is unaffected, because a daemon's
+  output is read by a sibling sink process rather than by the supervisor,
+  so it continues uninterrupted across the crash. Exit codes of adopted
+  daemons cannot be observed, though;
+  an adopted daemon that dies unexpectedly is marked `errored` with an
+  unknown exit code, which makes it eligible for its configured retries.
 - `kill`: terminate the orphaned process group so the new supervisor
   starts with a clean slate, matching pre-adoption behavior.
 

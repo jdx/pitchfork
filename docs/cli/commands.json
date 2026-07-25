@@ -943,6 +943,66 @@
         "hidden_aliases": [],
         "examples": []
       },
+      "log-sink": {
+        "full_cmd": [
+          "log-sink"
+        ],
+        "usage": "log-sink <--daemon-id <DAEMON_ID>> [--log-format <LOG_FORMAT>]",
+        "subcommands": {},
+        "args": [],
+        "flags": [
+          {
+            "name": "daemon-id",
+            "usage": "--daemon-id <DAEMON_ID>",
+            "help": "Qualified id of the daemon whose output this is",
+            "help_first_line": "Qualified id of the daemon whose output this is",
+            "short": [],
+            "long": [
+              "daemon-id"
+            ],
+            "required": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "DAEMON_ID",
+              "usage": "<DAEMON_ID>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "log-format",
+            "usage": "--log-format <LOG_FORMAT>",
+            "help": "Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)",
+            "help_first_line": "Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)",
+            "short": [],
+            "long": [
+              "log-format"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "LOG_FORMAT",
+              "usage": "<LOG_FORMAT>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "text"
+            ]
+          }
+        ],
+        "mounts": [],
+        "hide": true,
+        "help": "Reads a daemon's output on stdin and writes it to the log store",
+        "help_long": "Reads a daemon's output on stdin and writes it to the log store\n\nSpawned by the supervisor as a sibling of the daemon, holding the read end\nof the daemon's output pipe. Keeping the reader in its own process is what\nmakes logging survive a supervisor crash: the pipe still has a reader, so\nthe daemon is neither killed by SIGPIPE nor blocked, and no output is lost.\nExits when the pipe reaches end of file, which happens once the daemon and\nevery descendant holding the write end have gone.",
+        "name": "log-sink",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": []
+      },
       "logs": {
         "full_cmd": [
           "logs"
