@@ -109,7 +109,7 @@ pub struct Supervisor {
     /// sends back the line that matched. The monitoring task registers here
     /// before the sink starts and unregisters when it ends, so a line arriving
     /// from a sink that outlived its daemon has nowhere to go and is dropped.
-    pub(crate) sink_output: std::sync::Mutex<HashMap<DaemonId, mpsc::Sender<OutputLine>>>,
+    pub(crate) sink_output: std::sync::Mutex<HashMap<DaemonId, log_sink::Relay>>,
 }
 
 /// A line of daemon output on its way to the monitoring task.

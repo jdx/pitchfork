@@ -460,13 +460,18 @@ impl Supervisor {
                 .clone()
                 .unwrap_or_else(|| settings().logs.log_format.clone());
             let ready_pattern = opts.ready_output.as_ref().map(|o| o.pattern.clone());
-            if ready_pattern.is_some() {
-                output_relay = Some(super::log_sink::OutputRelay::register(
-                    id,
-                    output_tx.clone(),
-                ));
-            }
-            match super::log_sink::SinkPipe::new(log_format, ready_pattern) {
+            // The token ties this attempt's sink to this attempt's channel, so
+            // a sink still draining a previous attempt cannot report into it.
+            let relay_token = match ready_pattern {
+                Some(_) => {
+                    let relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
+                    let token = relay.token();
+                    output_relay = Some(relay);
+                    token
+                }
+                None => 0,
+            };
+            match super::log_sink::SinkPipe::new(log_format, ready_pattern, relay_token) {
                 Ok((pipe, writer)) => match pipe.start(id) {
                     Ok(child) => {
                         sink_child = Some(super::log_sink::PendingSink::new(child));

@@ -102,8 +102,8 @@ impl Supervisor {
                 self.refresh().await?;
                 IpcResponse::Ok
             }
-            IpcRequest::SinkReadyMatch { id, line } => {
-                super::log_sink::deliver_reported_line(&id, line).await;
+            IpcRequest::SinkReadyMatch { id, token, line } => {
+                super::log_sink::deliver_reported_line(&id, token, line).await;
                 IpcResponse::Ok
             }
             IpcRequest::Clean => {

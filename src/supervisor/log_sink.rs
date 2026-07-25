@@ -49,6 +49,17 @@ pub(crate) fn is_supported(opts: &RunOptions) -> bool {
     opts.on_output_hook.is_none() && !opts.pty.unwrap_or(false)
 }
 
+/// Source of relay tokens. Never reused within a supervisor's lifetime, and a
+/// restarted supervisor has no relays to be confused about.
+static NEXT_RELAY_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A daemon's registration entry: which start attempt it belongs to, and where
+/// that attempt's output should go.
+pub(crate) struct Relay {
+    token: u64,
+    tx: tokio::sync::mpsc::Sender<super::OutputLine>,
+}
+
 /// Registers where a daemon's sink-reported output should be delivered, and
 /// stops delivery when dropped.
 ///
@@ -56,10 +67,14 @@ pub(crate) fn is_supported(opts: &RunOptions) -> bool {
 /// nothing waiting on readiness, and a sink that outlives it — one still
 /// draining a daemon's last output — must not be able to deliver into a channel
 /// belonging to a later run of the same daemon.
-pub(crate) struct OutputRelay(DaemonId, tokio::sync::mpsc::Sender<super::OutputLine>);
+pub(crate) struct OutputRelay {
+    id: DaemonId,
+    token: u64,
+}
 
 impl OutputRelay {
-    /// Route lines reported for `id` into `tx` until this guard is dropped.
+    /// Route lines reported for `id` under the returned token into `tx`, until
+    /// this guard is dropped.
     ///
     /// Registered before the sink is started, so a match found in the daemon's
     /// very first line still has somewhere to go.
@@ -67,12 +82,21 @@ impl OutputRelay {
         id: &DaemonId,
         tx: tokio::sync::mpsc::Sender<super::OutputLine>,
     ) -> Self {
+        let token = NEXT_RELAY_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         SUPERVISOR
             .sink_output
             .lock()
             .expect("sink_output lock poisoned")
-            .insert(id.clone(), tx.clone());
-        Self(id.clone(), tx)
+            .insert(id.clone(), Relay { token, tx });
+        Self {
+            id: id.clone(),
+            token,
+        }
+    }
+
+    /// The token a sink must quote for its reports to be delivered.
+    pub(crate) fn token(&self) -> u64 {
+        self.token
     }
 }
 
@@ -88,28 +112,34 @@ impl Drop for OutputRelay {
         // has finished unwinding — an unconditional remove would leave the new
         // attempt with a sink reporting into nowhere.
         if relays
-            .get(&self.0)
-            .is_some_and(|current| current.same_channel(&self.1))
+            .get(&self.id)
+            .is_some_and(|current| current.token == self.token)
         {
-            relays.remove(&self.0);
+            relays.remove(&self.id);
         }
     }
 }
 
 /// Hand a line reported by a sink to the daemon's monitoring task.
 ///
-/// Silently does nothing when no task is listening: a sink outliving its daemon
-/// is normal — it exits only once every descendant has closed the pipe — and a
-/// late line is not worth an error.
-pub(crate) async fn deliver_reported_line(id: &DaemonId, text: String) {
+/// `token` identifies the start attempt the reporting sink belongs to. A sink
+/// outlives its daemon — it exits only once every descendant has closed the
+/// pipe — so the previous attempt's sink can still be draining, and reporting,
+/// while a retry is starting. Without the token that line would be delivered to
+/// the new attempt and could mark a process ready that has printed nothing.
+///
+/// Silently does nothing when the token has expired or nothing is listening:
+/// both are ordinary, not errors.
+pub(crate) async fn deliver_reported_line(id: &DaemonId, token: u64, text: String) {
     let tx = SUPERVISOR
         .sink_output
         .lock()
         .expect("sink_output lock poisoned")
         .get(id)
-        .cloned();
+        .filter(|relay| relay.token == token)
+        .map(|relay| relay.tx.clone());
     let Some(tx) = tx else {
-        debug!("no monitoring task is listening for output reported by the sink for {id}");
+        debug!("dropping output reported for {id} by a sink from a finished start attempt");
         return;
     };
     if tx
@@ -265,10 +295,11 @@ pub(crate) struct SinkPipe {
     reader: PipeReader,
     log_format: String,
     /// Readiness pattern for the sink to match, for a daemon configured with
-    /// `ready_output`. Passed to every sink started on this pipe, including
-    /// replacements: a daemon that is not ready yet when its sink dies still
-    /// needs the pattern watched for.
+    /// `ready_output`, and the relay token its reports must quote. Passed to
+    /// every sink started on this pipe, including replacements: a daemon that
+    /// is not ready yet when its sink dies still needs the pattern watched for.
     ready_pattern: Option<String>,
+    relay_token: u64,
 }
 
 impl SinkPipe {
@@ -277,6 +308,7 @@ impl SinkPipe {
     pub(crate) fn new(
         log_format: String,
         ready_pattern: Option<String>,
+        relay_token: u64,
     ) -> Result<(Self, std::io::PipeWriter)> {
         let (reader, writer) = std::io::pipe().into_diagnostic()?;
         Ok((
@@ -284,6 +316,7 @@ impl SinkPipe {
                 reader,
                 log_format,
                 ready_pattern,
+                relay_token,
             },
             writer,
         ))
@@ -371,7 +404,10 @@ impl SinkPipe {
             .arg("--log-format")
             .arg(&self.log_format);
         if let Some(ref pattern) = self.ready_pattern {
-            cmd.arg("--ready-pattern").arg(pattern);
+            cmd.arg("--ready-pattern")
+                .arg(pattern)
+                .arg("--relay-token")
+                .arg(self.relay_token.to_string());
         }
         cmd.stdin(std::process::Stdio::from(reader))
             .stdout(std::process::Stdio::null())

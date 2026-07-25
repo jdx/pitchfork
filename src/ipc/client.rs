@@ -425,9 +425,9 @@ impl IpcClient {
     /// Called by a log sink, which reads the daemon's output in the
     /// supervisor's place and so is the only process in a position to see the
     /// match.
-    pub async fn sink_ready_match(&self, id: DaemonId, line: String) -> Result<()> {
+    pub async fn sink_ready_match(&self, id: DaemonId, token: u64, line: String) -> Result<()> {
         let rsp = self
-            .request(IpcRequest::SinkReadyMatch { id, line })
+            .request(IpcRequest::SinkReadyMatch { id, token, line })
             .await?;
         match rsp {
             IpcResponse::Ok => Ok(()),

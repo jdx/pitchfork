@@ -1012,6 +1012,29 @@
               "double_dash": "Optional",
               "hide": false
             }
+          },
+          {
+            "name": "relay-token",
+            "usage": "--relay-token <RELAY_TOKEN>",
+            "help": "Token identifying the start attempt this sink belongs to",
+            "help_long": "Token identifying the start attempt this sink belongs to\n\nQuoted back when reporting a match. The supervisor drops reports whose token is no longer current, so a sink still draining a failed attempt cannot mark that daemon's retry ready.",
+            "help_first_line": "Token identifying the start attempt this sink belongs to",
+            "short": [],
+            "long": [
+              "relay-token"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "RELAY_TOKEN",
+              "usage": "<RELAY_TOKEN>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "0"
+            ]
           }
         ],
         "mounts": [],
