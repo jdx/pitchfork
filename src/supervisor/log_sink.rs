@@ -38,16 +38,27 @@ pub(crate) fn is_supported(opts: &RunOptions) -> bool {
     opts.ready_output.is_none() && opts.on_output_hook.is_none() && !opts.pty.unwrap_or(false)
 }
 
+/// How long to wait before trying again when a sink process cannot be spawned.
+const SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Resolves once a sink has read its pipe to end of file and written what it
-/// read. Used to order start-failure diagnostics after the sink's final write,
-/// which the in-process capture path guaranteed by flushing synchronously.
-pub(crate) struct Drained(tokio::sync::oneshot::Receiver<()>);
+/// read.
+///
+/// The in-process capture path awaited a synchronous flush before signalling
+/// readiness and again before finalizing a daemon's exit, so anything the
+/// daemon printed was queryable by the time its status changed. Waiting on this
+/// restores that ordering, which both the exit path and start-failure
+/// diagnostics depend on — hence a `watch` rather than a oneshot, so several
+/// waiters can observe it, including any that arrive after it has fired.
+#[derive(Clone)]
+pub(crate) struct Drained(tokio::sync::watch::Receiver<bool>);
 
 impl Drained {
     /// Wait for the final write, giving up after `timeout` so a daemon whose
     /// descendants still hold the pipe open cannot stall the caller.
-    pub(crate) async fn wait(self, timeout: std::time::Duration) {
-        let _ = tokio::time::timeout(timeout, self.0).await;
+    pub(crate) async fn wait(&self, timeout: std::time::Duration) {
+        let mut rx = self.0.clone();
+        let _ = tokio::time::timeout(timeout, rx.wait_for(|drained| *drained)).await;
     }
 }
 
@@ -76,9 +87,8 @@ impl SinkPipe {
     /// written what it had, which is what start-failure diagnostics wait for
     /// before querying the log store.
     pub(crate) fn supervise(self, id: DaemonId, token: u64) -> Drained {
-        let (drained_tx, drained_rx) = tokio::sync::oneshot::channel();
+        let (drained_tx, drained_rx) = tokio::sync::watch::channel(false);
         tokio::spawn(async move {
-            let mut drained_tx = Some(drained_tx);
             loop {
                 if !SUPERVISOR.monitor_token_valid(&id, token) {
                     break;
@@ -86,8 +96,14 @@ impl SinkPipe {
                 let child = match self.spawn(&id) {
                     Ok(child) => child,
                     Err(e) => {
-                        error!("failed to start log sink for {id}: {e}");
-                        break;
+                        // Do not give up while the daemon is still running: this
+                        // task owns the retained read end, and dropping it would
+                        // leave the pipe with no reader at all, blocking the
+                        // daemon once it fills and killing it with SIGPIPE once
+                        // the sink's own end goes too.
+                        error!("failed to start log sink for {id}: {e}; retrying");
+                        tokio::time::sleep(SPAWN_RETRY_DELAY).await;
+                        continue;
                     }
                 };
                 match child.wait_with_output().await {
@@ -96,9 +112,7 @@ impl SinkPipe {
                         // descendant closed the pipe, so there is nothing left
                         // to capture, and everything read has been written.
                         debug!("log sink for {id} finished");
-                        if let Some(tx) = drained_tx.take() {
-                            let _ = tx.send(());
-                        }
+                        let _ = drained_tx.send(true);
                         break;
                     }
                     Ok(out) => {

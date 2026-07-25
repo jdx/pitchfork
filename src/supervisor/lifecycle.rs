@@ -1549,7 +1549,14 @@ impl Supervisor {
                     // what the daemon printed, so wait for the sink's final
                     // write first. The in-process path got this ordering by
                     // flushing synchronously before signalling.
-                    if let Some(drained) = sink_drained {
+                    //
+                    // Only on the attempt that gives up: `run` retries inline,
+                    // and waiting after every attempt would both delay the
+                    // backoff and widen the window in which the daemon looks
+                    // errored and idle — long enough for the background retry
+                    // checker to start an attempt of its own alongside it.
+                    let last_attempt = opts.retry_count >= opts.retry.count();
+                    if last_attempt && let Some(ref drained) = sink_drained {
                         drained.wait(SINK_DRAIN_TIMEOUT).await;
                     }
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })

@@ -33,8 +33,14 @@ pub struct LogSink {
 impl LogSink {
     pub async fn run(&self) -> Result<()> {
         let id = DaemonId::parse(&self.daemon_id)?;
-        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+        let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
         let mut batch: Vec<crate::log_parse::ParsedLog> = Vec::with_capacity(BATCH_SIZE);
+        // Read bytes and convert lossily rather than requiring valid UTF-8. A
+        // daemon that emits a stray non-UTF-8 byte must not be able to stop its
+        // own logging, and an error here would be reported as a clean exit —
+        // which the supervisor reads as end of file and stops replacing the
+        // sink, eventually blocking the daemon behind a full pipe.
+        let mut buf: Vec<u8> = Vec::new();
 
         // Batch writes, but never hold a line longer than this. Waiting for a
         // full batch would make a daemon that logs a few lines a second appear
@@ -44,22 +50,29 @@ impl LogSink {
 
         loop {
             tokio::select! {
-                line = lines.next_line() => {
-                    match line {
-                        Ok(Some(line)) => {
-                            batch.push(crate::log_parse::parse(&line, &self.log_format));
+                read = reader.read_until(b'\n', &mut buf) => {
+                    match read {
+                        // End of file: every write end is closed, so the daemon
+                        // is gone and there will be nothing more to read.
+                        Ok(0) => break,
+                        Ok(_) => {
+                            let line = String::from_utf8_lossy(&buf);
+                            let line = line.trim_end_matches(['\n', '\r']);
+                            batch.push(crate::log_parse::parse(line, &self.log_format));
+                            buf.clear();
                             if batch.len() >= BATCH_SIZE {
                                 flush(&id, &mut batch);
                             }
                         }
-                        // End of file: every write end is closed, so the daemon
-                        // is gone and there will be nothing more to read.
-                        Ok(None) => break,
                         Err(e) => {
-                            // Invalid UTF-8 or a broken pipe: record it and
-                            // stop rather than spin on an unreadable stream.
-                            debug!("log sink for {id} stopping: {e}");
-                            break;
+                            // A real read failure, not a decoding problem. Write
+                            // what we have and exit non-zero so the supervisor
+                            // replaces this sink rather than treating the stream
+                            // as finished.
+                            flush(&id, &mut batch);
+                            return Err(miette::miette!(
+                                "log sink for {id} could not read the daemon's output: {e}"
+                            ));
                         }
                     }
                 }
