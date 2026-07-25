@@ -622,10 +622,19 @@ impl SqliteLogStore {
                     }
                 }
                 FieldFilter::FieldEq { key, value } => {
-                    let param_index = query_params.len() + 1;
+                    let key_idx = query_params.len() + 1;
+                    let val_idx = query_params.len() + 2;
+                    // Use json_each with parameterized key to avoid JSON path
+                    // interpolation. This correctly handles keys containing '.'
+                    // (e.g. "request.id") which json_extract would treat as
+                    // nested traversal, and prevents SQL injection from
+                    // untrusted key input (CLI --field doesn't validate keys).
                     conditions.push(format!(
-                        "json_extract(fields_json, '$.{key}') = ?{param_index}"
+                        "EXISTS (SELECT 1 FROM json_each(fields_json) \
+                         WHERE json_each.key = ?{key_idx} \
+                           AND json_each.value = ?{val_idx})"
                     ));
+                    query_params.push(Box::new(key.clone()));
                     query_params.push(Box::new(value.clone()));
                 }
                 FieldFilter::LoggerContains(pattern) => {

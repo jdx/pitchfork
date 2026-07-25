@@ -49,12 +49,13 @@ fn parse_datetime(s: &str) -> Option<DateTime<Local>> {
 }
 
 /// Check if a field key is safe for SQL JSON path interpolation.
-/// Only alphanumeric, underscore, and period are allowed.
+/// Only alphanumeric, underscore, period, and hyphen are allowed.
+/// Must match the key grammar in parse_logfmt_pairs.
 fn is_safe_field_key(key: &str) -> bool {
     !key.is_empty()
         && key
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
 }
 
 /// Build message and field filters from query params.

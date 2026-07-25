@@ -91,25 +91,29 @@ fn parse_logfmt(line: &str) -> Option<ParsedLog> {
 
     // Build a JSON object from the key-value pairs.
     let mut obj = Map::new();
-    for (key, value) in &pairs {
-        // Try to parse the value as a JSON type (number, bool, null);
-        // fall back to string.
-        let json_val = if value.is_empty() {
-            Value::Bool(true)
-        } else if let Ok(n) = value.parse::<i64>() {
-            Value::Number(n.into())
-        } else if let Ok(n) = value.parse::<f64>() {
-            serde_json::Number::from_f64(n)
-                .map(Value::Number)
-                .unwrap_or_else(|| Value::String(value.clone()))
-        } else if value.eq_ignore_ascii_case("true") {
-            Value::Bool(true)
-        } else if value.eq_ignore_ascii_case("false") {
-            Value::Bool(false)
-        } else if value.eq_ignore_ascii_case("null") {
-            Value::Null
-        } else {
-            Value::String(value.clone())
+    for (key, maybe_value) in &pairs {
+        // Bare key (no '=') → boolean true. Explicit value (including empty
+        // string from `key=""` or `key=`) → typed value.
+        let json_val = match maybe_value {
+            None => Value::Bool(true),
+            Some(value) if value.is_empty() => Value::String(value.clone()),
+            Some(value) => {
+                if let Ok(n) = value.parse::<i64>() {
+                    Value::Number(n.into())
+                } else if let Ok(n) = value.parse::<f64>() {
+                    serde_json::Number::from_f64(n)
+                        .map(Value::Number)
+                        .unwrap_or_else(|| Value::String(value.clone()))
+                } else if value.eq_ignore_ascii_case("true") {
+                    Value::Bool(true)
+                } else if value.eq_ignore_ascii_case("false") {
+                    Value::Bool(false)
+                } else if value.eq_ignore_ascii_case("null") {
+                    Value::Null
+                } else {
+                    Value::String(value.clone())
+                }
+            }
         };
         obj.insert(key.clone(), json_val);
     }
@@ -139,10 +143,13 @@ fn parse_logfmt(line: &str) -> Option<ParsedLog> {
 /// ```
 ///
 /// Returns `None` if the line doesn't look like logfmt (no `=` found, or
-/// parsing yields zero pairs).
-fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
+/// parsing yields zero pairs). Bare keys (no `=`) are represented as
+/// `None` in the value position to distinguish them from explicit empty
+/// values (`key=""` or `key=`).
+fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, Option<String>)>> {
     let bytes = line.as_bytes();
     let mut pairs = Vec::new();
+    let mut bare_key_count = 0;
     let mut i = 0;
 
     while i < bytes.len() {
@@ -172,8 +179,28 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
         {
-            // Skip this token — it's not a valid logfmt key.
-            i += 1;
+            // Skip the entire invalid token. If followed by '=value',
+            // consume that too so it isn't parsed as a separate pair.
+            while i < bytes.len() && bytes[i] == b'=' {
+                i += 1;
+                if i < bytes.len() && bytes[i] == b'"' {
+                    i += 1;
+                    while i < bytes.len() && bytes[i] != b'"' {
+                        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                            i += 2;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    if i < bytes.len() {
+                        i += 1;
+                    }
+                } else {
+                    while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                        i += 1;
+                    }
+                }
+            }
             continue;
         }
 
@@ -197,18 +224,19 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
                 if i < bytes.len() {
                     i += 1; // skip closing quote
                 }
-                pairs.push((key.to_string(), value));
+                pairs.push((key.to_string(), Some(value)));
             } else {
                 // Unquoted value: read until whitespace or end.
                 let val_start = i;
                 while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
                     i += 1;
                 }
-                pairs.push((key.to_string(), line[val_start..i].to_string()));
+                pairs.push((key.to_string(), Some(line[val_start..i].to_string())));
             }
         } else {
             // Bare key (no '='): treat as boolean true.
-            pairs.push((key.to_string(), String::new()));
+            pairs.push((key.to_string(), None));
+            bare_key_count += 1;
         }
     }
 
@@ -220,10 +248,9 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
         return None;
     }
     // Reject lines that are mostly bare keys — they are likely plain text
-    // with a trailing key=value, not real logfmt. Require at least half the
-    // pairs to have a proper key=value (non-empty value or quoted value).
-    let proper = pairs.iter().filter(|(_, v)| !v.is_empty()).count();
-    if proper * 2 < pairs.len() {
+    // with a trailing key=value, not real logfmt. A bare key is one without
+    // '='; explicit `key=""` or `key=` counts as a proper pair.
+    if bare_key_count * 2 > pairs.len() {
         return None;
     }
     Some(pairs)
@@ -440,6 +467,29 @@ mod tests {
         assert!(parsed.level.is_none());
         assert!(parsed.fields_json.is_none());
         assert_eq!(parsed.message, line);
+    }
+
+    #[test]
+    fn test_logfmt_explicit_empty_value() {
+        // `key=""` is an explicit empty value, not a bare key.
+        // Should not be rejected by the bare-key ratio check.
+        let line = r#"level=debug msg="" extra="""#;
+        let parsed = parse(line, "logfmt");
+        assert_eq!(parsed.level.as_deref(), Some("debug"));
+        assert_eq!(parsed.msg.as_deref(), Some(""));
+        let fields: Value = serde_json::from_str(parsed.fields_json.as_deref().unwrap()).unwrap();
+        assert_eq!(fields["msg"], Value::String("".into()));
+        assert_eq!(fields["extra"], Value::String("".into()));
+    }
+
+    #[test]
+    fn test_logfmt_hyphenated_key() {
+        // Hyphens are valid in logfmt keys (e.g. request-id).
+        let line = r#"level=info msg="ok" request-id=abc123"#;
+        let parsed = parse(line, "logfmt");
+        assert_eq!(parsed.level.as_deref(), Some("info"));
+        let fields: Value = serde_json::from_str(parsed.fields_json.as_deref().unwrap()).unwrap();
+        assert_eq!(fields["request-id"], Value::String("abc123".into()));
     }
 
     #[test]
