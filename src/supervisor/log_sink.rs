@@ -14,6 +14,18 @@
 //! sink that dies cannot leave the pipe readerless and kill the daemon, and the
 //! replacement sink can be handed the very same pipe. It deliberately keeps no
 //! write end, which would stop the sink from ever seeing end of file.
+//!
+//! Both descriptors belong to one pipe carrying stdout and stderr together,
+//! matching what the in-process path did (it merged both into a single channel)
+//! and what runit does. Writes up to `PIPE_BUF` are atomic, so a daemon writing
+//! a line per `write` cannot interleave the two streams mid-line.
+//!
+//! Known gap: a daemon adopted after a supervisor crash keeps the sink it
+//! already had, and its logging continues, but the new supervisor holds no
+//! retained read end and runs no replacement loop for it. A sink that dies
+//! after adoption is therefore not replaced, and the daemon will take SIGPIPE
+//! on its next write. Recovering a read end from `/proc/<pid>/fd/1` would close
+//! this on Linux.
 
 use crate::Result;
 use crate::daemon::RunOptions;
