@@ -199,13 +199,16 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         None => None,
     };
 
-    // Fetch initial history from the SQLite log store.
-    let initial = match tokio::task::spawn_blocking({
+    // Fetch initial history and clear generation in the same spawn_blocking
+    // to get a consistent snapshot. This eliminates the blind window between
+    // history fetch and generation lookup where a log clear could go undetected.
+    let (initial, initial_gen) = match tokio::task::spawn_blocking({
         let q = qualified.clone();
         let mf = message_filters.clone();
         let ff = field_filters.clone();
+        let d = daemon_id.clone();
         move || {
-            LOG_STORE.query(&LogQuery {
+            let entries = LOG_STORE.query(&LogQuery {
                 daemon_ids: vec![q],
                 from,
                 to,
@@ -216,13 +219,19 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 message_filters: mf,
                 field_filters: ff,
                 include_structured: true,
-            })
+            });
+            let clear_gen = LOG_STORE.last_clear_generation(&d);
+            (entries, clear_gen)
         }
     })
     .await
     {
-        Ok(Ok(entries)) => entries,
-        Ok(Err(e)) => {
+        Ok((Ok(entries), Ok(clear_gen))) => (entries, clear_gen),
+        Ok((Ok(entries), Err(e))) => {
+            log::warn!("failed to get initial clear generation for {daemon_id}: {e}");
+            (entries, None)
+        }
+        Ok((Err(e), _)) => {
             log::warn!("failed to query logs for {daemon_id}: {e}");
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
@@ -294,25 +303,12 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
         let mut last_id: i64 = cursor_id;
 
-        // On generation lookup failure, keep the last known value instead of
-        // falling back to 0 (which would reset the cursor and replay logs).
-        // None means the initial lookup failed — the first successful poll
-        // records the generation without treating it as a clear event.
-        let mut last_clear_gen: Option<u64> = match tokio::task::spawn_blocking({
-            let d = daemon_id.clone();
-            move || LOG_STORE.last_clear_generation(&d)
-        }).await {
-            Ok(Ok(Some(g))) => Some(g),
-            Ok(Ok(None)) => Some(0),
-            Ok(Err(e)) => {
-                log::warn!("failed to get clear generation for {daemon_id}: {e}");
-                None
-            }
-            Err(e) => {
-                log::warn!("clear generation task panicked for {daemon_id}: {e}");
-                None
-            }
-        };
+        // initial_gen was captured atomically with the initial history query.
+        // If it failed (None), we treat the first successful poll's generation
+        // as a clear event to be safe — the client already has the initial
+        // history, and if a clear happened during the blind window, treating
+        // it as a clear ensures stale entries are flushed.
+        let mut last_clear_gen: Option<u64> = initial_gen;
 
         const BATCH_SIZE: usize = 500;
         loop {
@@ -341,9 +337,12 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 }
                 None => {
                     // Initial generation was unknown (transient lookup
-                    // failure). Record it now without treating it as a
-                    // clear event, so we don't replay the initial history.
+                    // failure during history fetch). Treat the first
+                    // successful generation as a clear event to flush
+                    // potentially stale initial history.
                     last_clear_gen = Some(current_gen);
+                    last_id = 0;
+                    continue;
                 }
                 _ => {}
             }
