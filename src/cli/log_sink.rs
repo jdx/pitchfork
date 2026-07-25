@@ -85,6 +85,10 @@ async fn read_lines(
     let mut stdin = tokio::io::stdin();
     let mut chunk = vec![0u8; READ_CHUNK];
     let mut line: Vec<u8> = Vec::with_capacity(256);
+    // Whether the last line was emitted because it reached the cap rather than
+    // because it ended. A newline arriving straight afterwards terminates the
+    // line already written, so it must not produce an empty one.
+    let mut split_at_cap = false;
 
     loop {
         let read = stdin.read(&mut chunk).await?;
@@ -93,13 +97,20 @@ async fn read_lines(
         }
         for &byte in &chunk[..read] {
             if byte == b'\n' {
+                if split_at_cap && line.is_empty() {
+                    split_at_cap = false;
+                    continue;
+                }
+                split_at_cap = false;
                 queue(&tx, &mut line, log_format).await?;
             } else {
                 line.push(byte);
+                split_at_cap = false;
                 // Emit an over-long run as its own line rather than letting the
                 // buffer grow without bound.
                 if line.len() >= MAX_LINE_BYTES {
-                    queue(&tx, &mut line, log_format).await?;
+                    queue_capped(&tx, &mut line, log_format).await?;
+                    split_at_cap = true;
                 }
             }
         }
@@ -110,6 +121,30 @@ async fn read_lines(
         queue(&tx, &mut line, log_format).await?;
     }
     Ok(())
+}
+
+/// Emit a line that has reached the length cap, keeping any trailing bytes that
+/// form an incomplete character.
+///
+/// Splitting purely by byte count would cut a multi-byte character in half, and
+/// converting each half on its own turns one valid character into two
+/// replacement characters.
+async fn queue_capped(
+    tx: &tokio::sync::mpsc::Sender<ParsedLog>,
+    line: &mut Vec<u8>,
+    log_format: &str,
+) -> std::io::Result<()> {
+    let split = match std::str::from_utf8(line) {
+        Ok(_) => line.len(),
+        // A sequence cut short at the end: keep it for the next line.
+        Err(e) if e.error_len().is_none() && e.valid_up_to() > 0 => e.valid_up_to(),
+        // Genuinely invalid bytes, which the lossy conversion already handles.
+        Err(_) => line.len(),
+    };
+    let tail = line.split_off(split);
+    let result = queue(tx, line, log_format).await;
+    *line = tail;
+    result
 }
 
 /// Parse `line` and hand it to the writer, clearing it either way.
