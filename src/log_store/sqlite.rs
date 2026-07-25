@@ -668,23 +668,28 @@ impl SqliteLogStore {
                     // nested traversal, and prevents SQL injection from
                     // untrusted key input (CLI --field doesn't validate keys).
                     //
-                    // Convert the text filter value to a JSON literal and use
-                    // json_extract(?, '$') to get the native SQLite value:
-                    //   json_extract('"req_1"', '$') → TEXT 'req_1'
-                    //   json_extract('true', '$')   → INTEGER 1
-                    //   json_extract('42', '$')     → INTEGER 42
-                    //   json_extract('null', '$')    → NULL
-                    // This matches json_each.value's native types.
-                    // Use IS (instead of =) so NULL comparisons work
-                    // (NULL = NULL is false in SQL, but NULL IS NULL is true).
+                    // Match both the typed JSON value and the raw text.
+                    // json_each.value has no type affinity, so comparing it
+                    // IS ? (text) only matches string values, not integers
+                    // or booleans. This prevents a string field storing "42"
+                    // or "true" from being unreachable via field filters.
+                    //
+                    // Typed path:   json_each.value IS json_extract(json_literal, '$')
+                    //   matches numbers, booleans, null (native SQLite types)
+                    // Text path:    json_each.value IS ? (raw text)
+                    //   matches string fields whose value textually resembles
+                    //   a primitive (e.g. field storing "true", "42", "null")
                     let json_literal = text_to_json_literal(value);
+                    let raw_idx = query_params.len() + 3;
                     conditions.push(format!(
                         "EXISTS (SELECT 1 FROM json_each(fields_json) \
                          WHERE json_each.key = ?{key_idx} \
-                           AND json_each.value IS json_extract(?{val_idx}, '$'))"
+                           AND (json_each.value IS json_extract(?{val_idx}, '$') \
+                                OR json_each.value IS ?{raw_idx}))"
                     ));
                     query_params.push(Box::new(key.clone()));
                     query_params.push(Box::new(json_literal));
+                    query_params.push(Box::new(value.clone()));
                 }
                 FieldFilter::LoggerContains(pattern) => {
                     let param_index = query_params.len() + 1;
