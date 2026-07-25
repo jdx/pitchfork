@@ -38,6 +38,8 @@ Show only logs for the specified daemon(s)
 
 ### `-c --clear`
 
+**Effect**: destructive — may delete or irreversibly overwrite
+
 Delete logs
 
 ### `-n <N>`

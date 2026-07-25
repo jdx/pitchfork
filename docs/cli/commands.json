@@ -1050,7 +1050,8 @@
               "clear"
             ],
             "hide": false,
-            "global": false
+            "global": false,
+            "effect": "destructive"
           },
           {
             "name": "n",
@@ -3083,5 +3084,5 @@
     }
   },
   "about": "Daemons with DX",
-  "min_usage_version": "3.6"
+  "min_usage_version": "4.0"
 }

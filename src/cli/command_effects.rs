@@ -42,6 +42,7 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     ("enable", Write),
     ("list", Read),
     ("log-sink", Write),
+    // `logs` reads; `--clear` deletes the stored logs. See FLAG_EFFECTS.
     ("logs", Read),
     ("project", Read),
     ("project enter", Write),
@@ -92,6 +93,17 @@ pub const UNCLASSIFIED: &[(&str, &str)] = &[
     ),
 ];
 
+/// Flags that raise the effect of their command, keyed by (command, flag).
+///
+/// usage 4 takes the effect of an invocation to be the maximum of the
+/// command's effect and that of every flag supplied, so these only ever raise.
+/// Most flags belong nowhere near this table — it is for the few that change
+/// what the command does to the world.
+pub const FLAG_EFFECTS: &[(&str, &str, SpecCommandEffect)] = &[
+    // `LOG_STORE.clear()` — deletes the stored logs for the matched daemons.
+    ("logs", "clear", Destructive),
+];
+
 /// Annotate every command in the spec that has a declared effect.
 pub fn apply(spec: &mut usage::Spec) {
     let effects: HashMap<&str, SpecCommandEffect> = EFFECTS.iter().copied().collect();
@@ -105,8 +117,17 @@ fn annotate(
 ) {
     for (name, sub) in cmd.subcommands.iter_mut() {
         path.push(name.clone());
-        if let Some(effect) = effects.get(path.join(" ").as_str()) {
+        let full = path.join(" ");
+        if let Some(effect) = effects.get(full.as_str()) {
             sub.effect = Some(*effect);
+        }
+        for (cmd_path, flag_name, effect) in FLAG_EFFECTS {
+            if *cmd_path != full {
+                continue;
+            }
+            if let Some(flag) = sub.flags.iter_mut().find(|f| f.name == *flag_name) {
+                flag.effect = Some(*effect);
+            }
         }
         annotate(sub, path, effects);
         path.pop();
@@ -177,6 +198,24 @@ mod tests {
             stale.is_empty(),
             "these entries no longer match a command:\n  {}",
             stale.join("\n  ")
+        );
+    }
+
+    /// A renamed or removed flag would otherwise silently stop being annotated.
+    #[test]
+    fn every_flag_effect_matches_a_real_flag() {
+        let spec: usage::Spec = Cli::command().into();
+        let mut missing = vec![];
+        for (cmd_path, flag_name, _) in FLAG_EFFECTS {
+            match spec.cmd.subcommands.get(*cmd_path) {
+                Some(c) if c.flags.iter().any(|f| f.name == *flag_name) => {}
+                _ => missing.push(format!("{cmd_path} --{flag_name}")),
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these FLAG_EFFECTS entries do not match a real flag:\n  {}",
+            missing.join("\n  ")
         );
     }
 
