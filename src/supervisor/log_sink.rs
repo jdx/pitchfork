@@ -176,10 +176,13 @@ impl PendingSink {
 impl Drop for PendingSink {
     fn drop(&mut self) {
         if let Some(mut child) = self.0.take() {
-            // Drop cannot await, so finish the kill on a task.
-            tokio::spawn(async move {
-                let _ = child.kill().await;
-            });
+            // Signal synchronously rather than spawning the kill: dropping can
+            // happen while the runtime is going away, and `tokio::spawn` panics
+            // with no runtime to spawn onto — or silently abandons the task if
+            // shutdown has already begun. `start_kill` needs neither, so the
+            // signal is always delivered; collecting the exit status is left to
+            // tokio's orphan reaping, since a destructor cannot await.
+            let _ = child.start_kill();
         }
     }
 }
