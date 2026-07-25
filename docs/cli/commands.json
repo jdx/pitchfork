@@ -947,7 +947,7 @@
         "full_cmd": [
           "log-sink"
         ],
-        "usage": "log-sink <--daemon-id <DAEMON_ID>> [--log-format <LOG_FORMAT>]",
+        "usage": "log-sink <FLAGS>",
         "subcommands": {},
         "args": [],
         "flags": [
@@ -992,6 +992,26 @@
             "default": [
               "text"
             ]
+          },
+          {
+            "name": "ready-pattern",
+            "usage": "--ready-pattern <READY_PATTERN>",
+            "help": "Regex whose first match means the daemon is ready",
+            "help_long": "Regex whose first match means the daemon is ready\n\nSet for a daemon configured with `ready_output`. The supervisor cannot match it itself — this process holds the output — so the match is reported back over IPC.",
+            "help_first_line": "Regex whose first match means the daemon is ready",
+            "short": [],
+            "long": [
+              "ready-pattern"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "READY_PATTERN",
+              "usage": "<READY_PATTERN>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
           }
         ],
         "mounts": [],

@@ -48,20 +48,38 @@ pub struct LogSink {
     /// Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)
     #[clap(long, default_value = "text")]
     log_format: String,
+
+    /// Regex whose first match means the daemon is ready
+    ///
+    /// Set for a daemon configured with `ready_output`. The supervisor cannot
+    /// match it itself — this process holds the output — so the match is
+    /// reported back over IPC.
+    #[clap(long)]
+    ready_pattern: Option<String>,
 }
 
 impl LogSink {
     pub async fn run(&self) -> Result<()> {
         let id = DaemonId::parse(&self.daemon_id)?;
 
+        // A pattern that does not compile is reported and then ignored, rather
+        // than failing the sink: refusing to start would leave the daemon's
+        // output unread, which is far worse than a readiness check that never
+        // fires. The supervisor validates patterns too, so this is a backstop.
+        let ready_pattern = self.ready_pattern.as_deref().and_then(|p| {
+            regex::Regex::new(p)
+                .map_err(|e| error!("log sink for {id} ignoring unparsable ready pattern: {e}"))
+                .ok()
+        });
+
         // Reading and writing are separate tasks. A write to SQLite can block —
         // for as long as the store's busy timeout, if another writer holds the
         // lock — and this process is the only reader of the daemon's pipe, so a
         // write must never stop it being drained.
-        let (tx, rx) = tokio::sync::mpsc::channel::<ParsedLog>(QUEUE_DEPTH);
+        let (tx, rx) = tokio::sync::mpsc::channel::<SinkEvent>(QUEUE_DEPTH);
         let writer = tokio::spawn(write_batches(id.clone(), rx));
 
-        let read_result = read_lines(tx, &self.log_format).await;
+        let read_result = read_lines(tx, &self.log_format, ready_pattern).await;
 
         // The sender has been dropped by now, so the writer drains its queue and
         // returns; wait for it so nothing queued is lost on exit.
@@ -73,14 +91,26 @@ impl LogSink {
     }
 }
 
+/// Something for the writer task to do, in the order the reader saw it.
+///
+/// Reporting a readiness match travels the same queue as the lines rather than
+/// jumping ahead of them, so the line that triggered the match is always in the
+/// log store by the time the supervisor hears about it — `collect_startup_logs`
+/// and `pitchfork logs` would otherwise be able to miss it.
+enum SinkEvent {
+    Line(ParsedLog),
+    ReadyMatch(String),
+}
+
 /// Split the daemon's output into lines and queue them for writing.
 ///
 /// Returns once the pipe reaches end of file. A read error is propagated so the
 /// process can exit non-zero: exiting cleanly would tell the supervisor the
 /// stream had finished and it would stop replacing this sink.
 async fn read_lines(
-    tx: tokio::sync::mpsc::Sender<ParsedLog>,
+    tx: tokio::sync::mpsc::Sender<SinkEvent>,
     log_format: &str,
+    mut ready_pattern: Option<regex::Regex>,
 ) -> std::io::Result<()> {
     let mut stdin = tokio::io::stdin();
     let mut chunk = vec![0u8; READ_CHUNK];
@@ -102,14 +132,14 @@ async fn read_lines(
                     continue;
                 }
                 split_at_cap = false;
-                queue(&tx, &mut line, log_format).await?;
+                queue(&tx, &mut line, log_format, &mut ready_pattern).await?;
             } else {
                 line.push(byte);
                 split_at_cap = false;
                 // Emit an over-long run as its own line rather than letting the
                 // buffer grow without bound.
                 if line.len() >= MAX_LINE_BYTES {
-                    queue_capped(&tx, &mut line, log_format).await?;
+                    queue_capped(&tx, &mut line, log_format, &mut ready_pattern).await?;
                     split_at_cap = true;
                 }
             }
@@ -118,7 +148,7 @@ async fn read_lines(
 
     // Anything written without a trailing newline is still output.
     if !line.is_empty() {
-        queue(&tx, &mut line, log_format).await?;
+        queue(&tx, &mut line, log_format, &mut ready_pattern).await?;
     }
     Ok(())
 }
@@ -130,13 +160,14 @@ async fn read_lines(
 /// converting each half on its own turns one valid character into two
 /// replacement characters.
 async fn queue_capped(
-    tx: &tokio::sync::mpsc::Sender<ParsedLog>,
+    tx: &tokio::sync::mpsc::Sender<SinkEvent>,
     line: &mut Vec<u8>,
     log_format: &str,
+    ready_pattern: &mut Option<regex::Regex>,
 ) -> std::io::Result<()> {
     let split = split_before_incomplete_char(line);
     let tail = line.split_off(split);
-    let result = queue(tx, line, log_format).await;
+    let result = queue(tx, line, log_format, ready_pattern).await;
     *line = tail;
     result
 }
@@ -176,34 +207,83 @@ fn split_before_incomplete_char(bytes: &[u8]) -> usize {
 /// sink had reached end of file, and it would stop replacing it while the daemon
 /// was still writing.
 async fn queue(
-    tx: &tokio::sync::mpsc::Sender<ParsedLog>,
+    tx: &tokio::sync::mpsc::Sender<SinkEvent>,
     line: &mut Vec<u8>,
     log_format: &str,
+    ready_pattern: &mut Option<regex::Regex>,
 ) -> std::io::Result<()> {
     // Convert lossily: a daemon emitting a stray non-UTF-8 byte must not be able
     // to stop its own logging.
     let text = String::from_utf8_lossy(line);
-    let parsed = crate::log_parse::parse(text.trim_end_matches('\r'), log_format);
+    let text = text.trim_end_matches('\r');
+    let parsed = crate::log_parse::parse(text, log_format);
+    // Strip ANSI before matching so a pattern works whether or not the daemon
+    // colours its output, matching what in-process capture did.
+    let matched = ready_pattern.as_ref().and_then(|re| {
+        let clean = console::strip_ansi_codes(text);
+        re.is_match(&clean).then(|| clean.into_owned())
+    });
     line.clear();
-    tx.send(parsed)
+
+    tx.send(SinkEvent::Line(parsed))
         .await
-        .map_err(|_| std::io::Error::other("log writer stopped"))
+        .map_err(|_| std::io::Error::other("log writer stopped"))?;
+    if let Some(matched) = matched {
+        // Only the first match means anything; readiness happens once.
+        *ready_pattern = None;
+        tx.send(SinkEvent::ReadyMatch(matched))
+            .await
+            .map_err(|_| std::io::Error::other("log writer stopped"))?;
+    }
+    Ok(())
 }
 
 /// Write queued lines in batches until the queue closes.
-async fn write_batches(id: DaemonId, mut rx: tokio::sync::mpsc::Receiver<ParsedLog>) {
+async fn write_batches(id: DaemonId, mut rx: tokio::sync::mpsc::Receiver<SinkEvent>) {
+    let mut events: Vec<SinkEvent> = Vec::with_capacity(BATCH_SIZE);
     let mut batch: Vec<ParsedLog> = Vec::with_capacity(BATCH_SIZE);
     let mut flush_interval = tokio::time::interval(FLUSH_INTERVAL);
     flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         let closed = tokio::select! {
-            received = rx.recv_many(&mut batch, BATCH_SIZE) => received == 0,
+            received = rx.recv_many(&mut events, BATCH_SIZE) => received == 0,
             _ = flush_interval.tick() => false,
         };
+        for event in events.drain(..) {
+            match event {
+                SinkEvent::Line(parsed) => batch.push(parsed),
+                SinkEvent::ReadyMatch(line) => {
+                    // Everything up to and including the matching line goes to
+                    // the store before the supervisor is told, so whatever it
+                    // does next can already read it.
+                    flush(&id, &mut batch).await;
+                    report_ready_match(&id, line).await;
+                }
+            }
+        }
         flush(&id, &mut batch).await;
         if closed {
             break;
+        }
+    }
+}
+
+/// Tell the supervisor that the daemon's output matched its readiness pattern.
+///
+/// Failure is logged and dropped. There is no supervisor to retry against if it
+/// has crashed — and if it has, this daemon's readiness is no longer anyone's
+/// concern — while the daemon's output keeps being captured either way.
+async fn report_ready_match(id: &DaemonId, line: String) {
+    // `autostart: false` — a sink must never bring a supervisor into being.
+    match crate::ipc::client::IpcClient::connect(false).await {
+        Ok(client) => {
+            if let Err(e) = client.sink_ready_match(id.clone(), line).await {
+                warn!("log sink for {id} could not report its readiness match: {e}");
+            }
+        }
+        Err(e) => {
+            warn!("log sink for {id} could not reach the supervisor to report readiness: {e}");
         }
     }
 }

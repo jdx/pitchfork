@@ -441,6 +441,14 @@ impl Supervisor {
             None
         };
 
+        // Output reaches the monitoring task either from readers this process
+        // owns or, when a sink owns the stream, relayed over IPC. The channel is
+        // created here rather than in that task so it exists before the sink
+        // starts: a daemon whose very first line matches its readiness pattern
+        // would otherwise have the match reported with nowhere to deliver it.
+        let (output_tx, output_rx) = tokio::sync::mpsc::channel::<super::OutputLine>(256);
+        let mut output_relay = None;
+
         // Set up out-of-process capture before building the command, so the
         // daemon can be handed the pipe's write end directly.
         let mut sink_pipe = None;
@@ -451,7 +459,14 @@ impl Supervisor {
                 .log_format
                 .clone()
                 .unwrap_or_else(|| settings().logs.log_format.clone());
-            match super::log_sink::SinkPipe::new(log_format) {
+            let ready_pattern = opts.ready_output.as_ref().map(|o| o.pattern.clone());
+            if ready_pattern.is_some() {
+                output_relay = Some(super::log_sink::OutputRelay::register(
+                    id,
+                    output_tx.clone(),
+                ));
+            }
+            match super::log_sink::SinkPipe::new(log_format, ready_pattern) {
                 Ok((pipe, writer)) => match pipe.start(id) {
                     Ok(child) => {
                         sink_child = Some(super::log_sink::PendingSink::new(child));
@@ -724,9 +739,14 @@ impl Supervisor {
             // Registered before the Running upsert above; unregisters when
             // this monitoring task ends.
             let _monitored_guard = monitored_guard;
+            // Likewise for sink-relayed output: dropping this stops the
+            // supervisor delivering into a channel nobody is reading. Dropped
+            // explicitly once the daemon exits, before the drain below.
+            let output_relay = output_relay;
 
-            // Merge all output sources (PTY master OR stdout+stderr) into a single channel.
-            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<String>(256);
+            // Merge all output sources (PTY master OR stdout+stderr, or a
+            // sink's IPC reports) into a single channel.
+            let mut output_rx = output_rx;
 
             if let Some(mut reader) = pty_reader {
                 // PTY mode: single merged stream from the master.
@@ -738,7 +758,14 @@ impl Supervisor {
                         if line.ends_with('\r') {
                             line.pop();
                         }
-                        if output_tx.send(line).await.is_err() {
+                        if output_tx
+                            .send(super::OutputLine {
+                                text: line,
+                                persist: true,
+                            })
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -752,7 +779,14 @@ impl Supervisor {
                     let tx = output_tx.clone();
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = stdout.next_line().await {
-                            if tx.send(line).await.is_err() {
+                            if tx
+                                .send(super::OutputLine {
+                                    text: line,
+                                    persist: true,
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -762,13 +796,22 @@ impl Supervisor {
                     let tx = output_tx.clone();
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = stderr.next_line().await {
-                            if tx.send(line).await.is_err() {
+                            if tx
+                                .send(super::OutputLine {
+                                    text: line,
+                                    persist: true,
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
                     });
                 }
-                // Drop the last sender so the channel closes when all readers finish.
+                // Drop the last sender so the channel closes when all readers
+                // finish. The relay holds its own clone, so a sink's reports
+                // still have somewhere to go after these end.
                 drop(output_tx);
             }
             let log_store = Arc::clone(&LOG_STORE);
@@ -996,11 +1039,16 @@ impl Supervisor {
                         }
                         break;
                     },
-                    Some(line) = output_rx.recv() => {
-                        let parsed = parse_line(&line);
-                        log_buffer.push(parsed);
-                        if log_buffer.len() >= LOG_BATCH_SIZE {
-                            let _ = flush_logs(&mut log_buffer);
+                    Some(super::OutputLine { text: line, persist }) = output_rx.recv() => {
+                        // A line relayed by a sink is already in the store —
+                        // the sink wrote and flushed it before reporting it —
+                        // so it arrives here only to be matched against.
+                        if persist {
+                            let parsed = parse_line(&line);
+                            log_buffer.push(parsed);
+                            if log_buffer.len() >= LOG_BATCH_SIZE {
+                                let _ = flush_logs(&mut log_buffer);
+                            }
                         }
                         trace!("output: {id} {line}");
 
@@ -1399,6 +1447,12 @@ impl Supervisor {
             // None when all data has been consumed. A total deadline of 5 s
             // guards against a stuck reader (e.g. PTY master FD not closing)
             // while ensuring drain doesn't block post-exit cleanup indefinitely.
+            //
+            // Stop accepting relayed output first: the relay holds a sender of
+            // its own, so leaving it registered would keep the channel open and
+            // make every drain wait out the whole deadline. Readiness is moot
+            // now anyway — the process has exited.
+            drop(output_relay);
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let now = tokio::time::Instant::now();
@@ -1410,7 +1464,10 @@ impl Supervisor {
                 else {
                     break;
                 };
-                log_buffer.push(parse_line(&line));
+                // Sink-relayed lines are already stored; see the select loop.
+                if line.persist {
+                    log_buffer.push(parse_line(&line.text));
+                }
             }
             // Flush any remaining log lines (including drained) before the process exits.
             // Await the flush to guarantee all buffered logs are persisted before cleanup.

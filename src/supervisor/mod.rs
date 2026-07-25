@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio::{signal, time};
 
@@ -102,6 +102,26 @@ pub struct Supervisor {
     /// reconciliation tell a supervised daemon from one whose monitor died
     /// with a previous supervisor process.
     pub(crate) monitored: std::sync::Mutex<HashMap<DaemonId, adopt::MonitorEntry>>,
+    /// Where to deliver output a log sink reports over IPC.
+    ///
+    /// A daemon whose output is captured by a sink writes nothing this process
+    /// reads, so the sink evaluates the daemon's readiness pattern itself and
+    /// sends back the line that matched. The monitoring task registers here
+    /// before the sink starts and unregisters when it ends, so a line arriving
+    /// from a sink that outlived its daemon has nowhere to go and is dropped.
+    pub(crate) sink_output: std::sync::Mutex<HashMap<DaemonId, mpsc::Sender<OutputLine>>>,
+}
+
+/// A line of daemon output on its way to the monitoring task.
+#[derive(Debug, Clone)]
+pub(crate) struct OutputLine {
+    pub(crate) text: String,
+    /// Whether the monitoring task must write this line to the log store.
+    ///
+    /// False for lines relayed by a sink: the sink has already stored the line
+    /// — and flushed it — before reporting it, so storing it again here would
+    /// duplicate it.
+    pub(crate) persist: bool,
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -271,6 +291,7 @@ impl Supervisor {
             lan_monitor_task: Mutex::new(None),
             flush_cancel: std::sync::Mutex::new(None),
             monitored: std::sync::Mutex::new(HashMap::new()),
+            sink_output: std::sync::Mutex::new(HashMap::new()),
         })
     }
 

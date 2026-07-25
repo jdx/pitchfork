@@ -147,6 +147,10 @@ cmd log-sink hide=#true help="Reads a daemon's output on stdin and writes it to 
     flag --log-format help="Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)" default=text {
         arg <LOG_FORMAT>
     }
+    flag --ready-pattern help="Regex whose first match means the daemon is ready" {
+        long_help "Regex whose first match means the daemon is ready\n\nSet for a daemon configured with `ready_output`. The supervisor cannot match it itself — this process holds the output — so the match is reported back over IPC."
+        arg <READY_PATTERN>
+    }
 }
 cmd logs help="Displays logs for daemon(s)" {
     alias l

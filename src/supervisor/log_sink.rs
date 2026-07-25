@@ -37,18 +37,91 @@ use std::io::PipeReader;
 
 /// Whether `opts` describes a daemon whose output can be captured by a sink.
 ///
-/// Excluded for now, both because the supervisor itself has to read the stream
-/// to serve them:
+/// Still excluded:
 ///
-/// - `ready_output`, which decides readiness by matching output
 /// - an `on_output` hook, which fires per matching line
+/// - PTY daemons, whose output arrives on a terminal master rather than a pipe
 ///
-/// and PTY daemons, whose output arrives on a terminal master rather than a
-/// pipe. Those keep the in-process path, so they remain vulnerable to a
-/// supervisor crash until the sink learns to evaluate them and report matches
-/// back.
+/// Those keep the in-process path, so they remain vulnerable to a supervisor
+/// crash. `ready_output` is served by the sink: it matches the pattern itself
+/// and reports the line back over IPC.
 pub(crate) fn is_supported(opts: &RunOptions) -> bool {
-    opts.ready_output.is_none() && opts.on_output_hook.is_none() && !opts.pty.unwrap_or(false)
+    opts.on_output_hook.is_none() && !opts.pty.unwrap_or(false)
+}
+
+/// Registers where a daemon's sink-reported output should be delivered, and
+/// stops delivery when dropped.
+///
+/// Tied to the monitoring task's lifetime: once that task is gone there is
+/// nothing waiting on readiness, and a sink that outlives it — one still
+/// draining a daemon's last output — must not be able to deliver into a channel
+/// belonging to a later run of the same daemon.
+pub(crate) struct OutputRelay(DaemonId, tokio::sync::mpsc::Sender<super::OutputLine>);
+
+impl OutputRelay {
+    /// Route lines reported for `id` into `tx` until this guard is dropped.
+    ///
+    /// Registered before the sink is started, so a match found in the daemon's
+    /// very first line still has somewhere to go.
+    pub(crate) fn register(
+        id: &DaemonId,
+        tx: tokio::sync::mpsc::Sender<super::OutputLine>,
+    ) -> Self {
+        SUPERVISOR
+            .sink_output
+            .lock()
+            .expect("sink_output lock poisoned")
+            .insert(id.clone(), tx.clone());
+        Self(id.clone(), tx)
+    }
+}
+
+impl Drop for OutputRelay {
+    fn drop(&mut self) {
+        let mut relays = SUPERVISOR
+            .sink_output
+            .lock()
+            .expect("sink_output lock poisoned");
+        // Only withdraw this registration, never a successor's. A retry
+        // registers the next attempt's channel as soon as the previous attempt
+        // reports failure, which can be before that attempt's monitoring task
+        // has finished unwinding — an unconditional remove would leave the new
+        // attempt with a sink reporting into nowhere.
+        if relays
+            .get(&self.0)
+            .is_some_and(|current| current.same_channel(&self.1))
+        {
+            relays.remove(&self.0);
+        }
+    }
+}
+
+/// Hand a line reported by a sink to the daemon's monitoring task.
+///
+/// Silently does nothing when no task is listening: a sink outliving its daemon
+/// is normal — it exits only once every descendant has closed the pipe — and a
+/// late line is not worth an error.
+pub(crate) async fn deliver_reported_line(id: &DaemonId, text: String) {
+    let tx = SUPERVISOR
+        .sink_output
+        .lock()
+        .expect("sink_output lock poisoned")
+        .get(id)
+        .cloned();
+    let Some(tx) = tx else {
+        debug!("no monitoring task is listening for output reported by the sink for {id}");
+        return;
+    };
+    if tx
+        .send(super::OutputLine {
+            text,
+            persist: false,
+        })
+        .await
+        .is_err()
+    {
+        debug!("monitoring task for {id} stopped before its sink's output arrived");
+    }
 }
 
 /// How long to wait before trying again when a sink process cannot be spawned.
@@ -191,14 +264,29 @@ impl Drop for PendingSink {
 pub(crate) struct SinkPipe {
     reader: PipeReader,
     log_format: String,
+    /// Readiness pattern for the sink to match, for a daemon configured with
+    /// `ready_output`. Passed to every sink started on this pipe, including
+    /// replacements: a daemon that is not ready yet when its sink dies still
+    /// needs the pattern watched for.
+    ready_pattern: Option<String>,
 }
 
 impl SinkPipe {
     /// Create the pipe a daemon will write to, returning the retained read end
     /// and the write end to hand the daemon.
-    pub(crate) fn new(log_format: String) -> Result<(Self, std::io::PipeWriter)> {
+    pub(crate) fn new(
+        log_format: String,
+        ready_pattern: Option<String>,
+    ) -> Result<(Self, std::io::PipeWriter)> {
         let (reader, writer) = std::io::pipe().into_diagnostic()?;
-        Ok((Self { reader, log_format }, writer))
+        Ok((
+            Self {
+                reader,
+                log_format,
+                ready_pattern,
+            },
+            writer,
+        ))
     }
 
     /// Start the first sink on this pipe.
@@ -276,13 +364,16 @@ impl SinkPipe {
     /// Spawn one sink process reading a duplicate of the retained read end.
     fn spawn(&self, id: &DaemonId) -> Result<tokio::process::Child> {
         let reader = self.reader.try_clone().into_diagnostic()?;
-        tokio::process::Command::new(&*crate::env::PITCHFORK_BIN)
-            .arg("log-sink")
+        let mut cmd = tokio::process::Command::new(&*crate::env::PITCHFORK_BIN);
+        cmd.arg("log-sink")
             .arg("--daemon-id")
             .arg(id.qualified())
             .arg("--log-format")
-            .arg(&self.log_format)
-            .stdin(std::process::Stdio::from(reader))
+            .arg(&self.log_format);
+        if let Some(ref pattern) = self.ready_pattern {
+            cmd.arg("--ready-pattern").arg(pattern);
+        }
+        cmd.stdin(std::process::Stdio::from(reader))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
