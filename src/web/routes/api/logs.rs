@@ -206,7 +206,8 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 to,
                 limit: Some(history_lines),
                 order_desc: true,
-                after_id: None, before_id: query.before_id,
+                after_id: None,
+                before_id: query.before_id,
                 message_filters: mf,
                 field_filters: ff,
                 include_structured: true,
@@ -290,19 +291,21 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
         // On generation lookup failure, keep the last known value instead of
         // falling back to 0 (which would reset the cursor and replay logs).
-        let mut last_clear_gen: u64 = match tokio::task::spawn_blocking({
+        // None means the initial lookup failed — the first successful poll
+        // records the generation without treating it as a clear event.
+        let mut last_clear_gen: Option<u64> = match tokio::task::spawn_blocking({
             let d = daemon_id.clone();
             move || LOG_STORE.last_clear_generation(&d)
         }).await {
-            Ok(Ok(Some(g))) => g,
-            Ok(Ok(None)) => 0,
+            Ok(Ok(Some(g))) => Some(g),
+            Ok(Ok(None)) => Some(0),
             Ok(Err(e)) => {
                 log::warn!("failed to get clear generation for {daemon_id}: {e}");
-                0
+                None
             }
             Err(e) => {
                 log::warn!("clear generation task panicked for {daemon_id}: {e}");
-                0
+                None
             }
         };
 
@@ -320,14 +323,24 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 Ok(Ok(None)) => 0,
                 _ => {
                     // Keep last_clear_gen on error — don't reset cursor.
-                    last_clear_gen
+                    continue;
                 }
             };
 
-            if current_gen != last_clear_gen {
-                last_clear_gen = current_gen;
-                last_id = 0;
-                continue;
+            match last_clear_gen {
+                Some(prev) if current_gen != prev => {
+                    // Log clear detected — reset cursor.
+                    last_clear_gen = Some(current_gen);
+                    last_id = 0;
+                    continue;
+                }
+                None => {
+                    // Initial generation was unknown (transient lookup
+                    // failure). Record it now without treating it as a
+                    // clear event, so we don't replay the initial history.
+                    last_clear_gen = Some(current_gen);
+                }
+                _ => {}
             }
 
             let raw_entries = match tokio::task::spawn_blocking({

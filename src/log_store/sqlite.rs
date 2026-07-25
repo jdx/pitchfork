@@ -36,17 +36,11 @@ fn text_to_json_literal(value: &str) -> String {
     if value.eq_ignore_ascii_case("null") {
         return "null".to_string();
     }
-    // Number (integer or float)
-    if value.parse::<f64>().is_ok() {
-        // Validate it's a proper number (parse::<f64> accepts things like
-        // "inf", "nan" which aren't valid JSON)
-        let trimmed = value.trim();
-        if !trimmed.eq_ignore_ascii_case("inf")
-            && !trimmed.eq_ignore_ascii_case("nan")
-            && !trimmed.eq_ignore_ascii_case("infinity")
-        {
-            return value.to_string();
-        }
+    // Number: validate as a JSON number (stricter than f64::parse, which
+    // accepts "+42", "1.", ".5", "inf", "nan" — none are valid JSON and
+    // would cause SQLite's json_extract to fail).
+    if let Ok(serde_json::Value::Number(_)) = serde_json::from_str(value) {
+        return value.to_string();
     }
     // String: JSON-escape and quote
     serde_json::to_string(value).unwrap_or_else(|_| format!(r#""{value}""#))
@@ -1258,4 +1252,53 @@ fn auto_migrate_legacy_logs(store: &SqliteLogStore) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_to_json_literal;
+
+    #[test]
+    fn test_json_literal_booleans() {
+        assert_eq!(text_to_json_literal("true"), "true");
+        assert_eq!(text_to_json_literal("TRUE"), "true");
+        assert_eq!(text_to_json_literal("false"), "false");
+        assert_eq!(text_to_json_literal("False"), "false");
+    }
+
+    #[test]
+    fn test_json_literal_null() {
+        assert_eq!(text_to_json_literal("null"), "null");
+        assert_eq!(text_to_json_literal("NULL"), "null");
+    }
+
+    #[test]
+    fn test_json_literal_valid_numbers() {
+        assert_eq!(text_to_json_literal("42"), "42");
+        assert_eq!(text_to_json_literal("-1"), "-1");
+        assert_eq!(text_to_json_literal("0"), "0");
+        assert_eq!(text_to_json_literal("3.14"), "3.14");
+        assert_eq!(text_to_json_literal("1e10"), "1e10");
+        assert_eq!(text_to_json_literal("1.5e-3"), "1.5e-3");
+    }
+
+    #[test]
+    fn test_json_literal_rejects_invalid_json_numbers() {
+        // f64::parse accepts these but they are not valid JSON numbers,
+        // so they must be treated as strings (quoted) instead.
+        assert_eq!(text_to_json_literal("+42"), r#""+42""#);
+        assert_eq!(text_to_json_literal("1."), r#""1.""#);
+        assert_eq!(text_to_json_literal(".5"), r#"".5""#);
+        assert_eq!(text_to_json_literal("inf"), r#""inf""#);
+        assert_eq!(text_to_json_literal("nan"), r#""nan""#);
+        assert_eq!(text_to_json_literal("infinity"), r#""infinity""#);
+    }
+
+    #[test]
+    fn test_json_literal_strings() {
+        assert_eq!(text_to_json_literal("hello"), r#""hello""#);
+        assert_eq!(text_to_json_literal("req_1"), r#""req_1""#);
+        // String with special chars gets JSON-escaped
+        assert_eq!(text_to_json_literal(r#"a"b"#), r#""a\"b""#);
+    }
 }
