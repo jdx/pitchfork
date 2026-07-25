@@ -1439,6 +1439,29 @@ fn process_identity_matches(
     }
 }
 
+/// Whether a PID read from persisted state may be signalled.
+///
+/// Stopping a daemon signals its whole process *group*, so acting on a PID that
+/// has been recycled since it was recorded takes down an unrelated process tree.
+/// Records are refused only when their identity is positively contradicted: if
+/// either start time is unknown the PID stays as signallable as it was before
+/// identities were recorded, so a daemon whose record predates the field can
+/// still be stopped rather than becoming permanently unstoppable.
+///
+/// This is deliberately weaker than [`process_identity_matches`], which decides
+/// whether to adopt or kill a process nobody asked about. Here the user has
+/// named the daemon and asked for it to stop; the check exists to catch the
+/// case where the answer is provably the wrong process.
+pub(crate) fn signalling_pid_is_authorized(
+    recorded_start_time: Option<u64>,
+    current_start_time: Option<u64>,
+) -> bool {
+    !matches!(
+        (recorded_start_time, current_start_time),
+        (Some(recorded), Some(current)) if recorded != current
+    )
+}
+
 /// How a daemon's run ended, which decides what happens to the recorded
 /// `last_exit_success` that cron `retrigger = "success" | "fail"` reads.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1592,7 +1615,7 @@ fn chmod_recursive(dir: &std::path::Path) {
 mod tests {
     use super::{
         BOOT_TIME_TOLERANCE_SECS, process_identity_matches, should_remove_liveness_session,
-        unobserved_exit_status,
+        signalling_pid_is_authorized, unobserved_exit_status,
     };
     use crate::daemon_status::DaemonStatus;
     use crate::state_file::ProjectSession;
@@ -1689,6 +1712,20 @@ mod tests {
         assert!(!process_identity_matches(Some(123), Some(456)));
         // Unreadable current identity: unverifiable, so not a match.
         assert!(!process_identity_matches(Some(123), None));
+    }
+
+    #[test]
+    fn signalling_is_refused_only_for_a_contradicted_identity() {
+        // Provably someone else's process group: refuse.
+        assert!(!signalling_pid_is_authorized(Some(123), Some(456)));
+        // Verified as the daemon's own.
+        assert!(signalling_pid_is_authorized(Some(123), Some(123)));
+        // Unknown on either side. Stopping stays possible, because the user has
+        // named this daemon and a record that cannot be verified must not become
+        // one that can never be stopped.
+        assert!(signalling_pid_is_authorized(None, Some(123)));
+        assert!(signalling_pid_is_authorized(Some(123), None));
+        assert!(signalling_pid_is_authorized(None, None));
     }
 
     #[test]

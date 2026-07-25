@@ -259,6 +259,57 @@ EOF
   { kill -9 "$bystander_pid" && wait "$bystander_pid"; } 2>/dev/null || true
 }
 
+@test "stop does not signal a process that recycled the daemon's PID" {
+  skip_on_windows "state file crafting relies on Unix signal semantics"
+
+  # `stop` kills a process group, so a recycled PID would take down whatever
+  # unrelated tree now owns it. The bystander must therefore lead its own group
+  # — a plain background job here would join bats' group, and killpg would find
+  # no group to signal whatever the daemon code did. Its children make the blast
+  # radius visible: signalling the group takes them too.
+  local pidfile="$BATS_TEST_TMPDIR/bystander.pid"
+  setsid bash -c 'echo $$ > "$1"; sleep 300 & sleep 300 & wait' _ "$pidfile" >/dev/null 2>&1 &
+  local i
+  for i in $(seq 1 50); do [ -s "$pidfile" ] && break; sleep 0.1; done
+  local bystander_pid
+  bystander_pid=$(cat "$pidfile")
+  [ -n "$bystander_pid" ]
+
+  # Orphan reconciliation would reset the crafted record before `stop` ever saw
+  # it; this test is about the stop path, so leave the record alone.
+  export PITCHFORK_CLEANUP_ORPHANS=false
+
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."recycled/stopvictim"]
+id = "recycled/stopvictim"
+pid = $bystander_pid
+start_time = 1
+status = "running"
+autostop = false
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 1
+
+  run pitchfork stop recycled/stopvictim
+  assert_success
+
+  # The unrelated process group must survive untouched.
+  pid_alive "$bystander_pid"
+  assert_equal "$(pgrep -c -P "$bystander_pid" || true)" "2"
+
+  # ...and the daemon is reported as gone, since that PID is not its process.
+  run pitchfork status recycled/stopvictim
+  assert_success
+  assert_output --partial "stopped"
+
+  { kill -9 "-$bystander_pid" || kill -9 "$bystander_pid"; } 2>/dev/null || true
+  wait "$bystander_pid" 2>/dev/null || true
+}
+
 @test "daemon that dies during a supervisor crash is retried on restart" {
   skip_on_windows "relies on SIGKILL semantics for both supervisor and daemon"
   export PITCHFORK_INTERVAL=1s
