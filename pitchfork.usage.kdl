@@ -342,6 +342,18 @@ every descendant holding the write end have gone.
         long_help "Token identifying the start attempt this sink belongs to\n\nQuoted back when reporting a match. The supervisor drops reports whose token is no longer current, so a sink still draining a failed attempt cannot mark that daemon's retry ready."
         arg <RELAY_TOKEN>
     }
+    flag --report-output help="Report lines so the supervisor can fire the daemon's `on_output` hook" {
+        long_help "Report lines so the supervisor can fire the daemon's `on_output` hook\n\nWithout `--output-filter` or `--output-regex` every line qualifies, which is what a hook with no pattern asks for."
+    }
+    flag --output-filter help="Only report lines containing this substring" {
+        arg <OUTPUT_FILTER>
+    }
+    flag --output-regex help="Only report lines matching this regex" {
+        arg <OUTPUT_REGEX>
+    }
+    flag --output-debounce-ms help="Shortest gap between reported lines, in milliseconds" default="1000" {
+        arg <OUTPUT_DEBOUNCE_MS>
+    }
 }
 cmd logs help="Displays logs for daemon(s)" effect=read {
     alias l

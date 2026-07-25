@@ -37,16 +37,81 @@ use std::io::PipeReader;
 
 /// Whether `opts` describes a daemon whose output can be captured by a sink.
 ///
-/// Still excluded:
+/// Only PTY daemons are excluded, because their output arrives on a terminal
+/// master rather than a pipe. They keep the in-process path and remain
+/// vulnerable to a supervisor crash.
 ///
-/// - an `on_output` hook, which fires per matching line
-/// - PTY daemons, whose output arrives on a terminal master rather than a pipe
-///
-/// Those keep the in-process path, so they remain vulnerable to a supervisor
-/// crash. `ready_output` is served by the sink: it matches the pattern itself
-/// and reports the line back over IPC.
+/// Everything that used to require the supervisor to read the stream —
+/// `ready_output` and the `on_output` hook — is evaluated by the sink, which
+/// reports the lines that matter back over IPC.
 pub(crate) fn is_supported(opts: &RunOptions) -> bool {
-    opts.on_output_hook.is_none() && !opts.pty.unwrap_or(false)
+    !opts.pty.unwrap_or(false)
+}
+
+/// What a sink should watch a daemon's output for.
+///
+/// Empty for most daemons: nothing needs reporting, and the sink just stores
+/// what it reads.
+#[derive(Default)]
+pub(crate) struct WatchFor {
+    /// `ready_output`'s pattern.
+    ready_pattern: Option<String>,
+    /// The `on_output` hook, already validated.
+    hook: Option<crate::config_types::OnOutputHook>,
+}
+
+impl WatchFor {
+    /// Read from a daemon's options, dropping a hook the supervisor would
+    /// refuse to fire anyway — the in-process path discards an invalid hook in
+    /// the same way, rather than firing it on every line.
+    pub(crate) fn from_opts(id: &DaemonId, opts: &RunOptions) -> Self {
+        Self {
+            ready_pattern: opts.ready_output.as_ref().map(|o| o.pattern.clone()),
+            hook: opts
+                .on_output_hook
+                .as_ref()
+                .filter(|hook| {
+                    hook.validate(id.name())
+                        .inspect_err(|e| error!("{e}"))
+                        .is_ok()
+                })
+                .cloned(),
+        }
+    }
+
+    /// Whether the sink has anything to report, and so whether this attempt
+    /// needs to be reachable from one.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ready_pattern.is_none() && self.hook.is_none()
+    }
+
+    /// The arguments telling a sink what to watch for.
+    fn args(&self, relay_token: u64) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.is_empty() {
+            return args;
+        }
+        args.push("--relay-token".into());
+        args.push(relay_token.to_string());
+        if let Some(ref pattern) = self.ready_pattern {
+            args.push("--ready-pattern".into());
+            args.push(pattern.clone());
+        }
+        if let Some(ref hook) = self.hook {
+            args.push("--report-output".into());
+            if let Some(ref filter) = hook.filter {
+                args.push("--output-filter".into());
+                args.push(filter.clone());
+            }
+            if let Some(ref regex) = hook.regex {
+                args.push("--output-regex".into());
+                args.push(regex.clone());
+            }
+            args.push("--output-debounce-ms".into());
+            args.push(hook.debounce_duration().as_millis().to_string());
+        }
+        args
+    }
 }
 
 /// Source of relay tokens. Never reused within a supervisor's lifetime, and a
@@ -145,7 +210,7 @@ pub(crate) async fn deliver_reported_line(id: &DaemonId, token: u64, text: Strin
     if tx
         .send(super::OutputLine {
             text,
-            persist: false,
+            source: super::OutputSource::Sink,
         })
         .await
         .is_err()
@@ -294,11 +359,11 @@ impl Drop for PendingSink {
 pub(crate) struct SinkPipe {
     reader: PipeReader,
     log_format: String,
-    /// Readiness pattern for the sink to match, for a daemon configured with
-    /// `ready_output`, and the relay token its reports must quote. Passed to
-    /// every sink started on this pipe, including replacements: a daemon that
-    /// is not ready yet when its sink dies still needs the pattern watched for.
-    ready_pattern: Option<String>,
+    /// What the sink reports back, and the relay token its reports must quote.
+    /// Passed to every sink started on this pipe, including replacements: a
+    /// daemon that is not ready yet when its sink dies still needs its pattern
+    /// watched for, and its hook still needs firing.
+    watch_for: WatchFor,
     relay_token: u64,
 }
 
@@ -307,7 +372,7 @@ impl SinkPipe {
     /// and the write end to hand the daemon.
     pub(crate) fn new(
         log_format: String,
-        ready_pattern: Option<String>,
+        watch_for: WatchFor,
         relay_token: u64,
     ) -> Result<(Self, std::io::PipeWriter)> {
         let (reader, writer) = std::io::pipe().into_diagnostic()?;
@@ -315,7 +380,7 @@ impl SinkPipe {
             Self {
                 reader,
                 log_format,
-                ready_pattern,
+                watch_for,
                 relay_token,
             },
             writer,
@@ -403,12 +468,7 @@ impl SinkPipe {
             .arg(id.qualified())
             .arg("--log-format")
             .arg(&self.log_format);
-        if let Some(ref pattern) = self.ready_pattern {
-            cmd.arg("--ready-pattern")
-                .arg(pattern)
-                .arg("--relay-token")
-                .arg(self.relay_token.to_string());
-        }
+        cmd.args(self.watch_for.args(self.relay_token));
         cmd.stdin(std::process::Stdio::from(reader))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

@@ -64,6 +64,25 @@ pub struct LogSink {
     /// cannot mark that daemon's retry ready.
     #[clap(long, default_value_t = 0)]
     relay_token: u64,
+
+    /// Report lines so the supervisor can fire the daemon's `on_output` hook
+    ///
+    /// Without `--output-filter` or `--output-regex` every line qualifies,
+    /// which is what a hook with no pattern asks for.
+    #[clap(long)]
+    report_output: bool,
+
+    /// Only report lines containing this substring
+    #[clap(long)]
+    output_filter: Option<String>,
+
+    /// Only report lines matching this regex
+    #[clap(long)]
+    output_regex: Option<String>,
+
+    /// Shortest gap between reported lines, in milliseconds
+    #[clap(long, default_value_t = 1000)]
+    output_debounce_ms: u64,
 }
 
 impl LogSink {
@@ -74,10 +93,23 @@ impl LogSink {
         // than failing the sink: refusing to start would leave the daemon's
         // output unread, which is far worse than a readiness check that never
         // fires. The supervisor validates patterns too, so this is a backstop.
-        let ready_pattern = self.ready_pattern.as_deref().and_then(|p| {
-            regex::Regex::new(p)
-                .map_err(|e| error!("log sink for {id} ignoring unparsable ready pattern: {e}"))
+        let compile = |what: &str, pattern: &str| {
+            regex::Regex::new(pattern)
+                .map_err(|e| error!("log sink for {id} ignoring unparsable {what}: {e}"))
                 .ok()
+        };
+        let ready_pattern = self
+            .ready_pattern
+            .as_deref()
+            .and_then(|p| compile("ready pattern", p));
+        let hook = self.report_output.then(|| HookMatcher {
+            filter: self.output_filter.clone(),
+            regex: self
+                .output_regex
+                .as_deref()
+                .and_then(|p| compile("output pattern", p)),
+            debounce: std::time::Duration::from_millis(self.output_debounce_ms),
+            last_reported: None,
         });
 
         // Reading and writing are separate tasks. A write to SQLite can block —
@@ -87,7 +119,8 @@ impl LogSink {
         let (tx, rx) = tokio::sync::mpsc::channel::<SinkEvent>(QUEUE_DEPTH);
         let writer = tokio::spawn(write_batches(id.clone(), self.relay_token, rx));
 
-        let read_result = read_lines(tx, &self.log_format, ReadyMatcher::new(ready_pattern)).await;
+        let read_result =
+            read_lines(tx, &self.log_format, ReadyMatcher::new(ready_pattern, hook)).await;
 
         // The sender has been dropped by now, so the writer drains its queue and
         // returns; wait for it so nothing queued is lost on exit.
@@ -119,21 +152,74 @@ enum SinkEvent {
 /// while still bounding what is held.
 const MATCH_CARRY_BYTES: usize = 4 * 1024;
 
-/// Watches a daemon's output for its readiness pattern.
+/// Watches a daemon's output for the things the supervisor would look for if it
+/// could still read the stream: the readiness pattern, and whatever fires the
+/// `on_output` hook.
+///
+/// What the supervisor does about a reported line — mark the daemon ready, run
+/// the hook — remains its own business.
 struct ReadyMatcher {
-    /// Cleared once it has matched: readiness happens once.
+    /// Readiness pattern, cleared once it has matched: readiness happens once.
     pattern: Option<regex::Regex>,
+    /// The `on_output` hook's filter and rate limit, if the daemon has one.
+    hook: Option<HookMatcher>,
     /// Tail of the previous piece of a line split at the length cap. Empty
     /// whenever the last piece ended at a real newline.
     carried: String,
 }
 
+/// The `on_output` hook's line filter and its rate limit.
+struct HookMatcher {
+    filter: Option<String>,
+    regex: Option<regex::Regex>,
+    debounce: std::time::Duration,
+    last_reported: Option<std::time::Instant>,
+}
+
+impl HookMatcher {
+    /// Whether this line should fire the hook, consuming the debounce window.
+    ///
+    /// The debounce is applied here rather than by the supervisor because this
+    /// process is the one that sees every line: enforcing it here means one IPC
+    /// message per window instead of one per line, which matters for a hook
+    /// with no filter, where every line qualifies.
+    fn matches(&mut self, clean: &str) -> bool {
+        let matched = match (&self.filter, &self.regex) {
+            // Mutually exclusive, and a hook setting both is rejected before it
+            // ever reaches this process.
+            (Some(substr), _) => clean.contains(substr.as_str()),
+            (None, Some(re)) => re.is_match(clean),
+            // A hook with neither fires on every line.
+            (None, None) => true,
+        };
+        if !matched {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .last_reported
+            .is_some_and(|last| now.duration_since(last) < self.debounce)
+        {
+            return false;
+        }
+        self.last_reported = Some(now);
+        true
+    }
+}
+
 impl ReadyMatcher {
-    fn new(pattern: Option<regex::Regex>) -> Self {
+    fn new(pattern: Option<regex::Regex>, hook: Option<HookMatcher>) -> Self {
         Self {
             pattern,
+            hook,
             carried: String::new(),
         }
+    }
+
+    /// Whether anything is still being watched for. Once nothing is, matching is
+    /// skipped: stripping ANSI from every line of a chatty daemon is not free.
+    fn is_watching(&self) -> bool {
+        self.pattern.is_some() || self.hook.is_some()
     }
 
     /// Test `text` — one whole line, or one piece of an over-long one — and
@@ -141,7 +227,7 @@ impl ReadyMatcher {
     ///
     /// `split_at_cap` says another piece of the same logical line follows.
     fn consider(&mut self, text: &str, split_at_cap: bool) -> Option<String> {
-        if self.pattern.is_none() {
+        if !self.is_watching() {
             self.carried.clear();
             return None;
         }
@@ -163,17 +249,26 @@ impl ReadyMatcher {
             String::new()
         };
 
-        let matched = self
+        // Both reasons to report produce the same message. The supervisor
+        // re-checks the readiness pattern on what it is sent, so a line reported
+        // for the hook that also announces readiness is still handled correctly.
+        let mut report = false;
+        if self
             .pattern
             .as_ref()
-            .is_some_and(|re| re.is_match(&candidate));
-        if matched {
+            .is_some_and(|re| re.is_match(&candidate))
+        {
             self.pattern = None;
-            // The supervisor re-matches what it is sent, so send the text the
-            // pattern actually matched against, not just this piece of it.
-            return Some(candidate);
+            report = true;
         }
-        None
+        if let Some(hook) = self.hook.as_mut()
+            && hook.matches(&candidate)
+        {
+            report = true;
+        }
+        // Send the text the patterns actually matched against, not just this
+        // piece of it: the supervisor re-matches it, and hands it to the hook.
+        report.then_some(candidate)
     }
 }
 
@@ -408,10 +503,22 @@ async fn flush(id: &DaemonId, batch: &mut Vec<ParsedLog>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MATCH_CARRY_BYTES, ReadyMatcher};
+    use super::{HookMatcher, MATCH_CARRY_BYTES, ReadyMatcher};
 
     fn matcher(pattern: &str) -> ReadyMatcher {
-        ReadyMatcher::new(Some(regex::Regex::new(pattern).unwrap()))
+        ReadyMatcher::new(Some(regex::Regex::new(pattern).unwrap()), None)
+    }
+
+    fn hook_matcher(filter: Option<&str>, debounce_ms: u64) -> ReadyMatcher {
+        ReadyMatcher::new(
+            None,
+            Some(HookMatcher {
+                filter: filter.map(str::to_string),
+                regex: None,
+                debounce: std::time::Duration::from_millis(debounce_ms),
+                last_reported: None,
+            }),
+        )
     }
 
     #[test]
@@ -462,6 +569,26 @@ mod tests {
         let mut m = matcher("nothing-matches-this");
         m.consider(&"é".repeat(MATCH_CARRY_BYTES), true);
         assert!(m.carried.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn hook_reports_matching_lines_within_the_debounce_window() {
+        let mut m = hook_matcher(Some("ALERT"), 0);
+        assert_eq!(m.consider("nothing here", false), None);
+        assert_eq!(
+            m.consider("ALERT disk full", false).as_deref(),
+            Some("ALERT disk full")
+        );
+        // Unlike readiness, a hook keeps firing.
+        assert!(m.consider("ALERT again", false).is_some());
+    }
+
+    #[test]
+    fn hook_debounce_suppresses_a_second_line_in_the_same_window() {
+        let mut m = hook_matcher(None, 60_000);
+        assert!(m.consider("first", false).is_some());
+        // Every line matches a hook with no filter, so only the window stops it.
+        assert_eq!(m.consider("second", false), None);
     }
 
     #[test]

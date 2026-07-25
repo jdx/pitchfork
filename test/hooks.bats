@@ -513,3 +513,76 @@ EOF
   count=$(wc -l < "$counter" | tr -d ' ')
   [[ "$count" -eq 1 ]]
 }
+
+# ---------------------------------------------------------------------------
+# on_output – capture is out of process
+# ---------------------------------------------------------------------------
+
+@test "on_output fires from a sink rather than in-process capture" {
+  skip_on_windows "relies on pgrep to see the sink process"
+
+  local marker="$TEST_TEMP_DIR/sink_hook_fired"
+
+  create_pitchfork_toml <<EOF
+[daemons.sinkhook]
+run = "sleep 0.2; echo ALERT disk full; sleep 60"
+
+[daemons.sinkhook.hooks]
+on_output = { filter = "ALERT", run = "touch $marker" }
+EOF
+
+  pitchfork supervisor start
+  pitchfork start sinkhook
+
+  wait_for_file "$marker"
+  assert_file_exists "$marker"
+
+  # The hook fired on a line this process never read: a sink owns the stream
+  # and told the supervisor which line mattered.
+  run pgrep -f "log-sink --daemon-id .*sinkhook"
+  assert_success
+
+  # And the line was stored exactly once, by the sink.
+  assert_equal "$(read_logs sinkhook | grep -c "ALERT disk full")" "1"
+
+  pitchfork stop sinkhook
+}
+
+@test "an on_output daemon keeps logging through a supervisor crash" {
+  skip_on_windows "relies on SIGKILL semantics for the supervisor"
+
+  # An on_output hook used to force in-process capture, putting the supervisor
+  # back in this daemon's data path — the crash below took the daemon with it.
+  create_pitchfork_toml <<EOF
+[daemons.hookcrash]
+run = "i=0; while true; do i=\$((i+1)); echo hookcrash-\$i; sleep 0.3; done"
+ready_delay = 1
+
+[daemons.hookcrash.hooks]
+on_output = { filter = "hookcrash", run = "true" }
+EOF
+
+  run pitchfork start hookcrash
+  assert_success
+  wait_for_logs hookcrash "hookcrash-"
+
+  local daemon_pid sup_pid before
+  daemon_pid="$(get_daemon_pid hookcrash)"
+  sup_pid="$(grep -A 10 '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" |
+    grep -E '^pid = ' | head -1 | sed -E 's/.*= //')"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+  before="$(read_logs hookcrash | grep -c "hookcrash-")"
+
+  kill_pid "$sup_pid"
+  sleep 3
+
+  pid_alive "$daemon_pid"
+  local after
+  after="$(read_logs hookcrash | grep -c "hookcrash-")"
+  [[ "$after" -gt "$before" ]] || {
+    echo "capture stopped at the crash: before=$before after=$after" >&2
+    return 1
+  }
+
+  kill_pid "$daemon_pid"
+}
