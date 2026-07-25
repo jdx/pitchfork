@@ -13,6 +13,45 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Convert a text filter value to a JSON literal string for use with
+/// SQLite's `json()` function. This ensures `json_each.value` (which returns
+/// native SQLite types) is compared against the correct type:
+///
+/// - `"true"` / `"false"` → JSON boolean (SQLite integer 1/0)
+/// - `"null"` → JSON null (SQLite NULL)
+/// - `"42"` / `"3.14"` → JSON number (SQLite integer/real)
+/// - `"hello"` → JSON string `"hello"`
+///
+/// Without this conversion, binding `8080` as text would never match
+/// `json_each.value` returning integer `8080`.
+fn text_to_json_literal(value: &str) -> String {
+    // Boolean
+    if value.eq_ignore_ascii_case("true") {
+        return "true".to_string();
+    }
+    if value.eq_ignore_ascii_case("false") {
+        return "false".to_string();
+    }
+    // Null
+    if value.eq_ignore_ascii_case("null") {
+        return "null".to_string();
+    }
+    // Number (integer or float)
+    if value.parse::<f64>().is_ok() {
+        // Validate it's a proper number (parse::<f64> accepts things like
+        // "inf", "nan" which aren't valid JSON)
+        let trimmed = value.trim();
+        if !trimmed.eq_ignore_ascii_case("inf")
+            && !trimmed.eq_ignore_ascii_case("nan")
+            && !trimmed.eq_ignore_ascii_case("infinity")
+        {
+            return value.to_string();
+        }
+    }
+    // String: JSON-escape and quote
+    serde_json::to_string(value).unwrap_or_else(|_| format!(r#""{value}""#))
+}
+
 /// Registers a `regexp` SQL function backed by the `regex` crate.
 ///
 /// SQLite does not ship a REGEXP implementation by default. This function
@@ -629,13 +668,21 @@ impl SqliteLogStore {
                     // (e.g. "request.id") which json_extract would treat as
                     // nested traversal, and prevents SQL injection from
                     // untrusted key input (CLI --field doesn't validate keys).
+                    //
+                    // Convert the text filter value to a JSON literal and use
+                    // `IS` (instead of `=`) so that NULL comparisons work
+                    // (NULL = NULL is false in SQL, but NULL IS NULL is true).
+                    // json('true') → 1, json('42') → 42, json('"hi"') → "hi",
+                    // json('null') → NULL — matching json_each.value's native
+                    // SQLite types.
+                    let json_literal = text_to_json_literal(value);
                     conditions.push(format!(
                         "EXISTS (SELECT 1 FROM json_each(fields_json) \
                          WHERE json_each.key = ?{key_idx} \
-                           AND json_each.value = ?{val_idx})"
+                           AND json_each.value IS json(?{val_idx}))"
                     ));
                     query_params.push(Box::new(key.clone()));
-                    query_params.push(Box::new(value.clone()));
+                    query_params.push(Box::new(json_literal));
                 }
                 FieldFilter::LoggerContains(pattern) => {
                     let param_index = query_params.len() + 1;

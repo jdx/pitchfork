@@ -97,17 +97,24 @@ fn build_filters(query: &TailQuery) -> Result<(Vec<MessageFilter>, Vec<FieldFilt
     // Parse "KEY=VALUE" field filters (can be repeated).
     if let Some(fields) = &query.field {
         for pair in fields {
-            if let Some((key, value)) = pair.split_once('=') {
-                if !is_safe_field_key(key) {
-                    return Err(format!(
-                        "invalid field key: {key} (only alphanumeric, underscore, and period are allowed)"
-                    ));
-                }
-                field_filters.push(FieldFilter::FieldEq {
-                    key: key.to_string(),
-                    value: value.to_string(),
-                });
+            let pair = pair.trim();
+            if pair.is_empty() {
+                continue;
             }
+            let Some((key, value)) = pair.split_once('=') else {
+                return Err(format!(
+                    "invalid field filter: '{pair}' (expected KEY=VALUE format)"
+                ));
+            };
+            if !is_safe_field_key(key) {
+                return Err(format!(
+                    "invalid field key: {key} (only alphanumeric, underscore, period, and hyphen are allowed)"
+                ));
+            }
+            field_filters.push(FieldFilter::FieldEq {
+                key: key.to_string(),
+                value: value.to_string(),
+            });
         }
     }
 
