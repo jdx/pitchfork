@@ -60,6 +60,11 @@ pub(crate) fn is_supported(opts: &RunOptions) -> bool {
 /// spawn failure is barely noticeable.
 const SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// Longest gap between attempts once they keep failing. A sink that cannot be
+/// started at all — a missing binary, no memory for another process — should not
+/// be retried five times a second for the life of the daemon.
+const SPAWN_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Wait until a daemon's output from this run is queryable, or `timeout`
 /// elapses.
 ///
@@ -78,42 +83,68 @@ pub(crate) async fn wait_for_output(
     since: chrono::DateTime<chrono::Local>,
     timeout: std::time::Duration,
 ) {
+    // The cap has to wrap the whole loop, not sit between polls: a single query
+    // can itself wait out the store's busy timeout, which is far longer than any
+    // caller wants to pause a failed start for.
+    let _ = tokio::time::timeout(timeout, settle(id, since)).await;
+}
+
+/// Poll until the daemon's output for this run stops growing.
+async fn settle(id: &DaemonId, since: chrono::DateTime<chrono::Local>) {
     const POLL: std::time::Duration = std::time::Duration::from_millis(20);
     // Returning at the first row would report a daemon's first line while the
     // rest of its output was still batched in the sink, so keep going until
     // nothing new has arrived for a moment.
     const SETTLED_FOR: std::time::Duration = std::time::Duration::from_millis(80);
 
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut seen = 0usize;
+    let mut newest: Option<i64> = None;
     let mut last_change = tokio::time::Instant::now();
 
     loop {
-        let query = crate::log_store::LogQuery {
-            daemon_ids: vec![id.qualified()],
-            from: Some(since),
-            ..Default::default()
-        };
-        let found = tokio::task::spawn_blocking(move || {
-            crate::log_store::sqlite::LOG_STORE
-                .query(&query)
-                .map(|entries| entries.len())
-                .unwrap_or(0)
-        })
-        .await
-        .unwrap_or(0);
-
-        let now = tokio::time::Instant::now();
-        if found > seen {
-            seen = found;
-            last_change = now;
-        }
-        let settled = seen > 0 && now.duration_since(last_change) >= SETTLED_FOR;
-        if settled || now >= deadline {
-            return;
+        match newest_entry_id(id, since).await {
+            Ok(latest) if latest != newest && latest.is_some() => {
+                newest = latest;
+                last_change = tokio::time::Instant::now();
+            }
+            Ok(_) => {
+                if newest.is_some() && last_change.elapsed() >= SETTLED_FOR {
+                    return;
+                }
+            }
+            Err(e) => {
+                // An unreadable store says nothing about whether the sink has
+                // finished writing, so do not mistake it for a settled stream —
+                // keep polling and let the caller's timeout end the wait.
+                debug!("could not check {id}'s captured output: {e}");
+            }
         }
         tokio::time::sleep(POLL).await;
     }
+}
+
+/// Id of the most recent entry for `id` since `since`, if any.
+///
+/// Deliberately fetches one row rather than counting: polling every few
+/// milliseconds while a chatty daemon logs would otherwise materialize its whole
+/// history each time.
+async fn newest_entry_id(
+    id: &DaemonId,
+    since: chrono::DateTime<chrono::Local>,
+) -> Result<Option<i64>> {
+    let query = crate::log_store::LogQuery {
+        daemon_ids: vec![id.qualified()],
+        from: Some(since),
+        limit: Some(1),
+        order_desc: true,
+        ..Default::default()
+    };
+    tokio::task::spawn_blocking(move || {
+        crate::log_store::sqlite::LOG_STORE
+            .query(&query)
+            .map(|entries| entries.first().map(|entry| entry.id))
+    })
+    .await
+    .map_err(|e| miette::miette!("log store check did not run: {e}"))?
 }
 
 /// Terminate and reap a sink that was started for a daemon which then failed to
@@ -192,12 +223,14 @@ impl SinkPipe {
                 // task owns the retained read end, and giving up would leave the
                 // pipe with no reader, blocking the daemon once it filled and
                 // killing it with SIGPIPE once the sink's own end went too.
+                let mut delay = SPAWN_RETRY_DELAY;
                 child = loop {
                     match self.spawn(&id) {
                         Ok(child) => break child,
                         Err(e) => {
-                            error!("failed to start log sink for {id}: {e}; retrying");
-                            tokio::time::sleep(SPAWN_RETRY_DELAY).await;
+                            error!("failed to start log sink for {id}: {e}; retrying in {delay:?}");
+                            tokio::time::sleep(delay).await;
+                            delay = (delay * 2).min(SPAWN_RETRY_MAX_DELAY);
                             if !SUPERVISOR.monitor_token_valid(&id, token) {
                                 return;
                             }

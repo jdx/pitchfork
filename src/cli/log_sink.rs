@@ -93,16 +93,13 @@ async fn read_lines(
         }
         for &byte in &chunk[..read] {
             if byte == b'\n' {
-                if queue(&tx, &mut line, log_format).await.is_err() {
-                    return Ok(());
-                }
+                queue(&tx, &mut line, log_format).await?;
             } else {
                 line.push(byte);
                 // Emit an over-long run as its own line rather than letting the
                 // buffer grow without bound.
-                if line.len() >= MAX_LINE_BYTES && queue(&tx, &mut line, log_format).await.is_err()
-                {
-                    return Ok(());
+                if line.len() >= MAX_LINE_BYTES {
+                    queue(&tx, &mut line, log_format).await?;
                 }
             }
         }
@@ -110,23 +107,30 @@ async fn read_lines(
 
     // Anything written without a trailing newline is still output.
     if !line.is_empty() {
-        let _ = queue(&tx, &mut line, log_format).await;
+        queue(&tx, &mut line, log_format).await?;
     }
     Ok(())
 }
 
 /// Parse `line` and hand it to the writer, clearing it either way.
+///
+/// A closed queue means the writer task is gone, which is a failure rather than
+/// the end of the stream: reporting it as success would tell the supervisor this
+/// sink had reached end of file, and it would stop replacing it while the daemon
+/// was still writing.
 async fn queue(
     tx: &tokio::sync::mpsc::Sender<ParsedLog>,
     line: &mut Vec<u8>,
     log_format: &str,
-) -> std::result::Result<(), ()> {
+) -> std::io::Result<()> {
     // Convert lossily: a daemon emitting a stray non-UTF-8 byte must not be able
     // to stop its own logging.
     let text = String::from_utf8_lossy(line);
     let parsed = crate::log_parse::parse(text.trim_end_matches('\r'), log_format);
     line.clear();
-    tx.send(parsed).await.map_err(|_| ())
+    tx.send(parsed)
+        .await
+        .map_err(|_| std::io::Error::other("log writer stopped"))
 }
 
 /// Write queued lines in batches until the queue closes.
