@@ -35,19 +35,24 @@ pub struct TailQuery {
 }
 
 /// Parse a datetime string from the query params.
-/// Accepts ISO 8601 (e.g. "2026-07-22T17:00:00") or "YYYY-MM-DD HH:MM:SS".
+/// Accepts ISO 8601, "YYYY-MM-DD HH:MM[:SS]", or "YYYY-MM-DDTHH:MM[:SS]".
+/// The optional-seconds form matches HTML datetime-local input output.
 fn parse_datetime(s: &str) -> Option<DateTime<Local>> {
     // Try ISO 8601 first
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.with_timezone(&Local));
     }
-    // Try "YYYY-MM-DD HH:MM:SS"
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Local.from_local_datetime(&naive).single();
-    }
-    // Try "YYYY-MM-DDTHH:MM:SS" (datetime-local input format)
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Local.from_local_datetime(&naive).single();
+    // Try "YYYY-MM-DD[T ]HH:MM[:SS]" — covers datetime-local (no seconds),
+    // space-separated, and full datetime formats.
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Local.from_local_datetime(&naive).single();
+        }
     }
     None
 }
