@@ -587,11 +587,22 @@ impl Supervisor {
         // Timestamp the run so a failed start can wait for this attempt's output
         // specifically, rather than seeing an earlier attempt's.
         let spawn_time = chrono::Local::now();
-        let mut child = cmd.spawn().into_diagnostic()?;
+        // A sink is already running at this point. Both bail-outs below have to
+        // reap it explicitly: dropping the handle only reaps on a best-effort
+        // basis, and run_once runs once per retry attempt, so a daemon that
+        // consistently fails to spawn would otherwise accumulate sinks.
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                super::log_sink::reap(sink_child.take()).await;
+                return Err(e).into_diagnostic();
+            }
+        };
         let pid = match child.id() {
             Some(p) => p,
             None => {
                 warn!("Daemon {id} exited before PID could be captured");
+                super::log_sink::reap(sink_child.take()).await;
                 return Ok(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
                 });

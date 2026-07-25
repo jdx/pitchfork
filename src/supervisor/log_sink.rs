@@ -52,7 +52,13 @@ pub(crate) fn is_supported(opts: &RunOptions) -> bool {
 }
 
 /// How long to wait before trying again when a sink process cannot be spawned.
-const SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+///
+/// Nothing drains the pipe while no sink is running, so a chatty daemon will
+/// block on its next write once the pipe fills. Blocking is the right outcome —
+/// it is backpressure rather than discarded output, and it is what runit does
+/// when a log service cannot keep up — but keep the gap short so a transient
+/// spawn failure is barely noticeable.
+const SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Wait until a daemon's output from this run is queryable, or `timeout`
 /// elapses.
@@ -73,26 +79,48 @@ pub(crate) async fn wait_for_output(
     timeout: std::time::Duration,
 ) {
     const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    // Returning at the first row would report a daemon's first line while the
+    // rest of its output was still batched in the sink, so keep going until
+    // nothing new has arrived for a moment.
+    const SETTLED_FOR: std::time::Duration = std::time::Duration::from_millis(80);
+
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut seen = 0usize;
+    let mut last_change = tokio::time::Instant::now();
+
     loop {
         let query = crate::log_store::LogQuery {
             daemon_ids: vec![id.qualified()],
             from: Some(since),
-            limit: Some(1),
             ..Default::default()
         };
         let found = tokio::task::spawn_blocking(move || {
             crate::log_store::sqlite::LOG_STORE
                 .query(&query)
-                .map(|entries| !entries.is_empty())
-                .unwrap_or(false)
+                .map(|entries| entries.len())
+                .unwrap_or(0)
         })
         .await
-        .unwrap_or(false);
-        if found || tokio::time::Instant::now() >= deadline {
+        .unwrap_or(0);
+
+        let now = tokio::time::Instant::now();
+        if found > seen {
+            seen = found;
+            last_change = now;
+        }
+        let settled = seen > 0 && now.duration_since(last_change) >= SETTLED_FOR;
+        if settled || now >= deadline {
             return;
         }
         tokio::time::sleep(POLL).await;
+    }
+}
+
+/// Terminate and reap a sink that was started for a daemon which then failed to
+/// start, so it cannot linger as a zombie.
+pub(crate) async fn reap(child: Option<tokio::process::Child>) {
+    if let Some(mut child) = child {
+        let _ = child.kill().await;
     }
 }
 
