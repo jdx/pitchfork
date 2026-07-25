@@ -94,6 +94,9 @@ pub struct LogQuery {
     pub limit: Option<usize>,
     pub order_desc: bool,
     pub after_id: Option<i64>,
+    /// When set, only return entries with id < before_id (used for backward
+    /// pagination — loading older history on scroll-up).
+    pub before_id: Option<i64>,
     /// Filters applied to the message text. Multiple filters are combined with OR.
     pub message_filters: Vec<MessageFilter>,
     /// Filters applied to structured fields. Multiple filters are combined with AND.
@@ -226,7 +229,7 @@ pub trait LogStore: Send + Sync {
             to: None,
             limit: Some(1),
             order_desc: true,
-            after_id: None,
+            after_id: None, before_id: None,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
             include_structured: false,

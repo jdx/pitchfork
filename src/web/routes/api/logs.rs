@@ -28,6 +28,10 @@ pub struct TailQuery {
     case_sensitive: Option<bool>,
     /// jq expression for advanced filtering.
     jq: Option<String>,
+    /// When set, return only entries with id < before_id (backward pagination
+    /// for scroll-up history loading). The response is a one-shot JSONL body
+    /// instead of a streaming response.
+    before_id: Option<i64>,
 }
 
 /// Parse a datetime string from the query params.
@@ -202,7 +206,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 to,
                 limit: Some(history_lines),
                 order_desc: true,
-                after_id: None,
+                after_id: None, before_id: query.before_id,
                 message_filters: mf,
                 field_filters: ff,
                 include_structured: true,
@@ -229,6 +233,30 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 .unwrap();
         }
     };
+
+    // When before_id is set, this is a one-shot backward pagination request
+    // (scroll-up history loading). Return the results immediately without
+    // starting the streaming polling loop.
+    if query.before_id.is_some() {
+        let initial = if let Some(jq) = &jq_filter {
+            jq.filter(initial)
+        } else {
+            initial
+        };
+        let body: String = initial
+            .into_iter()
+            .rev()
+            .filter_map(|e| {
+                let entry: JsonLogEntry = e.into();
+                serde_json::to_string(&entry).ok().map(|s| s + "\n")
+            })
+            .collect();
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/x-ndjson")
+            .body(Body::from(body))
+            .unwrap();
+    }
 
     // Capture cursor from raw query (before jq filtering) so the polling
     // loop doesn't rescan jq-filtered-out rows on every poll.
@@ -312,7 +340,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                     to,
                     limit: Some(BATCH_SIZE),
                     order_desc: false,
-                    after_id: Some(last_id),
+                    after_id: Some(last_id), before_id: None,
                     message_filters: mf,
                     field_filters: ff,
                     include_structured: true,

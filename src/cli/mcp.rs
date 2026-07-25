@@ -383,7 +383,7 @@ impl PitchforkServer {
                 to: None,
                 limit: Some(limit),
                 order_desc: true,
-                after_id: None,
+                after_id: None, before_id: None,
                 message_filters: Vec::new(),
                 field_filters: Vec::new(),
                 include_structured: false,

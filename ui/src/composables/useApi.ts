@@ -200,6 +200,8 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
   const lines = ref<StructuredLogEntry[]>([])
   const error = ref<string | null>(null)
   const connected = ref(false)
+  const hasMoreHistory = ref(true)
+  const loadingMore = ref(false)
   let abort: AbortController | null = null
   const MAX_LINES = 10000
 
@@ -212,6 +214,8 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
   async function connect() {
     lines.value = []
     error.value = null
+    hasMoreHistory.value = true
+    loadingMore.value = false
     const currentAbort = new AbortController()
     abort = currentAbort
 
@@ -285,6 +289,64 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
     }
   }
 
+  async function loadMoreHistory(): Promise<number> {
+    if (loadingMore.value) return 0
+    if (lines.value.length === 0) return 0
+    if (lines.value.length >= MAX_LINES) return 0
+    if (!hasMoreHistory.value) return 0
+
+    const oldestId = lines.value[0].id
+    if (oldestId === undefined) return 0
+
+    loadingMore.value = true
+
+    const params = new URLSearchParams()
+    params.set('before_id', String(oldestId))
+    params.set('lines', '100')
+    const f = filters.value
+    if (f.level) params.set('level', f.level)
+    if (f.logger) params.set('logger', f.logger)
+    if (f.grep) params.set('grep', f.grep)
+    if (f.regex) params.set('regex', f.regex)
+    if (f.since) params.set('since', f.since)
+    if (f.until) params.set('until', f.until)
+    if (f.caseSensitive) params.set('case_sensitive', 'true')
+    if (f.jq) params.set('jq', f.jq)
+
+    try {
+      const url = `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail?${params.toString()}`
+      const res = await fetch(url, { headers: getAuthHeaders() })
+      if (!res.ok) return 0
+
+      const text = await res.text()
+      const entries: StructuredLogEntry[] = []
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const parsed = JSON.parse(line) as StructuredLogEntry
+          entries.push(parsed)
+        } catch {
+          entries.push({ timestamp: '', daemon_id: '', message: line })
+        }
+      }
+
+      if (entries.length === 0) {
+        hasMoreHistory.value = false
+        return 0
+      }
+      if (entries.length < 100) {
+        hasMoreHistory.value = false
+      }
+
+      lines.value.unshift(...entries)
+      return entries.length
+    } catch {
+      return 0
+    } finally {
+      loadingMore.value = false
+    }
+  }
+
   watchEffect((onCleanup) => {
     connect()
     onCleanup(() => {
@@ -292,7 +354,7 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
     })
   })
 
-  return { lines, error, connected }
+  return { lines, error, connected, hasMoreHistory, loadingMore, loadMoreHistory }
 }
 
 export function useStats(pollInterval = 3000) {

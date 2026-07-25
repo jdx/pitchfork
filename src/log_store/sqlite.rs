@@ -600,6 +600,11 @@ impl SqliteLogStore {
             query_params.push(Box::new(after_id));
         }
 
+        if let Some(before_id) = opts.before_id {
+            conditions.push(format!("id < ?{}", query_params.len() + 1));
+            query_params.push(Box::new(before_id));
+        }
+
         if let Some((start, end)) = id_range {
             conditions.push(format!("id > ?{}", query_params.len() + 1));
             query_params.push(Box::new(start));
@@ -1026,6 +1031,7 @@ impl LogStore for SqliteLogStore {
             limit: None,
             order_desc: false,
             after_id,
+            before_id: None,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
             include_structured: false,

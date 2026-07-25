@@ -71,6 +71,7 @@ export interface DaemonLogLine {
 }
 
 export interface StructuredLogEntry {
+  id?: number
   timestamp: string
   daemon_id: string
   message: string

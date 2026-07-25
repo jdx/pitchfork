@@ -32,6 +32,11 @@ pub struct JsonStatusEntry {
 
 #[derive(Serialize)]
 pub struct JsonLogEntry {
+    /// SQLite row id, used by the webui for backward pagination (scroll-up
+    /// history loading). Skipped in serialization when 0 to avoid changing
+    /// the CLI --json output shape for non-web callers.
+    #[serde(skip_serializing_if = "is_zero_id")]
+    pub id: i64,
     pub timestamp: String,
     pub daemon_id: String,
     pub message: String,
@@ -47,6 +52,10 @@ pub struct JsonLogEntry {
     pub fields: Option<serde_json::Value>,
 }
 
+fn is_zero_id(id: &i64) -> bool {
+    *id == 0
+}
+
 impl From<LogEntry> for JsonLogEntry {
     fn from(e: LogEntry) -> Self {
         let fields = e
@@ -54,6 +63,7 @@ impl From<LogEntry> for JsonLogEntry {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
         JsonLogEntry {
+            id: e.id,
             timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
             daemon_id: e.daemon_id,
             message: console::strip_ansi_codes(&e.message).to_string(),

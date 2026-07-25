@@ -164,7 +164,7 @@ watch(
 )
 
 const decodedId = computed(() => decodeURIComponent(props.id))
-const { lines, error, connected } = useLogStream(decodedId, debouncedFilters)
+const { lines, error, connected, hasMoreHistory, loadingMore, loadMoreHistory } = useLogStream(decodedId, debouncedFilters)
 const parsedLines = computed<ParsedLogLine[]>(() => parseLogLines(lines.value))
 
 function goBack() {
@@ -181,21 +181,22 @@ watch(() => lines.value.length, () => {
   }
 }, { immediate: true })
 
-function onScroll() {
+async function onScroll() {
   if (!logContainer.value) return
   const { scrollTop, scrollHeight, clientHeight } = logContainer.value
   autoScroll.value = scrollHeight - scrollTop - clientHeight < 20
-}
 
-function clearFilters() {
-  filterLevel.value = ''
-  filterLogger.value = ''
-  filterSearch.value = ''
-  filterSearchRegex.value = false
-  filterSearchCase.value = false
-  filterJq.value = ''
-  filterSince.value = ''
-  filterUntil.value = ''
+  if (scrollTop < 50 && hasMoreHistory.value && !loadingMore.value) {
+    const oldScrollHeight = logContainer.value.scrollHeight
+    const loaded = await loadMoreHistory()
+    if (loaded > 0) {
+      nextTick(() => {
+        if (logContainer.value) {
+          logContainer.value.scrollTop += logContainer.value.scrollHeight - oldScrollHeight
+        }
+      })
+    }
+  }
 }
 
 const activeFilterCount = computed(() => {
@@ -318,9 +319,6 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
           <label class="filter-label">Until</label>
           <input v-model="filterUntil" type="datetime-local" class="filter-input filter-datetime" />
         </div>
-        <button v-if="activeFilterCount > 0" class="filter-clear" @click="clearFilters">
-          Clear
-        </button>
       </div>
     </div>
 
@@ -329,6 +327,9 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
     </div>
 
     <div ref="logContainer" class="log-container" @scroll="onScroll">
+      <div v-if="loadingMore" class="loading-more">
+        <span class="loading-spinner" /> Loading older logs...
+      </div>
       <div
         v-for="(line, i) in parsedLines"
         :key="i"
@@ -483,17 +484,6 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
   min-width: 0;
 }
 
-.filter-clear {
-  .ghost-btn();
-  flex-shrink: 0;
-  margin-left: auto;
-  color: @c-accent;
-
-  &:hover {
-    background: @sf-danger-8;
-  }
-}
-
 .filter-group-wide {
   flex: 1 1 140px;
   min-width: 0;
@@ -565,6 +555,29 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
 .alert { .alert-base(); background: rgba(220, 38, 38, 0.08); border: 1px solid rgba(220, 38, 38, 0.15); color: @c-accent; }
 .alert-icon { font-weight: 700; flex-shrink: 0; }
 
+.loading-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0;
+  font-size: 0.72rem;
+  color: @sf-30;
+}
+
+.loading-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: @sf-50;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .log-container {
   flex: 1;
   overflow-y: auto;
@@ -623,7 +636,6 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
   .filter-group { width: 100%; flex: 0 0 auto; }
   .filter-group-wide { width: 100%; flex: 0 0 auto; }
   .filter-search-wrap { flex-wrap: wrap; }
-  .filter-clear { margin-left: 0; width: 100%; justify-content: center; }
   .line-num { display: none; }
   .log-line { gap: 0.4rem; padding: 0.08rem 0.5rem; }
   .line-ts { min-width: 40px; margin-right: 0.35rem; flex-direction: column; align-items: flex-start; }
