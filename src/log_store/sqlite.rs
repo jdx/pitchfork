@@ -1239,12 +1239,20 @@ mod tests {
         const BATCHES: usize = 15;
         const PER_BATCH: usize = 10;
 
+        // Release every worker into open() at the same moment. Without this
+        // the scheduler is free to run them one after another, so the first
+        // would enable WAL and the rest would never contend for the
+        // journal-mode switch — leaving the race this guards unexercised.
+        let barrier = std::sync::Barrier::new(WRITERS);
+
         std::thread::scope(|scope| {
             for writer in 0..WRITERS {
                 let path = path.clone();
+                let barrier = &barrier;
                 scope.spawn(move || {
                     // A separate connection per writer, as separate processes
                     // would have.
+                    barrier.wait();
                     let store = SqliteLogStore::open(&path).unwrap();
                     let id = DaemonId::try_new("test", format!("w{writer}")).unwrap();
                     for batch in 0..BATCHES {
