@@ -168,7 +168,10 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, String)>> {
         // Reject keys that aren't valid logfmt identifiers. Real logfmt keys
         // are alphanumeric with '_', '.', '-'. Tokens like '2026/07/23' or
         // '22:02:39' (from Go's standard log format) are not valid keys.
-        if !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-') {
+        if !key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+        {
             // Skip this token — it's not a valid logfmt key.
             i += 1;
             continue;
@@ -252,9 +255,10 @@ fn unescape_logfmt_value(s: &str) -> String {
 fn extract_level(obj: &Map<String, Value>) -> Option<String> {
     for key in &["level", "severity", "lvl", "PRIORITY", "@level"] {
         if let Some(val) = obj.get(*key)
-            && let Some(level) = normalize_level_value(val) {
-                return Some(level);
-            }
+            && let Some(level) = normalize_level_value(val)
+        {
+            return Some(level);
+        }
     }
     None
 }
@@ -412,6 +416,30 @@ mod tests {
         let line = r#"level=info msg="hi" logger=myapp"#;
         let parsed = parse(line, "logfmt");
         assert_eq!(parsed.logger.as_deref(), Some("myapp"));
+    }
+
+    #[test]
+    fn test_logfmt_multiple_bare_keys_still_parsed() {
+        // 2 bare keys + 2 key=value: proper=2, 2*2=4 not < 4, so accepted.
+        let line = r#"level=debug ready enabled msg="ok""#;
+        let parsed = parse(line, "logfmt");
+        assert_eq!(parsed.level.as_deref(), Some("debug"));
+        assert_eq!(parsed.msg.as_deref(), Some("ok"));
+        let fields: Value = serde_json::from_str(parsed.fields_json.as_deref().unwrap()).unwrap();
+        assert_eq!(fields["ready"], Value::Bool(true));
+        assert_eq!(fields["enabled"], Value::Bool(true));
+    }
+
+    #[test]
+    fn test_logfmt_rejects_go_standard_log() {
+        // Go standard log format with a trailing key=value should not be
+        // misparse as logfmt.
+        let line = "2026/07/23 22:02:39 INFO acquired instance lock path=/foo/bar";
+        let parsed = parse(line, "logfmt");
+        // Should fall back to plain text — no structured fields.
+        assert!(parsed.level.is_none());
+        assert!(parsed.fields_json.is_none());
+        assert_eq!(parsed.message, line);
     }
 
     #[test]

@@ -28,9 +28,10 @@ pub static HOME_DIR: Lazy<PathBuf> = Lazy::new(|| {
     #[cfg(unix)]
     if nix::unistd::Uid::effective().is_root()
         && let Ok(sudo_user) = std::env::var("SUDO_USER")
-            && let Some(home) = home_dir_for_user(&sudo_user) {
-                return home;
-            }
+        && let Some(home) = home_dir_for_user(&sudo_user)
+    {
+        return home;
+    }
     dirs::home_dir().unwrap_or_else(|| {
         eprintln!("Warning: Could not determine home directory");
         PathBuf::from("/tmp")

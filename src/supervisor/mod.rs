@@ -538,9 +538,10 @@ impl Supervisor {
                 loop {
                     ticker.tick().await;
                     if let Some(cancel) = monitor_cancel.as_ref()
-                        && cancel.is_cancelled() {
-                            break;
-                        }
+                        && cancel.is_cancelled()
+                    {
+                        break;
+                    }
                     if let Some(new_ip) =
                         crate::proxy::lan_ip::detect_lan_ip_if_changed(last_ip).await
                     {
@@ -622,9 +623,10 @@ impl Supervisor {
                 }
                 let state = SUPERVISOR.state_file.lock().await;
                 if state.is_dirty()
-                    && let Err(e) = state.write() {
-                        warn!("failed to flush state file: {e}");
-                    }
+                    && let Err(e) = state.write()
+                {
+                    warn!("failed to flush state file: {e}");
+                }
             }
             debug!("state flush task exiting");
         });
@@ -633,9 +635,10 @@ impl Supervisor {
     pub(crate) async fn flush_state(&self) {
         let state = self.state_file.lock().await;
         if state.is_dirty()
-            && let Err(e) = state.write() {
-                warn!("failed to flush state file: {e}");
-            }
+            && let Err(e) = state.write()
+        {
+            warn!("failed to flush state file: {e}");
+        }
     }
 
     pub(crate) async fn refresh(&self) -> Result<()> {
@@ -1007,9 +1010,10 @@ impl Supervisor {
         {
             let state = self.state_file.lock().await;
             if state.is_dirty()
-                && let Err(e) = state.write() {
-                    warn!("failed to flush state file during shutdown: {e}");
-                }
+                && let Err(e) = state.write()
+            {
+                warn!("failed to flush state file during shutdown: {e}");
+            }
         }
 
         // Signal IPC server to shut down gracefully
@@ -1180,9 +1184,10 @@ fn chown_recursive(dir: &std::path::Path, uid: u32, gid: u32, skip_proxy: bool) 
             // Skip proxy/ at the top level of the state directory
             if skip_proxy
                 && let Some(name) = path.file_name().and_then(|n| n.to_str())
-                    && name == "proxy" {
-                        continue;
-                    }
+                && name == "proxy"
+            {
+                continue;
+            }
             chown_recursive(&path, uid, gid, false);
         } else {
             let _ = chown_path(&path, uid, gid);

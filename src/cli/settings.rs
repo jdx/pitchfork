@@ -142,9 +142,11 @@ impl ListCmd {
         }
         for (key, info) in meta.iter() {
             if let Some(ref group) = self.group
-                && !key.starts_with(&format!("{group}.")) && key != group {
-                    continue;
-                }
+                && !key.starts_with(&format!("{group}."))
+                && key != group
+            {
+                continue;
+            }
             let default = info.default_value.unwrap_or("(none)");
             let env_hint = info.env_var.map(|e| format!(" [{e}]")).unwrap_or_default();
             println!("{key} ({}) default={default}{env_hint}", info.typ);

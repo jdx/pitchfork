@@ -231,9 +231,10 @@ impl SqliteLogStore {
                 // without this flush the failure would be lost and the entries
                 // deleted without ever being delivered to the hook.
                 if result.is_ok()
-                    && let Err(e) = stdin.flush() {
-                        result = Err(miette::miette!("failed to flush archive hook stdin: {e}"));
-                    }
+                    && let Err(e) = stdin.flush()
+                {
+                    result = Err(miette::miette!("failed to flush archive hook stdin: {e}"));
+                }
                 result
                 // BufWriter + ChildStdin drop here, closing stdin (EOF signal).
             };
@@ -489,12 +490,13 @@ impl SqliteLogStore {
         }
 
         if total_migrated > 0
-            && let Err(e) = std::fs::remove_file(&text_path) {
-                log::warn!(
-                    "failed to remove legacy log file after migration {}: {e}",
-                    text_path.display()
-                );
-            }
+            && let Err(e) = std::fs::remove_file(&text_path)
+        {
+            log::warn!(
+                "failed to remove legacy log file after migration {}: {e}",
+                text_path.display()
+            );
+        }
 
         Ok(total_migrated)
     }
@@ -768,9 +770,10 @@ impl SqliteLogStore {
         }
 
         if let Some(limit) = opts.limit
-            && merged.len() > limit {
-                merged.truncate(limit);
-            }
+            && merged.len() > limit
+        {
+            merged.truncate(limit);
+        }
 
         Ok(merged)
     }
@@ -795,13 +798,18 @@ impl SqliteLogStore {
     }
 
     /// Return distinct non-null logger values for a daemon, sorted alphabetically.
+    ///
+    /// Scans only the most recent 5000 entries for performance — autocomplete
+    /// only needs a representative sample, not the full history.
     pub fn distinct_loggers(&self, daemon_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT DISTINCT logger FROM log_entries \
-                 WHERE daemon_id = ?1 AND logger IS NOT NULL \
-                 ORDER BY logger",
+                "SELECT DISTINCT logger FROM ( \
+                  SELECT logger FROM log_entries \
+                  WHERE daemon_id = ?1 AND logger IS NOT NULL \
+                  ORDER BY id DESC LIMIT 5000 \
+                 ) ORDER BY logger",
             )
             .into_diagnostic()?;
         let rows = stmt
@@ -816,16 +824,19 @@ impl SqliteLogStore {
 
     /// Return distinct keys from the `fields_json` column for a daemon.
     ///
-    /// Uses `json_each` to extract all object keys across all structured log
+    /// Uses `json_each` to extract all object keys across recent structured log
     /// entries, returning a sorted unique list. Useful for jq autocomplete.
+    /// Scans only the most recent 5000 entries for performance.
     pub fn distinct_field_keys(&self, daemon_id: &str) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
                 "SELECT DISTINCT je.key \
-                 FROM log_entries, json_each(fields_json) AS je \
-                 WHERE log_entries.daemon_id = ?1 \
-                   AND log_entries.fields_json IS NOT NULL \
+                 FROM ( \
+                   SELECT fields_json FROM log_entries \
+                   WHERE daemon_id = ?1 AND fields_json IS NOT NULL \
+                   ORDER BY id DESC LIMIT 5000 \
+                 ), json_each(fields_json) AS je \
                  ORDER BY je.key",
             )
             .into_diagnostic()?;
@@ -934,11 +945,13 @@ impl LogStore for SqliteLogStore {
 
     fn query(&self, opts: &LogQuery) -> Result<Vec<LogEntry>> {
         // Delegate to parallel path for large single-daemon queries.
-        if Self::should_parallelize(opts) && self.path.as_os_str() != ":memory:"
-            && let Ok(entries) = self.query_parallel(opts) {
-                return Ok(entries);
-            }
-            // Fall back to single-threaded on parallel failure.
+        if Self::should_parallelize(opts)
+            && self.path.as_os_str() != ":memory:"
+            && let Ok(entries) = self.query_parallel(opts)
+        {
+            return Ok(entries);
+        }
+        // Fall back to single-threaded on parallel failure.
 
         // Single-threaded path.
         let conn = self.conn.lock().unwrap();

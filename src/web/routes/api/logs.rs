@@ -48,11 +48,18 @@ fn parse_datetime(s: &str) -> Option<DateTime<Local>> {
     None
 }
 
+/// Check if a field key is safe for SQL JSON path interpolation.
+/// Only alphanumeric, underscore, and period are allowed.
+fn is_safe_field_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
+}
+
 /// Build message and field filters from query params.
-/// Returns an error string if the regex pattern is invalid.
-fn build_filters(
-    query: &TailQuery,
-) -> Result<(Vec<MessageFilter>, Vec<FieldFilter>), String> {
+/// Returns an error string if any filter value is invalid.
+fn build_filters(query: &TailQuery) -> Result<(Vec<MessageFilter>, Vec<FieldFilter>), String> {
     let mut message_filters = Vec::new();
     let mut field_filters = Vec::new();
 
@@ -76,8 +83,9 @@ fn build_filters(
     }
 
     if let Some(level) = query.level.as_deref().filter(|s| !s.is_empty()) {
-        if let Some(normalized) = crate::log_parse::normalize_level_str(level) {
-            field_filters.push(FieldFilter::LevelMin(normalized));
+        match crate::log_parse::normalize_level_str(level) {
+            Some(normalized) => field_filters.push(FieldFilter::LevelMin(normalized)),
+            None => return Err(format!("invalid level value: {level}")),
         }
     }
 
@@ -89,6 +97,11 @@ fn build_filters(
     if let Some(fields) = &query.field {
         for pair in fields {
             if let Some((key, value)) = pair.split_once('=') {
+                if !is_safe_field_key(key) {
+                    return Err(format!(
+                        "invalid field key: {key} (only alphanumeric, underscore, and period are allowed)"
+                    ));
+                }
                 field_filters.push(FieldFilter::FieldEq {
                     key: key.to_string(),
                     value: value.to_string(),
@@ -115,8 +128,34 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
     let history_lines = query.lines.unwrap_or(100);
     let qualified = daemon_id.qualified();
 
-    let from = query.since.as_deref().and_then(parse_datetime);
-    let to = query.until.as_deref().and_then(parse_datetime);
+    // Parse time range. Invalid datetime strings return 400 instead of
+    // silently broadening the query.
+    let from = match query.since.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => match parse_datetime(s) {
+            Some(dt) => Some(dt),
+            None => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("content-type", "text/plain")
+                    .body(Body::from(format!("invalid 'since' datetime: {s}")))
+                    .unwrap();
+            }
+        },
+        None => None,
+    };
+    let to = match query.until.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => match parse_datetime(s) {
+            Some(dt) => Some(dt),
+            None => {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("content-type", "text/plain")
+                    .body(Body::from(format!("invalid 'until' datetime: {s}")))
+                    .unwrap();
+            }
+        },
+        None => None,
+    };
     let (message_filters, field_filters) = match build_filters(&query) {
         Ok(v) => v,
         Err(e) => {
@@ -198,9 +237,9 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
     let initial: Vec<String> = initial
         .into_iter()
         .rev()
-        .map(|e| {
+        .filter_map(|e| {
             let entry: JsonLogEntry = e.into();
-            serde_json::to_string(&entry).unwrap_or_default() + "\n"
+            serde_json::to_string(&entry).ok().map(|s| s + "\n")
         })
         .collect();
 
@@ -213,25 +252,40 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
         let mut last_id: i64 = cursor_id;
 
+        // On generation lookup failure, keep the last known value instead of
+        // falling back to 0 (which would reset the cursor and replay logs).
         let mut last_clear_gen: u64 = match tokio::task::spawn_blocking({
             let d = daemon_id.clone();
             move || LOG_STORE.last_clear_generation(&d)
         }).await {
             Ok(Ok(Some(g))) => g,
-            _ => 0,
+            Ok(Ok(None)) => 0,
+            Ok(Err(e)) => {
+                log::warn!("failed to get clear generation for {daemon_id}: {e}");
+                0
+            }
+            Err(e) => {
+                log::warn!("clear generation task panicked for {daemon_id}: {e}");
+                0
+            }
         };
 
         const BATCH_SIZE: usize = 500;
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            // Detect log clear
+            // Detect log clear. On error, keep last_clear_gen unchanged
+            // to avoid spurious cursor resets and log replay.
             let current_gen: u64 = match tokio::task::spawn_blocking({
                 let d = daemon_id.clone();
                 move || LOG_STORE.last_clear_generation(&d)
             }).await {
                 Ok(Ok(Some(g))) => g,
-                _ => 0,
+                Ok(Ok(None)) => 0,
+                _ => {
+                    // Keep last_clear_gen on error — don't reset cursor.
+                    last_clear_gen
+                }
             };
 
             if current_gen != last_clear_gen {
@@ -275,8 +329,9 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
 
             for entry in entries {
                 let json_entry: JsonLogEntry = entry.into();
-                let line = serde_json::to_string(&json_entry).unwrap_or_default() + "\n";
-                yield Ok::<Vec<u8>, Infallible>(line.into_bytes());
+                if let Ok(line) = serde_json::to_string(&json_entry) {
+                    yield Ok::<Vec<u8>, Infallible>((line + "\n").into_bytes());
+                }
             }
         }
     };
@@ -302,29 +357,26 @@ pub async fn loggers(Path(id): Path<String>) -> Response<Body> {
     };
 
     let qualified = daemon_id.qualified();
-    let loggers = match tokio::task::spawn_blocking(move || {
-        LOG_STORE.distinct_loggers(&qualified)
-    })
-    .await
-    {
-        Ok(Ok(loggers)) => loggers,
-        Ok(Err(e)) => {
-            log::warn!("failed to query loggers for {daemon_id}: {e}");
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("content-type", "text/plain")
-                .body(Body::from("failed to query loggers"))
-                .unwrap();
-        }
-        Err(e) => {
-            log::warn!("loggers query task panicked for {daemon_id}: {e}");
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("content-type", "text/plain")
-                .body(Body::from("loggers query failed"))
-                .unwrap();
-        }
-    };
+    let loggers =
+        match tokio::task::spawn_blocking(move || LOG_STORE.distinct_loggers(&qualified)).await {
+            Ok(Ok(loggers)) => loggers,
+            Ok(Err(e)) => {
+                log::warn!("failed to query loggers for {daemon_id}: {e}");
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("content-type", "text/plain")
+                    .body(Body::from("failed to query loggers"))
+                    .unwrap();
+            }
+            Err(e) => {
+                log::warn!("loggers query task panicked for {daemon_id}: {e}");
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("content-type", "text/plain")
+                    .body(Body::from("loggers query failed"))
+                    .unwrap();
+            }
+        };
 
     (
         StatusCode::OK,
@@ -348,10 +400,8 @@ pub async fn field_keys(Path(id): Path<String>) -> Response<Body> {
     };
 
     let qualified = daemon_id.qualified();
-    let keys = match tokio::task::spawn_blocking(move || {
-        LOG_STORE.distinct_field_keys(&qualified)
-    })
-    .await
+    let keys = match tokio::task::spawn_blocking(move || LOG_STORE.distinct_field_keys(&qualified))
+        .await
     {
         Ok(Ok(keys)) => keys,
         Ok(Err(e)) => {

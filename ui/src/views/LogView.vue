@@ -139,9 +139,9 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 watch(
   [filterLevel, filterLogger, filterSearch, filterSearchRegex, filterSearchCase, filterJq, filterSince, filterUntil],
-  () => {
+  (_, oldValues) => {
     if (debounceTimer) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(() => {
+    const apply = () => {
       const search = filterSearch.value.trim()
       debouncedFilters.value = {
         level: filterLevel.value || undefined,
@@ -153,7 +153,12 @@ watch(
         since: filterSince.value || undefined,
         until: filterUntil.value || undefined,
       }
-    }, 500)
+    }
+    if (oldValues === undefined) {
+      apply() // first run on mount: apply immediately, no debounce
+    } else {
+      debounceTimer = setTimeout(apply, 500)
+    }
   },
   { immediate: true },
 )
@@ -203,6 +208,8 @@ const activeFilterCount = computed(() => {
   if (filterUntil.value) count++
   return count
 })
+
+const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jqFieldKeys.value.length > 0)
 </script>
 
 <template>
@@ -237,7 +244,7 @@ const activeFilterCount = computed(() => {
 
     <div v-if="showFilters" class="filter-bar">
       <div class="filter-row">
-        <div class="filter-group">
+        <div v-if="hasStructuredLogs" class="filter-group">
           <label class="filter-label">Level</label>
           <select v-model="filterLevel" class="filter-select">
             <option value="">All</option>
@@ -248,7 +255,7 @@ const activeFilterCount = computed(() => {
             <option value="trace">Trace</option>
           </select>
         </div>
-        <div class="filter-group">
+        <div v-if="hasStructuredLogs" class="filter-group">
           <label class="filter-label">Logger</label>
           <select v-model="filterLogger" class="filter-select">
             <option value="">All</option>
@@ -274,7 +281,7 @@ const activeFilterCount = computed(() => {
             </label>
           </div>
         </div>
-        <div class="filter-group filter-group-wide">
+        <div v-if="hasStructuredLogs" class="filter-group filter-group-wide">
           <label class="filter-label">jq</label>
           <div class="jq-input-wrap">
             <input

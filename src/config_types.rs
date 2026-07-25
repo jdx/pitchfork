@@ -604,9 +604,10 @@ impl<'de> Deserialize<'de> for ReadyPort {
                     ));
                 }
                 if let Some(port) = raw.port
-                    && port == 0 {
-                        return Err(serde::de::Error::custom("port must be between 1 and 65535"));
-                    }
+                    && port == 0
+                {
+                    return Err(serde::de::Error::custom("port must be between 1 and 65535"));
+                }
                 let timeout = parse_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
                 Ok(ReadyPort {
                     port: raw.port,
