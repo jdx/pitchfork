@@ -30,6 +30,7 @@
 use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
+use crate::log_store::LogStore;
 use crate::supervisor::SUPERVISOR;
 use miette::IntoDiagnostic;
 use std::io::PipeReader;
@@ -53,24 +54,41 @@ pub(crate) fn is_supported(opts: &RunOptions) -> bool {
 /// How long to wait before trying again when a sink process cannot be spawned.
 const SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Resolves once a sink has read its pipe to end of file and written what it
-/// read.
+/// Wait until a daemon's output from this run is queryable, or `timeout`
+/// elapses.
 ///
-/// The in-process capture path awaited a synchronous flush before signalling
-/// readiness and again before finalizing a daemon's exit, so anything the
-/// daemon printed was queryable by the time its status changed. Waiting on this
-/// restores that ordering, which both the exit path and start-failure
-/// diagnostics depend on — hence a `watch` rather than a oneshot, so several
-/// waiters can observe it, including any that arrive after it has fired.
-#[derive(Clone)]
-pub(crate) struct Drained(tokio::sync::watch::Receiver<bool>);
-
-impl Drained {
-    /// Wait for the final write, giving up after `timeout` so a daemon whose
-    /// descendants still hold the pipe open cannot stall the caller.
-    pub(crate) async fn wait(&self, timeout: std::time::Duration) {
-        let mut rx = self.0.clone();
-        let _ = tokio::time::timeout(timeout, rx.wait_for(|drained| *drained)).await;
+/// A failed start is reported by querying the log store, and the in-process
+/// capture path made that safe by flushing synchronously before signalling.
+/// With a sink there is a short gap instead: the daemon can exit before its
+/// output has been written. Waiting for the *sink process* to exit would be far
+/// more patient than necessary — it also pays for process startup and opening
+/// the store, hundreds of milliseconds, where the write itself lands in a few
+/// dozen. So wait for the data.
+///
+/// A daemon that failed without printing anything has nothing to wait for and
+/// pays the full timeout, which is why it is short.
+pub(crate) async fn wait_for_output(id: &DaemonId, since: chrono::DateTime<chrono::Local>, timeout: std::time::Duration) {
+    const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let query = crate::log_store::LogQuery {
+            daemon_ids: vec![id.qualified()],
+            from: Some(since),
+            limit: Some(1),
+            ..Default::default()
+        };
+        let found = tokio::task::spawn_blocking(move || {
+            crate::log_store::sqlite::LOG_STORE
+                .query(&query)
+                .map(|entries| !entries.is_empty())
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        if found || tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(POLL).await;
     }
 }
 
@@ -88,43 +106,37 @@ impl SinkPipe {
         Ok((Self { reader, log_format }, writer))
     }
 
-    /// Start a sink on this pipe and keep one running for as long as the daemon
-    /// identified by `token` is being monitored.
+    /// Start the first sink on this pipe.
+    ///
+    /// Called before the daemon is spawned so the reader is already running by
+    /// the time output appears — and, more importantly, so a daemon that exits
+    /// immediately does not have to wait for a sink to start before its output
+    /// can be written and reported.
+    pub(crate) fn start(&self, id: &DaemonId) -> Result<tokio::process::Child> {
+        self.spawn(id)
+    }
+
+    /// Keep a sink running for as long as the daemon identified by `token` is
+    /// being monitored, beginning with `first` — the process `start` returned.
     ///
     /// A sink that exits while the daemon is still supervised is replaced: it
     /// would otherwise stop draining, and the daemon would block once the pipe
     /// filled. This mirrors `runsv` restarting a service's log service.
-    ///
-    /// The returned `Drained` resolves once a sink has read to end of file and
-    /// written what it had, which is what start-failure diagnostics wait for
-    /// before querying the log store.
-    pub(crate) fn supervise(self, id: DaemonId, token: u64) -> Drained {
-        let (drained_tx, drained_rx) = tokio::sync::watch::channel(false);
+    pub(crate) fn supervise(self, id: DaemonId, token: u64, first: tokio::process::Child) {
         tokio::spawn(async move {
+            let mut child = first;
             loop {
-                if !SUPERVISOR.monitor_token_valid(&id, token) {
-                    break;
-                }
-                let child = match self.spawn(&id) {
-                    Ok(child) => child,
-                    Err(e) => {
-                        // Do not give up while the daemon is still running: this
-                        // task owns the retained read end, and dropping it would
-                        // leave the pipe with no reader at all, blocking the
-                        // daemon once it fills and killing it with SIGPIPE once
-                        // the sink's own end goes too.
-                        error!("failed to start log sink for {id}: {e}; retrying");
-                        tokio::time::sleep(SPAWN_RETRY_DELAY).await;
-                        continue;
-                    }
-                };
+                // Always wait on the sink already in hand before consulting the
+                // registry: a daemon that exits immediately drops its monitor
+                // entry before this task first runs, and checking the token
+                // first would abandon the sink without ever reporting that it
+                // had drained.
                 match child.wait_with_output().await {
                     Ok(out) if out.status.success() => {
                         // A clean exit means end of file: the daemon and every
                         // descendant closed the pipe, so there is nothing left
                         // to capture, and everything read has been written.
                         debug!("log sink for {id} finished");
-                        let _ = drained_tx.send(true);
                         break;
                     }
                     Ok(out) => {
@@ -143,9 +155,25 @@ impl SinkPipe {
                         warn!("lost track of the log sink for {id}: {e}; restarting it");
                     }
                 }
+
+                // Replace it. Keep trying while the daemon is monitored: this
+                // task owns the retained read end, and giving up would leave the
+                // pipe with no reader, blocking the daemon once it filled and
+                // killing it with SIGPIPE once the sink's own end went too.
+                child = loop {
+                    match self.spawn(&id) {
+                        Ok(child) => break child,
+                        Err(e) => {
+                            error!("failed to start log sink for {id}: {e}; retrying");
+                            tokio::time::sleep(SPAWN_RETRY_DELAY).await;
+                            if !SUPERVISOR.monitor_token_valid(&id, token) {
+                                return;
+                            }
+                        }
+                    }
+                };
             }
         });
-        Drained(drained_rx)
     }
 
     /// Spawn one sink process reading a duplicate of the retained read end.

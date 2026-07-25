@@ -167,10 +167,11 @@ fn any_ready_check_remaining(
         || ready_cmd.is_some_and(|c| c.timeout.is_none() || !cmd_exhausted)
 }
 
-/// How long a failed start waits for its sink to write what the daemon printed
-/// before reporting. Short enough not to stall the caller, long enough for a
-/// sink that has already seen end of file to finish its final batch.
-const SINK_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a failed start waits for the daemon's output to become queryable
+/// before reporting. Typically satisfied in a few dozen milliseconds; a daemon
+/// that failed without printing anything waits the whole of it, so keep it
+/// short.
+const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 
 impl Supervisor {
     /// Run a daemon, handling retries if configured
@@ -444,16 +445,23 @@ impl Supervisor {
         // daemon can be handed the pipe's write end directly.
         let mut sink_pipe = None;
         let mut sink_writer = None;
+        let mut sink_child = None;
         if super::log_sink::is_supported(&opts) {
             let log_format = opts
                 .log_format
                 .clone()
                 .unwrap_or_else(|| settings().logs.log_format.clone());
             match super::log_sink::SinkPipe::new(log_format) {
-                Ok((pipe, writer)) => {
-                    sink_pipe = Some(pipe);
-                    sink_writer = Some(writer);
-                }
+                Ok((pipe, writer)) => match pipe.start(id) {
+                    Ok(child) => {
+                        sink_child = Some(child);
+                        sink_pipe = Some(pipe);
+                        sink_writer = Some(writer);
+                    }
+                    Err(e) => {
+                        warn!("could not start log sink for {id}, capturing in-process: {e}");
+                    }
+                },
                 Err(e) => {
                     // Fall back to in-process capture rather than refusing to
                     // start the daemon.
@@ -576,6 +584,9 @@ impl Supervisor {
             }
         }
 
+        // Timestamp the run so a failed start can wait for this attempt's output
+        // specifically, rather than seeing an earlier attempt's.
+        let spawn_time = chrono::Local::now();
         let mut child = cmd.spawn().into_diagnostic()?;
         let pid = match child.id() {
             Some(p) => p,
@@ -601,9 +612,9 @@ impl Supervisor {
         // Hand the retained read end to a sink and keep one running for as long
         // as this daemon is monitored.
         let using_sink = sink_pipe.is_some();
-        let sink_drained = sink_pipe
-            .take()
-            .map(|pipe| pipe.supervise(id.clone(), monitor_token));
+        if let (Some(pipe), Some(child)) = (sink_pipe.take(), sink_child.take()) {
+            pipe.supervise(id.clone(), monitor_token, child);
+        }
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -1556,8 +1567,9 @@ impl Supervisor {
                     // errored and idle — long enough for the background retry
                     // checker to start an attempt of its own alongside it.
                     let last_attempt = opts.retry_count >= opts.retry.count();
-                    if last_attempt && let Some(ref drained) = sink_drained {
-                        drained.wait(SINK_DRAIN_TIMEOUT).await;
+                    if using_sink && last_attempt {
+                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT)
+                            .await;
                     }
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })
                 }
