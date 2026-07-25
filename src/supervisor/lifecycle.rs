@@ -602,6 +602,14 @@ impl Supervisor {
             Some(p) => p,
             None => {
                 warn!("Daemon {id} exited before PID could be captured");
+                // Unlike a daemon that never started, this one ran and may have
+                // said why it gave up, and its output is the only diagnosis
+                // available. Its write end is already closed, so the sink is on
+                // its way to end of file: let it finish writing before reporting,
+                // then reap whatever is left of it.
+                if sink_child.is_some() {
+                    super::log_sink::wait_for_output(&id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+                }
                 super::log_sink::reap(sink_child.take()).await;
                 return Ok(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
