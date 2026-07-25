@@ -86,8 +86,19 @@ const jqSuggestions = computed(() => {
   const lastDotIdx = word.lastIndexOf('.')
   if (lastDotIdx >= 0) {
     const prefix = word.slice(lastDotIdx + 1).toLowerCase()
-    const allKeys = [...new Set([...topLevelKeys, ...jqFieldKeys.value])]
-    return allKeys
+    const pathBefore = word.slice(0, lastDotIdx)
+
+    // Context-aware suggestions: jqFieldKeys are keys inside the .fields
+    // object, not top-level keys. Suggest them only when accessing .fields.
+    let keys: string[]
+    if (pathBefore === '.fields') {
+      keys = jqFieldKeys.value
+    } else if (pathBefore === '' || pathBefore === '.') {
+      keys = topLevelKeys
+    } else {
+      keys = []
+    }
+    return keys
       .filter((k) => k.toLowerCase().startsWith(prefix))
       .map((k) => word.slice(0, lastDotIdx + 1) + k)
       .slice(0, 20)
@@ -528,8 +539,8 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
   left: 0;
   right: 0;
   margin-top: 0.25rem;
-  background: @sf-3;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 21, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: @r-md;
   max-height: 200px;
   overflow-y: auto;
@@ -538,6 +549,7 @@ const hasStructuredLogs = computed(() => availableLoggers.value.length > 0 || jq
   padding: 0.25rem 0;
   font-family: @ff-mono;
   font-size: 0.78rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 
   li {
     padding: 0.35rem 0.6rem;
