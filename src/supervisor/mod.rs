@@ -127,10 +127,13 @@ pub(crate) enum OutputSource {
     /// Nothing has been done with it yet.
     Local,
     /// Reported by the daemon's log sink, which has already written the line to
-    /// the store and already applied any output-hook filter and debounce.
-    /// Repeating either here would duplicate the line, or suppress a firing the
-    /// sink correctly allowed.
-    Sink,
+    /// the store — storing it again here would duplicate it.
+    ///
+    /// `fires_hook` is the sink's answer to whether this line passed the
+    /// `on_output` hook's filter and debounce. It is carried rather than
+    /// re-derived because a line can be reported for readiness alone, and
+    /// firing a hook that filters for something else would be wrong.
+    Sink { fires_hook: bool },
 }
 
 pub(crate) fn interval_duration() -> Duration {

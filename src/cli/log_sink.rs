@@ -140,7 +140,17 @@ impl LogSink {
 /// and `pitchfork logs` would otherwise be able to miss it.
 enum SinkEvent {
     Line(ParsedLog),
-    ReadyMatch(String),
+    Report(Report),
+}
+
+/// A line the supervisor needs to see, and why.
+#[derive(Debug, PartialEq, Eq)]
+struct Report {
+    text: String,
+    /// Whether it passed the `on_output` hook's filter and debounce. False for
+    /// a line reported only because it matched the readiness pattern — firing a
+    /// hook that filters for something else would be wrong.
+    fires_hook: bool,
 }
 
 /// How much of a capped line is carried forward for matching.
@@ -226,7 +236,7 @@ impl ReadyMatcher {
     /// return what matched, which is what the supervisor is told about.
     ///
     /// `split_at_cap` says another piece of the same logical line follows.
-    fn consider(&mut self, text: &str, split_at_cap: bool) -> Option<String> {
+    fn consider(&mut self, text: &str, split_at_cap: bool) -> Option<Report> {
         if !self.is_watching() {
             self.carried.clear();
             return None;
@@ -249,26 +259,30 @@ impl ReadyMatcher {
             String::new()
         };
 
-        // Both reasons to report produce the same message. The supervisor
-        // re-checks the readiness pattern on what it is sent, so a line reported
-        // for the hook that also announces readiness is still handled correctly.
-        let mut report = false;
+        // A line can qualify for either reason, or both. The supervisor
+        // re-checks the readiness pattern on what it is sent, but it cannot
+        // re-check the hook without redoing the debounce, so that answer is
+        // carried explicitly.
+        let mut ready_matched = false;
         if self
             .pattern
             .as_ref()
             .is_some_and(|re| re.is_match(&candidate))
         {
             self.pattern = None;
-            report = true;
+            ready_matched = true;
         }
-        if let Some(hook) = self.hook.as_mut()
-            && hook.matches(&candidate)
-        {
-            report = true;
-        }
+        let fires_hook = self
+            .hook
+            .as_mut()
+            .is_some_and(|hook| hook.matches(&candidate));
+
         // Send the text the patterns actually matched against, not just this
         // piece of it: the supervisor re-matches it, and hands it to the hook.
-        report.then_some(candidate)
+        (ready_matched || fires_hook).then_some(Report {
+            text: candidate,
+            fires_hook,
+        })
     }
 }
 
@@ -353,14 +367,14 @@ async fn queue_piece(
     let text = String::from_utf8_lossy(line);
     let text = text.trim_end_matches('\r');
     let parsed = crate::log_parse::parse(text, log_format);
-    let matched = matcher.consider(text, true);
+    let report = matcher.consider(text, true);
     line.clear();
 
     tx.send(SinkEvent::Line(parsed))
         .await
         .map_err(|_| std::io::Error::other("log writer stopped"))?;
-    if let Some(matched) = matched {
-        tx.send(SinkEvent::ReadyMatch(matched))
+    if let Some(report) = report {
+        tx.send(SinkEvent::Report(report))
             .await
             .map_err(|_| std::io::Error::other("log writer stopped"))?;
     }
@@ -414,14 +428,14 @@ async fn queue(
     let parsed = crate::log_parse::parse(text, log_format);
     // Strip ANSI before matching so a pattern works whether or not the daemon
     // colours its output, matching what in-process capture did.
-    let matched = matcher.consider(text, false);
+    let report = matcher.consider(text, false);
     line.clear();
 
     tx.send(SinkEvent::Line(parsed))
         .await
         .map_err(|_| std::io::Error::other("log writer stopped"))?;
-    if let Some(matched) = matched {
-        tx.send(SinkEvent::ReadyMatch(matched))
+    if let Some(report) = report {
+        tx.send(SinkEvent::Report(report))
             .await
             .map_err(|_| std::io::Error::other("log writer stopped"))?;
     }
@@ -447,12 +461,12 @@ async fn write_batches(
         for event in events.drain(..) {
             match event {
                 SinkEvent::Line(parsed) => batch.push(parsed),
-                SinkEvent::ReadyMatch(line) => {
-                    // Everything up to and including the matching line goes to
+                SinkEvent::Report(report) => {
+                    // Everything up to and including the reported line goes to
                     // the store before the supervisor is told, so whatever it
                     // does next can already read it.
                     flush(&id, &mut batch).await;
-                    report_ready_match(&id, relay_token, line).await;
+                    report_line(&id, relay_token, report).await;
                 }
             }
         }
@@ -463,21 +477,24 @@ async fn write_batches(
     }
 }
 
-/// Tell the supervisor that the daemon's output matched its readiness pattern.
+/// Hand the supervisor a line it needs to act on.
 ///
 /// Failure is logged and dropped. There is no supervisor to retry against if it
-/// has crashed — and if it has, this daemon's readiness is no longer anyone's
-/// concern — while the daemon's output keeps being captured either way.
-async fn report_ready_match(id: &DaemonId, relay_token: u64, line: String) {
+/// has crashed — and if it has, nothing is waiting on this daemon's readiness or
+/// hooks — while the daemon's output keeps being captured either way.
+async fn report_line(id: &DaemonId, relay_token: u64, report: Report) {
     // `autostart: false` — a sink must never bring a supervisor into being.
     match crate::ipc::client::IpcClient::connect(false).await {
         Ok(client) => {
-            if let Err(e) = client.sink_ready_match(id.clone(), relay_token, line).await {
-                warn!("log sink for {id} could not report its readiness match: {e}");
+            if let Err(e) = client
+                .sink_output_line(id.clone(), relay_token, report.fires_hook, report.text)
+                .await
+            {
+                warn!("log sink for {id} could not report a line of output: {e}");
             }
         }
         Err(e) => {
-            warn!("log sink for {id} could not reach the supervisor to report readiness: {e}");
+            warn!("log sink for {id} could not reach the supervisor to report output: {e}");
         }
     }
 }
@@ -526,7 +543,9 @@ mod tests {
         let mut m = matcher("READY");
         assert_eq!(m.consider("starting up", false), None);
         assert_eq!(
-            m.consider("READY to serve", false).as_deref(),
+            m.consider("READY to serve", false)
+                .map(|r| r.text)
+                .as_deref(),
             Some("READY to serve")
         );
         // Readiness happens once; later matches are somebody else's business.
@@ -539,10 +558,14 @@ mod tests {
         // point where the sink had to cut it.
         let mut m = matcher("SERVER READY");
         assert_eq!(m.consider("....SERVER ", true), None);
-        let matched = m
+        let report = m
             .consider("READY....", false)
             .expect("should match across the split");
-        assert!(matched.contains("SERVER READY"), "reported {matched:?}");
+        assert!(
+            report.text.contains("SERVER READY"),
+            "reported {:?}",
+            report.text
+        );
     }
 
     #[test]
@@ -575,10 +598,9 @@ mod tests {
     fn hook_reports_matching_lines_within_the_debounce_window() {
         let mut m = hook_matcher(Some("ALERT"), 0);
         assert_eq!(m.consider("nothing here", false), None);
-        assert_eq!(
-            m.consider("ALERT disk full", false).as_deref(),
-            Some("ALERT disk full")
-        );
+        let report = m.consider("ALERT disk full", false).expect("should report");
+        assert_eq!(report.text, "ALERT disk full");
+        assert!(report.fires_hook);
         // Unlike readiness, a hook keeps firing.
         assert!(m.consider("ALERT again", false).is_some());
     }
@@ -589,6 +611,39 @@ mod tests {
         assert!(m.consider("first", false).is_some());
         // Every line matches a hook with no filter, so only the window stops it.
         assert_eq!(m.consider("second", false), None);
+    }
+
+    #[test]
+    fn a_readiness_only_line_does_not_fire_the_hook() {
+        // A daemon can have both, filtered differently. The line that announces
+        // readiness is nothing to do with the hook, and reporting it must not
+        // be taken as permission to run the hook's command.
+        let mut m = ReadyMatcher::new(
+            Some(regex::Regex::new("READY").unwrap()),
+            Some(HookMatcher {
+                filter: Some("ALERT".to_string()),
+                regex: None,
+                debounce: std::time::Duration::from_millis(0),
+                last_reported: None,
+            }),
+        );
+        let report = m.consider("READY to serve", false).expect("should report");
+        assert!(!report.fires_hook, "readiness line must not fire the hook");
+        // ...and a line matching both says so.
+        let mut m = ReadyMatcher::new(
+            Some(regex::Regex::new("READY").unwrap()),
+            Some(HookMatcher {
+                filter: Some("READY".to_string()),
+                regex: None,
+                debounce: std::time::Duration::from_millis(0),
+                last_reported: None,
+            }),
+        );
+        assert!(
+            m.consider("READY", false)
+                .expect("should report")
+                .fires_hook
+        );
     }
 
     #[test]

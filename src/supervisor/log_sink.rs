@@ -195,7 +195,12 @@ impl Drop for OutputRelay {
 ///
 /// Silently does nothing when the token has expired or nothing is listening:
 /// both are ordinary, not errors.
-pub(crate) async fn deliver_reported_line(id: &DaemonId, token: u64, text: String) {
+pub(crate) async fn deliver_reported_line(
+    id: &DaemonId,
+    token: u64,
+    fires_hook: bool,
+    text: String,
+) {
     let tx = SUPERVISOR
         .sink_output
         .lock()
@@ -210,7 +215,7 @@ pub(crate) async fn deliver_reported_line(id: &DaemonId, token: u64, text: Strin
     if tx
         .send(super::OutputLine {
             text,
-            source: super::OutputSource::Sink,
+            source: super::OutputSource::Sink { fires_hook },
         })
         .await
         .is_err()

@@ -1047,7 +1047,7 @@ impl Supervisor {
                         // A line relayed by a sink is already in the store —
                         // the sink wrote and flushed it before reporting it —
                         // so it arrives here only to be acted on.
-                        if source == super::OutputSource::Local {
+                        if matches!(source, super::OutputSource::Local) {
                             let parsed = parse_line(&line);
                             log_buffer.push(parsed);
                             if log_buffer.len() >= LOG_BATCH_SIZE {
@@ -1090,21 +1090,27 @@ impl Supervisor {
                             }
                         }
 
-                        // Check on_output hook. A sink relays only lines it has
-                        // already matched and debounced; deciding either again
-                        // here would suppress a firing its clock allowed but
-                        // this one, started later, has not caught up with.
+                        // Check on_output hook. A sink has already applied the
+                        // filter, and says so per line: a line reported only
+                        // because it announced readiness must not fire a hook
+                        // that filters for something else.
                         if let Some(ref hook) = on_output_hook {
-                            let from_sink = source == super::OutputSource::Sink;
-                            let matched = from_sink || match (&hook.filter, &on_output_pattern) {
-                                (Some(substr), _) => line_clean.contains(substr.as_str()),
-                                (None, Some(re)) => re.is_match(&line_clean),
-                                (None, None) => true,
+                            let matched = match source {
+                                super::OutputSource::Sink { fires_hook } => fires_hook,
+                                super::OutputSource::Local => match (&hook.filter, &on_output_pattern) {
+                                    (Some(substr), _) => line_clean.contains(substr.as_str()),
+                                    (None, Some(re)) => re.is_match(&line_clean),
+                                    (None, None) => true,
+                                },
                             };
                             if matched {
+                                // The debounce is applied here as well as in the
+                                // sink. A replacement sink starts with a fresh
+                                // clock, and would otherwise let the hook fire
+                                // twice inside one configured window.
                                 let now = std::time::Instant::now();
                                 let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
-                                if from_sink || elapsed.is_none_or(|e| e >= on_output_debounce) {
+                                if elapsed.is_none_or(|e| e >= on_output_debounce) {
                                     on_output_last_fired = Some(now);
                                     hooks::fire_output_hook(id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook.run.clone(), line_clean.clone()).await;
                                 }
@@ -1473,7 +1479,7 @@ impl Supervisor {
                     break;
                 };
                 // Sink-relayed lines are already stored; see the select loop.
-                if line.source == super::OutputSource::Local {
+                if matches!(line.source, super::OutputSource::Local) {
                     log_buffer.push(parse_line(&line.text));
                 }
             }
