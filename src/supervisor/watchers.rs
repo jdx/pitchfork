@@ -475,6 +475,18 @@ impl Supervisor {
             warn!(
                 "pid {pid} recorded for daemon {id} belongs to another process now; not killing it for a resource violation"
             );
+            // Leaving the record running would have the resource watcher
+            // measure the stranger's usage on every tick and try to kill it
+            // again each time. The daemon died unobserved, so record that —
+            // the same terminal state orphan reconciliation would reach, and
+            // one that keeps the daemon eligible for retry.
+            self.finalize_if_pid(
+                id,
+                pid,
+                DaemonStatus::Errored(-1),
+                super::ExitObservation::Unobserved,
+            )
+            .await;
             return;
         }
         let stop_cfg = daemon.and_then(|d| d.stop_signal).unwrap_or_default();

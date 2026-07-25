@@ -373,7 +373,7 @@ impl Supervisor {
         true
     }
 
-    async fn finalize_if_pid(
+    pub(super) async fn finalize_if_pid(
         &self,
         id: &DaemonId,
         pid: u32,
