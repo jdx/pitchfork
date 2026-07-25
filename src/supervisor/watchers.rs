@@ -467,11 +467,29 @@ impl Supervisor {
     /// the retry checker to restart the daemon if `retry` is configured.
     async fn stop_for_resource_violation(&self, id: &DaemonId, pid: u32) {
         info!("killing daemon {id} (pid {pid}) due to resource limit violation");
-        let stop_cfg = self
-            .get_daemon(id)
-            .await
-            .and_then(|d| d.stop_signal)
-            .unwrap_or_default();
+        let daemon = self.get_daemon(id).await;
+        // Never signal a process group that provably isn't the daemon's: a
+        // recycled PID would mean measuring one process tree and killing another.
+        let recorded_start_time = daemon.as_ref().and_then(|d| d.start_time);
+        if !super::signalling_pid_is_authorized(recorded_start_time, PROCS.start_time(pid)) {
+            warn!(
+                "pid {pid} recorded for daemon {id} belongs to another process now; not killing it for a resource violation"
+            );
+            // Leaving the record running would have the resource watcher
+            // measure the stranger's usage on every tick and try to kill it
+            // again each time. The daemon died unobserved, so record that —
+            // the same terminal state orphan reconciliation would reach, and
+            // one that keeps the daemon eligible for retry.
+            self.finalize_if_pid(
+                id,
+                pid,
+                DaemonStatus::Errored(-1),
+                super::ExitObservation::Unobserved,
+            )
+            .await;
+            return;
+        }
+        let stop_cfg = daemon.and_then(|d| d.stop_signal).unwrap_or_default();
         let stop_signal: i32 = stop_cfg.signal.into();
         if let Err(e) = PROCS
             .kill_process_group_async(pid, stop_signal, stop_cfg.timeout)

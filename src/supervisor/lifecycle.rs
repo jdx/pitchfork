@@ -1613,6 +1613,30 @@ impl Supervisor {
             if let Some(pid) = daemon.pid {
                 trace!("killing pid: {pid}");
                 if PROCS.is_running(pid) {
+                    // Something is alive on that PID, but the kill below signals
+                    // the entire process group: if the PID was recycled while
+                    // this record sat unsupervised, that group belongs to an
+                    // unrelated process tree. The daemon itself is gone either
+                    // way, so report it as not running and clear the record.
+                    if !super::signalling_pid_is_authorized(
+                        daemon.start_time,
+                        PROCS.start_time(pid),
+                    ) {
+                        warn!(
+                            "pid {pid} recorded for daemon {id} belongs to another process now; not signalling it"
+                        );
+                        self.upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = DaemonStatus::Stopped;
+                                })
+                                .build(),
+                        )
+                        .await?;
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
+
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
