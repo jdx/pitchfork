@@ -2,6 +2,7 @@
 # `pitchfork proxy untrust`
 
 - **Usage**: `pitchfork proxy untrust [--cert <CERT>]`
+- **Effect**: modifies state
 
 Remove the proxy's TLS certificate from the system trust store
 

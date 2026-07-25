@@ -76,6 +76,9 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
 /// pitchfork exists to run daemons, and a daemon is whatever command the user
 /// put in `pitchfork.toml`. For everything below, the effect is that command's
 /// effect. Labelling them would be a guess about someone else's program.
+// Only the coverage test reads this; it exists so the reason a command is
+// left unclassified lives next to the decision rather than in a commit message.
+#[cfg(test)]
 pub const UNCLASSIFIED: &[(&str, &str)] = &[
     ("mcp", "serves tools that start and stop daemons on request"),
     ("restart", "stops then reruns a user-configured daemon"),

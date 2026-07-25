@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork disable <ID>`
 - **Aliases**: `d`
+- **Effect**: modifies state
 
 Prevent a daemon from restarting
 

@@ -2,6 +2,7 @@
 # `pitchfork proxy`
 
 - **Usage**: `pitchfork proxy <SUBCOMMAND>`
+- **Effect**: read-only
 
 Manage the pitchfork reverse proxy
 

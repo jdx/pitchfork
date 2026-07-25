@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork daemons remove [FLAGS] <ID>`
 - **Aliases**: `rm`
+- **Effect**: destructive — may delete or irreversibly overwrite
 
 Remove a daemon from a pitchfork config file
 

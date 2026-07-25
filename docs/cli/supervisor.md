@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork supervisor <SUBCOMMAND>`
 - **Aliases**: `sup`
+- **Effect**: read-only
 
 Start, stop, and check the status of the pitchfork supervisor daemon
 

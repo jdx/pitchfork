@@ -2,6 +2,7 @@
 # `pitchfork completion`
 
 - **Usage**: `pitchfork completion <SHELL>`
+- **Effect**: read-only
 
 Generates shell completion scripts
 

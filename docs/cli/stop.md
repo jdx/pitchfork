@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork stop [FLAGS] [ID]…`
 - **Aliases**: `kill`
+- **Effect**: modifies state
 
 Sends a stop signal to a daemon
 

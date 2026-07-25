@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork logs [FLAGS] [ID]…`
 - **Aliases**: `l`
+- **Effect**: read-only
 
 Displays logs for daemon(s)
 

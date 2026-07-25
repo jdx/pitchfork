@@ -2,6 +2,7 @@
 # `pitchfork proxy add`
 
 - **Usage**: `pitchfork proxy add [FLAGS] <SLUG>`
+- **Effect**: modifies state
 
 Add a slug mapping to the global config
 

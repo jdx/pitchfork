@@ -2,6 +2,7 @@
 # `pitchfork boot`
 
 - **Usage**: `pitchfork boot <SUBCOMMAND>`
+- **Effect**: read-only
 
 Enable or disable boot start
 
