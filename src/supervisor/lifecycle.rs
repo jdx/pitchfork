@@ -454,7 +454,7 @@ impl Supervisor {
             match super::log_sink::SinkPipe::new(log_format) {
                 Ok((pipe, writer)) => match pipe.start(id) {
                     Ok(child) => {
-                        sink_child = Some(child);
+                        sink_child = Some(super::log_sink::PendingSink::new(child));
                         sink_pipe = Some(pipe);
                         sink_writer = Some(writer);
                     }
@@ -591,13 +591,8 @@ impl Supervisor {
         // reap it explicitly: dropping the handle only reaps on a best-effort
         // basis, and run_once runs once per retry attempt, so a daemon that
         // consistently fails to spawn would otherwise accumulate sinks.
-        let mut child = match cmd.spawn() {
-            Ok(child) => child,
-            Err(e) => {
-                super::log_sink::reap(sink_child.take()).await;
-                return Err(e).into_diagnostic();
-            }
-        };
+        // A failed spawn returns here; the sink is terminated by PendingSink.
+        let mut child = cmd.spawn().into_diagnostic()?;
         let pid = match child.id() {
             Some(p) => p,
             None => {
@@ -610,7 +605,6 @@ impl Supervisor {
                 if sink_child.is_some() {
                     super::log_sink::wait_for_output(&id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
                 }
-                super::log_sink::reap(sink_child.take()).await;
                 return Ok(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
                 });
@@ -631,7 +625,11 @@ impl Supervisor {
         // Hand the retained read end to a sink and keep one running for as long
         // as this daemon is monitored.
         let using_sink = sink_pipe.is_some();
-        if let (Some(pipe), Some(child)) = (sink_pipe.take(), sink_child.take()) {
+        // Take the sink out of the guard only once there is a pipe to supervise
+        // it with, so it is never left running unsupervised.
+        if let Some(pipe) = sink_pipe.take()
+            && let Some(child) = sink_child.as_mut().and_then(|pending| pending.take())
+        {
             pipe.supervise(id.clone(), monitor_token, child);
         }
         let daemon = self

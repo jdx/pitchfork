@@ -147,11 +147,40 @@ async fn newest_entry_id(
     .map_err(|e| miette::miette!("log store check did not run: {e}"))?
 }
 
-/// Terminate and reap a sink that was started for a daemon which then failed to
-/// start, so it cannot linger as a zombie.
-pub(crate) async fn reap(child: Option<tokio::process::Child>) {
-    if let Some(mut child) = child {
-        let _ = child.kill().await;
+/// Holds a sink that has been started but not yet handed to `supervise`, and
+/// terminates it if that never happens.
+///
+/// `run_once` can bail out at several points between starting the sink and
+/// taking charge of it — the daemon's stdio failing to wire up, its spawn
+/// failing, its PID being unreadable — and each one would otherwise leave a sink
+/// running with nothing writing to it. Tying cleanup to the value's lifetime
+/// covers those paths, and any added later, without each having to remember.
+pub(crate) struct PendingSink(Option<tokio::process::Child>);
+
+impl PendingSink {
+    pub(crate) fn new(child: tokio::process::Child) -> Self {
+        Self(Some(child))
+    }
+
+    /// Give up ownership, for handing the sink to `supervise`.
+    pub(crate) fn take(&mut self) -> Option<tokio::process::Child> {
+        self.0.take()
+    }
+
+    /// Whether a sink is still held.
+    pub(crate) fn is_some(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+impl Drop for PendingSink {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            // Drop cannot await, so finish the kill on a task.
+            tokio::spawn(async move {
+                let _ = child.kill().await;
+            });
+        }
     }
 }
 

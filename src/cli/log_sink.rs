@@ -134,17 +134,39 @@ async fn queue_capped(
     line: &mut Vec<u8>,
     log_format: &str,
 ) -> std::io::Result<()> {
-    let split = match std::str::from_utf8(line) {
-        Ok(_) => line.len(),
-        // A sequence cut short at the end: keep it for the next line.
-        Err(e) if e.error_len().is_none() && e.valid_up_to() > 0 => e.valid_up_to(),
-        // Genuinely invalid bytes, which the lossy conversion already handles.
-        Err(_) => line.len(),
-    };
+    let split = split_before_incomplete_char(line);
     let tail = line.split_off(split);
     let result = queue(tx, line, log_format).await;
     *line = tail;
     result
+}
+
+/// Length to cut `bytes` at so no character is left half-written.
+///
+/// Decided by inspecting the final bytes rather than by asking `from_utf8` where
+/// the string stops being valid: that reports the *first* problem, so a single
+/// invalid byte earlier in the line would hide an unfinished character at the
+/// end, and the character would be split after all.
+fn split_before_incomplete_char(bytes: &[u8]) -> usize {
+    let len = bytes.len();
+    // A character is at most four bytes, so only the last few can be unfinished.
+    for i in (len.saturating_sub(4)..len).rev() {
+        let byte = bytes[i];
+        if byte & 0b1100_0000 == 0b1000_0000 {
+            continue; // a continuation byte; keep looking back for its lead
+        }
+        let expected = match byte {
+            0x00..=0x7f => 1,
+            b if b >> 5 == 0b110 => 2,
+            b if b >> 4 == 0b1110 => 3,
+            b if b >> 3 == 0b11110 => 4,
+            // Not a valid lead byte at all, so nothing is pending; the lossy
+            // conversion will render it.
+            _ => 1,
+        };
+        return if i + expected > len && i > 0 { i } else { len };
+    }
+    len
 }
 
 /// Parse `line` and hand it to the writer, clearing it either way.
