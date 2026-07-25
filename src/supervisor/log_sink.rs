@@ -67,7 +67,11 @@ const SPAWN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1)
 ///
 /// A daemon that failed without printing anything has nothing to wait for and
 /// pays the full timeout, which is why it is short.
-pub(crate) async fn wait_for_output(id: &DaemonId, since: chrono::DateTime<chrono::Local>, timeout: std::time::Duration) {
+pub(crate) async fn wait_for_output(
+    id: &DaemonId,
+    since: chrono::DateTime<chrono::Local>,
+    timeout: std::time::Duration,
+) {
     const POLL: std::time::Duration = std::time::Duration::from_millis(20);
     let deadline = tokio::time::Instant::now() + timeout;
     loop {

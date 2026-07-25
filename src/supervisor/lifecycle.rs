@@ -1568,8 +1568,7 @@ impl Supervisor {
                     // checker to start an attempt of its own alongside it.
                     let last_attempt = opts.retry_count >= opts.retry.count();
                     if using_sink && last_attempt {
-                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT)
-                            .await;
+                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
                     }
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })
                 }
