@@ -670,16 +670,19 @@ impl SqliteLogStore {
                     // untrusted key input (CLI --field doesn't validate keys).
                     //
                     // Convert the text filter value to a JSON literal and use
-                    // `IS` (instead of `=`) so that NULL comparisons work
+                    // json_extract(?, '$') to get the native SQLite value:
+                    //   json_extract('"req_1"', '$') → TEXT 'req_1'
+                    //   json_extract('true', '$')   → INTEGER 1
+                    //   json_extract('42', '$')     → INTEGER 42
+                    //   json_extract('null', '$')    → NULL
+                    // This matches json_each.value's native types.
+                    // Use IS (instead of =) so NULL comparisons work
                     // (NULL = NULL is false in SQL, but NULL IS NULL is true).
-                    // json('true') → 1, json('42') → 42, json('"hi"') → "hi",
-                    // json('null') → NULL — matching json_each.value's native
-                    // SQLite types.
                     let json_literal = text_to_json_literal(value);
                     conditions.push(format!(
                         "EXISTS (SELECT 1 FROM json_each(fields_json) \
                          WHERE json_each.key = ?{key_idx} \
-                           AND json_each.value IS json(?{val_idx}))"
+                           AND json_each.value IS json_extract(?{val_idx}, '$'))"
                     ));
                     query_params.push(Box::new(key.clone()));
                     query_params.push(Box::new(json_literal));
