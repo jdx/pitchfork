@@ -11,9 +11,8 @@ pub struct Usage {}
 
 impl Usage {
     pub async fn run(&self) -> Result<()> {
-        let cmd = Cli::command();
-        let mut spec: usage::Spec = cmd.into();
-        spec.bin = "pitchfork".to_string();
+        let mut cmd = Cli::command();
+        let mut spec = clap_usage::spec(&mut cmd, "pitchfork");
         // Declare what each command does to the world; clap cannot express it.
         super::command_effects::apply(&mut spec);
         // 4.0 added flag-level `effect=`; older `usage` CLIs reject the spec with

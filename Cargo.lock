@@ -510,6 +510,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "clap_usage"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46d067625f5704e5722fe7e46407fef7e79680d6dfd045d29036149d90ec044b"
+dependencies = [
+ "clap",
+ "usage-lib",
+]
+
+[[package]]
 name = "clx"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2928,6 +2938,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "clap_usage",
  "clx",
  "comfy-table",
  "console",
@@ -2995,7 +3006,6 @@ dependencies = [
  "tokio-util",
  "toml",
  "tower-http 0.7.0",
- "usage-lib",
  "uuid",
  "vte",
  "windows-sys 0.61.2",
