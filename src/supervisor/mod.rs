@@ -4,6 +4,7 @@
 //! - `state`: State access layer (get/set operations)
 //! - `lifecycle`: Daemon start/stop operations
 //! - `adopt`: Re-adoption of orphaned daemons after a supervisor crash
+//! - `log_sink`: Out-of-process capture of daemon output
 //! - `autostop`: Autostop logic and boot daemon startup
 //! - `retry`: Retry logic with backoff
 //! - `watchers`: Background tasks (interval, cron, file watching)
@@ -14,6 +15,7 @@ mod autostop;
 mod hooks;
 mod ipc_handlers;
 mod lifecycle;
+mod log_sink;
 #[cfg(unix)]
 mod pty;
 mod retry;

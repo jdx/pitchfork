@@ -139,6 +139,15 @@ cmd list help="List all daemons" {
         }
     }
 }
+cmd log-sink hide=#true help="Reads a daemon's output on stdin and writes it to the log store" {
+    long_help "Reads a daemon's output on stdin and writes it to the log store\n\nSpawned by the supervisor as a sibling of the daemon, holding the read end\nof the daemon's output pipe. Keeping the reader in its own process is what\nmakes logging survive a supervisor crash: the pipe still has a reader, so\nthe daemon is neither killed by SIGPIPE nor blocked, and no output is lost.\nExits when the pipe reaches end of file, which happens once the daemon and\nevery descendant holding the write end have gone."
+    flag --daemon-id help="Qualified id of the daemon whose output this is" required=#true {
+        arg <DAEMON_ID>
+    }
+    flag --log-format help="Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)" default=text {
+        arg <LOG_FORMAT>
+    }
+}
 cmd logs help="Displays logs for daemon(s)" {
     alias l
     long_help "Displays logs for daemon(s)\n\nShows logs from managed daemons. Logs are stored in the pitchfork logs directory\nand include timestamps for filtering.\n\nExamples:\n  pitchfork logs api              Show all logs for 'api' (paged if needed)\n  pitchfork logs api worker       Show logs for multiple daemons\n  pitchfork logs                  Show logs for all daemons\n  pitchfork logs api -n 50        Show last 50 lines\n  pitchfork logs api --follow     Follow logs in real-time\n  pitchfork logs api --since '2024-01-15 10:00:00'\n                                  Show logs since a specific time (forward)\n  pitchfork logs api --since '10:30:00'\n                                  Show logs since 10:30:00 today\n  pitchfork logs api --since '10:30' --until '12:00'\n                                  Show logs since 10:30:00 until 12:00:00 today\n  pitchfork logs api --since 5min Show logs from last 5 minutes\n  pitchfork logs api --raw        Output raw log lines without formatting\n  pitchfork logs api --raw -n 100 Output last 100 raw log lines\n  pitchfork logs api --clear      Delete logs for 'api'\n  pitchfork logs --clear          Delete logs for all daemons"

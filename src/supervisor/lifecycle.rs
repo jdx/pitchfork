@@ -167,6 +167,11 @@ fn any_ready_check_remaining(
         || ready_cmd.is_some_and(|c| c.timeout.is_none() || !cmd_exhausted)
 }
 
+/// How long a failed start waits for its sink to write what the daemon printed
+/// before reporting. Short enough not to stall the caller, long enough for a
+/// sink that has already seen end of file to finish its final batch.
+const SINK_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
 impl Supervisor {
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
@@ -435,6 +440,28 @@ impl Supervisor {
             None
         };
 
+        // Set up out-of-process capture before building the command, so the
+        // daemon can be handed the pipe's write end directly.
+        let mut sink_pipe = None;
+        let mut sink_writer = None;
+        if super::log_sink::is_supported(&opts) {
+            let log_format = opts
+                .log_format
+                .clone()
+                .unwrap_or_else(|| settings().logs.log_format.clone());
+            match super::log_sink::SinkPipe::new(log_format) {
+                Ok((pipe, writer)) => {
+                    sink_pipe = Some(pipe);
+                    sink_writer = Some(writer);
+                }
+                Err(e) => {
+                    // Fall back to in-process capture rather than refusing to
+                    // start the daemon.
+                    warn!("could not create log pipe for {id}, capturing in-process: {e}");
+                }
+            }
+        }
+
         let mut cmd = tokio::process::Command::new(&program);
 
         #[cfg(unix)]
@@ -454,13 +481,27 @@ impl Supervisor {
                 |e| miette::miette!("failed to clone slave PTY fd for stdout: {e}"),
             )?));
             cmd.stderr(std::process::Stdio::from(slave_file));
+        } else if let Some(writer) = sink_writer.take() {
+            // Capture belongs to a sibling sink process, so the daemon writes
+            // to a pipe this process does not read. See supervisor::log_sink.
+            let dup = writer
+                .try_clone()
+                .map_err(|e| miette::miette!("failed to dup log pipe for stderr: {e}"))?;
+            cmd.stdout(std::process::Stdio::from(writer))
+                .stderr(std::process::Stdio::from(dup));
         } else {
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
         }
 
         #[cfg(not(unix))]
-        {
+        if let Some(writer) = sink_writer.take() {
+            let dup = writer
+                .try_clone()
+                .map_err(|e| miette::miette!("failed to dup log pipe for stderr: {e}"))?;
+            cmd.stdout(std::process::Stdio::from(writer))
+                .stderr(std::process::Stdio::from(dup));
+        } else {
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
         }
@@ -556,6 +597,13 @@ impl Supervisor {
         // handed to the monitoring task.
         let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), pid);
         let monitor_token = monitored_guard.token();
+
+        // Hand the retained read end to a sink and keep one running for as long
+        // as this daemon is monitored.
+        let using_sink = sink_pipe.is_some();
+        let sink_drained = sink_pipe
+            .take()
+            .map(|pipe| pipe.supervise(id.clone(), monitor_token));
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -636,7 +684,10 @@ impl Supervisor {
             None
         };
 
-        if pty_reader.is_none() && (stdout_reader.is_none() || stderr_reader.is_none()) {
+        if !using_sink
+            && pty_reader.is_none()
+            && (stdout_reader.is_none() || stderr_reader.is_none())
+        {
             error!("Failed to capture stdout/stderr for daemon {id}");
         }
 
@@ -1494,6 +1545,13 @@ impl Supervisor {
                 }
                 Ok(Err(exit_code)) => {
                     error!("daemon {id} failed before becoming ready");
+                    // The caller reports this by querying the log store for
+                    // what the daemon printed, so wait for the sink's final
+                    // write first. The in-process path got this ordering by
+                    // flushing synchronously before signalling.
+                    if let Some(drained) = sink_drained {
+                        drained.wait(SINK_DRAIN_TIMEOUT).await;
+                    }
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })
                 }
                 Err(_) => {
