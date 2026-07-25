@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.19.0](https://github.com/jdx/pitchfork/compare/v2.18.0...v2.19.0) - 2026-07-25
+
+### Added
+
+- *(logs)* capture daemon output in a sibling process ([#661](https://github.com/jdx/pitchfork/pull/661))
+
 ## [2.18.0](https://github.com/jdx/pitchfork/compare/v2.17.0...v2.18.0) - 2026-07-25
 
 ### Added
