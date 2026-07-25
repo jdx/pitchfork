@@ -168,6 +168,41 @@ mod tests {
             .collect()
     }
 
+    /// The tables are only worth having if they reach the spec. Everything
+    /// else here checks the tables against the CLI; this checks that `apply`
+    /// actually transfers them, including onto flags.
+    #[test]
+    fn apply_annotates_commands_and_flags() {
+        let mut spec: usage::Spec = Cli::command().into();
+        apply(&mut spec);
+
+        let cmd = |name: &str| {
+            spec.cmd
+                .subcommands
+                .get(name)
+                .unwrap_or_else(|| panic!("no `pitchfork {name}`"))
+        };
+        let logs = cmd("logs");
+        assert_eq!(logs.effect, Some(Read));
+        let flag = |name: &str| {
+            logs.flags
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("no --{name}"))
+        };
+        assert_eq!(flag("clear").effect, Some(Destructive));
+        // A flag with no entry must be left alone rather than inheriting one.
+        assert_eq!(flag("tail").effect, None);
+
+        assert_eq!(
+            cmd("daemons").subcommands["remove"].effect,
+            Some(Destructive)
+        );
+        assert_eq!(cmd("stop").effect, Some(Write));
+        // Anything in UNCLASSIFIED must be left unset, not defaulted.
+        assert_eq!(cmd("start").effect, None);
+    }
+
     /// Adding a command without deciding what it does to the world is the
     /// failure mode this table exists to prevent, so make it a test failure
     /// rather than a silently missing annotation.
