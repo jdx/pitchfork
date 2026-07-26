@@ -587,6 +587,80 @@ EOF
   kill_pid "$daemon_pid"
 }
 
+@test "ready_output is decided by the sink" {
+  skip_on_windows "relies on pgrep to see the sink process"
+
+  # Readiness must not arrive before the daemon says it is ready, and must
+  # arrive once it does — with the supervisor never reading the output itself.
+  create_pitchfork_toml <<EOF
+[daemons.sinkready]
+run = "sleep 2; echo SERVING on 8080; sleep 300"
+ready_output = "SERVING"
+EOF
+
+  local start end
+  start="$(date +%s)"
+  run pitchfork start sinkready
+  assert_success
+  end="$(date +%s)"
+
+  # A sink owns the stream, so the match came back over IPC rather than from
+  # the supervisor reading the pipe.
+  run pgrep -f "log-sink --daemon-id .*sinkready"
+  assert_success
+
+  # It waited for the line rather than returning early on a timer.
+  [[ "$((end - start))" -ge 2 ]] || {
+    echo "returned after $((end - start))s; readiness did not wait for the output" >&2
+    return 1
+  }
+
+  run pitchfork status sinkready
+  assert_output --partial "running"
+
+  # The line that decided readiness is in the log store exactly once: the sink
+  # stores it, and the copy relayed to the supervisor is for matching only.
+  assert_equal "$(read_logs sinkready | grep -c "SERVING on 8080")" "1"
+
+  pitchfork stop sinkready
+}
+
+@test "log capture for a ready_output daemon survives a supervisor crash" {
+  skip_on_windows "relies on SIGKILL semantics for the supervisor"
+
+  # `ready_output` used to force in-process capture, which put the supervisor
+  # back in the data path for exactly these daemons.
+  create_pitchfork_toml <<EOF
+[daemons.readycrash]
+run = "echo LISTENING; i=0; while true; do i=\$((i+1)); echo readycrash-\$i; sleep 0.3; done"
+ready_output = "LISTENING"
+EOF
+
+  run pitchfork start readycrash
+  assert_success
+  wait_for_logs readycrash "readycrash-"
+
+  local daemon_pid sup_pid before
+  daemon_pid="$(get_daemon_pid readycrash)"
+  sup_pid="$(grep -A 10 '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" |
+    grep -E '^pid = ' | head -1 | sed -E 's/.*= //')"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+  before="$(read_logs readycrash | grep -c "readycrash-")"
+
+  kill_pid "$sup_pid"
+  sleep 3
+
+  pid_alive "$daemon_pid"
+  local after
+  after="$(read_logs readycrash | grep -c "readycrash-")"
+  [[ "$after" -gt "$before" ]] || {
+    echo "capture stopped at the crash: before=$before after=$after" >&2
+    return 1
+  }
+
+  kill_pid "$daemon_pid"
+}
+
 @test "a log sink that dies is replaced" {
   skip_on_windows "relies on SIGKILL semantics and pgrep"
 

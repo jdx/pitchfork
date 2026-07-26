@@ -420,6 +420,21 @@ impl IpcClient {
         Ok(())
     }
 
+    /// Report output that matched a daemon's readiness pattern.
+    ///
+    /// Called by a log sink, which reads the daemon's output in the
+    /// supervisor's place and so is the only process in a position to see the
+    /// match.
+    pub async fn sink_ready_match(&self, id: DaemonId, token: u64, line: String) -> Result<()> {
+        let rsp = self
+            .request(IpcRequest::SinkReadyMatch { id, token, line })
+            .await?;
+        match rsp {
+            IpcResponse::Ok => Ok(()),
+            rsp => Err(Self::unexpected_response("Ok", &rsp).into()),
+        }
+    }
+
     pub async fn clean(&self) -> Result<()> {
         let rsp = self.request(IpcRequest::Clean).await?;
         match rsp {

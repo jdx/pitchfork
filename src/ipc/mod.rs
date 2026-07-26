@@ -75,6 +75,18 @@ pub enum IpcRequest {
     /// List all tracked project sessions with live liveness status filled in
     /// by the supervisor.
     GetProjectSessions,
+    /// A daemon's log sink reporting output that matched its readiness pattern.
+    ///
+    /// The sink owns the daemon's output stream, so it does the matching and
+    /// tells the supervisor rather than the other way around. Sent by
+    /// `pitchfork log-sink`, not by any user-facing command.
+    SinkReadyMatch {
+        id: DaemonId,
+        /// Identifies the start attempt this sink belongs to, so a report from
+        /// a sink still draining a previous attempt cannot satisfy a retry.
+        token: u64,
+        line: String,
+    },
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {

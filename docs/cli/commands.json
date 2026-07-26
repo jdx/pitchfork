@@ -947,7 +947,7 @@
         "full_cmd": [
           "log-sink"
         ],
-        "usage": "log-sink <--daemon-id <DAEMON_ID>> [--log-format <LOG_FORMAT>]",
+        "usage": "log-sink <FLAGS>",
         "subcommands": {},
         "args": [],
         "flags": [
@@ -991,6 +991,49 @@
             },
             "default": [
               "text"
+            ]
+          },
+          {
+            "name": "ready-pattern",
+            "usage": "--ready-pattern <READY_PATTERN>",
+            "help": "Regex whose first match means the daemon is ready",
+            "help_long": "Regex whose first match means the daemon is ready\n\nSet for a daemon configured with `ready_output`. The supervisor cannot match it itself — this process holds the output — so the match is reported back over IPC.",
+            "help_first_line": "Regex whose first match means the daemon is ready",
+            "short": [],
+            "long": [
+              "ready-pattern"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "READY_PATTERN",
+              "usage": "<READY_PATTERN>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "relay-token",
+            "usage": "--relay-token <RELAY_TOKEN>",
+            "help": "Token identifying the start attempt this sink belongs to",
+            "help_long": "Token identifying the start attempt this sink belongs to\n\nQuoted back when reporting a match. The supervisor drops reports whose token is no longer current, so a sink still draining a failed attempt cannot mark that daemon's retry ready.",
+            "help_first_line": "Token identifying the start attempt this sink belongs to",
+            "short": [],
+            "long": [
+              "relay-token"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "RELAY_TOKEN",
+              "usage": "<RELAY_TOKEN>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "0"
             ]
           }
         ],
