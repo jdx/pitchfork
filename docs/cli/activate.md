@@ -2,6 +2,7 @@
 # `pitchfork activate`
 
 - **Usage**: `pitchfork activate <SHELL>`
+- **Effect**: read-only
 
 Activate pitchfork in your shell session
 

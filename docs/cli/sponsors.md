@@ -2,5 +2,6 @@
 # `pitchfork sponsors`
 
 - **Usage**: `pitchfork sponsors`
+- **Effect**: read-only
 
 Show the companies sponsoring pitchfork and the jdx.dev open source tools

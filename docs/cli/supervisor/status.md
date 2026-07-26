@@ -2,5 +2,6 @@
 # `pitchfork supervisor status`
 
 - **Usage**: `pitchfork supervisor status`
+- **Effect**: read-only
 
 Gets the status of the pitchfork daemon

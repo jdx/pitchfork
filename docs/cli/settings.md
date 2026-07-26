@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork settings [--json] <SUBCOMMAND>`
 - **Aliases**: `setting`
+- **Effect**: read-only
 
 View and modify pitchfork settings
 

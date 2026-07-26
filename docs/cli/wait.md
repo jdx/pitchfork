@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork wait <ID>`
 - **Aliases**: `w`
+- **Effect**: read-only
 
 Wait for a daemon to stop, tailing the logs along the way
 

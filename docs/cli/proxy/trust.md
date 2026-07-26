@@ -2,6 +2,7 @@
 # `pitchfork proxy trust`
 
 - **Usage**: `pitchfork proxy trust [--cert <CERT>]`
+- **Effect**: modifies state
 
 Install the proxy's self-signed TLS certificate into the system trust store
 

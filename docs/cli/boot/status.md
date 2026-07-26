@@ -2,6 +2,7 @@
 # `pitchfork boot status`
 
 - **Usage**: `pitchfork boot status`
+- **Effect**: read-only
 
 Check boot start status
 

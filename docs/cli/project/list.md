@@ -2,6 +2,7 @@
 # `pitchfork project list`
 
 - **Usage**: `pitchfork project list [--json]`
+- **Effect**: read-only
 
 List tracked project sessions
 
