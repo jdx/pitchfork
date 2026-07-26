@@ -289,7 +289,7 @@ impl schemars::JsonSchema for DaemonId {
         schemars::json_schema!({
             "type": "string",
             "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
-            "pattern": r"^[\w.-]+(/[\w.-]+)?$"
+            "pattern": r"^(?!.*(?:\.\.|--))(?!\.($|/))[A-Za-z0-9_.](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?(?:/(?!\.$)[A-Za-z0-9_.](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?)?$"
         })
     }
 }

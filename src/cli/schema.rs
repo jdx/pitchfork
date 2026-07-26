@@ -46,5 +46,10 @@ mod tests {
                 .is_none_or(|required| required.is_empty()),
             "top-level config sections must remain optional"
         );
+        assert_eq!(
+            schema["$defs"]["GroupEntryRaw"]["properties"]["daemons"]["items"]["$ref"],
+            "#/$defs/DaemonId",
+            "group members must use the daemon ID schema"
+        );
     }
 }

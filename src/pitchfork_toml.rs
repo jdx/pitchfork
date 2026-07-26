@@ -76,6 +76,7 @@ impl SlugEntry {
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct GroupEntryRaw {
+    #[schemars(with = "Vec<DaemonId>")]
     pub daemons: Vec<String>,
 }
 

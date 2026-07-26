@@ -9,7 +9,7 @@
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[\\w.-]+(/[\\w.-]+)?$": {
+        "^(?!.*(?:\\.\\.|--))(?!\\.($|/))[A-Za-z0-9_.](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?(?:/(?!\\.$)[A-Za-z0-9_.](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?)?$": {
           "$ref": "#/$defs/PitchforkTomlDaemon"
         }
       }
@@ -92,7 +92,7 @@
     "DaemonId": {
       "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
       "type": "string",
-      "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
+      "pattern": "^(?!.*(?:\\.\\.|--))(?!\\.($|/))[A-Za-z0-9_.](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?(?:/(?!\\.$)[A-Za-z0-9_.](?:[A-Za-z0-9_.-]*[A-Za-z0-9_.])?)?$"
     },
     "GroupEntryRaw": {
       "description": "Raw group entry as read from TOML.\n```toml\n[groups.backend]\ndaemons = [\"api\", \"worker\"]\n```",
@@ -101,7 +101,7 @@
         "daemons": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/DaemonId"
           }
         }
       },
