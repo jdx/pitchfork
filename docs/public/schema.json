@@ -1032,7 +1032,7 @@
       "type": "object",
       "properties": {
         "cleanup_orphans": {
-          "description": "Kill orphaned daemon processes when supervisor starts",
+          "description": "Reconcile orphaned daemon processes when supervisor starts",
           "type": [
             "boolean",
             "null"
@@ -1076,6 +1076,13 @@
         },
         "log_flush_interval": {
           "description": "Daemon log buffer flush interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "orphan_policy": {
+          "description": "What to do with live orphaned daemons on supervisor startup: adopt or kill",
           "type": [
             "string",
             "null"

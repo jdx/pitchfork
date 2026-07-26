@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork list [FLAGS]`
 - **Aliases**: `ls`
+- **Effect**: read-only
 
 List all daemons
 

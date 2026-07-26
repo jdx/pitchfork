@@ -99,6 +99,18 @@ kill_pid() {
   fi
 }
 
+# Check whether a PID is alive, working on both Unix and Windows.
+# On Windows Git Bash, `kill -0` cannot probe native Windows processes,
+# so query tasklist instead.
+pid_alive() {
+  local pid="$1"
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    tasklist //FI "PID eq $pid" 2>/dev/null | grep -q "[[:space:]]$pid[[:space:]]"
+  else
+    kill -0 "$pid" 2>/dev/null
+  fi
+}
+
 # Normalize a path for cross-platform comparison.
 # On Windows Git Bash, paths can appear in multiple formats:
 #   /tmp/...           (Git Bash virtual mount)

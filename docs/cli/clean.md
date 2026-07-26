@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork clean`
 - **Aliases**: `c`
+- **Effect**: modifies state
 
 Removes stopped/failed daemons from `pitchfork list`
 

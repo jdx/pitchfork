@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork daemons add [FLAGS] <ID> [ARGS]…`
 - **Aliases**: `a`
+- **Effect**: modifies state
 
 Add a new daemon to pitchfork.toml
 

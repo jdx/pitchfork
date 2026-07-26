@@ -2,6 +2,7 @@
 # `pitchfork project`
 
 - **Usage**: `pitchfork project <SUBCOMMAND>`
+- **Effect**: read-only
 
 Project session management for IDE and workspace integrations.
 

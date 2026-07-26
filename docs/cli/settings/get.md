@@ -2,6 +2,7 @@
 # `pitchfork settings get`
 
 - **Usage**: `pitchfork settings get [--json] <KEY>`
+- **Effect**: read-only
 
 Get the current value of a setting
 

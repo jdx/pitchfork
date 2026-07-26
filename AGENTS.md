@@ -40,7 +40,7 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 ### Core Components
 
 1. **CLI (`src/cli/`)** - User-facing commands that communicate with the supervisor via IPC
-2. **Supervisor (`src/supervisor.rs`)** - Background daemon that manages all child processes
+2. **Supervisor (`src/supervisor/`)** - Background daemon that manages all child processes
 3. **IPC (`src/ipc/`)** - Unix domain socket communication using MessagePack serialization
 
 ### How It Works
@@ -54,27 +54,26 @@ Pitchfork is a daemon supervisor CLI with a **client-server architecture**:
 
 | File | Purpose |
 |------|---------|
-| `src/supervisor.rs` | Main supervisor logic, IPC handlers, background watchers |
+| `src/supervisor/` | Supervisor module: `lifecycle.rs` (start/stop daemons), `ipc_handlers.rs`, `watchers.rs` (background watchers), `retry.rs`, `autostop.rs`, `state.rs`, `hooks.rs`, `pty.rs` |
 | `src/ipc/` | Client/server IPC with MessagePack over Unix sockets |
 | `src/pitchfork_toml.rs` | Config file parsing and merging |
 | `src/state_file.rs` | Persistent state management |
 | `src/daemon.rs` | Daemon struct and state |
 | `src/cli/start.rs` | Main "start daemon" command logic |
 
-### Background Watchers (in supervisor)
+### Background Watchers (in `src/supervisor/watchers.rs`)
 
-- **Interval watcher (10s)**: Refresh process state, autostop, retry failed daemons
-- **Cron watcher (10s)**: Trigger scheduled tasks based on cron expressions
+- **Interval watcher**: Refresh process state, autostop, retry failed daemons (interval from `general.interval` setting, default 10s)
+- **Cron watcher**: Trigger scheduled tasks based on cron expressions (interval from `supervisor.cron_check_interval` setting, default 10s)
+- **File watcher**: Restart daemons when their watched files change (`daemon_file_watch`)
 
 ### Config Hierarchy
 
 Configs merge in order (later overrides earlier):
 1. `/etc/pitchfork/config.toml` (system - namespace: global)
 2. `~/.config/pitchfork/config.toml` (user - namespace: global)
-3. `.config/pitchfork.toml` files from filesystem root to current directory (project)
-4. `.config/pitchfork.local.toml` files from filesystem root to current directory (project)
-5. `pitchfork.toml` files from filesystem root to current directory (project)
-6. `pitchfork.local.toml` files from filesystem root to current directory (project)
+3. Project config files from filesystem root down to the current directory; within each directory:
+   `.config/pitchfork.toml` < `.config/pitchfork.local.toml` < `pitchfork.toml` < `pitchfork.local.toml`
 
 ### Data Sources
 
@@ -102,7 +101,7 @@ Configs merge in order (later overrides earlier):
 - **Error handling**: Use `miette::Result` for rich error messages
 - **Serialization**: Heavy use of serde with TOML for config/state, MessagePack for IPC
 - **File locking**: Always lock state file for concurrent access (`xx::fslock`)
-- **Daemon commands**: Prepend `exec` to eliminate shell process overhead
+- **Daemon commands**: Run via the shell verbatim; do NOT prepend `exec` — it breaks compound commands (e.g. `exec a && b` silently drops `b`). Users can add `exec` themselves in the run string for single commands
 - **Idiomatical Rust**: Prefer Idiomatical Rust patterns and idioms
 
 ## Conventional Commits

@@ -420,6 +420,34 @@ impl IpcClient {
         Ok(())
     }
 
+    /// Report a line of a daemon's output the supervisor must act on.
+    ///
+    /// Called by a log sink, which reads the daemon's output in the
+    /// supervisor's place and so is the only process in a position to see it.
+    /// `fires_hook` is the sink's answer to whether the line passed the
+    /// `on_output` hook's filter and debounce; the supervisor cannot re-derive
+    /// it without redoing the debounce on a clock of its own.
+    pub async fn sink_output_line(
+        &self,
+        id: DaemonId,
+        token: u64,
+        fires_hook: bool,
+        line: String,
+    ) -> Result<()> {
+        let rsp = self
+            .request(IpcRequest::SinkOutputLine {
+                id,
+                token,
+                fires_hook,
+                line,
+            })
+            .await?;
+        match rsp {
+            IpcResponse::Ok => Ok(()),
+            rsp => Err(Self::unexpected_response("Ok", &rsp).into()),
+        }
+    }
+
     pub async fn clean(&self) -> Result<()> {
         let rsp = self.request(IpcRequest::Clean).await?;
         match rsp {

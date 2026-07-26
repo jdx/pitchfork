@@ -2,6 +2,7 @@
 # `pitchfork project enter`
 
 - **Usage**: `pitchfork project enter <--pid <PID>> [--directory <DIRECTORY>]`
+- **Effect**: modifies state
 
 Enter (or replace) a project session tied to a host process.
 

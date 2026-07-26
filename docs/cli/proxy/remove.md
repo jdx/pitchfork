@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork proxy remove <SLUG>`
 - **Aliases**: `rm`
+- **Effect**: destructive — may delete or irreversibly overwrite
 
 Remove a slug mapping from the global config
 

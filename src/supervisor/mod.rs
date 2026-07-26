@@ -3,15 +3,19 @@
 //! This module is split into focused submodules:
 //! - `state`: State access layer (get/set operations)
 //! - `lifecycle`: Daemon start/stop operations
+//! - `adopt`: Re-adoption of orphaned daemons after a supervisor crash
+//! - `log_sink`: Out-of-process capture of daemon output
 //! - `autostop`: Autostop logic and boot daemon startup
 //! - `retry`: Retry logic with backoff
 //! - `watchers`: Background tasks (interval, cron, file watching)
 //! - `ipc_handlers`: IPC request dispatch
 
+mod adopt;
 mod autostop;
 mod hooks;
 mod ipc_handlers;
 mod lifecycle;
+mod log_sink;
 #[cfg(unix)]
 mod pty;
 mod retry;
@@ -92,6 +96,44 @@ pub struct Supervisor {
     pub(crate) lan_monitor_task: Mutex<Option<JoinHandle<()>>>,
     /// Cancellation token for the background state flush task.
     pub(crate) flush_cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
+    /// Daemons that currently have a live monitoring task (child `wait()`
+    /// monitor or adopted-orphan poll monitor), keyed to the PID being
+    /// monitored plus a unique registration token. Lets orphan
+    /// reconciliation tell a supervised daemon from one whose monitor died
+    /// with a previous supervisor process.
+    pub(crate) monitored: std::sync::Mutex<HashMap<DaemonId, adopt::MonitorEntry>>,
+    /// Where to deliver output a log sink reports over IPC.
+    ///
+    /// A daemon whose output is captured by a sink writes nothing this process
+    /// reads, so the sink evaluates the daemon's readiness pattern itself and
+    /// sends back the line that matched. The monitoring task registers here
+    /// before the sink starts and unregisters when it ends, so a line arriving
+    /// from a sink that outlived its daemon has nowhere to go and is dropped.
+    pub(crate) sink_output: std::sync::Mutex<HashMap<DaemonId, log_sink::Relay>>,
+}
+
+/// A line of daemon output on its way to the monitoring task.
+#[derive(Debug, Clone)]
+pub(crate) struct OutputLine {
+    pub(crate) text: String,
+    pub(crate) source: OutputSource,
+}
+
+/// Where a line of daemon output came from, which decides what is left to do
+/// with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputSource {
+    /// Read by this process from the daemon's stdout, stderr or PTY master.
+    /// Nothing has been done with it yet.
+    Local,
+    /// Reported by the daemon's log sink, which has already written the line to
+    /// the store — storing it again here would duplicate it.
+    ///
+    /// `fires_hook` is the sink's answer to whether this line passed the
+    /// `on_output` hook's filter and debounce. It is carried rather than
+    /// re-derived because a line can be reported for readiness alone, and
+    /// firing a hook that filters for something else would be wrong.
+    Sink { fires_hook: bool },
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -260,6 +302,8 @@ impl Supervisor {
             mdns_publisher: Mutex::new(None),
             lan_monitor_task: Mutex::new(None),
             flush_cancel: std::sync::Mutex::new(None),
+            monitored: std::sync::Mutex::new(HashMap::new()),
+            sink_output: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -738,6 +782,12 @@ impl Supervisor {
         for dir in dirs_to_leave {
             self.leave_dir(&dir).await?;
         }
+
+        // Catch state-`running` daemons that lost their monitor (e.g. the
+        // monitor died with a previous supervisor): mark dead ones errored
+        // and re-adopt live ones. Runs before check_retry so a daemon marked
+        // errored here is retried on this same tick.
+        self.reconcile_unmonitored_daemons().await;
 
         self.check_retry().await?;
         self.process_pending_autostops().await?;
@@ -1232,16 +1282,23 @@ fn chmod_safe_subtrees(state_dir: &std::path::Path) {
     }
 }
 
-/// On startup, kill any daemon processes left behind by a previous supervisor
+/// On startup, reconcile daemon processes left behind by a previous supervisor
 /// that was terminated unexpectedly (e.g. `kill -9`).
 ///
-/// This iterates the state file for daemon entries with a recorded PID.  If the
-/// PID is still alive and the process name matches the recorded `title`, it is
-/// assumed to be an orphan from the previous supervisor session and is killed.
-/// The daemon's state is then reset to `Stopped` with no PID.
+/// This iterates the state file for daemon entries with a recorded PID. If the
+/// PID is still alive and its current identity matches the recorded start time
+/// (or the recorded title for older state files), it is assumed to be an orphan
+/// from the previous supervisor session and `supervisor.orphan_policy` decides
+/// its fate: `adopt` (default) resumes supervision via a poll monitor and keeps
+/// the daemon's state intact; `kill` terminates it and resets its state to
+/// `Stopped` with no PID. If a matching live process cannot be terminated
+/// securely, its running state is retained to prevent a duplicate instance
+/// from being started.
 ///
-/// The process-name check protects against the rare case where a PID has been
-/// recycled by an unrelated process since the state file was written.
+/// Missing or mismatched identity data fails closed so a PID recycled by an
+/// unrelated process is never adopted or killed. On Unix platforms without
+/// durable process handles, orphan termination also fails closed because the
+/// PID/PGID cannot be pinned between identity validation and signaling.
 ///
 /// This is gated by the `supervisor.cleanup_orphans` setting (default: true).
 async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
@@ -1268,55 +1325,76 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         candidates.len()
     );
 
+    let policy = orphan_policy();
+    let boot_time = PROCS.boot_time();
+    let unclean = supervisor_exited_uncleanly(supervisor).await;
+
     for daemon in candidates {
         let Some(pid) = daemon.pid else { continue };
 
+        // Refresh each candidate immediately before checking it. Processing an
+        // earlier orphan can await its stop timeout, during which this PID may
+        // exit and be recycled.
+        PROCS.refresh_pids(&[pid]);
+
         if !PROCS.is_running(pid) {
-            // PID already dead — just reset its state
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
-                .await;
+            // PID already dead — the daemon exited while unsupervised, so
+            // record a terminal status that reflects whether it died under a
+            // crashed supervisor (retryable) or with the machine.
+            let status =
+                unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
+            reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
             continue;
         }
 
-        // Safety check: verify the process name matches what we recorded.
-        // This avoids accidentally killing an unrelated process if the PID
-        // was recycled by the kernel between state-file writes.
-        let current_title = PROCS.title(pid);
-        let matches = match (&current_title, &daemon.title) {
-            (Some(current), Some(expected)) => current == expected,
-            // If we don't have a recorded title, fall back to allowing the kill
-            // (this is a degraded but functional state — the process was probably
-            // started before title tracking was added, or the state was reset).
-            _ => true,
-        };
+        // Safety check: verify the live process really is the daemon we
+        // recorded, not an unrelated process that received a recycled PID.
+        // The kernel start time is a stable identity for the lifetime of a
+        // process, and is the only thing accepted as one.
+        let current_start_time = PROCS.start_time(pid);
+        let matches = process_identity_matches(daemon.start_time, current_start_time);
 
         if !matches {
+            // Either side missing means the identity cannot be checked at all,
+            // which is different from checking it and finding a stranger: retain
+            // the running state rather than resetting a record whose process may
+            // well still be the daemon.
+            if daemon.start_time.is_none() || current_start_time.is_none() {
+                warn!(
+                    "could not verify the identity of live pid {pid} recorded for daemon {}; retaining running state",
+                    daemon.id,
+                );
+                continue;
+            }
             warn!(
-                "pid {pid} for daemon {} has changed name (expected '{}', found '{}'); skipping orphan cleanup",
+                "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
                 daemon.id,
-                daemon.title.as_deref().unwrap_or("?"),
-                current_title.as_deref().unwrap_or("?")
             );
-            // Still reset state so we don't track a stale PID
-            let _ = supervisor
-                .upsert_daemon(
-                    UpsertDaemonOpts::builder(daemon.id.clone())
-                        .set(|o| {
-                            o.pid = None;
-                            o.status = DaemonStatus::Stopped;
-                            o.active_port = None;
-                        })
-                        .build(),
-                )
+            // The daemon died at some unknown point and the OS handed its PID
+            // to something else — same unobserved exit as a dead PID.
+            let status =
+                unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
+            reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
+            continue;
+        }
+
+        // Both policies need a verified start time: killing revalidates it
+        // while pinned to the process, and adoption anchors its poll monitor
+        // to it so a later PID recycle is never mistaken for the daemon.
+        let Some(expected_start_time) = current_start_time else {
+            warn!(
+                "could not read start time for live pid {pid} recorded for daemon {}; retaining running state",
+                daemon.id,
+            );
+            continue;
+        };
+
+        // Identity verified — the process really is our orphaned daemon.
+        // The policy decides whether supervision resumes or the slate is
+        // wiped clean.
+        if policy == "adopt" {
+            supervisor
+                .adopt_daemon(&daemon, pid, expected_start_time)
                 .await;
             continue;
         }
@@ -1324,22 +1402,228 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
 
         let stop_cfg = daemon.stop_signal.unwrap_or_default();
-        let _ = PROCS
-            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
-            .await;
-
-        let _ = supervisor
-            .upsert_daemon(
-                UpsertDaemonOpts::builder(daemon.id.clone())
-                    .set(|o| {
-                        o.pid = None;
-                        o.status = DaemonStatus::Stopped;
-                        o.active_port = None;
-                    })
-                    .build(),
+        let termination_result = PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                expected_start_time,
+                stop_cfg.signal.into(),
+                stop_cfg.timeout,
             )
             .await;
+
+        match termination_result {
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(
+                    "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
+                    daemon.id
+                );
+                continue;
+            }
+            Err(err) => {
+                warn!(
+                    "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
+                    daemon.id
+                );
+                continue;
+            }
+        }
+
+        // We terminated the orphan ourselves, so this is an observed,
+        // intentional stop rather than an unobserved exit.
+        reset_daemon_state(
+            supervisor,
+            &daemon.id,
+            DaemonStatus::Stopped,
+            ExitObservation::Terminated,
+        )
+        .await;
     }
+}
+
+/// Effective `supervisor.orphan_policy`, warning on an unrecognized value
+/// (which falls back to the default of adopting).
+pub(crate) fn orphan_policy() -> String {
+    let policy = settings().supervisor.orphan_policy.clone();
+    match policy.as_str() {
+        "adopt" | "kill" => policy,
+        other => {
+            warn!("unknown supervisor.orphan_policy '{other}', defaulting to 'adopt'");
+            "adopt".to_string()
+        }
+    }
+}
+
+/// Verify that live process identity matches the persisted daemon identity.
+///
+/// Both start times are required. A process name was once accepted in place of
+/// a recorded start time, for state written before start times existed, but a
+/// name is not an identity: a recycled PID belonging to another copy of the same
+/// program matches it, and adopting or killing on that basis acts on the wrong
+/// process. Missing identity, on either side, means unverifiable — and
+/// unverifiable must never authorize acting on a process.
+fn process_identity_matches(
+    recorded_start_time: Option<u64>,
+    current_start_time: Option<u64>,
+) -> bool {
+    match (recorded_start_time, current_start_time) {
+        (Some(recorded), Some(current)) => recorded == current,
+        _ => false,
+    }
+}
+
+/// Whether a PID read from persisted state may be signalled.
+///
+/// Stopping a daemon signals its whole process *group*, so acting on a PID that
+/// has been recycled since it was recorded takes down an unrelated process tree.
+/// Records are refused only when their identity is positively contradicted: if
+/// either start time is unknown the PID stays as signallable as it was before
+/// identities were recorded, so a daemon whose record predates the field can
+/// still be stopped rather than becoming permanently unstoppable.
+///
+/// This is deliberately weaker than [`process_identity_matches`], which decides
+/// whether to adopt or kill a process nobody asked about. Here the user has
+/// named the daemon and asked for it to stop; the check exists to catch the
+/// case where the answer is provably the wrong process.
+pub(crate) fn signalling_pid_is_authorized(
+    recorded_start_time: Option<u64>,
+    current_start_time: Option<u64>,
+) -> bool {
+    !matches!(
+        (recorded_start_time, current_start_time),
+        (Some(recorded), Some(current)) if recorded != current
+    )
+}
+
+/// How a daemon's run ended, which decides what happens to the recorded
+/// `last_exit_success` that cron `retrigger = "success" | "fail"` reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitObservation {
+    /// Nobody saw how the run ended, because the monitor that would have
+    /// observed it died with a previous supervisor. The recorded outcome is
+    /// cleared to `None`.
+    ///
+    /// Every option here is imperfect, so this picks the one that asserts
+    /// nothing false. `Some(false)` would fabricate a failure, silently
+    /// breaking a `retrigger = "success"` chain whose run may well have
+    /// succeeded; `Some(true)` fabricates the opposite; keeping the previous
+    /// value attributes an earlier run's outcome to this one. `None` says
+    /// "unknown", reusing the reading the cron watcher already applies to a
+    /// daemon that has never run.
+    ///
+    /// The tradeoff is that `None` satisfies both `retrigger = "success"`
+    /// (`unwrap_or(true)`) and `retrigger = "fail"` (`!unwrap_or(false)`), so
+    /// such a daemon fires once at its next scheduled time regardless of which
+    /// it configured. That is schedule-gated rather than a loop, and it biases
+    /// toward running the daemon over leaving it permanently untriggered.
+    /// Distinguishing "unknown" from "never ran" would require a third cron
+    /// state and is deliberately left out of scope here.
+    Unobserved,
+    /// We terminated the process ourselves, so the outcome is not a mystery:
+    /// it stopped because we asked it to. Recorded as a success, matching the
+    /// convention `Supervisor::stop` already uses for a deliberate stop.
+    Terminated,
+}
+
+impl ExitObservation {
+    /// The `last_exit_success` value this observation implies.
+    pub(crate) fn last_exit_success(self) -> Option<bool> {
+        match self {
+            ExitObservation::Unobserved => None,
+            ExitObservation::Terminated => Some(true),
+        }
+    }
+}
+
+/// Clear a daemon's runtime state (pid, process identity, active port) after
+/// its process is gone or is no longer ours to manage.
+///
+/// Config fields are preserved by cloning the existing record, so a reset can
+/// never drop a daemon's command, retry policy, or schedule.
+async fn reset_daemon_state(
+    supervisor: &Supervisor,
+    id: &DaemonId,
+    status: DaemonStatus,
+    observation: ExitObservation,
+) {
+    let mut state_file = supervisor.state_file.lock().await;
+    let Some(existing) = state_file.daemons.get(id) else {
+        return;
+    };
+    let mut daemon = existing.clone();
+    daemon.pid = None;
+    daemon.title = None;
+    daemon.start_time = None;
+    daemon.boot_time = None;
+    daemon.status = status;
+    daemon.last_exit_success = observation.last_exit_success();
+    daemon.active_port = None;
+    state_file.clear_active_port(id);
+    state_file.insert_daemon(id, daemon);
+}
+
+/// Boot times this far apart are treated as different boots.
+///
+/// Sized to the only platform that reports a jittery value: Windows derives
+/// boot time as `now - GetTickCount64()`, sampling two clocks independently,
+/// so consecutive calls within one boot can differ by about a second. Linux
+/// (`/proc/stat` btime) and macOS (`kern.boottime`) report stable values.
+///
+/// Deliberately kept this tight so a genuine reboot can never fall inside it:
+/// a prior session would have to boot, start the supervisor, spawn a daemon,
+/// have that daemon die, and complete a reboot inside two seconds, which no
+/// real boot cycle reaches. A larger window would misread a short-lived
+/// previous boot (e.g. a device in a reboot loop) as the current one and
+/// resurrect daemons a reboot should have left stopped.
+const BOOT_TIME_TOLERANCE_SECS: u64 = 2;
+
+/// Terminal status for a daemon whose process is gone and whose exit was
+/// never observed, because the monitor that would have seen it died with a
+/// previous supervisor.
+///
+/// A daemon recorded `Running` was expected to still be alive, so it died
+/// under the crashed supervisor: `Errored(-1)` ("unknown exit code") makes it
+/// eligible for its configured retries. Two cases stay `Stopped` instead:
+///
+/// - records from an earlier boot, whose processes died with the machine —
+///   auto-restarting those is what `boot_start` is for, and reviving every
+///   retry-configured daemon after a reboot would be a surprise
+/// - any other status (in practice `Stopping`), i.e. an intentional stop that
+///   completed while the supervisor was gone
+pub(crate) fn unobserved_exit_status(
+    status: &DaemonStatus,
+    recorded_boot_time: Option<u64>,
+    current_boot_time: u64,
+    supervisor_exited_uncleanly: bool,
+) -> DaemonStatus {
+    let same_boot = recorded_boot_time
+        .is_some_and(|recorded| recorded.abs_diff(current_boot_time) <= BOOT_TIME_TOLERANCE_SECS);
+    if status.is_running() && same_boot && supervisor_exited_uncleanly {
+        DaemonStatus::Errored(-1)
+    } else {
+        DaemonStatus::Stopped
+    }
+}
+
+/// Whether the supervisor that owned this state file failed to shut down
+/// cleanly, meaning any daemon it left behind stopped for reasons nobody
+/// recorded.
+///
+/// A clean shutdown removes the supervisor's own entry: `close()` does it on
+/// Unix, where the stop signal is delivered and handled, and the
+/// `supervisor stop` command does it on Windows, which has no POSIX signals
+/// and force-terminates the process instead. A crash, an external `kill -9`,
+/// or a `--force` replacement all leave the entry behind.
+///
+/// This must be read before the starting supervisor records itself, which is
+/// why `cleanup_orphaned_daemons` runs first in `start()`.
+async fn supervisor_exited_uncleanly(supervisor: &Supervisor) -> bool {
+    supervisor
+        .state_file
+        .lock()
+        .await
+        .daemons
+        .contains_key(&DaemonId::pitchfork())
 }
 
 /// Recursively chmod: directories → 0o755, files → 0o644.
@@ -1362,8 +1646,130 @@ fn chmod_recursive(dir: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_remove_liveness_session;
+    use super::{
+        BOOT_TIME_TOLERANCE_SECS, process_identity_matches, should_remove_liveness_session,
+        signalling_pid_is_authorized, unobserved_exit_status,
+    };
+    use crate::daemon_status::DaemonStatus;
     use crate::state_file::ProjectSession;
+
+    const BOOT: u64 = 1_700_000_000;
+
+    #[test]
+    fn unobserved_running_death_in_current_boot_is_retryable() {
+        // Died under a crashed supervisor during this boot: Errored(-1) makes
+        // the daemon eligible for its configured retries.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, true),
+            DaemonStatus::Errored(-1)
+        ));
+    }
+
+    #[test]
+    fn unobserved_running_death_from_previous_boot_is_stopped() {
+        // The process died with the machine; reviving every retry-configured
+        // daemon after a reboot is what boot_start is for.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - 86_400), BOOT, true),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_tolerates_boot_time_jitter() {
+        // Windows recomputes boot time as now - GetTickCount64(), which can
+        // drift about a second between samples within one boot.
+        let within = BOOT + BOOT_TIME_TOLERANCE_SECS;
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(within), BOOT, true),
+            DaemonStatus::Errored(-1)
+        ));
+        let beyond = BOOT + BOOT_TIME_TOLERANCE_SECS + 1;
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(beyond), BOOT, true),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_after_clean_shutdown_is_stopped() {
+        // A deliberate `supervisor stop` can leave running records behind on
+        // platforms where the supervisor cannot handle the stop signal. Those
+        // daemons were stopped on purpose, so they must not be reported as
+        // failures or resurrected by the retry checker.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, false),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_treats_short_previous_boot_as_previous() {
+        // A device in a reboot loop can produce consecutive boots seconds
+        // apart. The jitter window must stay far below that so those records
+        // are still recognised as belonging to an earlier boot.
+        for gap in [5, 30, 59, 60] {
+            assert!(
+                matches!(
+                    unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - gap), BOOT, true),
+                    DaemonStatus::Stopped
+                ),
+                "boot {gap}s earlier should be treated as a previous boot"
+            );
+        }
+    }
+
+    #[test]
+    fn unobserved_exit_without_recorded_boot_time_is_stopped() {
+        // Legacy state files predating the field fail closed to today's
+        // behavior rather than triggering surprise retries.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, None, BOOT, true),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn unobserved_exit_of_stopping_daemon_is_stopped() {
+        // An intentional stop that completed while the supervisor was gone is
+        // not a failure, even within the same boot.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Stopping, Some(BOOT), BOOT, true),
+            DaemonStatus::Stopped
+        ));
+    }
+
+    #[test]
+    fn orphan_identity_requires_both_start_times() {
+        assert!(process_identity_matches(Some(123), Some(123)));
+        assert!(!process_identity_matches(Some(123), Some(456)));
+        // Unreadable current identity: unverifiable, so not a match.
+        assert!(!process_identity_matches(Some(123), None));
+    }
+
+    #[test]
+    fn signalling_is_refused_only_for_a_contradicted_identity() {
+        // Provably someone else's process group: refuse.
+        assert!(!signalling_pid_is_authorized(Some(123), Some(456)));
+        // Verified as the daemon's own.
+        assert!(signalling_pid_is_authorized(Some(123), Some(123)));
+        // Unknown on either side. Stopping stays possible, because the user has
+        // named this daemon and a record that cannot be verified must not become
+        // one that can never be stopped.
+        assert!(signalling_pid_is_authorized(None, Some(123)));
+        assert!(signalling_pid_is_authorized(Some(123), None));
+        assert!(signalling_pid_is_authorized(None, None));
+    }
+
+    #[test]
+    fn orphan_identity_rejects_records_without_a_start_time() {
+        // State written before start times were recorded. A process name used
+        // to stand in here, but another copy of the same program on a recycled
+        // PID matches a name, so such records are no longer verifiable and must
+        // not authorize adopting or killing anything.
+        assert!(!process_identity_matches(None, Some(123)));
+        assert!(!process_identity_matches(None, None));
+    }
 
     #[test]
     fn should_not_remove_when_state_title_differs_from_snapshot() {

@@ -2,6 +2,7 @@
 # `pitchfork boot enable`
 
 - **Usage**: `pitchfork boot enable`
+- **Effect**: modifies state
 
 Enable boot start for pitchfork supervisor
 

@@ -108,7 +108,12 @@ get_supervisor_pid() {
   kill_port 18998
 }
 
-@test "orphaned daemons are cleaned up on supervisor restart" {
+@test "orphan_policy=kill terminates orphaned daemons on supervisor restart" {
+  if [[ "$(uname -s)" != "Linux" && "$(uname -s)" != MINGW* && "$(uname -s)" != MSYS* ]]; then
+    skip "secure process-group termination is unavailable on this Unix platform"
+  fi
+  # The default policy re-adopts orphans; this test pins the kill policy.
+  export PITCHFORK_ORPHAN_POLICY=kill
 
   create_pitchfork_toml <<EOF
 [daemons.orphan_test]
@@ -123,6 +128,10 @@ EOF
   assert_success
   wait_for_status orphan_test running
 
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid orphan_test)"
+  [[ -n "$daemon_pid" ]]
+
   local sup_pid
   sup_pid="$(get_supervisor_pid)"
   [[ -n "$sup_pid" ]]
@@ -131,6 +140,9 @@ EOF
   kill_pid "$sup_pid"
   sleep 1
 
+  # The daemon survives the crash as an orphan (reparented to init).
+  pid_alive "$daemon_pid"
+
   run pitchfork supervisor start
   assert_success
   sleep 3
@@ -138,6 +150,413 @@ EOF
   run pitchfork status orphan_test
   assert_success
   assert_output --partial "stopped"
+
+  # The orphan process itself must be terminated — a state entry that merely
+  # says "stopped" while the process lives on would allow silent duplicates.
+  run pid_alive "$daemon_pid"
+  assert_failure
+
+  # Starting again must yield exactly one fresh instance, not a duplicate.
+  run pitchfork start orphan_test
+  assert_success
+  wait_for_status orphan_test running
+
+  local new_pid
+  new_pid="$(get_daemon_pid orphan_test)"
+  [[ -n "$new_pid" ]]
+  [[ "$new_pid" != "$daemon_pid" ]]
+
+  pitchfork stop orphan_test
+}
+
+@test "orphan cleanup fails closed without durable process handles" {
+  if [[ "$(uname -s)" == "Linux" || "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    skip "only applies to non-Linux Unix platforms"
+  fi
+
+  create_pitchfork_toml <<EOF
+[daemons.orphan_test]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+
+  run pitchfork start orphan_test
+  assert_success
+  wait_for_status orphan_test running
+
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid orphan_test)"
+  [[ -n "$daemon_pid" ]]
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 1
+  pid_alive "$daemon_pid"
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # Both the orphan and its running state survive because the platform cannot
+  # pin its identity across killpg. Retaining state prevents duplicate starts.
+  pid_alive "$daemon_pid"
+
+  run pitchfork status orphan_test
+  assert_success
+  assert_output --partial "running"
+
+  run pitchfork start orphan_test
+  assert_success
+  assert_output --partial "already running"
+
+  local retained_pid
+  retained_pid="$(get_daemon_pid orphan_test)"
+  [[ "$retained_pid" == "$daemon_pid" ]]
+
+  kill_pid "$daemon_pid"
+}
+
+@test "orphan cleanup does not kill unrelated process with recycled PID" {
+  skip_on_windows "state file crafting relies on Unix signal semantics"
+
+  # An unrelated long-running process standing in for a recycled PID.
+  sleep 300 >/dev/null 2>&1 &
+  local bystander_pid=$!
+
+  # Stop the supervisor, then plant a state entry claiming a daemon owns the
+  # bystander's PID with a mismatching identity (different start time/title).
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."recycled/victim"]
+id = "recycled/victim"
+title = "definitely-not-sleep"
+pid = $bystander_pid
+start_time = 1
+status = "running"
+autostop = false
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # The unrelated process must survive; only the stale state entry is reset.
+  pid_alive "$bystander_pid"
+
+  run pitchfork status recycled/victim
+  assert_success
+  # The crafted record has no boot_time (as written by versions before the
+  # field existed), so the unobserved exit fails closed to stopped.
+  assert_output --partial "stopped"
+
+  { kill -9 "$bystander_pid" && wait "$bystander_pid"; } 2>/dev/null || true
+}
+
+@test "stop does not signal a process that recycled the daemon's PID" {
+  skip_on_windows "state file crafting relies on Unix signal semantics"
+
+  # `stop` kills a process group, so a recycled PID would take down whatever
+  # unrelated tree now owns it. The bystander must therefore lead its own group
+  # — a plain background job here would join bats' group, and killpg would find
+  # no group to signal whatever the daemon code did. Its children make the blast
+  # radius visible: signalling the group takes them too.
+  local pidfile="$BATS_TEST_TMPDIR/bystander.pid"
+  setsid bash -c 'echo $$ > "$1"; sleep 300 & sleep 300 & wait' _ "$pidfile" >/dev/null 2>&1 &
+  local i
+  for i in $(seq 1 50); do [ -s "$pidfile" ] && break; sleep 0.1; done
+  local bystander_pid
+  bystander_pid=$(cat "$pidfile")
+  [ -n "$bystander_pid" ]
+
+  # Orphan reconciliation would reset the crafted record before `stop` ever saw
+  # it; this test is about the stop path, so leave the record alone.
+  export PITCHFORK_CLEANUP_ORPHANS=false
+
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."recycled/stopvictim"]
+id = "recycled/stopvictim"
+pid = $bystander_pid
+start_time = 1
+status = "running"
+autostop = false
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 1
+
+  run pitchfork stop recycled/stopvictim
+  assert_success
+
+  # The unrelated process group must survive untouched.
+  pid_alive "$bystander_pid"
+  assert_equal "$(pgrep -c -P "$bystander_pid" || true)" "2"
+
+  # ...and the daemon is reported as gone, since that PID is not its process.
+  run pitchfork status recycled/stopvictim
+  assert_success
+  assert_output --partial "stopped"
+
+  { kill -9 "-$bystander_pid" || kill -9 "$bystander_pid"; } 2>/dev/null || true
+  wait "$bystander_pid" 2>/dev/null || true
+}
+
+@test "daemon that dies during a supervisor crash is retried on restart" {
+  skip_on_windows "relies on SIGKILL semantics for both supervisor and daemon"
+  export PITCHFORK_INTERVAL=1s
+
+  create_pitchfork_toml <<EOF
+[daemons.crash_retry]
+run = "sleep 120"
+ready_delay = 1
+retry = 1
+EOF
+
+  run pitchfork start crash_retry
+  assert_success
+  wait_for_status crash_retry running
+
+  local daemon_pid sup_pid
+  daemon_pid="$(get_daemon_pid crash_retry)"
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+
+  # Crash the supervisor, then kill the daemon while nothing is watching it,
+  # so its exit is never observed by any monitor.
+  kill_pid "$sup_pid"
+  sleep 1
+  kill_pid "$daemon_pid"
+  sleep 1
+
+  run pitchfork supervisor start
+  assert_success
+
+  # The unobserved death is recorded as errored, which makes the daemon
+  # eligible for its configured retry — it comes back on its own.
+  wait_for_status crash_retry running 30
+  local new_pid
+  new_pid="$(get_daemon_pid crash_retry)"
+  [[ -n "$new_pid" ]]
+  [[ "$new_pid" != "$daemon_pid" ]]
+
+  pitchfork stop crash_retry
+}
+
+@test "supervisor stop clears the supervisor record on every platform" {
+  # Orphan reconciliation reads the presence of this record as evidence that
+  # the previous supervisor died unexpectedly. A deliberate stop must always
+  # clear it, whether the supervisor handles the stop signal itself (Unix) or
+  # is force-terminated by the stop command (Windows) — otherwise the next
+  # supervisor reports intentionally stopped daemons as failures.
+  create_pitchfork_toml <<EOF
+[daemons.stop_marker]
+run = "sleep 60"
+ready_delay = 1
+EOF
+
+  run pitchfork start stop_marker
+  assert_success
+  wait_for_status stop_marker running
+  grep -q '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml"
+
+  run pitchfork supervisor stop
+  assert_success
+  sleep 1
+
+  run grep -q '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml"
+  assert_failure
+
+  # And the daemon reads as stopped rather than errored after the restart.
+  # Poll rather than sleeping: this test also runs on Windows, where startup
+  # plus orphan reconciliation plus state persistence is slowest.
+  run pitchfork supervisor start
+  assert_success
+  wait_for_status stop_marker stopped
+}
+
+@test "daemon record from a previous boot is not retried" {
+  skip_on_windows "state file crafting relies on Unix signal semantics"
+  export PITCHFORK_INTERVAL=1s
+
+  # A PID that is definitely dead: start a process and kill it.
+  sleep 60 >/dev/null 2>&1 &
+  local dead_pid=$!
+  kill -9 "$dead_pid" 2>/dev/null || true
+  wait "$dead_pid" 2>/dev/null || true
+
+  pitchfork supervisor stop 2>/dev/null || true
+  sleep 1
+  # The leftover supervisor entry is what marks the previous shutdown as
+  # unclean. Without it the unclean check short-circuits to stopped and this
+  # test would pass even with the boot-time rule deleted; with it, boot_time
+  # is the only reason the daemon stays stopped. Orphan cleanup skips the
+  # supervisor's own id, and start() overwrites the entry immediately.
+  #
+  # boot_time = 1 marks the daemon record as belonging to a long-gone boot:
+  # the process died with the machine, not under a crashed supervisor.
+  cat > "$PITCHFORK_STATE_DIR/state.toml" <<EOF
+[daemons."global/pitchfork"]
+id = "global/pitchfork"
+pid = $dead_pid
+status = "running"
+autostop = false
+
+[daemons."prevboot/svc"]
+id = "prevboot/svc"
+title = "sleep"
+pid = $dead_pid
+start_time = 1
+boot_time = 1
+status = "running"
+autostop = false
+retry = 3
+cmd = ["sleep", "120"]
+EOF
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # Stopped, not errored — so the retry checker leaves it alone instead of
+  # resurrecting a daemon the user never asked to start at boot.
+  run pitchfork status prevboot/svc
+  assert_success
+  assert_output --partial "stopped"
+  [[ "$(get_daemon_pid prevboot/svc)" == "" ]]
+}
+
+@test "crashed supervisor re-adopts running daemon by default" {
+
+  create_pitchfork_toml <<EOF
+[daemons.adopt_test]
+run = "sleep 120"
+ready_delay = 1
+EOF
+
+  run pitchfork start adopt_test
+  assert_success
+  wait_for_status adopt_test running
+
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid adopt_test)"
+  [[ -n "$daemon_pid" ]]
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  # SIGKILL the supervisor so its daemon child is left orphaned.
+  kill_pid "$sup_pid"
+  sleep 1
+  pid_alive "$daemon_pid"
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+
+  # The SAME process is still alive and supervised again — not killed,
+  # not restarted, not duplicated.
+  pid_alive "$daemon_pid"
+  wait_for_status adopt_test running
+  [[ "$(get_daemon_pid adopt_test)" == "$daemon_pid" ]]
+
+  run pitchfork start adopt_test
+  assert_output --partial "already running"
+
+  # Stopping an adopted daemon terminates the process and the poll
+  # monitor completes the stopped transition.
+  run pitchfork stop adopt_test
+  assert_success
+  wait_for_status adopt_test stopped
+  run pid_alive "$daemon_pid"
+  assert_failure
+}
+
+@test "adopted daemon death is detected and marked errored" {
+
+  create_pitchfork_toml <<EOF
+[daemons.adopt_exit]
+run = "sleep 120"
+ready_delay = 1
+EOF
+
+  run pitchfork start adopt_exit
+  assert_success
+  wait_for_status adopt_exit running
+
+  local daemon_pid
+  daemon_pid="$(get_daemon_pid adopt_exit)"
+  [[ -n "$daemon_pid" ]]
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 1
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+  wait_for_status adopt_exit running
+
+  # Kill the adopted process externally; the poll monitor cannot observe
+  # the exit status of a non-child, so the daemon is marked errored.
+  kill_pid "$daemon_pid"
+  wait_for_status adopt_exit errored 30
+}
+
+@test "stopping an adopted daemon fires on_stop and on_exit hooks" {
+  local stop_marker
+  stop_marker="$(to_shell_path "$TEST_TEMP_DIR/adopt_stop_marker")"
+  local exit_marker
+  exit_marker="$(to_shell_path "$TEST_TEMP_DIR/adopt_exit_marker")"
+
+  create_pitchfork_toml <<EOF
+[daemons.adopt_hooks]
+run = "sleep 120"
+ready_delay = 1
+
+[daemons.adopt_hooks.hooks]
+on_stop = "touch \"$stop_marker\""
+on_exit = "touch \"$exit_marker\""
+EOF
+
+  run pitchfork start adopt_hooks
+  assert_success
+  wait_for_status adopt_hooks running
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  kill_pid "$sup_pid"
+  sleep 1
+
+  run pitchfork supervisor start
+  assert_success
+  sleep 3
+  wait_for_status adopt_hooks running
+
+  # stop() finalizes state itself; the poll monitor must still fire the
+  # stop hooks even when it wakes up after the stop already completed.
+  run pitchfork stop adopt_hooks
+  assert_success
+  wait_for_status adopt_hooks stopped
+
+  wait_for_file "$stop_marker"
+  assert_file_exists "$stop_marker"
+  wait_for_file "$exit_marker"
+  assert_file_exists "$exit_marker"
 }
 
 # ============================================================================

@@ -167,6 +167,12 @@ fn any_ready_check_remaining(
         || ready_cmd.is_some_and(|c| c.timeout.is_none() || !cmd_exhausted)
 }
 
+/// How long a failed start waits for the daemon's output to become queryable
+/// before reporting. Typically satisfied in a few dozen milliseconds; a daemon
+/// that failed without printing anything waits the whole of it, so keep it
+/// short.
+const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
+
 impl Supervisor {
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
@@ -435,6 +441,54 @@ impl Supervisor {
             None
         };
 
+        // Output reaches the monitoring task either from readers this process
+        // owns or, when a sink owns the stream, relayed over IPC. The channel is
+        // created here rather than in that task so it exists before the sink
+        // starts: a daemon whose very first line matches its readiness pattern
+        // would otherwise have the match reported with nowhere to deliver it.
+        let (output_tx, output_rx) = tokio::sync::mpsc::channel::<super::OutputLine>(256);
+        let mut output_relay = None;
+
+        // Set up out-of-process capture before building the command, so the
+        // daemon can be handed the pipe's write end directly.
+        let mut sink_pipe = None;
+        let mut sink_writer = None;
+        let mut sink_child = None;
+        if super::log_sink::is_supported(&opts) {
+            let log_format = opts
+                .log_format
+                .clone()
+                .unwrap_or_else(|| settings().logs.log_format.clone());
+            let watch_for = super::log_sink::WatchFor::from_opts(id, &opts);
+            // The token ties this attempt's sink to this attempt's channel, so
+            // a sink still draining a previous attempt cannot report into it.
+            let relay_token = if watch_for.is_empty() {
+                0
+            } else {
+                let relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
+                let token = relay.token();
+                output_relay = Some(relay);
+                token
+            };
+            match super::log_sink::SinkPipe::new(log_format, watch_for, relay_token) {
+                Ok((pipe, writer)) => match pipe.start(id) {
+                    Ok(child) => {
+                        sink_child = Some(super::log_sink::PendingSink::new(child));
+                        sink_pipe = Some(pipe);
+                        sink_writer = Some(writer);
+                    }
+                    Err(e) => {
+                        warn!("could not start log sink for {id}, capturing in-process: {e}");
+                    }
+                },
+                Err(e) => {
+                    // Fall back to in-process capture rather than refusing to
+                    // start the daemon.
+                    warn!("could not create log pipe for {id}, capturing in-process: {e}");
+                }
+            }
+        }
+
         let mut cmd = tokio::process::Command::new(&program);
 
         #[cfg(unix)]
@@ -454,13 +508,27 @@ impl Supervisor {
                 |e| miette::miette!("failed to clone slave PTY fd for stdout: {e}"),
             )?));
             cmd.stderr(std::process::Stdio::from(slave_file));
+        } else if let Some(writer) = sink_writer.take() {
+            // Capture belongs to a sibling sink process, so the daemon writes
+            // to a pipe this process does not read. See supervisor::log_sink.
+            let dup = writer
+                .try_clone()
+                .map_err(|e| miette::miette!("failed to dup log pipe for stderr: {e}"))?;
+            cmd.stdout(std::process::Stdio::from(writer))
+                .stderr(std::process::Stdio::from(dup));
         } else {
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
         }
 
         #[cfg(not(unix))]
-        {
+        if let Some(writer) = sink_writer.take() {
+            let dup = writer
+                .try_clone()
+                .map_err(|e| miette::miette!("failed to dup log pipe for stderr: {e}"))?;
+            cmd.stdout(std::process::Stdio::from(writer))
+                .stderr(std::process::Stdio::from(dup));
+        } else {
             cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
         }
@@ -535,11 +603,27 @@ impl Supervisor {
             }
         }
 
+        // Timestamp the run so a failed start can wait for this attempt's output
+        // specifically, rather than seeing an earlier attempt's.
+        let spawn_time = chrono::Local::now();
+        // A sink is already running at this point. Both bail-outs below have to
+        // reap it explicitly: dropping the handle only reaps on a best-effort
+        // basis, and run_once runs once per retry attempt, so a daemon that
+        // consistently fails to spawn would otherwise accumulate sinks.
+        // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
         let pid = match child.id() {
             Some(p) => p,
             None => {
                 warn!("Daemon {id} exited before PID could be captured");
+                // Unlike a daemon that never started, this one ran and may have
+                // said why it gave up, and its output is the only diagnosis
+                // available. Its write end is already closed, so the sink is on
+                // its way to end of file: let it finish writing before reporting,
+                // then reap whatever is left of it.
+                if sink_child.is_some() {
+                    super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+                }
                 return Ok(IpcResponse::DaemonFailed {
                     error: "Process exited immediately".to_string(),
                 });
@@ -547,6 +631,26 @@ impl Supervisor {
         };
         info!("started daemon {id} with pid {pid}");
         PROCS.refresh_pids(&[pid]);
+        // Register the daemon as monitored BEFORE persisting the Running
+        // state. The orphan reconciler treats any running, unmonitored PID
+        // as an orphan; if the state became visible first, a concurrent
+        // reconciliation pass could adopt — or under the kill policy,
+        // terminate — a daemon that was just legitimately started. The RAII
+        // guard unregisters on any early-error path below and is otherwise
+        // handed to the monitoring task.
+        let monitored_guard = super::adopt::MonitoredGuard::register(id.clone(), pid);
+        let monitor_token = monitored_guard.token();
+
+        // Hand the retained read end to a sink and keep one running for as long
+        // as this daemon is monitored.
+        let using_sink = sink_pipe.is_some();
+        // Take the sink out of the guard only once there is a pipe to supervise
+        // it with, so it is never left running unsupervised.
+        if let Some(pipe) = sink_pipe.take()
+            && let Some(child) = sink_child.as_mut().and_then(|pending| pending.take())
+        {
+            pipe.supervise(id.clone(), monitor_token, child);
+        }
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -627,15 +731,26 @@ impl Supervisor {
             None
         };
 
-        if pty_reader.is_none() && (stdout_reader.is_none() || stderr_reader.is_none()) {
+        if !using_sink
+            && pty_reader.is_none()
+            && (stdout_reader.is_none() || stderr_reader.is_none())
+        {
             error!("Failed to capture stdout/stderr for daemon {id}");
         }
 
         tokio::spawn(async move {
             let id = id_clone;
+            // Registered before the Running upsert above; unregisters when
+            // this monitoring task ends.
+            let _monitored_guard = monitored_guard;
+            // Likewise for sink-relayed output: dropping this stops the
+            // supervisor delivering into a channel nobody is reading. Dropped
+            // explicitly once the daemon exits, before the drain below.
+            let output_relay = output_relay;
 
-            // Merge all output sources (PTY master OR stdout+stderr) into a single channel.
-            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<String>(256);
+            // Merge all output sources (PTY master OR stdout+stderr, or a
+            // sink's IPC reports) into a single channel.
+            let mut output_rx = output_rx;
 
             if let Some(mut reader) = pty_reader {
                 // PTY mode: single merged stream from the master.
@@ -647,7 +762,14 @@ impl Supervisor {
                         if line.ends_with('\r') {
                             line.pop();
                         }
-                        if output_tx.send(line).await.is_err() {
+                        if output_tx
+                            .send(super::OutputLine {
+                                text: line,
+                                source: super::OutputSource::Local,
+                            })
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -661,7 +783,14 @@ impl Supervisor {
                     let tx = output_tx.clone();
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = stdout.next_line().await {
-                            if tx.send(line).await.is_err() {
+                            if tx
+                                .send(super::OutputLine {
+                                    text: line,
+                                    source: super::OutputSource::Local,
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -671,13 +800,22 @@ impl Supervisor {
                     let tx = output_tx.clone();
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = stderr.next_line().await {
-                            if tx.send(line).await.is_err() {
+                            if tx
+                                .send(super::OutputLine {
+                                    text: line,
+                                    source: super::OutputSource::Local,
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
                     });
                 }
-                // Drop the last sender so the channel closes when all readers finish.
+                // Drop the last sender so the channel closes when all readers
+                // finish. The relay holds its own clone, so a sink's reports
+                // still have somewhere to go after these end.
                 drop(output_tx);
             }
             let log_store = Arc::clone(&LOG_STORE);
@@ -905,11 +1043,16 @@ impl Supervisor {
                         }
                         break;
                     },
-                    Some(line) = output_rx.recv() => {
-                        let parsed = parse_line(&line);
-                        log_buffer.push(parsed);
-                        if log_buffer.len() >= LOG_BATCH_SIZE {
-                            let _ = flush_logs(&mut log_buffer);
+                    Some(super::OutputLine { text: line, source }) = output_rx.recv() => {
+                        // A line relayed by a sink is already in the store —
+                        // the sink wrote and flushed it before reporting it —
+                        // so it arrives here only to be acted on.
+                        if matches!(source, super::OutputSource::Local) {
+                            let parsed = parse_line(&line);
+                            log_buffer.push(parsed);
+                            if log_buffer.len() >= LOG_BATCH_SIZE {
+                                let _ = flush_logs(&mut log_buffer);
+                            }
                         }
                         trace!("output: {id} {line}");
 
@@ -947,14 +1090,24 @@ impl Supervisor {
                             }
                         }
 
-                        // Check on_output hook
+                        // Check on_output hook. A sink has already applied the
+                        // filter, and says so per line: a line reported only
+                        // because it announced readiness must not fire a hook
+                        // that filters for something else.
                         if let Some(ref hook) = on_output_hook {
-                            let matched = match (&hook.filter, &on_output_pattern) {
-                                (Some(substr), _) => line_clean.contains(substr.as_str()),
-                                (None, Some(re)) => re.is_match(&line_clean),
-                                (None, None) => true,
+                            let matched = match source {
+                                super::OutputSource::Sink { fires_hook } => fires_hook,
+                                super::OutputSource::Local => match (&hook.filter, &on_output_pattern) {
+                                    (Some(substr), _) => line_clean.contains(substr.as_str()),
+                                    (None, Some(re)) => re.is_match(&line_clean),
+                                    (None, None) => true,
+                                },
                             };
                             if matched {
+                                // The debounce is applied here as well as in the
+                                // sink. A replacement sink starts with a fresh
+                                // clock, and would otherwise let the hook fire
+                                // twice inside one configured window.
                                 let now = std::time::Instant::now();
                                 let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
                                 if elapsed.is_none_or(|e| e >= on_output_debounce) {
@@ -1308,6 +1461,12 @@ impl Supervisor {
             // None when all data has been consumed. A total deadline of 5 s
             // guards against a stuck reader (e.g. PTY master FD not closing)
             // while ensuring drain doesn't block post-exit cleanup indefinitely.
+            //
+            // Stop accepting relayed output first: the relay holds a sender of
+            // its own, so leaving it registered would keep the channel open and
+            // make every drain wait out the whole deadline. Readiness is moot
+            // now anyway — the process has exited.
+            drop(output_relay);
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let now = tokio::time::Instant::now();
@@ -1319,7 +1478,10 @@ impl Supervisor {
                 else {
                     break;
                 };
-                log_buffer.push(parse_line(&line));
+                // Sink-relayed lines are already stored; see the select loop.
+                if matches!(line.source, super::OutputSource::Local) {
+                    log_buffer.push(parse_line(&line.text));
+                }
             }
             // Flush any remaining log lines (including drained) before the process exits.
             // Await the flush to guarantee all buffered logs are persisted before cleanup.
@@ -1424,19 +1586,22 @@ impl Supervisor {
                     ),
                     _ => (DaemonStatus::Errored(exit_code), false),
                 };
-                if let Err(e) = SUPERVISOR
-                    .upsert_daemon(
-                        UpsertDaemonOpts::builder(id.clone())
-                            .set(|o| {
-                                o.pid = None;
-                                o.status = new_status;
-                                o.last_exit_success = Some(last_exit_success);
-                            })
-                            .build(),
+                // Revalidate ownership inside the same state-lock section that
+                // performs the write. The snapshot above was taken without
+                // holding the lock, so a restart running on another thread can
+                // install a successor in between; overwriting its record would
+                // clear a live daemon's PID and undo the restart.
+                if !SUPERVISOR
+                    .finalize_monitored_exit(
+                        &id,
+                        pid,
+                        monitor_token,
+                        new_status,
+                        Some(last_exit_success),
                     )
                     .await
                 {
-                    error!("Failed to update daemon state for {id}: {e}");
+                    debug!("daemon {id} exit state was not written; a successor owns the record");
                 }
             }
 
@@ -1479,6 +1644,20 @@ impl Supervisor {
                 }
                 Ok(Err(exit_code)) => {
                     error!("daemon {id} failed before becoming ready");
+                    // The caller reports this by querying the log store for
+                    // what the daemon printed, so wait for the sink's final
+                    // write first. The in-process path got this ordering by
+                    // flushing synchronously before signalling.
+                    //
+                    // Only on the attempt that gives up: `run` retries inline,
+                    // and waiting after every attempt would both delay the
+                    // backoff and widen the window in which the daemon looks
+                    // errored and idle — long enough for the background retry
+                    // checker to start an attempt of its own alongside it.
+                    let last_attempt = opts.retry_count >= opts.retry.count();
+                    if using_sink && last_attempt {
+                        super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
+                    }
                     Ok(IpcResponse::DaemonFailedWithCode { exit_code })
                 }
                 Err(_) => {
@@ -1505,6 +1684,30 @@ impl Supervisor {
             if let Some(pid) = daemon.pid {
                 trace!("killing pid: {pid}");
                 if PROCS.is_running(pid) {
+                    // Something is alive on that PID, but the kill below signals
+                    // the entire process group: if the PID was recycled while
+                    // this record sat unsupervised, that group belongs to an
+                    // unrelated process tree. The daemon itself is gone either
+                    // way, so report it as not running and clear the record.
+                    if !super::signalling_pid_is_authorized(
+                        daemon.start_time,
+                        PROCS.start_time(pid),
+                    ) {
+                        warn!(
+                            "pid {pid} recorded for daemon {id} belongs to another process now; not signalling it"
+                        );
+                        self.upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = DaemonStatus::Stopped;
+                                })
+                                .build(),
+                        )
+                        .await?;
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
+
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())

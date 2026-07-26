@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork daemons [--json] <SUBCOMMAND>`
 - **Aliases**: `daemon`
+- **Effect**: read-only
 
 List configured daemons from all merged config files.
 

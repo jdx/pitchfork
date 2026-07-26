@@ -544,3 +544,184 @@ EOF
 # started a web supervisor and consumed the SSE `/logs/project%2Fsse_connect/stream`
 # endpoint. Converting it reliably to bash requires backgrounding the supervisor,
 # parsing a dynamic port, and timing SSE chunks with curl. Skipping for now.
+
+# ============================================================================
+# Out-of-process capture (log sink)
+# ============================================================================
+
+@test "log capture survives a supervisor crash" {
+  skip_on_windows "relies on SIGKILL semantics for the supervisor"
+
+  # No SIGPIPE guard in the daemon: the whole point is that a plain writer
+  # survives losing its supervisor, because the sink still holds the pipe.
+  create_pitchfork_toml <<EOF
+[daemons.crashlog]
+run = "i=0; while true; do i=\$((i+1)); echo crashlog-\$i; sleep 0.3; done"
+ready_delay = 1
+EOF
+
+  run pitchfork start crashlog
+  assert_success
+  wait_for_logs crashlog "crashlog-"
+
+  local daemon_pid sup_pid before
+  daemon_pid="$(get_daemon_pid crashlog)"
+  sup_pid="$(grep -A 10 '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" |
+    grep -E '^pid = ' | head -1 | sed -E 's/.*= //')"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+  before="$(read_logs crashlog | grep -c "crashlog-")"
+
+  kill_pid "$sup_pid"
+  sleep 3
+
+  # The daemon outlives its supervisor, and its output keeps being recorded
+  # even though no supervisor exists to record it.
+  pid_alive "$daemon_pid"
+  local after
+  after="$(read_logs crashlog | grep -c "crashlog-")"
+  [[ "$after" -gt "$before" ]] || {
+    echo "capture stopped at the crash: before=$before after=$after" >&2
+    return 1
+  }
+
+  kill_pid "$daemon_pid"
+}
+
+@test "ready_output is decided by the sink" {
+  skip_on_windows "relies on pgrep to see the sink process"
+
+  # Readiness must not arrive before the daemon says it is ready, and must
+  # arrive once it does — with the supervisor never reading the output itself.
+  create_pitchfork_toml <<EOF
+[daemons.sinkready]
+run = "sleep 2; echo SERVING on 8080; sleep 300"
+ready_output = "SERVING"
+EOF
+
+  local start end
+  start="$(date +%s)"
+  run pitchfork start sinkready
+  assert_success
+  end="$(date +%s)"
+
+  # A sink owns the stream, so the match came back over IPC rather than from
+  # the supervisor reading the pipe.
+  run pgrep -f "log-sink --daemon-id .*sinkready"
+  assert_success
+
+  # It waited for the line rather than returning early on a timer.
+  [[ "$((end - start))" -ge 2 ]] || {
+    echo "returned after $((end - start))s; readiness did not wait for the output" >&2
+    return 1
+  }
+
+  run pitchfork status sinkready
+  assert_output --partial "running"
+
+  # The line that decided readiness is in the log store exactly once: the sink
+  # stores it, and the copy relayed to the supervisor is for matching only.
+  assert_equal "$(read_logs sinkready | grep -c "SERVING on 8080")" "1"
+
+  pitchfork stop sinkready
+}
+
+@test "log capture for a ready_output daemon survives a supervisor crash" {
+  skip_on_windows "relies on SIGKILL semantics for the supervisor"
+
+  # `ready_output` used to force in-process capture, which put the supervisor
+  # back in the data path for exactly these daemons.
+  create_pitchfork_toml <<EOF
+[daemons.readycrash]
+run = "echo LISTENING; i=0; while true; do i=\$((i+1)); echo readycrash-\$i; sleep 0.3; done"
+ready_output = "LISTENING"
+EOF
+
+  run pitchfork start readycrash
+  assert_success
+  wait_for_logs readycrash "readycrash-"
+
+  local daemon_pid sup_pid before
+  daemon_pid="$(get_daemon_pid readycrash)"
+  sup_pid="$(grep -A 10 '\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" |
+    grep -E '^pid = ' | head -1 | sed -E 's/.*= //')"
+  [[ -n "$daemon_pid" && -n "$sup_pid" ]]
+  before="$(read_logs readycrash | grep -c "readycrash-")"
+
+  kill_pid "$sup_pid"
+  sleep 3
+
+  pid_alive "$daemon_pid"
+  local after
+  after="$(read_logs readycrash | grep -c "readycrash-")"
+  [[ "$after" -gt "$before" ]] || {
+    echo "capture stopped at the crash: before=$before after=$after" >&2
+    return 1
+  }
+
+  kill_pid "$daemon_pid"
+}
+
+@test "a log sink that dies is replaced" {
+  skip_on_windows "relies on SIGKILL semantics and pgrep"
+
+  create_pitchfork_toml <<EOF
+[daemons.sinkdies]
+run = "i=0; while true; do i=\$((i+1)); echo sinkdies-\$i; sleep 0.3; done"
+ready_delay = 1
+EOF
+
+  run pitchfork start sinkdies
+  assert_success
+  wait_for_logs sinkdies "sinkdies-"
+
+  local daemon_pid first
+  daemon_pid="$(get_daemon_pid sinkdies)"
+  first="$(pgrep -f "log-sink --daemon-id .*/sinkdies" | head -1)"
+  [[ -n "$first" ]] || {
+    echo "no sink process found for the daemon" >&2
+    return 1
+  }
+
+  kill_pid "$first"
+
+  # A replacement must take over, or the pipe would fill and block the daemon.
+  local second=""
+  for _ in $(seq 1 50); do
+    second="$(pgrep -f "log-sink --daemon-id .*/sinkdies" | head -1)"
+    [[ -n "$second" && "$second" != "$first" ]] && break
+    sleep 0.2
+  done
+  [[ -n "$second" && "$second" != "$first" ]] || {
+    echo "sink was not replaced (was $first, now ${second:-none})" >&2
+    return 1
+  }
+  pid_alive "$daemon_pid"
+
+  # And capture resumes through the replacement.
+  local before after
+  before="$(read_logs sinkdies | grep -c "sinkdies-")"
+  for _ in $(seq 1 50); do
+    after="$(read_logs sinkdies | grep -c "sinkdies-")"
+    [[ "$after" -gt "$before" ]] && break
+    sleep 0.2
+  done
+  [[ "$after" -gt "$before" ]] || {
+    echo "capture did not resume: before=$before after=$after" >&2
+    return 1
+  }
+
+  pitchfork stop sinkdies
+}
+
+@test "start failure diagnostics include the daemon's output" {
+  # collect_startup_logs reads the log store, so a failed start must not report
+  # before the sink has written what the daemon printed.
+  create_pitchfork_toml <<EOF
+[daemons.diagfail]
+run = "echo diagnostic-marker; exit 3"
+ready_delay = 5
+EOF
+
+  run pitchfork start diagfail
+  assert_output --partial "diagnostic-marker"
+}

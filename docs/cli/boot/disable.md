@@ -2,6 +2,7 @@
 # `pitchfork boot disable`
 
 - **Usage**: `pitchfork boot disable`
+- **Effect**: modifies state
 
 Disable boot start for pitchfork supervisor
 
