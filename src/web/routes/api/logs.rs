@@ -301,11 +301,10 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         let mut last_id: i64 = cursor_id;
 
         // initial_gen was captured atomically with the initial history query.
-        // If it failed (None), we treat the first successful poll's generation
-        // as a clear event to be safe — the client already has the initial
-        // history, and if a clear happened during the blind window, treating
-        // it as a clear ensures stale entries are flushed.
-        let mut last_clear_gen: Option<u64> = initial_gen;
+        // A value of None means the daemon has never been cleared (no row in
+        // log_clear_generations). Treat that as generation 0 so a subsequent
+        // clear (which bumps to 1+) is detected as a change.
+        let mut last_clear_gen: u64 = initial_gen.unwrap_or(0);
 
         const BATCH_SIZE: usize = 500;
         loop {
@@ -325,23 +324,11 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 }
             };
 
-            match last_clear_gen {
-                Some(prev) if current_gen != prev => {
-                    // Log clear detected — reset cursor.
-                    last_clear_gen = Some(current_gen);
-                    last_id = 0;
-                    continue;
-                }
-                None => {
-                    // Initial generation was unknown (transient lookup
-                    // failure during history fetch). Treat the first
-                    // successful generation as a clear event to flush
-                    // potentially stale initial history.
-                    last_clear_gen = Some(current_gen);
-                    last_id = 0;
-                    continue;
-                }
-                _ => {}
+            if current_gen != last_clear_gen {
+                // Log clear detected — reset cursor.
+                last_clear_gen = current_gen;
+                last_id = 0;
+                continue;
             }
 
             let raw_entries = match tokio::task::spawn_blocking({
