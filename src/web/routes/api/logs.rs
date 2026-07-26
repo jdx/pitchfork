@@ -199,39 +199,36 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         None => None,
     };
 
-    // Fetch initial history and clear generation in the same spawn_blocking
-    // to get a consistent snapshot. This eliminates the blind window between
-    // history fetch and generation lookup where a log clear could go undetected.
+    // Fetch initial history and clear generation atomically (single
+    // connection lock + transaction) so a concurrent clear cannot pair
+    // stale history with a new generation and evade clear detection.
     let (initial, initial_gen) = match tokio::task::spawn_blocking({
         let q = qualified.clone();
         let mf = message_filters.clone();
         let ff = field_filters.clone();
         let d = daemon_id.clone();
         move || {
-            let entries = LOG_STORE.query(&LogQuery {
-                daemon_ids: vec![q],
-                from,
-                to,
-                limit: Some(history_lines),
-                order_desc: true,
-                after_id: None,
-                before_id: query.before_id,
-                message_filters: mf,
-                field_filters: ff,
-                include_structured: true,
-            });
-            let clear_gen = LOG_STORE.last_clear_generation(&d);
-            (entries, clear_gen)
+            LOG_STORE.query_with_generation(
+                &LogQuery {
+                    daemon_ids: vec![q],
+                    from,
+                    to,
+                    limit: Some(history_lines),
+                    order_desc: true,
+                    after_id: None,
+                    before_id: query.before_id,
+                    message_filters: mf,
+                    field_filters: ff,
+                    include_structured: true,
+                },
+                &d,
+            )
         }
     })
     .await
     {
-        Ok((Ok(entries), Ok(clear_gen))) => (entries, clear_gen),
-        Ok((Ok(entries), Err(e))) => {
-            log::warn!("failed to get initial clear generation for {daemon_id}: {e}");
-            (entries, None)
-        }
-        Ok((Err(e), _)) => {
+        Ok(Ok((entries, clear_gen))) => (entries, clear_gen),
+        Ok(Err(e)) => {
             log::warn!("failed to query logs for {daemon_id}: {e}");
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)

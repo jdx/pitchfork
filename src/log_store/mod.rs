@@ -248,6 +248,21 @@ pub trait LogStore: Send + Sync {
         let _ = daemon_id;
         Ok(None)
     }
+
+    /// Query logs and the current clear generation atomically.
+    ///
+    /// This acquires a single connection lock and wraps both reads in one
+    /// transaction so that a concurrent `clear` cannot pair stale history
+    /// with a new generation (which would evade clear detection).
+    fn query_with_generation(
+        &self,
+        opts: &LogQuery,
+        daemon_id: &DaemonId,
+    ) -> Result<(Vec<LogEntry>, Option<u64>)> {
+        let entries = self.query(opts)?;
+        let generation = self.last_clear_generation(daemon_id)?;
+        Ok((entries, generation))
+    }
 }
 
 pub mod sqlite;

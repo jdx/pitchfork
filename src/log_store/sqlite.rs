@@ -1194,6 +1194,40 @@ impl LogStore for SqliteLogStore {
             })
             .transpose()
     }
+
+    fn query_with_generation(
+        &self,
+        opts: &LogQuery,
+        daemon_id: &DaemonId,
+    ) -> Result<(Vec<LogEntry>, Option<u64>)> {
+        let conn = self.conn.lock().unwrap();
+        // Wrap both reads in a single transaction so a concurrent clear
+        // cannot interleave between them. In WAL mode, BEGIN acquires a
+        // consistent snapshot that both statements share.
+        conn.execute_batch("BEGIN").into_diagnostic()?;
+        let result = (|| {
+            let (sql, query_params) = Self::build_query_sql(opts, None);
+            let entries = Self::execute_built_query(&conn, &sql, &query_params)?;
+            let generation: Option<i64> = conn
+                .query_row(
+                    "SELECT generation FROM log_clear_generations WHERE daemon_id = ?1",
+                    params![daemon_id.qualified()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .into_diagnostic()?;
+            let generation = generation
+                .map(|g| {
+                    u64::try_from(g)
+                        .map_err(|_| miette::miette!("log clear generation cannot be negative"))
+                })
+                .transpose()?;
+            Ok((entries, generation))
+        })();
+        // Always rollback (read transaction just needs to end).
+        let _ = conn.execute_batch("ROLLBACK");
+        result
+    }
 }
 
 /// Global singleton log store.
