@@ -335,11 +335,19 @@ every descendant holding the write end have gone.
         arg <LOG_FORMAT>
     }
     flag --ready-pattern help="Regex whose first match means the daemon is ready" {
-        long_help "Regex whose first match means the daemon is ready\n\nSet for a daemon configured with `ready_output`. The supervisor cannot match it itself — this process holds the output — so the match is reported back over IPC."
+        long_help #"""
+Regex whose first match means the daemon is ready
+
+Set for a daemon configured with `ready_output`. The supervisor cannot match it itself — this process holds the output — so the match is reported back over IPC.
+"""#
         arg <READY_PATTERN>
     }
     flag --relay-token help="Token identifying the start attempt this sink belongs to" default="0" {
-        long_help "Token identifying the start attempt this sink belongs to\n\nQuoted back when reporting a match. The supervisor drops reports whose token is no longer current, so a sink still draining a failed attempt cannot mark that daemon's retry ready."
+        long_help #"""
+Token identifying the start attempt this sink belongs to
+
+Quoted back when reporting a match. The supervisor drops reports whose token is no longer current, so a sink still draining a failed attempt cannot mark that daemon's retry ready.
+"""#
         arg <RELAY_TOKEN>
     }
 }
