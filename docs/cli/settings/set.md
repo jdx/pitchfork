@@ -2,6 +2,7 @@
 # `pitchfork settings set`
 
 - **Usage**: `pitchfork settings set [FLAGS] <KEY> <VALUE>`
+- **Effect**: modifies state
 
 Set a setting value in a config file
 

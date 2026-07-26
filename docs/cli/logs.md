@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork logs [FLAGS] [ID]…`
 - **Aliases**: `l`
+- **Effect**: read-only
 
 Displays logs for daemon(s)
 
@@ -36,6 +37,8 @@ Show only logs for the specified daemon(s)
 ## Flags
 
 ### `-c --clear`
+
+**Effect**: destructive — may delete or irreversibly overwrite
 
 Delete logs
 

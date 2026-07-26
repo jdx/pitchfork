@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork enable <ID>`
 - **Aliases**: `e`
+- **Effect**: modifies state
 
 Allow a daemon to start
 

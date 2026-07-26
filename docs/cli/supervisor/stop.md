@@ -2,5 +2,6 @@
 # `pitchfork supervisor stop`
 
 - **Usage**: `pitchfork supervisor stop`
+- **Effect**: modifies state
 
 Stops the internal pitchfork daemon running in the background

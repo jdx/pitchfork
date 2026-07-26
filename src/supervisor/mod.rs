@@ -77,19 +77,15 @@ pub struct Supervisor {
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete.
     /// Finished handles are pruned on each push to avoid unbounded growth.
     pub(crate) hook_tasks: Mutex<Vec<JoinHandle<()>>>,
-    /// Tracks in-flight background output-drain tasks spawned by monitor exit
-    /// paths so shutdown can wait for trailing log lines to be persisted.
-    /// Finished handles are pruned on each push to avoid unbounded growth.
-    pub(crate) drain_tasks: Mutex<Vec<JoinHandle<()>>>,
     /// Number of monitor tasks currently running. Each monitor task registers
     /// a `MonitorGuard` at start (before any lifecycle work) and drops it on
     /// exit, decrementing this counter and notifying `monitor_done`. Used by
     /// `close()` to wait until all monitors have exited and registered any
-    /// drain/hook tasks before draining those task sets.
+    /// hook tasks before draining those.
     pub(crate) active_monitors: AtomicU32,
     /// Signalled by each monitor task when it exits (via `MonitorGuard::drop`).
     /// `close()` waits on this to ensure no monitor is still mid-flight
-    /// before collecting drain/hook task handles.
+    /// before collecting hook task handles.
     pub(crate) monitor_done: Notify,
     /// Cancellation token for the proxy server — cancelled on shutdown to
     /// stop accepting new connections and drain in-flight ones.
@@ -110,6 +106,38 @@ pub struct Supervisor {
     /// reconciliation tell a supervised daemon from one whose monitor died
     /// with a previous supervisor process.
     pub(crate) monitored: std::sync::Mutex<HashMap<DaemonId, adopt::MonitorEntry>>,
+    /// Where to deliver output a log sink reports over IPC.
+    ///
+    /// A daemon whose output is captured by a sink writes nothing this process
+    /// reads, so the sink evaluates the daemon's readiness pattern itself and
+    /// sends back the line that matched. The monitoring task registers here
+    /// before the sink starts and unregisters when it ends, so a line arriving
+    /// from a sink that outlived its daemon has nowhere to go and is dropped.
+    pub(crate) sink_output: std::sync::Mutex<HashMap<DaemonId, log_sink::Relay>>,
+}
+
+/// A line of daemon output on its way to the monitoring task.
+#[derive(Debug, Clone)]
+pub(crate) struct OutputLine {
+    pub(crate) text: String,
+    pub(crate) source: OutputSource,
+}
+
+/// Where a line of daemon output came from, which decides what is left to do
+/// with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputSource {
+    /// Read by this process from the daemon's stdout, stderr or PTY master.
+    /// Nothing has been done with it yet.
+    Local,
+    /// Reported by the daemon's log sink, which has already written the line to
+    /// the store — storing it again here would duplicate it.
+    ///
+    /// `fires_hook` is the sink's answer to whether this line passed the
+    /// `on_output` hook's filter and debounce. It is carried rather than
+    /// re-derived because a line can be reported for readiness alone, and
+    /// firing a hook that filters for something else would be wrong.
+    Sink { fires_hook: bool },
 }
 
 pub(crate) fn interval_duration() -> Duration {
@@ -271,7 +299,6 @@ impl Supervisor {
             pending_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
-            drain_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),
             monitor_done: Notify::new(),
             proxy_cancel: Mutex::new(None),
@@ -280,6 +307,7 @@ impl Supervisor {
             lan_monitor_task: Mutex::new(None),
             flush_cancel: std::sync::Mutex::new(None),
             monitored: std::sync::Mutex::new(HashMap::new()),
+            sink_output: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -1068,39 +1096,6 @@ impl Supervisor {
             }
         }
 
-        // Await all in-flight output-drain tasks with a single bounded timeout.
-        // Each drain task has its own 5s receiver-drain deadline internally; we
-        // give the whole batch one 7s budget and join concurrently so shutdown
-        // delay is bounded regardless of how many daemons were running. This
-        // preserves the benefit of moving the 5s drain off the monitor critical
-        // path: `close()` blocks for at most ~7s, not N×5s.
-        let drain_handles: Vec<JoinHandle<()>> =
-            std::mem::take(&mut *self.drain_tasks.lock().await);
-        if !drain_handles.is_empty() {
-            let mut join_set = tokio::task::JoinSet::new();
-            for handle in drain_handles {
-                join_set.spawn(async move {
-                    let _ = handle.await;
-                });
-            }
-            let overall_timeout = Duration::from_secs(7);
-            let timed_out = tokio::time::timeout(overall_timeout, async {
-                while join_set.join_next().await.is_some() {}
-            })
-            .await
-            .is_err();
-            if timed_out {
-                let remaining = join_set.len();
-                warn!(
-                    "output drain tasks did not complete within {overall_timeout:?} during \
-                     shutdown, aborting {remaining} remaining task(s)"
-                );
-                join_set.abort_all();
-                // Reap the aborted tasks so their resources are released.
-                while join_set.join_next().await.is_some() {}
-            }
-        }
-
         let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.hook_tasks.lock().await);
         let hook_timeout = Duration::from_secs(30);
         for handle in handles {
@@ -1361,21 +1356,18 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
         // Safety check: verify the live process really is the daemon we
         // recorded, not an unrelated process that received a recycled PID.
         // The kernel start time is a stable identity for the lifetime of a
-        // process; fall back to comparing the process name for state files
-        // written by older versions that didn't record start_time.
+        // process, and is the only thing accepted as one.
         let current_start_time = PROCS.start_time(pid);
-        let current_title = PROCS.title(pid);
-        let matches = process_identity_matches(
-            daemon.start_time,
-            daemon.title.as_deref(),
-            current_start_time,
-            current_title.as_deref(),
-        );
+        let matches = process_identity_matches(daemon.start_time, current_start_time);
 
         if !matches {
-            if daemon.start_time.is_some() && current_start_time.is_none() {
+            // Either side missing means the identity cannot be checked at all,
+            // which is different from checking it and finding a stranger: retain
+            // the running state rather than resetting a record whose process may
+            // well still be the daemon.
+            if daemon.start_time.is_none() || current_start_time.is_none() {
                 warn!(
-                    "could not verify start time for live pid {pid} recorded for daemon {}; retaining running state",
+                    "could not verify the identity of live pid {pid} recorded for daemon {}; retaining running state",
                     daemon.id,
                 );
                 continue;
@@ -1470,21 +1462,43 @@ pub(crate) fn orphan_policy() -> String {
 
 /// Verify that live process identity matches the persisted daemon identity.
 ///
-/// A recorded start time takes precedence over the legacy title field. Missing
-/// current identity data must never authorize terminating a process.
+/// Both start times are required. A process name was once accepted in place of
+/// a recorded start time, for state written before start times existed, but a
+/// name is not an identity: a recycled PID belonging to another copy of the same
+/// program matches it, and adopting or killing on that basis acts on the wrong
+/// process. Missing identity, on either side, means unverifiable — and
+/// unverifiable must never authorize acting on a process.
 fn process_identity_matches(
     recorded_start_time: Option<u64>,
-    recorded_title: Option<&str>,
     current_start_time: Option<u64>,
-    current_title: Option<&str>,
 ) -> bool {
-    match recorded_start_time {
-        Some(recorded) => current_start_time == Some(recorded),
-        None => matches!(
-            (recorded_title, current_title),
-            (Some(recorded), Some(current)) if recorded == current
-        ),
+    match (recorded_start_time, current_start_time) {
+        (Some(recorded), Some(current)) => recorded == current,
+        _ => false,
     }
+}
+
+/// Whether a PID read from persisted state may be signalled.
+///
+/// Stopping a daemon signals its whole process *group*, so acting on a PID that
+/// has been recycled since it was recorded takes down an unrelated process tree.
+/// Records are refused only when their identity is positively contradicted: if
+/// either start time is unknown the PID stays as signallable as it was before
+/// identities were recorded, so a daemon whose record predates the field can
+/// still be stopped rather than becoming permanently unstoppable.
+///
+/// This is deliberately weaker than [`process_identity_matches`], which decides
+/// whether to adopt or kill a process nobody asked about. Here the user has
+/// named the daemon and asked for it to stop; the check exists to catch the
+/// case where the answer is provably the wrong process.
+pub(crate) fn signalling_pid_is_authorized(
+    recorded_start_time: Option<u64>,
+    current_start_time: Option<u64>,
+) -> bool {
+    !matches!(
+        (recorded_start_time, current_start_time),
+        (Some(recorded), Some(current)) if recorded != current
+    )
 }
 
 /// How a daemon's run ended, which decides what happens to the recorded
@@ -1640,7 +1654,7 @@ fn chmod_recursive(dir: &std::path::Path) {
 mod tests {
     use super::{
         BOOT_TIME_TOLERANCE_SECS, process_identity_matches, should_remove_liveness_session,
-        unobserved_exit_status,
+        signalling_pid_is_authorized, unobserved_exit_status,
     };
     use crate::daemon_status::DaemonStatus;
     use crate::state_file::ProjectSession;
@@ -1732,46 +1746,35 @@ mod tests {
     }
 
     #[test]
-    fn orphan_identity_does_not_match_when_current_identity_is_missing() {
-        assert!(!process_identity_matches(
-            Some(123),
-            Some("daemon"),
-            None,
-            None,
-        ));
-        assert!(!process_identity_matches(None, Some("daemon"), None, None,));
+    fn orphan_identity_requires_both_start_times() {
+        assert!(process_identity_matches(Some(123), Some(123)));
+        assert!(!process_identity_matches(Some(123), Some(456)));
+        // Unreadable current identity: unverifiable, so not a match.
+        assert!(!process_identity_matches(Some(123), None));
     }
 
     #[test]
-    fn orphan_identity_requires_recorded_start_time_when_available() {
-        assert!(process_identity_matches(
-            Some(123),
-            Some("old-title"),
-            Some(123),
-            Some("new-title"),
-        ));
-        assert!(!process_identity_matches(
-            Some(123),
-            Some("same-title"),
-            Some(456),
-            Some("same-title"),
-        ));
+    fn signalling_is_refused_only_for_a_contradicted_identity() {
+        // Provably someone else's process group: refuse.
+        assert!(!signalling_pid_is_authorized(Some(123), Some(456)));
+        // Verified as the daemon's own.
+        assert!(signalling_pid_is_authorized(Some(123), Some(123)));
+        // Unknown on either side. Stopping stays possible, because the user has
+        // named this daemon and a record that cannot be verified must not become
+        // one that can never be stopped.
+        assert!(signalling_pid_is_authorized(None, Some(123)));
+        assert!(signalling_pid_is_authorized(Some(123), None));
+        assert!(signalling_pid_is_authorized(None, None));
     }
 
     #[test]
-    fn orphan_identity_falls_back_to_title_for_legacy_state() {
-        assert!(process_identity_matches(
-            None,
-            Some("daemon"),
-            Some(123),
-            Some("daemon"),
-        ));
-        assert!(!process_identity_matches(
-            None,
-            Some("daemon"),
-            Some(123),
-            Some("unrelated"),
-        ));
+    fn orphan_identity_rejects_records_without_a_start_time() {
+        // State written before start times were recorded. A process name used
+        // to stand in here, but another copy of the same program on a recycled
+        // PID matches a name, so such records are no longer verifiable and must
+        // not authorize adopting or killing anything.
+        assert!(!process_identity_matches(None, Some(123)));
+        assert!(!process_identity_matches(None, None));
     }
 
     #[test]

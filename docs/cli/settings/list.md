@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork settings list [--group <GROUP>] [--json]`
 - **Aliases**: `ls`
+- **Effect**: read-only
 
 List all available settings with types and defaults
 

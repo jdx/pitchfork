@@ -7,6 +7,7 @@ mod api_schema;
 mod boot;
 mod cd;
 mod clean;
+mod command_effects;
 mod completion;
 mod daemons;
 mod disable;

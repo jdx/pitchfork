@@ -229,18 +229,14 @@ impl Supervisor {
             }
 
             let current_start_time = PROCS.start_time(pid);
-            let current_title = PROCS.title(pid);
-            let matches = super::process_identity_matches(
-                daemon.start_time,
-                daemon.title.as_deref(),
-                current_start_time,
-                current_title.as_deref(),
-            );
+            let matches = super::process_identity_matches(daemon.start_time, current_start_time);
 
             if !matches {
-                if daemon.start_time.is_some() && current_start_time.is_none() {
+                // Unverifiable is not the same as mismatched: retain the running
+                // state rather than recording a death that may not have happened.
+                if daemon.start_time.is_none() || current_start_time.is_none() {
                     warn!(
-                        "could not verify start time for live pid {pid} recorded for daemon {}; retaining running state",
+                        "could not verify the identity of live pid {pid} recorded for daemon {}; retaining running state",
                         daemon.id,
                     );
                     continue;
@@ -377,7 +373,7 @@ impl Supervisor {
         true
     }
 
-    async fn finalize_if_pid(
+    pub(super) async fn finalize_if_pid(
         &self,
         id: &DaemonId,
         pid: u32,

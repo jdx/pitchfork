@@ -63,7 +63,7 @@ graph TD
 |------|----------------|
 | `mod.rs` | `Supervisor` struct, `start()`, signal handling, `close()`, orphan cleanup, zombie reaper (PID1 mode) |
 | `lifecycle.rs` | `run()` / `run_once()` / `stop()`, port auto-bump, readiness loop, monitor task, `RunIdentity`, proxy env injection, `active_port` detection |
-| `log_sink.rs` | Out-of-process output capture: `SinkPipe` (pipe creation, sink spawn/supervise), `PendingSink` (RAII guard), `is_supported()`, `wait_for_output()` |
+| `log_sink.rs` | Out-of-process output capture: `SinkPipe` (pipe creation, sink spawn/supervise), `PendingSink` (RAII guard), `OutputRelay` (IPC match reporting), `WatchFor` (pattern/hook config for sink), `is_supported()`, `wait_for_output()` |
 | `state.rs` | `UpsertDaemonOpts` builder, daemon/shell-dir state accessors |
 | `watchers.rs` | Interval, cron, and file watchers; resource limits; log retention |
 | `autostop.rs` | Shell-directory tracking, pending autostop scheduling, boot daemons |
@@ -209,7 +209,7 @@ On startup, legacy daemon keys (without a namespace) are automatically migrated 
 4. **Shell parsing**: split `general.shell` (default `sh -c`) into program + args. The run script is passed **verbatim** as the final argument (no `exec` prepend, which would break compound commands like `a && b`).
 5. **mise wrapping**: if `mise = true`, wrap the command as `mise x -- <shell> <args> <run_script>`.
 6. **PTY allocation** (Unix, optional): `openpty(3)`; both stdout and stderr connect to the slave PTY, read from the master.
-7. **Log sink setup** (when `is_supported`): for daemons without `ready_output`, `on_output` hook, or `pty = true`, a `SinkPipe` creates a pipe and starts a `pitchfork log-sink` sibling process **before** the daemon is spawned. The sink holds the read end and writes to the log store; the daemon receives the write end as its stdout+stderr. The supervisor retains a spare read end so a dead sink can be replaced without losing the pipe. If sink creation fails, capture falls back to the in-process path.
+7. **Log sink setup** (when `is_supported`): for daemons without `pty = true`, a `SinkPipe` creates a pipe and starts a `pitchfork log-sink` sibling process **before** the daemon is spawned. The sink holds the read end, evaluates `ready_output` and `on_output` hooks, and writes to the log store; the daemon receives the write end as its stdout+stderr. The supervisor retains a spare read end so a dead sink can be replaced without losing the pipe. An `OutputRelay` channel is created before the sink starts so the sink can report readiness matches and hook triggers back to the monitor task. If sink creation fails, capture falls back to the in-process path.
 8. **Command construction**:
    - `current_dir = opts.dir`
    - `PATH` reset to the original user PATH (so daemons find user tools)
@@ -236,7 +236,7 @@ Switching to a different user requires the supervisor to be root; otherwise it e
 
 The monitor task spawned by `run_once()` drives readiness detection. It merges PTY master or stdout+stderr into a single `mpsc::channel<String>` and runs a `tokio::select! { biased; ... }` loop that evaluates branches in this fixed order.
 
-> **Two capture paths**: daemons using `ready_output`, an `on_output` hook, or `pty = true` keep the **in-process path** — the supervisor reads the stream itself to serve those features. All other daemons use the **sink path** — a sibling `pitchfork log-sink` process holds the read end (see [Logging](#logging)). The in-process monitor loop below applies only to daemons on the in-process path; sink-path daemons still have a monitor task for readiness checks that don't require reading output (HTTP, port, command, delay).
+> **Two capture paths**: PTY daemons keep the **in-process path** — the supervisor reads the PTY master itself to evaluate `ready_output` and `on_output` hooks. All other daemons use the **sink path** — a sibling `pitchfork log-sink` process holds the read end, evaluates `ready_output` and `on_output`, and reports matches back over IPC via `OutputRelay` (see [Logging](#logging)). The monitor loop below applies to both paths; the difference is where output reading and pattern matching happen.
 
 1. **Process exit** (`exit_rx`) — pre-empts everything; a dead daemon is never marked ready.
 2. **Output line** (`output_rx`) — parsed into structured logs, matched against `ready_output.pattern` (ANSI stripped) and the `on_output` hook.
@@ -315,10 +315,9 @@ Strategy:
 1. Shut down IPC (stop accepting new requests).
 2. Force-flush state.
 3. Stop daemons in **dependency reverse order** (`compute_reverse_stop_order`), concurrent within each dependency layer.
-4. Wait up to 5s for all monitor tasks to exit (`active_monitors` counter + `monitor_done` Notify), ensuring their drain and hook tasks have been registered.
-5. Wait for all registered output-drain tasks concurrently with a single 7s timeout. Each drain task has its own 5s receiver deadline; remaining tasks are aborted after the overall timeout.
-6. Wait for all hook tasks to complete (30s timeout per task).
-7. Cancel proxy / web / mDNS tasks.
+4. Wait up to 5s for all monitor tasks to exit (`active_monitors` counter + `monitor_done` Notify), ensuring their hook tasks have been registered.
+5. Wait for all hook tasks to complete (30s timeout per task).
+6. Cancel proxy / web / mDNS tasks.
 
 ## Monitor Task Exit Path
 
@@ -326,7 +325,7 @@ When the spawned process exits, the monitor task performs cleanup in a specific 
 
 1. **Acquire `MonitorGuard`** (RAII counter via `active_monitors` + `monitor_done` Notify) at the start of the monitor task. It covers every task exit path, so `close()` cannot observe `active_monitors == 0` before any drain or hook task has been registered.
 2. **Snapshot `stop_intent_observed`** before any cleanup that could race with a concurrent `start()`. Computed as `was_stopped_before_cleanup || was_stopping_before_cleanup` from the pre-cleanup daemon state. This preserves the intentional-stop signal even if `start()` (e.g. from `pitchfork restart`) upserts a new PID with `Running` status during cleanup.
-3. **Flush already-buffered logs** synchronously (not a full drain; the in-flight drain is deferred to step 6). Only applies to the in-process path; sink-path daemons have no buffered logs in the supervisor.
+3. **Drain in-flight output** synchronously: the `output_rx` channel is drained for up to 5s (or until EOF) and lines are flushed to the log store. The `OutputRelay` is dropped first so its sender doesn't keep the channel open. Sink-relayed lines (`OutputSource::Sink`) are already stored and skipped. Only applies to the in-process path; sink-path daemons are drained by the sink process itself.
 4. **Clear `active_port`** only if the daemon record still has this monitor's PID, checked while holding the state-file lock. A concurrent `start()` with a replacement PID keeps its new `active_port`.
 5. **PID-takeover check + exit reason + hooks**: if `stop_intent_observed` is false and a new process has taken over (different PID, not `Stopping`/`Stopped`), spawn the background drain and return without updating state or firing hooks. Otherwise:
    - Combine the pre-cleanup snapshot with the current state to cover both race orders: `stop()` set `Stopping` before cleanup (`stop_intent_observed`), or `stop()` set `Stopped` during cleanup (`already_stopped`).
@@ -337,7 +336,7 @@ When the spawned process exits, the monitor task performs cleanup in a specific 
      - `"exit"` → `OnExit`
      - `"fail"` with retries exhausted → `OnFail` + `OnExit`
      - `"fail"` with retries remaining → no hooks (retry loop handles it)
-6. **Spawn and register a drain task** (`spawn_output_drain`) to drain remaining in-flight output for up to 5s. Only applies to the in-process path; sink-path daemons are drained by the sink process itself. Each SQLite batch write is awaited before the next begins, and `close()` awaits the registered task with its single 7s shutdown budget. The monitor itself does not wait, so concurrent `start()` remains unblocked.
+6. **Drain complete**: output was already drained inline in step 3, so no further drain is needed. The `MonitorGuard` at the top of the task drops as the task ends.
 
 ## Hooks
 
@@ -361,11 +360,12 @@ Output capture uses one of two paths, selected per daemon at spawn time by `log_
 
 ### Sink path (default)
 
-For daemons without `ready_output`, an `on_output` hook, or `pty = true`, output is captured by a **sibling process** — `pitchfork log-sink`, this binary re-executed — which holds the read end of the daemon's output pipe and writes to the SQLite store. This mirrors runit's design, where `runsv` starts a log service alongside each daemon and stays out of the stream itself.
+For daemons without `pty = true`, output is captured by a **sibling process** — `pitchfork log-sink`, this binary re-executed — which holds the read end of the daemon's output pipe and writes to the SQLite store. This mirrors runit's design, where `runsv` starts a log service alongside each daemon and stays out of the stream itself.
 
 - **Survives supervisor crashes**: the sink is a separate process, so killing the supervisor does not remove the pipe reader. The daemon keeps writing, the sink keeps recording, no line is dropped.
 - **Pipe setup**: `SinkPipe::new()` creates a pipe; the daemon receives the write end as stdout+stderr (merged, matching the in-process path). The supervisor retains a spare read end so a dead sink can be replaced on the same pipe.
-- **Sink supervision** (`SinkPipe::supervise`): a background task waits on the sink process. A clean exit (success) means end of file — the daemon closed the pipe — and the sink is not replaced. A non-zero exit or wait error means the sink died unexpectedly; it is respawned with exponential backoff (200ms → 5s) for as long as the daemon is still monitored.
+- **Output relay**: when `ready_output` or `on_output` is configured, an `OutputRelay` channel is created before the sink starts. The sink evaluates patterns and reports matches back to the monitor task via IPC (`OutputSource::Sink`). A relay token ties each report to the correct monitoring attempt.
+- **Sink supervision** (`SinkPipe::supervise`): a background task waits on the sink process. A clean exit (success) means end of file — the daemon closed the pipe — and the sink is not replaced. A non-zero exit or wait error means the sink died unexpectedly; it is respawned with exponential backoff (200ms -> 5s) for as long as the daemon is still monitored.
 - **Batching** (in the sink process): up to 100 lines or 100ms interval, written via `spawn_blocking`. Reading and writing are separate tasks with a bounded queue (8192 entries) so a slow SQLite write cannot stall pipe drainage.
 - **Over-long lines**: output without newlines is split at 64 KiB on character boundaries (multi-byte characters are not cut in half).
 - **Failed start diagnostics**: when a daemon fails to start, `wait_for_output()` polls the log store (capped at 400ms) for this run's output to settle, so startup errors are included in the failure report.
@@ -373,11 +373,11 @@ For daemons without `ready_output`, an `on_output` hook, or `pty = true`, output
 
 ### In-process path
 
-For daemons using `ready_output`, an `on_output` hook, or `pty = true`, the supervisor reads the stream itself (from PTY master or stdout+stderr merged into one channel), parses it via `log_store::parse` with the configured `log_format`, and writes to the SQLite store in WAL mode.
+For PTY daemons, the supervisor reads the PTY master itself, parses it via `log_store::parse` with the configured `log_format`, and writes to the SQLite store in WAL mode.
 
 - **Batching**: up to 100 lines or 100ms interval, flushed via `spawn_blocking` to avoid blocking the async runtime.
 - **Synchronous flush before readiness**: when `ready_output` matches, the current batch is flushed and awaited so `collect_startup_logs` sees the triggering line.
-- **Drain on exit**: after process exit, already-buffered logs are flushed synchronously; remaining in-flight output is drained in a registered background task (`spawn_output_drain`) for up to 5s. Batches are written sequentially, and `close()` awaits all registered drains concurrently with one 7s timeout; normal monitor cleanup and concurrent `start()` do not wait for the drain.
+- **Drain on exit**: after process exit, in-flight output is drained inline (up to 5s) and flushed synchronously before hooks fire.
 
 ### Shared
 

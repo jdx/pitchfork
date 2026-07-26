@@ -2,6 +2,7 @@
 # `pitchfork proxy status`
 
 - **Usage**: `pitchfork proxy status [--json]`
+- **Effect**: read-only
 
 Show all registered slugs and their current state
 

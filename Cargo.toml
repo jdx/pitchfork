@@ -2,7 +2,7 @@
 name = "pitchfork-cli"
 description = "Daemons with DX"
 license = "MIT"
-version = "2.17.0"
+version = "2.19.0"
 edition = "2024"
 rust-version = "1.88"
 homepage = "https://pitchfork.jdx.dev"
@@ -35,7 +35,7 @@ proxy-tls = ["rcgen", "tokio-rustls", "rustls-pemfile", "x509-parser"]
 auto-launcher = "1.0.3"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-clap_usage = "2"
+clap_usage = "4"
 clx = "3"
 comfy-table = "7.1.3"
 console = "0.16"

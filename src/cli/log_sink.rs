@@ -48,20 +48,79 @@ pub struct LogSink {
     /// Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)
     #[clap(long, default_value = "text")]
     log_format: String,
+
+    /// Regex whose first match means the daemon is ready
+    ///
+    /// Set for a daemon configured with `ready_output`. The supervisor cannot
+    /// match it itself — this process holds the output — so the match is
+    /// reported back over IPC.
+    #[clap(long)]
+    ready_pattern: Option<String>,
+
+    /// Token identifying the start attempt this sink belongs to
+    ///
+    /// Quoted back when reporting a match. The supervisor drops reports whose
+    /// token is no longer current, so a sink still draining a failed attempt
+    /// cannot mark that daemon's retry ready.
+    #[clap(long, default_value_t = 0)]
+    relay_token: u64,
+
+    /// Report lines so the supervisor can fire the daemon's `on_output` hook
+    ///
+    /// Without `--output-filter` or `--output-regex` every line qualifies,
+    /// which is what a hook with no pattern asks for.
+    #[clap(long)]
+    report_output: bool,
+
+    /// Only report lines containing this substring
+    #[clap(long)]
+    output_filter: Option<String>,
+
+    /// Only report lines matching this regex
+    #[clap(long)]
+    output_regex: Option<String>,
+
+    /// Shortest gap between reported lines, in milliseconds
+    #[clap(long, default_value_t = 1000)]
+    output_debounce_ms: u64,
 }
 
 impl LogSink {
     pub async fn run(&self) -> Result<()> {
         let id = DaemonId::parse(&self.daemon_id)?;
 
+        // A pattern that does not compile is reported and then ignored, rather
+        // than failing the sink: refusing to start would leave the daemon's
+        // output unread, which is far worse than a readiness check that never
+        // fires. The supervisor validates patterns too, so this is a backstop.
+        let compile = |what: &str, pattern: &str| {
+            regex::Regex::new(pattern)
+                .map_err(|e| error!("log sink for {id} ignoring unparsable {what}: {e}"))
+                .ok()
+        };
+        let ready_pattern = self
+            .ready_pattern
+            .as_deref()
+            .and_then(|p| compile("ready pattern", p));
+        let hook = self.report_output.then(|| HookMatcher {
+            filter: self.output_filter.clone(),
+            regex: self
+                .output_regex
+                .as_deref()
+                .and_then(|p| compile("output pattern", p)),
+            debounce: std::time::Duration::from_millis(self.output_debounce_ms),
+            last_reported: None,
+        });
+
         // Reading and writing are separate tasks. A write to SQLite can block —
         // for as long as the store's busy timeout, if another writer holds the
         // lock — and this process is the only reader of the daemon's pipe, so a
         // write must never stop it being drained.
-        let (tx, rx) = tokio::sync::mpsc::channel::<ParsedLog>(QUEUE_DEPTH);
-        let writer = tokio::spawn(write_batches(id.clone(), rx));
+        let (tx, rx) = tokio::sync::mpsc::channel::<SinkEvent>(QUEUE_DEPTH);
+        let writer = tokio::spawn(write_batches(id.clone(), self.relay_token, rx));
 
-        let read_result = read_lines(tx, &self.log_format).await;
+        let read_result =
+            read_lines(tx, &self.log_format, ReadyMatcher::new(ready_pattern, hook)).await;
 
         // The sender has been dropped by now, so the writer drains its queue and
         // returns; wait for it so nothing queued is lost on exit.
@@ -73,14 +132,169 @@ impl LogSink {
     }
 }
 
+/// Something for the writer task to do, in the order the reader saw it.
+///
+/// Reporting a readiness match travels the same queue as the lines rather than
+/// jumping ahead of them, so the line that triggered the match is always in the
+/// log store by the time the supervisor hears about it — `collect_startup_logs`
+/// and `pitchfork logs` would otherwise be able to miss it.
+enum SinkEvent {
+    Line(ParsedLog),
+    Report(Report),
+}
+
+/// A line the supervisor needs to see, and why.
+#[derive(Debug, PartialEq, Eq)]
+struct Report {
+    text: String,
+    /// Whether it passed the `on_output` hook's filter and debounce. False for
+    /// a line reported only because it matched the readiness pattern — firing a
+    /// hook that filters for something else would be wrong.
+    fires_hook: bool,
+}
+
+/// How much of a capped line is carried forward for matching.
+///
+/// A line longer than [`MAX_LINE_BYTES`] is emitted in pieces, and a readiness
+/// pattern straddling a split would match none of them — the daemon would then
+/// be killed at its readiness timeout despite having announced itself. Keeping
+/// the tail of the previous piece closes that for any pattern shorter than this
+/// while still bounding what is held.
+const MATCH_CARRY_BYTES: usize = 4 * 1024;
+
+/// Watches a daemon's output for the things the supervisor would look for if it
+/// could still read the stream: the readiness pattern, and whatever fires the
+/// `on_output` hook.
+///
+/// What the supervisor does about a reported line — mark the daemon ready, run
+/// the hook — remains its own business.
+struct ReadyMatcher {
+    /// Readiness pattern, cleared once it has matched: readiness happens once.
+    pattern: Option<regex::Regex>,
+    /// The `on_output` hook's filter and rate limit, if the daemon has one.
+    hook: Option<HookMatcher>,
+    /// Tail of the previous piece of a line split at the length cap. Empty
+    /// whenever the last piece ended at a real newline.
+    carried: String,
+}
+
+/// The `on_output` hook's line filter and its rate limit.
+struct HookMatcher {
+    filter: Option<String>,
+    regex: Option<regex::Regex>,
+    debounce: std::time::Duration,
+    last_reported: Option<std::time::Instant>,
+}
+
+impl HookMatcher {
+    /// Whether this line should fire the hook, consuming the debounce window.
+    ///
+    /// The debounce is applied here rather than by the supervisor because this
+    /// process is the one that sees every line: enforcing it here means one IPC
+    /// message per window instead of one per line, which matters for a hook
+    /// with no filter, where every line qualifies.
+    fn matches(&mut self, clean: &str) -> bool {
+        let matched = match (&self.filter, &self.regex) {
+            // Mutually exclusive, and a hook setting both is rejected before it
+            // ever reaches this process.
+            (Some(substr), _) => clean.contains(substr.as_str()),
+            (None, Some(re)) => re.is_match(clean),
+            // A hook with neither fires on every line.
+            (None, None) => true,
+        };
+        if !matched {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .last_reported
+            .is_some_and(|last| now.duration_since(last) < self.debounce)
+        {
+            return false;
+        }
+        self.last_reported = Some(now);
+        true
+    }
+}
+
+impl ReadyMatcher {
+    fn new(pattern: Option<regex::Regex>, hook: Option<HookMatcher>) -> Self {
+        Self {
+            pattern,
+            hook,
+            carried: String::new(),
+        }
+    }
+
+    /// Whether anything is still being watched for. Once nothing is, matching is
+    /// skipped: stripping ANSI from every line of a chatty daemon is not free.
+    fn is_watching(&self) -> bool {
+        self.pattern.is_some() || self.hook.is_some()
+    }
+
+    /// Test `text` — one whole line, or one piece of an over-long one — and
+    /// return what matched, which is what the supervisor is told about.
+    ///
+    /// `split_at_cap` says another piece of the same logical line follows.
+    fn consider(&mut self, text: &str, split_at_cap: bool) -> Option<Report> {
+        if !self.is_watching() {
+            self.carried.clear();
+            return None;
+        }
+        let clean = console::strip_ansi_codes(text);
+        let candidate = if self.carried.is_empty() {
+            clean.into_owned()
+        } else {
+            format!("{}{clean}", self.carried)
+        };
+
+        self.carried = if split_at_cap {
+            let start = candidate.len().saturating_sub(MATCH_CARRY_BYTES);
+            // Never split a character in half; walk forward to a boundary.
+            let start = (start..candidate.len())
+                .find(|i| candidate.is_char_boundary(*i))
+                .unwrap_or(candidate.len());
+            candidate[start..].to_string()
+        } else {
+            String::new()
+        };
+
+        // A line can qualify for either reason, or both. The supervisor
+        // re-checks the readiness pattern on what it is sent, but it cannot
+        // re-check the hook without redoing the debounce, so that answer is
+        // carried explicitly.
+        let mut ready_matched = false;
+        if self
+            .pattern
+            .as_ref()
+            .is_some_and(|re| re.is_match(&candidate))
+        {
+            self.pattern = None;
+            ready_matched = true;
+        }
+        let fires_hook = self
+            .hook
+            .as_mut()
+            .is_some_and(|hook| hook.matches(&candidate));
+
+        // Send the text the patterns actually matched against, not just this
+        // piece of it: the supervisor re-matches it, and hands it to the hook.
+        (ready_matched || fires_hook).then_some(Report {
+            text: candidate,
+            fires_hook,
+        })
+    }
+}
+
 /// Split the daemon's output into lines and queue them for writing.
 ///
 /// Returns once the pipe reaches end of file. A read error is propagated so the
 /// process can exit non-zero: exiting cleanly would tell the supervisor the
 /// stream had finished and it would stop replacing this sink.
 async fn read_lines(
-    tx: tokio::sync::mpsc::Sender<ParsedLog>,
+    tx: tokio::sync::mpsc::Sender<SinkEvent>,
     log_format: &str,
+    mut matcher: ReadyMatcher,
 ) -> std::io::Result<()> {
     let mut stdin = tokio::io::stdin();
     let mut chunk = vec![0u8; READ_CHUNK];
@@ -102,14 +316,14 @@ async fn read_lines(
                     continue;
                 }
                 split_at_cap = false;
-                queue(&tx, &mut line, log_format).await?;
+                queue(&tx, &mut line, log_format, &mut matcher).await?;
             } else {
                 line.push(byte);
                 split_at_cap = false;
                 // Emit an over-long run as its own line rather than letting the
                 // buffer grow without bound.
                 if line.len() >= MAX_LINE_BYTES {
-                    queue_capped(&tx, &mut line, log_format).await?;
+                    queue_capped(&tx, &mut line, log_format, &mut matcher).await?;
                     split_at_cap = true;
                 }
             }
@@ -118,7 +332,7 @@ async fn read_lines(
 
     // Anything written without a trailing newline is still output.
     if !line.is_empty() {
-        queue(&tx, &mut line, log_format).await?;
+        queue(&tx, &mut line, log_format, &mut matcher).await?;
     }
     Ok(())
 }
@@ -130,15 +344,41 @@ async fn read_lines(
 /// converting each half on its own turns one valid character into two
 /// replacement characters.
 async fn queue_capped(
-    tx: &tokio::sync::mpsc::Sender<ParsedLog>,
+    tx: &tokio::sync::mpsc::Sender<SinkEvent>,
     line: &mut Vec<u8>,
     log_format: &str,
+    matcher: &mut ReadyMatcher,
 ) -> std::io::Result<()> {
     let split = split_before_incomplete_char(line);
     let tail = line.split_off(split);
-    let result = queue(tx, line, log_format).await;
+    let result = queue_piece(tx, line, log_format, matcher).await;
     *line = tail;
     result
+}
+
+/// Queue one piece of a line that hit the length cap, telling the matcher that
+/// the rest of the logical line is still to come.
+async fn queue_piece(
+    tx: &tokio::sync::mpsc::Sender<SinkEvent>,
+    line: &mut Vec<u8>,
+    log_format: &str,
+    matcher: &mut ReadyMatcher,
+) -> std::io::Result<()> {
+    let text = String::from_utf8_lossy(line);
+    let text = text.trim_end_matches('\r');
+    let parsed = crate::log_parse::parse(text, log_format);
+    let report = matcher.consider(text, true);
+    line.clear();
+
+    tx.send(SinkEvent::Line(parsed))
+        .await
+        .map_err(|_| std::io::Error::other("log writer stopped"))?;
+    if let Some(report) = report {
+        tx.send(SinkEvent::Report(report))
+            .await
+            .map_err(|_| std::io::Error::other("log writer stopped"))?;
+    }
+    Ok(())
 }
 
 /// Length to cut `bytes` at so no character is left half-written.
@@ -176,34 +416,85 @@ fn split_before_incomplete_char(bytes: &[u8]) -> usize {
 /// sink had reached end of file, and it would stop replacing it while the daemon
 /// was still writing.
 async fn queue(
-    tx: &tokio::sync::mpsc::Sender<ParsedLog>,
+    tx: &tokio::sync::mpsc::Sender<SinkEvent>,
     line: &mut Vec<u8>,
     log_format: &str,
+    matcher: &mut ReadyMatcher,
 ) -> std::io::Result<()> {
     // Convert lossily: a daemon emitting a stray non-UTF-8 byte must not be able
     // to stop its own logging.
     let text = String::from_utf8_lossy(line);
-    let parsed = crate::log_parse::parse(text.trim_end_matches('\r'), log_format);
+    let text = text.trim_end_matches('\r');
+    let parsed = crate::log_parse::parse(text, log_format);
+    // Strip ANSI before matching so a pattern works whether or not the daemon
+    // colours its output, matching what in-process capture did.
+    let report = matcher.consider(text, false);
     line.clear();
-    tx.send(parsed)
+
+    tx.send(SinkEvent::Line(parsed))
         .await
-        .map_err(|_| std::io::Error::other("log writer stopped"))
+        .map_err(|_| std::io::Error::other("log writer stopped"))?;
+    if let Some(report) = report {
+        tx.send(SinkEvent::Report(report))
+            .await
+            .map_err(|_| std::io::Error::other("log writer stopped"))?;
+    }
+    Ok(())
 }
 
 /// Write queued lines in batches until the queue closes.
-async fn write_batches(id: DaemonId, mut rx: tokio::sync::mpsc::Receiver<ParsedLog>) {
+async fn write_batches(
+    id: DaemonId,
+    relay_token: u64,
+    mut rx: tokio::sync::mpsc::Receiver<SinkEvent>,
+) {
+    let mut events: Vec<SinkEvent> = Vec::with_capacity(BATCH_SIZE);
     let mut batch: Vec<ParsedLog> = Vec::with_capacity(BATCH_SIZE);
     let mut flush_interval = tokio::time::interval(FLUSH_INTERVAL);
     flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         let closed = tokio::select! {
-            received = rx.recv_many(&mut batch, BATCH_SIZE) => received == 0,
+            received = rx.recv_many(&mut events, BATCH_SIZE) => received == 0,
             _ = flush_interval.tick() => false,
         };
+        for event in events.drain(..) {
+            match event {
+                SinkEvent::Line(parsed) => batch.push(parsed),
+                SinkEvent::Report(report) => {
+                    // Everything up to and including the reported line goes to
+                    // the store before the supervisor is told, so whatever it
+                    // does next can already read it.
+                    flush(&id, &mut batch).await;
+                    report_line(&id, relay_token, report).await;
+                }
+            }
+        }
         flush(&id, &mut batch).await;
         if closed {
             break;
+        }
+    }
+}
+
+/// Hand the supervisor a line it needs to act on.
+///
+/// Failure is logged and dropped. There is no supervisor to retry against if it
+/// has crashed — and if it has, nothing is waiting on this daemon's readiness or
+/// hooks — while the daemon's output keeps being captured either way.
+async fn report_line(id: &DaemonId, relay_token: u64, report: Report) {
+    // `autostart: false` — a sink must never bring a supervisor into being.
+    match crate::ipc::client::IpcClient::connect(false).await {
+        Ok(client) => {
+            if let Err(e) = client
+                .sink_output_line(id.clone(), relay_token, report.fires_hook, report.text)
+                .await
+            {
+                warn!("log sink for {id} could not report a line of output: {e}");
+            }
+        }
+        Err(e) => {
+            warn!("log sink for {id} could not reach the supervisor to report output: {e}");
         }
     }
 }
@@ -224,5 +515,140 @@ async fn flush(id: &DaemonId, batch: &mut Vec<ParsedLog>) {
         // alive to be told, and dropping a batch is preferable to stalling the
         // daemon behind a pipe nobody is draining.
         error!("log sink failed to write batch for {id}: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HookMatcher, MATCH_CARRY_BYTES, ReadyMatcher};
+
+    fn matcher(pattern: &str) -> ReadyMatcher {
+        ReadyMatcher::new(Some(regex::Regex::new(pattern).unwrap()), None)
+    }
+
+    fn hook_matcher(filter: Option<&str>, debounce_ms: u64) -> ReadyMatcher {
+        ReadyMatcher::new(
+            None,
+            Some(HookMatcher {
+                filter: filter.map(str::to_string),
+                regex: None,
+                debounce: std::time::Duration::from_millis(debounce_ms),
+                last_reported: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn reports_the_first_match_and_then_stops_looking() {
+        let mut m = matcher("READY");
+        assert_eq!(m.consider("starting up", false), None);
+        assert_eq!(
+            m.consider("READY to serve", false)
+                .map(|r| r.text)
+                .as_deref(),
+            Some("READY to serve")
+        );
+        // Readiness happens once; later matches are somebody else's business.
+        assert_eq!(m.consider("READY again", false), None);
+    }
+
+    #[test]
+    fn matches_a_pattern_split_across_the_line_cap() {
+        // The daemon emitted one enormous line whose announcement straddles the
+        // point where the sink had to cut it.
+        let mut m = matcher("SERVER READY");
+        assert_eq!(m.consider("....SERVER ", true), None);
+        let report = m
+            .consider("READY....", false)
+            .expect("should match across the split");
+        assert!(
+            report.text.contains("SERVER READY"),
+            "reported {:?}",
+            report.text
+        );
+    }
+
+    #[test]
+    fn does_not_match_across_a_completed_line() {
+        // Two separate lines are not one line: a pattern spanning them must not
+        // match, or "SERVER" at the end of one line plus "READY" at the start of
+        // the next would look like an announcement.
+        let mut m = matcher("SERVER READY");
+        assert_eq!(m.consider("SERVER ", false), None);
+        assert_eq!(m.consider("READY", false), None);
+    }
+
+    #[test]
+    fn carries_a_bounded_amount_of_a_capped_line() {
+        let mut m = matcher("nothing-matches-this");
+        m.consider(&"x".repeat(MATCH_CARRY_BYTES * 3), true);
+        assert!(m.carried.len() <= MATCH_CARRY_BYTES);
+    }
+
+    #[test]
+    fn carrying_never_splits_a_character() {
+        // A carry boundary landing mid-character would panic on the slice, or
+        // corrupt the text a pattern is matched against.
+        let mut m = matcher("nothing-matches-this");
+        m.consider(&"é".repeat(MATCH_CARRY_BYTES), true);
+        assert!(m.carried.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn hook_reports_matching_lines_within_the_debounce_window() {
+        let mut m = hook_matcher(Some("ALERT"), 0);
+        assert_eq!(m.consider("nothing here", false), None);
+        let report = m.consider("ALERT disk full", false).expect("should report");
+        assert_eq!(report.text, "ALERT disk full");
+        assert!(report.fires_hook);
+        // Unlike readiness, a hook keeps firing.
+        assert!(m.consider("ALERT again", false).is_some());
+    }
+
+    #[test]
+    fn hook_debounce_suppresses_a_second_line_in_the_same_window() {
+        let mut m = hook_matcher(None, 60_000);
+        assert!(m.consider("first", false).is_some());
+        // Every line matches a hook with no filter, so only the window stops it.
+        assert_eq!(m.consider("second", false), None);
+    }
+
+    #[test]
+    fn a_readiness_only_line_does_not_fire_the_hook() {
+        // A daemon can have both, filtered differently. The line that announces
+        // readiness is nothing to do with the hook, and reporting it must not
+        // be taken as permission to run the hook's command.
+        let mut m = ReadyMatcher::new(
+            Some(regex::Regex::new("READY").unwrap()),
+            Some(HookMatcher {
+                filter: Some("ALERT".to_string()),
+                regex: None,
+                debounce: std::time::Duration::from_millis(0),
+                last_reported: None,
+            }),
+        );
+        let report = m.consider("READY to serve", false).expect("should report");
+        assert!(!report.fires_hook, "readiness line must not fire the hook");
+        // ...and a line matching both says so.
+        let mut m = ReadyMatcher::new(
+            Some(regex::Regex::new("READY").unwrap()),
+            Some(HookMatcher {
+                filter: Some("READY".to_string()),
+                regex: None,
+                debounce: std::time::Duration::from_millis(0),
+                last_reported: None,
+            }),
+        );
+        assert!(
+            m.consider("READY", false)
+                .expect("should report")
+                .fires_hook
+        );
+    }
+
+    #[test]
+    fn strips_ansi_before_matching() {
+        let mut m = matcher("^READY$");
+        assert!(m.consider("\x1b[32mREADY\x1b[0m", false).is_some());
     }
 }

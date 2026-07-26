@@ -10,7 +10,7 @@ use crate::daemon_status::DaemonStatus;
 use crate::error::PortError;
 use crate::ipc::IpcResponse;
 use crate::log_store::LogStore;
-use crate::log_store::sqlite::{LOG_STORE, SqliteLogStore};
+use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
 use crate::procs::PROCS;
 use crate::settings::settings;
@@ -177,69 +177,6 @@ impl Drop for MonitorGuard {
 /// before the drain task exits, guaranteeing that all writes are persisted
 /// (no detached writes) when the returned `JoinHandle` resolves.
 ///
-/// Running this off the monitor task's critical path means `close()` and
-/// concurrent `start()` are not blocked by the drain window. Callers should
-/// register the returned handle via `SUPERVISOR.drain_tasks` so `close()`
-/// can await it before shutdown exits.
-fn spawn_output_drain(
-    id: DaemonId,
-    mut output_rx: tokio::sync::mpsc::Receiver<String>,
-    log_store: Arc<SqliteLogStore>,
-    log_format: String,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut buffer: Vec<crate::log_parse::ParsedLog> = Vec::with_capacity(100);
-
-        // Flush a batch by handing it to `spawn_blocking`. Returns the
-        // JoinHandle so the caller can await its completion before starting
-        // the next batch — this keeps writes ordered and non-detached.
-        let flush = |buffer: &mut Vec<crate::log_parse::ParsedLog>| {
-            if buffer.is_empty() {
-                return None;
-            }
-            let store = Arc::clone(&log_store);
-            let id = id.clone();
-            let batch = std::mem::take(buffer);
-            Some(tokio::task::spawn_blocking(move || {
-                if let Err(e) = store.append_structured_batch(&id, &batch) {
-                    error!("Failed to write drain batch to log for daemon {id}: {e}");
-                }
-            }))
-        };
-
-        loop {
-            let now = tokio::time::Instant::now();
-            if now >= drain_deadline {
-                break;
-            }
-            let Ok(Some(line)) = tokio::time::timeout(drain_deadline - now, output_rx.recv()).await
-            else {
-                break;
-            };
-            buffer.push(crate::log_parse::parse(&line, &log_format));
-            if buffer.len() >= 100
-                && let Some(handle) = flush(&mut buffer)
-            {
-                let _ = handle.await;
-            }
-        }
-        // Final flush: await its write before exiting so the returned
-        // JoinHandle only resolves once all persisted writes are durable.
-        if let Some(handle) = flush(&mut buffer) {
-            let _ = handle.await;
-        }
-    })
-}
-
-/// Register a drain task handle in `SUPERVISOR.drain_tasks`, pruning
-/// already-finished handles to avoid unbounded accumulation during normal
-/// operation (mirrors the established `hook_tasks` pattern).
-async fn register_drain_task(handle: tokio::task::JoinHandle<()>) {
-    let mut tasks = SUPERVISOR.drain_tasks.lock().await;
-    tasks.retain(|h| !h.is_finished());
-    tasks.push(handle);
-}
 
 /// Returns true if any configured readiness check can still succeed.
 /// A check with no timeout is unbounded; a timed check can still succeed until its
@@ -536,6 +473,14 @@ impl Supervisor {
             None
         };
 
+        // Output reaches the monitoring task either from readers this process
+        // owns or, when a sink owns the stream, relayed over IPC. The channel is
+        // created here rather than in that task so it exists before the sink
+        // starts: a daemon whose very first line matches its readiness pattern
+        // would otherwise have the match reported with nowhere to deliver it.
+        let (output_tx, output_rx) = tokio::sync::mpsc::channel::<super::OutputLine>(256);
+        let mut output_relay = None;
+
         // Set up out-of-process capture before building the command, so the
         // daemon can be handed the pipe's write end directly.
         let mut sink_pipe = None;
@@ -546,7 +491,18 @@ impl Supervisor {
                 .log_format
                 .clone()
                 .unwrap_or_else(|| settings().logs.log_format.clone());
-            match super::log_sink::SinkPipe::new(log_format) {
+            let watch_for = super::log_sink::WatchFor::from_opts(id, &opts);
+            // The token ties this attempt's sink to this attempt's channel, so
+            // a sink still draining a previous attempt cannot report into it.
+            let relay_token = if watch_for.is_empty() {
+                0
+            } else {
+                let relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
+                let token = relay.token();
+                output_relay = Some(relay);
+                token
+            };
+            match super::log_sink::SinkPipe::new(log_format, watch_for, relay_token) {
                 Ok((pipe, writer)) => match pipe.start(id) {
                     Ok(child) => {
                         sink_child = Some(super::log_sink::PendingSink::new(child));
@@ -819,6 +775,10 @@ impl Supervisor {
             // Registered before the Running upsert above; unregisters when
             // this monitoring task ends.
             let _monitored_guard = monitored_guard;
+            // Likewise for sink-relayed output: dropping this stops the
+            // supervisor delivering into a channel nobody is reading. Dropped
+            // explicitly once the daemon exits, before the drain below.
+            let output_relay = output_relay;
 
             // Register with `close()` *before* any lifecycle work so that
             // shutdown reliably waits for this monitor to finish (and to
@@ -835,8 +795,9 @@ impl Supervisor {
                 .fetch_add(1, atomic::Ordering::Release);
             let _monitor_guard = MonitorGuard;
 
-            // Merge all output sources (PTY master OR stdout+stderr) into a single channel.
-            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<String>(256);
+            // Merge all output sources (PTY master OR stdout+stderr, or a
+            // sink's IPC reports) into a single channel.
+            let mut output_rx = output_rx;
 
             if let Some(mut reader) = pty_reader {
                 // PTY mode: single merged stream from the master.
@@ -848,7 +809,14 @@ impl Supervisor {
                         if line.ends_with('\r') {
                             line.pop();
                         }
-                        if output_tx.send(line).await.is_err() {
+                        if output_tx
+                            .send(super::OutputLine {
+                                text: line,
+                                source: super::OutputSource::Local,
+                            })
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -862,7 +830,14 @@ impl Supervisor {
                     let tx = output_tx.clone();
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = stdout.next_line().await {
-                            if tx.send(line).await.is_err() {
+                            if tx
+                                .send(super::OutputLine {
+                                    text: line,
+                                    source: super::OutputSource::Local,
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -872,13 +847,22 @@ impl Supervisor {
                     let tx = output_tx.clone();
                     tokio::spawn(async move {
                         while let Ok(Some(line)) = stderr.next_line().await {
-                            if tx.send(line).await.is_err() {
+                            if tx
+                                .send(super::OutputLine {
+                                    text: line,
+                                    source: super::OutputSource::Local,
+                                })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
                         }
                     });
                 }
-                // Drop the last sender so the channel closes when all readers finish.
+                // Drop the last sender so the channel closes when all readers
+                // finish. The relay holds its own clone, so a sink's reports
+                // still have somewhere to go after these end.
                 drop(output_tx);
             }
             let log_store = Arc::clone(&LOG_STORE);
@@ -1109,11 +1093,16 @@ impl Supervisor {
                         }
                         break;
                     },
-                    Some(line) = output_rx.recv() => {
-                        let parsed = parse_line(&line);
-                        log_buffer.push(parsed);
-                        if log_buffer.len() >= LOG_BATCH_SIZE {
-                            let _ = flush_logs(&mut log_buffer);
+                    Some(super::OutputLine { text: line, source }) = output_rx.recv() => {
+                        // A line relayed by a sink is already in the store —
+                        // the sink wrote and flushed it before reporting it —
+                        // so it arrives here only to be acted on.
+                        if matches!(source, super::OutputSource::Local) {
+                            let parsed = parse_line(&line);
+                            log_buffer.push(parsed);
+                            if log_buffer.len() >= LOG_BATCH_SIZE {
+                                let _ = flush_logs(&mut log_buffer);
+                            }
                         }
                         trace!("output: {id} {line}");
 
@@ -1151,14 +1140,24 @@ impl Supervisor {
                             }
                         }
 
-                        // Check on_output hook
+                        // Check on_output hook. A sink has already applied the
+                        // filter, and says so per line: a line reported only
+                        // because it announced readiness must not fire a hook
+                        // that filters for something else.
                         if let Some(ref hook) = on_output_hook {
-                            let matched = match (&hook.filter, &on_output_pattern) {
-                                (Some(substr), _) => line_clean.contains(substr.as_str()),
-                                (None, Some(re)) => re.is_match(&line_clean),
-                                (None, None) => true,
+                            let matched = match source {
+                                super::OutputSource::Sink { fires_hook } => fires_hook,
+                                super::OutputSource::Local => match (&hook.filter, &on_output_pattern) {
+                                    (Some(substr), _) => line_clean.contains(substr.as_str()),
+                                    (None, Some(re)) => re.is_match(&line_clean),
+                                    (None, None) => true,
+                                },
                             };
                             if matched {
+                                // The debounce is applied here as well as in the
+                                // sink. A replacement sink starts with a fresh
+                                // clock, and would otherwise let the hook fire
+                                // twice inside one configured window.
                                 let now = std::time::Instant::now();
                                 let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
                                 if elapsed.is_none_or(|e| e >= on_output_debounce) {
@@ -1533,8 +1532,37 @@ impl Supervisor {
                 .is_some_and(|d| d.status.is_stopping());
             let stop_intent_observed = was_stopped_before_cleanup || was_stopping_before_cleanup;
 
-            // (2) Flush logs already in the buffer. The full drain of
-            //     in-flight output happens later in a background task.
+            // (2) Drain any in-flight output lines that were still in the mpsc
+            //     channel or the OS pipe buffer when the child exited. Without
+            //     this, trailing log lines from short-lived daemons get dropped.
+            //     The reader tasks drop their senders on EOF, so recv() returns
+            //     None when all data has been consumed. A total deadline of 5 s
+            //     guards against a stuck reader (e.g. PTY master FD not closing)
+            //     while ensuring drain doesn't block post-exit cleanup indefinitely.
+            //
+            //     Stop accepting relayed output first: the relay holds a sender of
+            //     its own, so leaving it registered would keep the channel open and
+            //     make every drain wait out the whole deadline. Readiness is moot
+            //     now anyway — the process has exited.
+            drop(output_relay);
+            let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= drain_deadline {
+                    break;
+                }
+                let Ok(Some(line)) =
+                    tokio::time::timeout(drain_deadline - now, output_rx.recv()).await
+                else {
+                    break;
+                };
+                // Sink-relayed lines are already stored; see the select loop.
+                if matches!(line.source, super::OutputSource::Local) {
+                    log_buffer.push(parse_line(&line.text));
+                }
+            }
+            // Flush any remaining log lines (including drained) before the process exits.
+            // Await the flush to guarantee all buffered logs are persisted before cleanup.
             if let Some(handle) = flush_logs(&mut log_buffer) {
                 let _ = handle.await;
             }
@@ -1583,19 +1611,10 @@ impl Supervisor {
                         d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
                     }))
             {
-                // Another process has taken over. Drain remaining output in
-                // the background so we don't lose trailing log lines, then
-                // return without updating state or firing hooks. The drain
-                // handle is registered before returning so `close()` awaits
-                // it; the `MonitorGuard` at the top of this task drops here,
+                // Another process has taken over. Output was already drained
+                // above; return without updating state or firing hooks. The
+                // `MonitorGuard` at the top of this task drops here,
                 // decrementing `active_monitors` and notifying `monitor_done`.
-                let drain_handle = spawn_output_drain(
-                    id.clone(),
-                    output_rx,
-                    log_store.clone(),
-                    log_format.clone(),
-                );
-                register_drain_task(drain_handle).await;
                 return;
             }
             // (4b) Determine the effective stop flag. Combine the pre-cleanup
@@ -1690,18 +1709,10 @@ impl Supervisor {
                 .await;
             }
 
-            // (5) Drain remaining in-flight output in the background so
-            //     trailing log lines from short-lived daemons are not lost.
-            //     This is best-effort: a 5s deadline guards against a stuck
-            //     reader (e.g. PTY master FD not closing). Running it off
-            //     the critical path means close() and concurrent start() are
-            //     not blocked by the drain window. The handle is registered
-            //     with `SUPERVISOR.drain_tasks` before this task drops its
-            //     `MonitorGuard`, so `close()` — which first waits for
-            //     `active_monitors` to reach 0 — observes it and awaits it
-            //     with a single bounded timeout.
-            let drain_handle = spawn_output_drain(id.clone(), output_rx, log_store, log_format);
-            register_drain_task(drain_handle).await;
+            // Output was already drained inline above (step 2) before hooks
+            // fired, so there is nothing left to do here. The `MonitorGuard`
+            // at the top of this task drops as the task ends, decrementing
+            // `active_monitors` and notifying `monitor_done`.
         });
 
         // If wait_ready is true, wait for readiness notification
@@ -1753,6 +1764,30 @@ impl Supervisor {
             if let Some(pid) = daemon.pid {
                 trace!("killing pid: {pid}");
                 if PROCS.is_running(pid) {
+                    // Something is alive on that PID, but the kill below signals
+                    // the entire process group: if the PID was recycled while
+                    // this record sat unsupervised, that group belongs to an
+                    // unrelated process tree. The daemon itself is gone either
+                    // way, so report it as not running and clear the record.
+                    if !super::signalling_pid_is_authorized(
+                        daemon.start_time,
+                        PROCS.start_time(pid),
+                    ) {
+                        warn!(
+                            "pid {pid} recorded for daemon {id} belongs to another process now; not signalling it"
+                        );
+                        self.upsert_daemon(
+                            UpsertDaemonOpts::builder(id.clone())
+                                .set(|o| {
+                                    o.pid = None;
+                                    o.status = DaemonStatus::Stopped;
+                                })
+                                .build(),
+                        )
+                        .await?;
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
+
                     // First set status to Stopping (preserve PID for monitoring task)
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
@@ -2575,81 +2610,5 @@ mod output_drain_tests {
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(format!("{}-wal", path.display()));
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
-    }
-
-    // Draining 250 lines forces multiple batches (batch size = 100). The
-    // returned JoinHandle must resolve only after every batch's
-    // `spawn_blocking` write has been awaited, so all 250 lines must be
-    // persisted (including the final partial batch) when we read them back.
-    #[tokio::test]
-    async fn spawn_output_drain_persists_all_batches() {
-        let db_path = unique_db_path();
-        cleanup_db(&db_path);
-        let store = Arc::new(SqliteLogStore::open(&db_path).unwrap());
-        let id = DaemonId::new("global", "drain-test");
-
-        let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
-        for i in 0..250 {
-            tx.send(format!("line {i}")).await.unwrap();
-        }
-        drop(tx);
-
-        let handle = spawn_output_drain(id.clone(), rx, store.clone(), "{message}".to_string());
-        // Drain has its own 5s internal deadline; with the sender dropped
-        // and the channel pre-populated, it should finish immediately.
-        // The handle resolving (Ok) proves writes were awaited, not detached.
-        tokio::time::timeout(Duration::from_secs(7), handle)
-            .await
-            .expect("drain handle resolved")
-            .expect("drain task did not panic");
-
-        let entries = store.tail(&id, None).unwrap();
-        assert_eq!(entries.len(), 250, "all lines persisted across batches");
-        // SQLite orders by (timestamp, id); when batches are written within
-        // the same millisecond their per-entry timestamps overlap, so the
-        // global order is not insertion order. Assert the SET of messages
-        // is exactly {line 0..line 249} instead, which proves every batch
-        // (including the final partial flush) was persisted.
-        let messages: std::collections::HashSet<&str> =
-            entries.iter().map(|e| e.message.as_str()).collect();
-        for i in 0..250u32 {
-            assert!(
-                messages.contains(&*format!("line {i}")),
-                "missing persisted line {i}"
-            );
-        }
-        // Spot-check the boundary between batches (idx 99, 100, 199, 200,
-        // 249) to ensure both batch boundaries landed in the DB.
-        for boundary in [0u32, 99, 100, 199, 200, 249] {
-            assert!(
-                messages.contains(&*format!("line {boundary}")),
-                "batch boundary line {boundary} missing"
-            );
-        }
-
-        cleanup_db(&db_path);
-    }
-
-    // With an empty channel and dropped sender, the drain task must exit
-    // promptly (no detached writes to wait on).
-    #[tokio::test]
-    async fn spawn_output_drain_exits_on_empty_channel() {
-        let db_path = unique_db_path();
-        cleanup_db(&db_path);
-        let store = Arc::new(SqliteLogStore::open(&db_path).unwrap());
-        let id = DaemonId::new("global", "drain-empty-test");
-
-        let (_tx, rx) = tokio::sync::mpsc::channel::<String>(4);
-        drop(_tx);
-
-        let handle = spawn_output_drain(id.clone(), rx, store.clone(), "{message}".to_string());
-        tokio::time::timeout(Duration::from_secs(2), handle)
-            .await
-            .expect("drain handle resolved on empty channel")
-            .expect("drain task did not panic");
-
-        assert!(store.tail(&id, None).unwrap().is_empty());
-
-        cleanup_db(&db_path);
     }
 }

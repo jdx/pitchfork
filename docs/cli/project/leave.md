@@ -2,6 +2,7 @@
 # `pitchfork project leave`
 
 - **Usage**: `pitchfork project leave <--pid <PID>> [--directory <DIRECTORY>]`
+- **Effect**: modifies state
 
 Leave a project session and evaluate its directory for autostop
 

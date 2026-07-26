@@ -3,6 +3,7 @@
 
 - **Usage**: `pitchfork status [--json] <ID>`
 - **Aliases**: `stat`
+- **Effect**: read-only
 
 Display the status of a daemon
 
