@@ -459,19 +459,18 @@ impl Supervisor {
                 .log_format
                 .clone()
                 .unwrap_or_else(|| settings().logs.log_format.clone());
-            let ready_pattern = opts.ready_output.as_ref().map(|o| o.pattern.clone());
+            let watch_for = super::log_sink::WatchFor::from_opts(id, &opts);
             // The token ties this attempt's sink to this attempt's channel, so
             // a sink still draining a previous attempt cannot report into it.
-            let relay_token = match ready_pattern {
-                Some(_) => {
-                    let relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
-                    let token = relay.token();
-                    output_relay = Some(relay);
-                    token
-                }
-                None => 0,
+            let relay_token = if watch_for.is_empty() {
+                0
+            } else {
+                let relay = super::log_sink::OutputRelay::register(id, output_tx.clone());
+                let token = relay.token();
+                output_relay = Some(relay);
+                token
             };
-            match super::log_sink::SinkPipe::new(log_format, ready_pattern, relay_token) {
+            match super::log_sink::SinkPipe::new(log_format, watch_for, relay_token) {
                 Ok((pipe, writer)) => match pipe.start(id) {
                     Ok(child) => {
                         sink_child = Some(super::log_sink::PendingSink::new(child));
@@ -766,7 +765,7 @@ impl Supervisor {
                         if output_tx
                             .send(super::OutputLine {
                                 text: line,
-                                persist: true,
+                                source: super::OutputSource::Local,
                             })
                             .await
                             .is_err()
@@ -787,7 +786,7 @@ impl Supervisor {
                             if tx
                                 .send(super::OutputLine {
                                     text: line,
-                                    persist: true,
+                                    source: super::OutputSource::Local,
                                 })
                                 .await
                                 .is_err()
@@ -804,7 +803,7 @@ impl Supervisor {
                             if tx
                                 .send(super::OutputLine {
                                     text: line,
-                                    persist: true,
+                                    source: super::OutputSource::Local,
                                 })
                                 .await
                                 .is_err()
@@ -1044,11 +1043,11 @@ impl Supervisor {
                         }
                         break;
                     },
-                    Some(super::OutputLine { text: line, persist }) = output_rx.recv() => {
+                    Some(super::OutputLine { text: line, source }) = output_rx.recv() => {
                         // A line relayed by a sink is already in the store —
                         // the sink wrote and flushed it before reporting it —
-                        // so it arrives here only to be matched against.
-                        if persist {
+                        // so it arrives here only to be acted on.
+                        if matches!(source, super::OutputSource::Local) {
                             let parsed = parse_line(&line);
                             log_buffer.push(parsed);
                             if log_buffer.len() >= LOG_BATCH_SIZE {
@@ -1091,14 +1090,24 @@ impl Supervisor {
                             }
                         }
 
-                        // Check on_output hook
+                        // Check on_output hook. A sink has already applied the
+                        // filter, and says so per line: a line reported only
+                        // because it announced readiness must not fire a hook
+                        // that filters for something else.
                         if let Some(ref hook) = on_output_hook {
-                            let matched = match (&hook.filter, &on_output_pattern) {
-                                (Some(substr), _) => line_clean.contains(substr.as_str()),
-                                (None, Some(re)) => re.is_match(&line_clean),
-                                (None, None) => true,
+                            let matched = match source {
+                                super::OutputSource::Sink { fires_hook } => fires_hook,
+                                super::OutputSource::Local => match (&hook.filter, &on_output_pattern) {
+                                    (Some(substr), _) => line_clean.contains(substr.as_str()),
+                                    (None, Some(re)) => re.is_match(&line_clean),
+                                    (None, None) => true,
+                                },
                             };
                             if matched {
+                                // The debounce is applied here as well as in the
+                                // sink. A replacement sink starts with a fresh
+                                // clock, and would otherwise let the hook fire
+                                // twice inside one configured window.
                                 let now = std::time::Instant::now();
                                 let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
                                 if elapsed.is_none_or(|e| e >= on_output_debounce) {
@@ -1470,7 +1479,7 @@ impl Supervisor {
                     break;
                 };
                 // Sink-relayed lines are already stored; see the select loop.
-                if line.persist {
+                if matches!(line.source, super::OutputSource::Local) {
                     log_buffer.push(parse_line(&line.text));
                 }
             }

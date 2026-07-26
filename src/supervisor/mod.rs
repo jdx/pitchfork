@@ -116,12 +116,24 @@ pub struct Supervisor {
 #[derive(Debug, Clone)]
 pub(crate) struct OutputLine {
     pub(crate) text: String,
-    /// Whether the monitoring task must write this line to the log store.
+    pub(crate) source: OutputSource,
+}
+
+/// Where a line of daemon output came from, which decides what is left to do
+/// with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutputSource {
+    /// Read by this process from the daemon's stdout, stderr or PTY master.
+    /// Nothing has been done with it yet.
+    Local,
+    /// Reported by the daemon's log sink, which has already written the line to
+    /// the store — storing it again here would duplicate it.
     ///
-    /// False for lines relayed by a sink: the sink has already stored the line
-    /// — and flushed it — before reporting it, so storing it again here would
-    /// duplicate it.
-    pub(crate) persist: bool,
+    /// `fires_hook` is the sink's answer to whether this line passed the
+    /// `on_output` hook's filter and debounce. It is carried rather than
+    /// re-derived because a line can be reported for readiness alone, and
+    /// firing a hook that filters for something else would be wrong.
+    Sink { fires_hook: bool },
 }
 
 pub(crate) fn interval_duration() -> Duration {

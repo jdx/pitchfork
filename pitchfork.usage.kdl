@@ -350,6 +350,22 @@ Quoted back when reporting a match. The supervisor drops reports whose token is 
 """#
         arg <RELAY_TOKEN>
     }
+    flag --report-output help="Report lines so the supervisor can fire the daemon's `on_output` hook" {
+        long_help #"""
+Report lines so the supervisor can fire the daemon's `on_output` hook
+
+Without `--output-filter` or `--output-regex` every line qualifies, which is what a hook with no pattern asks for.
+"""#
+    }
+    flag --output-filter help="Only report lines containing this substring" {
+        arg <OUTPUT_FILTER>
+    }
+    flag --output-regex help="Only report lines matching this regex" {
+        arg <OUTPUT_REGEX>
+    }
+    flag --output-debounce-ms help="Shortest gap between reported lines, in milliseconds" default="1000" {
+        arg <OUTPUT_DEBOUNCE_MS>
+    }
 }
 cmd logs help="Displays logs for daemon(s)" effect=read {
     alias l

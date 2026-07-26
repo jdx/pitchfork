@@ -1050,6 +1050,79 @@
             "default": [
               "0"
             ]
+          },
+          {
+            "name": "report-output",
+            "usage": "--report-output",
+            "help": "Report lines so the supervisor can fire the daemon's `on_output` hook",
+            "help_long": "Report lines so the supervisor can fire the daemon's `on_output` hook\n\nWithout `--output-filter` or `--output-regex` every line qualifies, which is what a hook with no pattern asks for.",
+            "help_first_line": "Report lines so the supervisor can fire the daemon's `on_output` hook",
+            "short": [],
+            "long": [
+              "report-output"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "output-filter",
+            "usage": "--output-filter <OUTPUT_FILTER>",
+            "help": "Only report lines containing this substring",
+            "help_first_line": "Only report lines containing this substring",
+            "short": [],
+            "long": [
+              "output-filter"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT_FILTER",
+              "usage": "<OUTPUT_FILTER>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output-regex",
+            "usage": "--output-regex <OUTPUT_REGEX>",
+            "help": "Only report lines matching this regex",
+            "help_first_line": "Only report lines matching this regex",
+            "short": [],
+            "long": [
+              "output-regex"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT_REGEX",
+              "usage": "<OUTPUT_REGEX>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "output-debounce-ms",
+            "usage": "--output-debounce-ms <OUTPUT_DEBOUNCE_MS>",
+            "help": "Shortest gap between reported lines, in milliseconds",
+            "help_first_line": "Shortest gap between reported lines, in milliseconds",
+            "short": [],
+            "long": [
+              "output-debounce-ms"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "OUTPUT_DEBOUNCE_MS",
+              "usage": "<OUTPUT_DEBOUNCE_MS>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "1000"
+            ]
           }
         ],
         "mounts": [],
