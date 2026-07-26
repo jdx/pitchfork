@@ -15,3 +15,36 @@ impl Schema {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn includes_all_config_sections() {
+        let schema = serde_json::to_value(schema_for!(PitchforkToml)).unwrap();
+        let properties = schema["properties"].as_object().unwrap();
+
+        for section in [
+            "daemons",
+            "env",
+            "groups",
+            "namespace",
+            "namespaces",
+            "settings",
+            "slugs",
+        ] {
+            assert!(
+                properties.contains_key(section),
+                "schema is missing the `{section}` config section"
+            );
+        }
+        assert!(!properties.contains_key("path"));
+        assert!(
+            schema["required"]
+                .as_array()
+                .is_none_or(|required| required.is_empty()),
+            "top-level config sections must remain optional"
+        );
+    }
+}

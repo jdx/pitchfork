@@ -23,7 +23,7 @@ pub use crate::config_types::{
 /// api = { dir = "/home/user/my-api", daemon = "server" }
 /// docs = { dir = "/home/user/docs-site" }  # daemon defaults to slug name
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct SlugEntryRaw {
     /// Project directory containing the pitchfork.toml
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,7 +74,7 @@ impl SlugEntry {
 /// [groups.backend]
 /// daemons = ["api", "worker"]
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct GroupEntryRaw {
     pub daemons: Vec<String>,
 }
@@ -90,7 +90,7 @@ pub struct GroupEntry {
 /// [namespaces.myproject]
 /// dir = "/home/user/projects/myproject"
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonSchema)]
 pub struct NamespaceEntryRaw {
     /// Project directory containing the pitchfork.toml
     pub dir: String,
@@ -269,14 +269,14 @@ pub struct PitchforkToml {
     /// Maps slug names to their project directory and optional daemon name.
     /// Only populated from global config files (`~/.config/pitchfork/config.toml`
     /// or `/etc/pitchfork/config.toml`).
-    #[schemars(skip)]
+    #[schemars(default, with = "IndexMap<String, SlugEntryRaw>")]
     pub slugs: IndexMap<String, SlugEntry>,
     /// Named groups of daemons for batch operations.
-    #[schemars(skip)]
+    #[schemars(default, with = "IndexMap<String, GroupEntryRaw>")]
     pub groups: IndexMap<String, GroupEntry>,
     /// Namespace registry (merged from global config files).
     /// Maps namespace names to their project directory.
-    #[schemars(skip)]
+    #[schemars(default, with = "IndexMap<String, NamespaceEntryRaw>")]
     pub namespaces: IndexMap<String, NamespaceEntry>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
