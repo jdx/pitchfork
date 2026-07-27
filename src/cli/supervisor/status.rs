@@ -19,7 +19,7 @@ impl Status {
         }
         let ipc = IpcClient::connect(false).await?;
         info!("Pitchfork daemon is running");
-        if let Some(url) = ipc.get_web_url().await.unwrap_or_default() {
+        if let Some(url) = ipc.get_web_url().await? {
             info!("Web UI: {url}");
         }
         Ok(())
@@ -27,10 +27,17 @@ impl Status {
 
     async fn status_json(&self) -> JsonSupervisorStatus {
         match IpcClient::connect(false).await {
-            Ok(ipc) => JsonSupervisorStatus {
-                status: "up",
-                web_ui: ipc.get_web_url().await.unwrap_or_default(),
-                error: None,
+            Ok(ipc) => match ipc.get_web_url().await {
+                Ok(web_ui) => JsonSupervisorStatus {
+                    status: "up",
+                    web_ui,
+                    error: None,
+                },
+                Err(err) => JsonSupervisorStatus {
+                    status: "up",
+                    web_ui: None,
+                    error: Some(format!("failed to get web UI URL: {err}")),
+                },
             },
             Err(err) => {
                 debug!("failed to connect to supervisor: {err:?}");
