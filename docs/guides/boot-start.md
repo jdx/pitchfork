@@ -80,6 +80,22 @@ When boot start is enabled:
 2. Supervisor starts all daemons with `boot_start = true`
 3. Daemons run in the background
 
+### Prevent fallback supervisor starts
+
+When systemd, launchd, or another service manager is the only intended owner of
+the supervisor, disable client-side auto-start in your global configuration:
+
+```toml
+[settings.supervisor]
+auto_start = false
+```
+
+Commands such as `pitchfork list`, the TUI, and shell activation will then
+connect to the managed supervisor without spawning an unmanaged replacement if
+the service is unavailable or still starting. Explicit
+`pitchfork supervisor start` and `pitchfork supervisor run` commands remain
+available.
+
 ## Typical Setup
 
 1. Enable boot start:

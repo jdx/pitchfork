@@ -125,6 +125,27 @@ EOF
   wait_for_status auto_start_test running
 }
 
+@test "CLI does not auto-start supervisor when disabled" {
+  create_pitchfork_toml <<EOF
+[settings.supervisor]
+auto_start = false
+EOF
+
+  pitchfork supervisor stop
+
+  export PITCHFORK_IPC_CONNECT_ATTEMPTS=1
+  export PITCHFORK_IPC_CONNECT_MIN_DELAY=1ms
+  export PITCHFORK_IPC_CONNECT_MAX_DELAY=1ms
+
+  run pitchfork list
+  assert_failure
+  assert_output --partial "supervisor auto-start is disabled"
+  assert_output --partial "service manager"
+
+  run pitchfork supervisor status
+  assert_failure
+}
+
 @test "pitchfork list works with empty config" {
   PITCHFORK_LOG=warn run pitchfork list
   assert_success
