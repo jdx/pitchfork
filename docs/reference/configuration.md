@@ -119,8 +119,7 @@ run = "cd /app && exec node server.js"
 
 ### `dir`
 
-Working directory for the daemon. Relative paths are resolved from the `pitchfork.toml` file location. If not set, defaults to the directory containing the `pitchfork.toml` file.
-Paths beginning with `~` are resolved from the user's home directory.
+Working directory for the daemon. Relative paths are resolved from the `pitchfork.toml` file location. If not set, defaults to the directory containing the `pitchfork.toml` file. A value of `~` or a path beginning with `~/` is resolved from the user's home directory; other shell-style expansions are left unchanged.
 
 ```toml
 # Relative path (resolved from pitchfork.toml location)
@@ -132,11 +131,6 @@ dir = "frontend"
 [daemons.api]
 run = "npm run server"
 dir = "/opt/myapp/api"
-
-# Home-relative path
-[daemons.worker]
-run = "npm run worker"
-dir = "~/projects/myapp"
 ```
 
 ### `env`
@@ -669,7 +663,7 @@ Each slug entry maps to:
 - `dir` — the project directory containing the `pitchfork.toml`
 - `daemon` (optional) — the daemon name within that project. Defaults to the slug name if omitted.
 
-Slug and namespace `dir` values also support a leading `~` for the user's home directory.
+Slug and namespace `dir` values use the same `~` and `~/...` expansion.
 
 Use `pitchfork proxy add` to manage slugs:
 
