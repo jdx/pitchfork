@@ -310,46 +310,47 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-            // Detect log clear. On error, keep last_clear_gen unchanged
-            // to avoid spurious cursor resets and log replay.
-            let current_gen: u64 = match tokio::task::spawn_blocking({
+            // Read new rows and current generation atomically (single
+            // connection lock + transaction) so a clear cannot interleave
+            // between the generation check and the row query. Without this,
+            // a clear could happen after the generation read but before the
+            // row query, producing post-clear rows that later get replayed
+            // when the next poll detects the generation change.
+            let poll_result = match tokio::task::spawn_blocking({
+                let q = qualified_clone.clone();
+                let mf = message_filters.clone();
+                let ff = field_filters.clone();
                 let d = daemon_id.clone();
-                move || LOG_STORE.last_clear_generation(&d)
-            }).await {
-                Ok(Ok(Some(g))) => g,
-                Ok(Ok(None)) => 0,
-                _ => {
-                    // Keep last_clear_gen on error — don't reset cursor.
-                    continue;
-                }
+                move || LOG_STORE.query_with_generation(
+                    &LogQuery {
+                        daemon_ids: vec![q],
+                        from,
+                        to,
+                        limit: Some(BATCH_SIZE),
+                        order_desc: false,
+                        after_id: Some(last_id),
+                        before_id: None,
+                        message_filters: mf,
+                        field_filters: ff,
+                        include_structured: true,
+                    },
+                    &d,
+                )
+            })
+            .await
+            {
+                Ok(Ok((entries, generation))) => (entries, generation.unwrap_or(0)),
+                _ => continue,
             };
 
+            let (raw_entries, current_gen) = poll_result;
+
             if current_gen != last_clear_gen {
-                // Log clear detected — reset cursor.
+                // Log clear detected — reset cursor and skip this batch.
                 last_clear_gen = current_gen;
                 last_id = 0;
                 continue;
             }
-
-            let raw_entries = match tokio::task::spawn_blocking({
-                let q = qualified_clone.clone();
-                let mf = message_filters.clone();
-                let ff = field_filters.clone();
-                move || LOG_STORE.query(&LogQuery {
-                    daemon_ids: vec![q],
-                    from,
-                    to,
-                    limit: Some(BATCH_SIZE),
-                    order_desc: false,
-                    after_id: Some(last_id), before_id: None,
-                    message_filters: mf,
-                    field_filters: ff,
-                    include_structured: true,
-                })
-            }).await {
-                Ok(Ok(e)) => e,
-                _ => continue,
-            };
 
             // Advance cursor past all raw entries (not just jq-matched ones)
             // so filtered-out rows aren't re-scanned on every poll.
