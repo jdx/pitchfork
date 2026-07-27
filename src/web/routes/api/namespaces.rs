@@ -1,6 +1,5 @@
 use axum::{extract::Path, response::Json};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 use crate::pitchfork_toml::PitchforkToml;
 
@@ -29,7 +28,7 @@ pub async fn list() -> Json<Vec<ApiNamespaceEntry>> {
 pub async fn register(
     Json(req): Json<RegisterNamespaceReq>,
 ) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    let dir = PathBuf::from(&req.dir);
+    let dir = crate::env::expand_tilde(&req.dir);
     let name = match PitchforkToml::namespace_for_dir(&dir) {
         Ok(ns) => ns,
         Err(e) => {
@@ -39,7 +38,7 @@ pub async fn register(
             ));
         }
     };
-    match PitchforkToml::register_namespace(&name, &req.dir) {
+    match PitchforkToml::register_namespace(&name, &dir.to_string_lossy()) {
         Ok(()) => Ok(Json(serde_json::json!({"ok": true, "name": name}))),
         Err(e) => {
             log::error!("Failed to register namespace {}: {e}", name);
