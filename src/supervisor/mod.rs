@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::{signal, time};
 
