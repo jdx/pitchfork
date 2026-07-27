@@ -30,42 +30,69 @@ pub async fn stream_sse(
             }
         };
 
-        let mut last_id: i64 = match tokio::task::spawn_blocking({
+        // Capture the starting cursor (last existing row id) and clear
+        // generation atomically so a clear between them can't pair a stale
+        // cursor with the new generation.
+        let (last_id, last_clear_gen) = match tokio::task::spawn_blocking({
             let d = daemon_id.clone();
-            move || LOG_STORE.query(&LogQuery {
-                daemon_ids: vec![d.qualified()],
-                from: None,
-                to: None,
-                limit: Some(1),
-                order_desc: true,
-                after_id: None, before_id: None,
-                message_filters: Vec::new(),
-                field_filters: Vec::new(),
-                include_structured: false,
-            })
-        }).await {
-            Ok(Ok(entries)) => entries.first().map(|e| e.id).unwrap_or(0),
-            _ => 0,
+            move || LOG_STORE.query_with_generation(
+                &LogQuery {
+                    daemon_ids: vec![d.qualified()],
+                    from: None,
+                    to: None,
+                    limit: Some(1),
+                    order_desc: true,
+                    after_id: None,
+                    before_id: None,
+                    message_filters: Vec::new(),
+                    field_filters: Vec::new(),
+                    include_structured: false,
+                },
+                &d,
+            )
+        })
+        .await
+        {
+            Ok(Ok((entries, generation))) => {
+                (entries.first().map(|e| e.id).unwrap_or(0), generation.unwrap_or(0))
+            }
+            _ => (0, 0),
         };
-
-        let mut last_clear_gen: u64 = match tokio::task::spawn_blocking({
-            let d = daemon_id.clone();
-            move || LOG_STORE.last_clear_generation(&d)
-        }).await {
-            Ok(Ok(Some(g))) => g,
-            _ => 0,
-        };
+        let mut last_id = last_id;
+        let mut last_clear_gen = last_clear_gen;
 
         loop {
             tokio::time::sleep(sse_poll_interval).await;
 
-            let current_gen: u64 = match tokio::task::spawn_blocking({
+            // Read new rows and current generation atomically so a clear
+            // cannot interleave between the generation check and the row
+            // query, which would produce duplicate streamed entries.
+            const BATCH_SIZE: usize = 500;
+            let poll_result = match tokio::task::spawn_blocking({
                 let d = daemon_id.clone();
-                move || LOG_STORE.last_clear_generation(&d)
-            }).await {
-                Ok(Ok(Some(g))) => g,
-                _ => 0,
+                move || LOG_STORE.query_with_generation(
+                    &LogQuery {
+                        daemon_ids: vec![d.qualified()],
+                        from: None,
+                        to: None,
+                        limit: Some(BATCH_SIZE),
+                        order_desc: false,
+                        after_id: Some(last_id),
+                        before_id: None,
+                        message_filters: Vec::new(),
+                        field_filters: Vec::new(),
+                        include_structured: true,
+                    },
+                    &d,
+                )
+            })
+            .await
+            {
+                Ok(Ok((entries, generation))) => (entries, generation.unwrap_or(0)),
+                _ => continue,
             };
+
+            let (entries, current_gen) = poll_result;
 
             if current_gen != last_clear_gen {
                 last_clear_gen = current_gen;
@@ -73,25 +100,6 @@ pub async fn stream_sse(
                 yield Ok(Event::default().event("clear").data(""));
                 continue;
             }
-
-            const BATCH_SIZE: usize = 500;
-            let entries = match tokio::task::spawn_blocking({
-                let d = daemon_id.clone();
-                move || LOG_STORE.query(&LogQuery {
-                    daemon_ids: vec![d.qualified()],
-                    from: None,
-                    to: None,
-                    limit: Some(BATCH_SIZE),
-                    order_desc: false,
-                    after_id: Some(last_id), before_id: None,
-                    message_filters: Vec::new(),
-                    field_filters: Vec::new(),
-                    include_structured: true,
-                })
-            }).await {
-                Ok(Ok(e)) => e,
-                _ => continue,
-            };
 
             for entry in entries {
                 last_id = entry.id;
