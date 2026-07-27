@@ -146,6 +146,25 @@ fn stop_cmd_probe_state(probe: &mut Option<CmdProbe>) {
     }
 }
 
+/// Spawn a detached task that kills a daemon's process group after its
+/// readiness checks are exhausted, logging a failed kill instead of
+/// discarding it. The returned handle is awaited before the readiness
+/// failure is reported so the process group is down by then.
+fn spawn_ready_fail_kill(
+    id: DaemonId,
+    pid: u32,
+    stop_cfg: crate::config_types::StopConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = PROCS
+            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
+            .await
+        {
+            error!("daemon {id}: failed to kill pid {pid} after readiness failure: {e}");
+        }
+    })
+}
+
 /// Returns true if any configured readiness check can still succeed.
 /// A check with no timeout is unbounded; a timed check can still succeed until its
 /// deadline fires. `ready_delay` is only used as a fallback when no other check is
@@ -187,30 +206,31 @@ impl Supervisor {
             }
         }
 
-        {
-            // Serialize against any in-flight stop of this daemon: a stop now
-            // waits for the whole process group to exit, so the Stopping window
-            // can last seconds instead of milliseconds. Starting through that
-            // window would collide with the dying instance (duplicate processes,
-            // port conflicts). Acquiring the stop lock waits the stop out; the
-            // state is re-read afterwards.
-            let stop_lock = self.stop_lock(id).await;
-            let _stop_guard = stop_lock.lock().await;
-            let daemon = self.get_daemon(id).await;
-            if let Some(daemon) = daemon {
-                // Stopping state is treated as "not running" - the monitoring task will clean it up
-                // Only check for Running state with a valid PID
-                if !daemon.status.is_stopping()
-                    && !daemon.status.is_stopped()
-                    && let Some(pid) = daemon.pid
-                {
-                    if opts.force {
-                        self.stop_locked(id).await?;
-                        info!("run: stop completed for daemon {id}");
-                    } else {
-                        warn!("daemon {id} already running with pid {pid}");
-                        return Ok(IpcResponse::DaemonAlreadyRunning);
-                    }
+        // Serialize against any in-flight stop of this daemon: a stop now
+        // waits for the whole process group to exit, so the Stopping window
+        // can last seconds instead of milliseconds. Starting through that
+        // window would collide with the dying instance (duplicate processes,
+        // port conflicts). Acquiring the stop lock waits the stop out; the
+        // state is re-read afterwards. The guard is owned and handed to
+        // run_once, which holds it until the new daemon's Running state and
+        // PID are persisted — releasing it before that point would let a
+        // concurrent run pass this same check (duplicate processes) or let a
+        // concurrent stop see no PID and return without stopping anything.
+        let mut stop_guard = Some(self.stop_lock(id).await.lock_owned().await);
+        let daemon = self.get_daemon(id).await;
+        if let Some(daemon) = daemon {
+            // Stopping state is treated as "not running" - the monitoring task will clean it up
+            // Only check for Running state with a valid PID
+            if !daemon.status.is_stopping()
+                && !daemon.status.is_stopped()
+                && let Some(pid) = daemon.pid
+            {
+                if opts.force {
+                    self.stop_locked(id).await?;
+                    info!("run: stop completed for daemon {id}");
+                } else {
+                    warn!("daemon {id} already running with pid {pid}");
+                    return Ok(IpcResponse::DaemonAlreadyRunning);
                 }
             }
         }
@@ -224,7 +244,14 @@ impl Supervisor {
                 retry_opts.retry_count = attempt;
                 retry_opts.cmd = cmd.clone();
 
-                let result = self.run_once(retry_opts).await?;
+                // The first attempt starts under the guard held since the
+                // running check above; later attempts re-acquire it so stops
+                // are not locked out during the backoff sleeps.
+                let guard = match stop_guard.take() {
+                    Some(guard) => guard,
+                    None => self.stop_lock(id).await.lock_owned().await,
+                };
+                let result = self.run_once(retry_opts, guard).await?;
 
                 match result {
                     IpcResponse::DaemonReady { daemon } => {
@@ -261,11 +288,24 @@ impl Supervisor {
         }
 
         // No retry or wait_ready is false
-        self.run_once(opts).await
+        let guard = match stop_guard.take() {
+            Some(guard) => guard,
+            None => self.stop_lock(id).await.lock_owned().await,
+        };
+        self.run_once(opts, guard).await
     }
 
-    /// Run a daemon once (single attempt)
-    pub(crate) async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
+    /// Run a daemon once (single attempt).
+    ///
+    /// `stop_guard` is this daemon's stop lock, acquired by `run` before the
+    /// already-running check. It is held through spawning until the Running
+    /// state and PID are persisted (or an early failure returns), then dropped
+    /// before the potentially unbounded readiness wait.
+    pub(crate) async fn run_once(
+        &self,
+        opts: RunOptions,
+        stop_guard: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<IpcResponse> {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
@@ -681,6 +721,12 @@ impl Supervisor {
                     .build(),
             )
             .await?;
+
+        // Running state and PID are now persisted: concurrent run/stop calls
+        // observe a running daemon and behave correctly, so release the stop
+        // lock rather than holding it through the readiness wait below, which
+        // can take arbitrarily long.
+        drop(stop_guard);
 
         let id_clone = id.clone();
         let ready_delay = opts.ready_delay;
@@ -1162,10 +1208,11 @@ impl Supervisor {
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
                             stop_cmd_probe_state(&mut cmd_probe);
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            ready_fail_kill = Some(tokio::spawn(async move {
-                                let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
-                            }));
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1192,10 +1239,11 @@ impl Supervisor {
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
                             stop_cmd_probe_state(&mut cmd_probe);
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            ready_fail_kill = Some(tokio::spawn(async move {
-                                let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
-                            }));
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1259,10 +1307,11 @@ impl Supervisor {
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
                             stop_cmd_probe_state(&mut cmd_probe);
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            ready_fail_kill = Some(tokio::spawn(async move {
-                                let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
-                            }));
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1393,10 +1442,11 @@ impl Supervisor {
                         );
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            ready_fail_kill = Some(tokio::spawn(async move {
-                                let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
-                            }));
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
