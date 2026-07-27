@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::time::Duration;
 #[cfg(unix)]
 use tokio::signal::unix::SignalKind;
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::{signal, time};
 
@@ -72,6 +72,12 @@ pub struct Supervisor {
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
+    /// Autostop stops that have been spawned as detached tasks but have not
+    /// yet begun stopping. `cancel_pending_autostops_for_dir` flips the flag
+    /// to call off the stop when a shell re-enters the directory while the
+    /// stop task is still in flight.
+    pub(crate) in_flight_autostops:
+        Mutex<HashMap<DaemonId, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete
@@ -110,6 +116,11 @@ pub struct Supervisor {
     /// before the sink starts and unregisters when it ends, so a line arriving
     /// from a sink that outlived its daemon has nowhere to go and is dropped.
     pub(crate) sink_output: std::sync::Mutex<HashMap<DaemonId, log_sink::Relay>>,
+    /// Per-daemon stop locks. A stop holds the daemon's lock for its whole
+    /// duration (which now includes waiting for the entire process group to
+    /// exit), and starts/orphan-cleanup acquire it first — serializing them
+    /// against in-flight stops instead of racing the Stopping window.
+    pub(crate) stop_locks: Mutex<HashMap<DaemonId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// A line of daemon output on its way to the monitoring task.
@@ -293,6 +304,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
+            in_flight_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),
@@ -304,7 +316,18 @@ impl Supervisor {
             flush_cancel: std::sync::Mutex::new(None),
             monitored: std::sync::Mutex::new(HashMap::new()),
             sink_output: std::sync::Mutex::new(HashMap::new()),
+            stop_locks: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Get (or create) the per-daemon stop lock for `id`.
+    pub(crate) async fn stop_lock(&self, id: &DaemonId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.stop_locks
+            .lock()
+            .await
+            .entry(id.clone())
+            .or_default()
+            .clone()
     }
 
     pub async fn start(
@@ -324,19 +347,25 @@ impl Supervisor {
         let pid = std::process::id();
         // Ensure PROCS has data for the supervisor PID before upsert_daemon reads title()
         PROCS.refresh_pids(&[pid]);
-        // Determine container mode: CLI flag takes priority, then settings
-        let container_mode = container || settings().supervisor.container;
+        // Determine container mode: CLI flag takes priority, then settings.
+        // Running as PID 1 always enables it: orphaned descendants of daemons
+        // re-parent to us, and without the zombie reaper they would accumulate
+        // as unreaped zombies — which also keep their process group alive,
+        // stalling whole-group stop waits indefinitely.
+        let container_mode =
+            container || settings().supervisor.container || std::process::id() == 1;
         if container_mode {
             info!("Starting supervisor in container/PID1 mode with pid {pid}");
         } else {
             info!("Starting supervisor with pid {pid}");
         }
 
-        // If the previous supervisor died uncleanly, its daemon child processes
-        // may still be alive (orphaned, re-parented to init).  Terminate them
-        // before we take over so we don't end up with duplicate processes
-        // holding the same ports.
-        cleanup_orphaned_daemons(self).await;
+        // Whether the previous supervisor exited uncleanly must be read before
+        // we record ourselves in the state file just below (see
+        // `supervisor_exited_uncleanly`); the background cleanup task runs
+        // after that record exists, so it receives the answer instead of
+        // reading it too late.
+        let unclean = supervisor_exited_uncleanly(self).await;
 
         self.upsert_daemon(
             UpsertDaemonOpts::builder(DaemonId::pitchfork())
@@ -350,11 +379,28 @@ impl Supervisor {
         #[cfg(unix)]
         fix_state_dir_permissions();
 
-        // If this is a boot start, automatically start boot_start daemons
-        if is_boot {
-            info!("Boot start mode enabled, starting boot_start daemons");
-            self.start_boot_daemons().await?;
-        }
+        // If the previous supervisor died uncleanly, its daemon child processes
+        // may still be alive (orphaned, re-parented to init).  Terminate them
+        // before starting replacements so we don't end up with duplicate
+        // processes holding the same ports.
+        //
+        // This runs in the background: each orphan kill now waits for its
+        // whole process group to exit (seconds per orphan), and doing that
+        // inline would delay IPC socket creation past the CLI's short connect
+        // budget on autostart. Per-daemon stop locks serialize the cleanup
+        // against any Run/Stop requests that arrive for the same daemon in the
+        // meantime, and boot daemons start after cleanup completes so they
+        // cannot observe an orphan as "already running".
+        let boot_after_cleanup = is_boot;
+        tokio::spawn(async move {
+            cleanup_orphaned_daemons(&SUPERVISOR, unclean).await;
+            if boot_after_cleanup {
+                info!("Boot start mode enabled, starting boot_start daemons");
+                if let Err(e) = SUPERVISOR.start_boot_daemons().await {
+                    error!("failed to start boot daemons: {e}");
+                }
+            }
+        });
 
         self.interval_watch()?;
 
@@ -1032,6 +1078,12 @@ impl Supervisor {
         // If dependency resolution fails (e.g. config changed), fall back to
         // stopping in arbitrary order so we still shut down cleanly.
         // Daemons within the same level are stopped concurrently.
+        //
+        // Each stop waits for the daemon's whole process group (bounded by its
+        // stop budget) and levels are sequential, so total shutdown time is the
+        // sum of the slowest stop per level. If an external manager (docker,
+        // systemd) kills us before this completes, cleanup_orphaned_daemons()
+        // recovers the leftover processes and stale state on the next start.
         let stop_levels = compute_reverse_stop_order(&active_ids);
         for level in &stop_levels {
             let mut tasks = Vec::new();
@@ -1301,7 +1353,13 @@ fn chmod_safe_subtrees(state_dir: &std::path::Path) {
 /// PID/PGID cannot be pinned between identity validation and signaling.
 ///
 /// This is gated by the `supervisor.cleanup_orphans` setting (default: true).
-async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
+///
+/// `unclean` is whether the previous supervisor exited uncleanly (see
+/// [`supervisor_exited_uncleanly`]). It is read in `start()` before the
+/// starting supervisor records itself in the state file — this function runs
+/// in the background after that record exists, so reading it here would
+/// always report unclean.
+async fn cleanup_orphaned_daemons(supervisor: &Supervisor, unclean: bool) {
     if !settings().supervisor.cleanup_orphans {
         return;
     }
@@ -1327,118 +1385,157 @@ async fn cleanup_orphaned_daemons(supervisor: &Supervisor) {
 
     let policy = orphan_policy();
     let boot_time = PROCS.boot_time();
-    let unclean = supervisor_exited_uncleanly(supervisor).await;
 
-    for daemon in candidates {
-        let Some(pid) = daemon.pid else { continue };
+    // Reconcile orphans in parallel — a kill waits for the daemon's whole
+    // process group to exit, bounded by that daemon's stop budget, so
+    // sequential processing would make total cleanup time the sum of the
+    // budgets.
+    let tasks: Vec<_> = candidates
+        .into_iter()
+        .map(|daemon| {
+            let policy = policy.clone();
+            tokio::spawn(cleanup_orphaned_daemon(daemon, policy, boot_time, unclean))
+        })
+        .collect();
+    for task in tasks {
+        let _ = task.await;
+    }
+}
 
-        // Refresh each candidate immediately before checking it. Processing an
-        // earlier orphan can await its stop timeout, during which this PID may
-        // exit and be recycled.
-        PROCS.refresh_pids(&[pid]);
+/// Reconcile a single orphan candidate: adopt it, kill it, or reset its state,
+/// per the policy and identity checks described on [`cleanup_orphaned_daemons`].
+///
+/// Holds the daemon's stop lock so a concurrent Run/Stop request for the same
+/// daemon (cleanup runs in the background) serializes with the orphan kill,
+/// and re-checks the recorded PID under the lock: if it changed, another path
+/// already replaced or cleaned up this record and the snapshot is stale.
+async fn cleanup_orphaned_daemon(
+    daemon: crate::daemon::Daemon,
+    policy: String,
+    boot_time: u64,
+    unclean: bool,
+) {
+    let supervisor: &Supervisor = &SUPERVISOR;
+    let Some(pid) = daemon.pid else { return };
 
-        if !PROCS.is_running(pid) {
-            // PID already dead — the daemon exited while unsupervised, so
-            // record a terminal status that reflects whether it died under a
-            // crashed supervisor (retryable) or with the machine.
-            let status =
-                unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
-            reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
-            continue;
-        }
+    let lock = supervisor.stop_lock(&daemon.id).await;
+    let _guard = lock.lock().await;
+    let current_pid = {
+        let state = supervisor.state_file.lock().await;
+        state.daemons.get(&daemon.id).and_then(|d| d.pid)
+    };
+    if current_pid != Some(pid) {
+        debug!(
+            "orphan cleanup: daemon {} pid changed (recorded {pid}, now {current_pid:?}), skipping",
+            daemon.id
+        );
+        return;
+    }
 
-        // Safety check: verify the live process really is the daemon we
-        // recorded, not an unrelated process that received a recycled PID.
-        // The kernel start time is a stable identity for the lifetime of a
-        // process, and is the only thing accepted as one.
-        let current_start_time = PROCS.start_time(pid);
-        let matches = process_identity_matches(daemon.start_time, current_start_time);
+    // Refresh the candidate immediately before checking it: waiting for the
+    // stop lock can await another path's stop timeout, during which this PID
+    // may exit and be recycled.
+    PROCS.refresh_pids(&[pid]);
 
-        if !matches {
-            // Either side missing means the identity cannot be checked at all,
-            // which is different from checking it and finding a stranger: retain
-            // the running state rather than resetting a record whose process may
-            // well still be the daemon.
-            if daemon.start_time.is_none() || current_start_time.is_none() {
-                warn!(
-                    "could not verify the identity of live pid {pid} recorded for daemon {}; retaining running state",
-                    daemon.id,
-                );
-                continue;
-            }
+    if !PROCS.is_running(pid) {
+        // PID already dead — the daemon exited while unsupervised, so
+        // record a terminal status that reflects whether it died under a
+        // crashed supervisor (retryable) or with the machine.
+        let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
+        reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
+        return;
+    }
+
+    // Safety check: verify the live process really is the daemon we
+    // recorded, not an unrelated process that received a recycled PID.
+    // The kernel start time is a stable identity for the lifetime of a
+    // process, and is the only thing accepted as one.
+    let current_start_time = PROCS.start_time(pid);
+    let matches = process_identity_matches(daemon.start_time, current_start_time);
+
+    if !matches {
+        // Either side missing means the identity cannot be checked at all,
+        // which is different from checking it and finding a stranger: retain
+        // the running state rather than resetting a record whose process may
+        // well still be the daemon.
+        if daemon.start_time.is_none() || current_start_time.is_none() {
             warn!(
-                "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
+                "could not verify the identity of live pid {pid} recorded for daemon {}; retaining running state",
                 daemon.id,
             );
-            // The daemon died at some unknown point and the OS handed its PID
-            // to something else — same unobserved exit as a dead PID.
-            let status =
-                unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
-            reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
-            continue;
+            return;
         }
+        warn!(
+            "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); resetting state without killing",
+            daemon.id,
+        );
+        // The daemon died at some unknown point and the OS handed its PID
+        // to something else — same unobserved exit as a dead PID.
+        let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
+        reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
+        return;
+    }
 
-        // Both policies need a verified start time: killing revalidates it
-        // while pinned to the process, and adoption anchors its poll monitor
-        // to it so a later PID recycle is never mistaken for the daemon.
-        let Some(expected_start_time) = current_start_time else {
-            warn!(
-                "could not read start time for live pid {pid} recorded for daemon {}; retaining running state",
-                daemon.id,
-            );
-            continue;
-        };
+    // Both policies need a verified start time: killing revalidates it
+    // while pinned to the process, and adoption anchors its poll monitor
+    // to it so a later PID recycle is never mistaken for the daemon.
+    let Some(expected_start_time) = current_start_time else {
+        warn!(
+            "could not read start time for live pid {pid} recorded for daemon {}; retaining running state",
+            daemon.id,
+        );
+        return;
+    };
 
-        // Identity verified — the process really is our orphaned daemon.
-        // The policy decides whether supervision resumes or the slate is
-        // wiped clean.
-        if policy == "adopt" {
-            supervisor
-                .adopt_daemon(&daemon, pid, expected_start_time)
-                .await;
-            continue;
-        }
-
-        info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
-
-        let stop_cfg = daemon.stop_signal.unwrap_or_default();
-        let termination_result = PROCS
-            .kill_process_group_if_start_time_matches_async(
-                pid,
-                expected_start_time,
-                stop_cfg.signal.into(),
-                stop_cfg.timeout,
-            )
+    // Identity verified — the process really is our orphaned daemon.
+    // The policy decides whether supervision resumes or the slate is
+    // wiped clean.
+    if policy == "adopt" {
+        supervisor
+            .adopt_daemon(&daemon, pid, expected_start_time)
             .await;
+        return;
+    }
 
-        match termination_result {
-            Ok(true) => {}
-            Ok(false) => {
-                warn!(
-                    "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
-                    daemon.id
-                );
-                continue;
-            }
-            Err(err) => {
-                warn!(
-                    "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
-                    daemon.id
-                );
-                continue;
-            }
-        }
+    info!("terminating orphaned daemon {} (pid {pid})", daemon.id);
 
-        // We terminated the orphan ourselves, so this is an observed,
-        // intentional stop rather than an unobserved exit.
-        reset_daemon_state(
-            supervisor,
-            &daemon.id,
-            DaemonStatus::Stopped,
-            ExitObservation::Terminated,
+    let stop_cfg = daemon.stop_signal.unwrap_or_default();
+    let termination_result = PROCS
+        .kill_process_group_if_start_time_matches_async(
+            pid,
+            expected_start_time,
+            stop_cfg.signal.into(),
+            stop_cfg.timeout,
         )
         .await;
+
+    match termination_result {
+        Ok(true) => {}
+        Ok(false) => {
+            warn!(
+                "could not securely terminate orphaned daemon {} (pid {pid}); retaining running state",
+                daemon.id
+            );
+            return;
+        }
+        Err(err) => {
+            warn!(
+                "failed to terminate orphaned daemon {} (pid {pid}): {err}; retaining running state",
+                daemon.id
+            );
+            return;
+        }
     }
+
+    // We terminated the orphan ourselves, so this is an observed,
+    // intentional stop rather than an unobserved exit.
+    reset_daemon_state(
+        supervisor,
+        &daemon.id,
+        DaemonStatus::Stopped,
+        ExitObservation::Terminated,
+    )
+    .await;
 }
 
 /// Effective `supervisor.orphan_policy`, warning on an unrecognized value

@@ -319,7 +319,10 @@ EOF
   assert_success
 
   # immediate=true should trigger the cron watcher on its first check because a
-  # scheduled time falls within the 10-second look-back window.
+  # scheduled time falls within the 10-second look-back window. The manual
+  # start logs the first line; poll until the cron-triggered second line
+  # arrives — asserting a count immediately races the cron tick and the log
+  # flush on loaded CI runners.
   wait_for_logs cron_immediate "immediate_fired" 5
 
   local count
