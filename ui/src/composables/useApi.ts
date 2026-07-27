@@ -258,6 +258,11 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
         buf = parts.pop() ?? ''
         const entries: StructuredLogEntry[] = []
         for (const part of parts) {
+          // Clear sentinel: flush the buffer and skip.
+          if (part === '{"_clear":true}') {
+            lines.value = []
+            continue
+          }
           try {
             const parsed = JSON.parse(part) as StructuredLogEntry
             entries.push(parsed)

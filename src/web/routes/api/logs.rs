@@ -346,9 +346,11 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
             let (raw_entries, current_gen) = poll_result;
 
             if current_gen != last_clear_gen {
-                // Log clear detected — reset cursor and skip this batch.
+                // Log clear detected — signal the frontend to flush its
+                // buffer, then reset cursor and skip this batch.
                 last_clear_gen = current_gen;
                 last_id = 0;
+                yield Ok::<Vec<u8>, Infallible>(b"{\"_clear\":true}\n".to_vec());
                 continue;
             }
 

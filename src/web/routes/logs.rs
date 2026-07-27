@@ -33,7 +33,7 @@ pub async fn stream_sse(
         // Capture the starting cursor (last existing row id) and clear
         // generation atomically so a clear between them can't pair a stale
         // cursor with the new generation.
-        let (last_id, last_clear_gen) = match tokio::task::spawn_blocking({
+        let (mut last_id, mut last_clear_gen) = match tokio::task::spawn_blocking({
             let d = daemon_id.clone();
             move || LOG_STORE.query_with_generation(
                 &LogQuery {
@@ -56,10 +56,13 @@ pub async fn stream_sse(
             Ok(Ok((entries, generation))) => {
                 (entries.first().map(|e| e.id).unwrap_or(0), generation.unwrap_or(0))
             }
-            _ => (0, 0),
+            _ => {
+                // Initialization failed — don't fall back to cursor 0 which
+                // would replay the entire history on the next poll.
+                yield Ok(Event::default().event("error").data("failed to initialize log stream"));
+                return;
+            }
         };
-        let mut last_id = last_id;
-        let mut last_clear_gen = last_clear_gen;
 
         loop {
             tokio::time::sleep(sse_poll_interval).await;
