@@ -1079,7 +1079,7 @@ pub fn resolve_config_base_dir(config_path: Option<&Path>) -> PathBuf {
 pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
     let base_dir = resolve_config_base_dir(config_path);
     match dir {
-        Some(d) => base_dir.join(d),
+        Some(d) => base_dir.join(crate::env::expand_tilde(d)),
         None => base_dir,
     }
 }
@@ -1206,6 +1206,15 @@ mod tests {
             Some(Path::new("/projects/myapp/pitchfork.toml")),
         );
         assert_eq!(result, PathBuf::from("/opt/myapp"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_tilde() {
+        let result = resolve_daemon_dir(
+            Some("~/projects/myapp"),
+            Some(Path::new("/projects/other/pitchfork.toml")),
+        );
+        assert_eq!(result, crate::env::HOME_DIR.join("projects/myapp"));
     }
 
     #[test]
