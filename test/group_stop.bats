@@ -115,7 +115,9 @@ EOF
   new_pid="$(get_daemon_pid slow_stop_test)"
   [[ -n "$new_pid" ]]
   [[ "$new_pid" != "$old_pid" ]]
-  ! pid_alive "$old_pid"
+  # `run !` rather than a bare `! pid_alive`: negated commands are excluded
+  # from errexit, so a bare form could never fail the test.
+  run ! pid_alive "$old_pid"
 
   # Exactly two instances ever ran: the original and the one started after
   # the stop completed. A third line would mean the start raced the stop.
