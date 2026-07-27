@@ -43,26 +43,26 @@ impl Status {
                 debug!("failed to connect to supervisor: {err:?}");
                 // Connecting can fail even while the supervisor is running
                 // (permission denied on the socket, stale socket, I/O errors).
-                // Only report "down" when the supervisor process is actually
-                // gone; otherwise report "unknown" with the connect error.
-                let running = super::existing_supervisor_pid()
-                    .ok()
-                    .flatten()
-                    .is_some_and(|pid| PROCS.is_running(pid));
-                if running {
-                    JsonSupervisorStatus {
+                // Only report "down" when the supervisor process is confirmed
+                // gone; otherwise report "unknown" with what failed.
+                match super::existing_supervisor_pid() {
+                    Ok(Some(pid)) if PROCS.is_running(pid) => JsonSupervisorStatus {
                         status: "unknown",
                         web_ui: None,
                         error: Some(format!(
                             "supervisor process is running but IPC connection failed: {err}"
                         )),
-                    }
-                } else {
-                    JsonSupervisorStatus {
+                    },
+                    Ok(_) => JsonSupervisorStatus {
                         status: "down",
                         web_ui: None,
                         error: None,
-                    }
+                    },
+                    Err(state_err) => JsonSupervisorStatus {
+                        status: "unknown",
+                        web_ui: None,
+                        error: Some(format!("failed to read supervisor state: {state_err}")),
+                    },
                 }
             }
         }
