@@ -339,11 +339,6 @@ impl PendingSink {
     pub(crate) fn take(&mut self) -> Option<tokio::process::Child> {
         self.0.take()
     }
-
-    /// Whether a sink is still held.
-    pub(crate) fn is_some(&self) -> bool {
-        self.0.is_some()
-    }
 }
 
 impl Drop for PendingSink {
