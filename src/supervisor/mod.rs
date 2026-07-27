@@ -72,6 +72,12 @@ pub struct Supervisor {
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
+    /// Autostop stops that have been spawned as detached tasks but have not
+    /// yet begun stopping. `cancel_pending_autostops_for_dir` flips the flag
+    /// to call off the stop when a shell re-enters the directory while the
+    /// stop task is still in flight.
+    pub(crate) in_flight_autostops:
+        Mutex<HashMap<DaemonId, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete
@@ -298,6 +304,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
+            in_flight_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),

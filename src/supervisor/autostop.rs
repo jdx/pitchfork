@@ -11,6 +11,8 @@ use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use log::LevelFilter::Info;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::time;
 
 /// Whether `path` is equal to or nested inside `base`.
@@ -70,18 +72,8 @@ impl Supervisor {
                         // UpdateShellDir handler — blocking here would stall the
                         // user's `cd` shell hook until the stop completes.
                         info!("autostopping {daemon}");
-                        let label = daemon.to_string();
-                        let daemon_id = daemon.id.clone();
-                        tokio::spawn(async move {
-                            match SUPERVISOR.stop(&daemon_id).await {
-                                Ok(_) => {
-                                    SUPERVISOR
-                                        .add_notification(Info, format!("autostopped {label}"))
-                                        .await;
-                                }
-                                Err(e) => error!("failed to autostop {daemon_id}: {e}"),
-                            }
-                        });
+                        self.spawn_autostop(daemon.id.clone(), daemon.to_string())
+                            .await;
                     } else {
                         // Schedule autostop with delay
                         let stop_at = time::Instant::now() + autostop_delay;
@@ -125,6 +117,83 @@ impl Supervisor {
             if pending.remove(&daemon_id).is_some() {
                 info!("cancelled pending autostop for {daemon_id}");
             }
+            // Also call off any stop task already spawned but not yet stopping.
+            // The entry is removed so a later leave can schedule a fresh
+            // autostop; the task keeps its own clone of the flag.
+            if let Some(flag) = self.in_flight_autostops.lock().await.remove(&daemon_id) {
+                flag.store(true, Ordering::SeqCst);
+                info!("cancelled in-flight autostop for {daemon_id}");
+            }
+        }
+    }
+
+    /// Spawn a detached stop task for an autostopped daemon.
+    ///
+    /// The task is registered in `in_flight_autostops` so that
+    /// `cancel_pending_autostops_for_dir` can call it off if a shell
+    /// re-enters the directory before the stop begins, and it revalidates
+    /// directory activity right before stopping since the scheduling check
+    /// ran before the task was spawned.
+    async fn spawn_autostop(&self, daemon_id: DaemonId, label: String) {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let mut in_flight = self.in_flight_autostops.lock().await;
+            if in_flight.contains_key(&daemon_id) {
+                debug!("autostop already in flight for {daemon_id}");
+                return;
+            }
+            in_flight.insert(daemon_id.clone(), cancelled.clone());
+        }
+        tokio::spawn(async move {
+            SUPERVISOR
+                .run_autostop(&daemon_id, &label, &cancelled)
+                .await;
+            // Only remove our own registration: a cancelled entry may have
+            // been replaced by a newer in-flight autostop for the same daemon.
+            let mut in_flight = SUPERVISOR.in_flight_autostops.lock().await;
+            if in_flight
+                .get(&daemon_id)
+                .is_some_and(|f| Arc::ptr_eq(f, &cancelled))
+            {
+                in_flight.remove(&daemon_id);
+            }
+        });
+    }
+
+    /// Body of a detached autostop task: revalidate, then stop.
+    async fn run_autostop(&self, daemon_id: &DaemonId, label: &str, cancelled: &AtomicBool) {
+        if cancelled.load(Ordering::SeqCst) {
+            debug!("autostop of {daemon_id} cancelled before stopping");
+            return;
+        }
+        // Revalidate that the daemon's directory is still inactive: a shell
+        // may have entered it between the scheduling check and this task
+        // running.
+        if let Some(daemon) = self.get_daemon(daemon_id).await
+            && daemon.autostop
+            && daemon.status.is_running()
+        {
+            if let Some(daemon_dir) = daemon.dir.as_ref() {
+                let active_dirs = self.get_active_directories().await;
+                if active_dirs.iter().any(|d| is_within(daemon_dir, d)) {
+                    debug!("autostop of {daemon_id} skipped: directory active again");
+                    return;
+                }
+            }
+        } else {
+            debug!("autostop of {daemon_id} skipped: no longer running");
+            return;
+        }
+        if cancelled.load(Ordering::SeqCst) {
+            debug!("autostop of {daemon_id} cancelled before stopping");
+            return;
+        }
+        match self.stop(daemon_id).await {
+            Ok(_) => {
+                self.add_notification(Info, format!("autostopped {label}"))
+                    .await;
+            }
+            Err(e) => error!("failed to autostop {daemon_id}: {e}"),
         }
     }
 
@@ -171,16 +240,8 @@ impl Supervisor {
                     // blocking here would stall the `cd` shell hook and delay
                     // other watcher duties (e.g. retries) behind each stop.
                     info!("autostopping {daemon_id} (after delay)");
-                    tokio::spawn(async move {
-                        match SUPERVISOR.stop(&daemon_id).await {
-                            Ok(_) => {
-                                SUPERVISOR
-                                    .add_notification(Info, format!("autostopped {daemon_id}"))
-                                    .await;
-                            }
-                            Err(e) => error!("failed to autostop {daemon_id}: {e}"),
-                        }
-                    });
+                    let label = daemon_id.to_string();
+                    self.spawn_autostop(daemon_id, label).await;
                 }
             }
         }
