@@ -173,11 +173,12 @@ fn parse_logfmt_pairs(line: &str) -> Option<Vec<(String, Option<String>)>> {
             continue;
         }
         // Reject keys that aren't valid logfmt identifiers. Real logfmt keys
-        // are alphanumeric with '_', '.', '-'. Tokens like '2026/07/23' or
+        // are alphanumeric with '_', '.', '-', '@'. Tokens like '2026/07/23' or
         // '22:02:39' (from Go's standard log format) are not valid keys.
+        // '@' is allowed for pino/syslog style keys like @level, @message.
         if !key
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-' || b == b'@')
         {
             // Skip the entire invalid token. If followed by '=value',
             // consume that too so it isn't parsed as a separate pair.
@@ -490,6 +491,17 @@ mod tests {
         assert_eq!(parsed.level.as_deref(), Some("info"));
         let fields: Value = serde_json::from_str(parsed.fields_json.as_deref().unwrap()).unwrap();
         assert_eq!(fields["request-id"], Value::String("abc123".into()));
+    }
+
+    #[test]
+    fn test_logfmt_at_prefixed_key() {
+        // pino/syslog style keys use @ prefix (e.g. @level, @message).
+        let line = r#"@level=info @message="server started" port=8080"#;
+        let parsed = parse(line, "logfmt");
+        assert_eq!(parsed.level.as_deref(), Some("info"));
+        assert_eq!(parsed.msg.as_deref(), Some("server started"));
+        let fields: Value = serde_json::from_str(parsed.fields_json.as_deref().unwrap()).unwrap();
+        assert_eq!(fields["port"], Value::Number(8080.into()));
     }
 
     #[test]
