@@ -1204,6 +1204,11 @@ impl LogStore for SqliteLogStore {
         // Wrap both reads in a single transaction so a concurrent clear
         // cannot interleave between them. In WAL mode, BEGIN acquires a
         // consistent snapshot that both statements share.
+        //
+        // Intentionally call build_query_sql + execute_built_query directly
+        // instead of self.query(): the latter may delegate to query_parallel
+        // which opens separate connections outside this transaction, breaking
+        // the snapshot guarantee.
         conn.execute_batch("BEGIN").into_diagnostic()?;
         let result = (|| {
             let (sql, query_params) = Self::build_query_sql(opts, None);
