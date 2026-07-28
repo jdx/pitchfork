@@ -57,16 +57,6 @@ fn parse_datetime(s: &str) -> Option<DateTime<Local>> {
     None
 }
 
-/// Check if a field key is safe for SQL JSON path interpolation.
-/// Only alphanumeric, underscore, period, and hyphen are allowed.
-/// Must match the key grammar in parse_logfmt_pairs.
-fn is_safe_field_key(key: &str) -> bool {
-    !key.is_empty()
-        && key
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
-}
-
 /// Build message and field filters from query params.
 /// Returns an error string if any filter value is invalid.
 fn build_filters(query: &TailQuery) -> Result<(Vec<MessageFilter>, Vec<FieldFilter>), String> {
@@ -115,10 +105,8 @@ fn build_filters(query: &TailQuery) -> Result<(Vec<MessageFilter>, Vec<FieldFilt
                     "invalid field filter: '{pair}' (expected KEY=VALUE format)"
                 ));
             };
-            if !is_safe_field_key(key) {
-                return Err(format!(
-                    "invalid field key: {key} (only alphanumeric, underscore, period, and hyphen are allowed)"
-                ));
+            if key.is_empty() {
+                return Err("invalid field filter: empty key".to_string());
             }
             field_filters.push(FieldFilter::FieldEq {
                 key: key.to_string(),
