@@ -41,10 +41,10 @@ The registration mode is determined automatically based on whether the command r
 
 If you need the supervisor to run as root (e.g. to manage system-level processes), use `sudo pitchfork boot enable`.
 
-However, if you still want state files, IPC sockets and daemon processes to belong to a specific user rather than root, set `supervisor.user` in your global config (`/etc/pitchfork/config.toml` or `~/.config/pitchfork/config.toml`):
+However, if you still want state files, IPC sockets and daemon processes to belong to a specific user rather than root, set `settings.supervisor.user` in your global config (`/etc/pitchfork/config.toml` or `~/.config/pitchfork/config.toml`):
 
 ```toml
-[supervisor]
+[settings.supervisor]
 user = "alice"
 ```
 

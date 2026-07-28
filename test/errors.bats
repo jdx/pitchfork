@@ -126,7 +126,7 @@ EOF
 }
 
 @test "CLI does not auto-start supervisor when disabled" {
-  create_pitchfork_toml <<EOF
+  cat > "$PITCHFORK_CONFIG_DIR/config.toml" <<EOF
 [settings.supervisor]
 auto_start = false
 EOF
