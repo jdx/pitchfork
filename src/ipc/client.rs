@@ -51,7 +51,7 @@ pub struct IpcClient {
 
 impl IpcClient {
     pub async fn connect(autostart: bool) -> Result<Self> {
-        if autostart {
+        if autostart && settings().supervisor.auto_start {
             supervisor::start_if_not_running()?;
         }
         let id = Uuid::new_v4().to_string();
@@ -126,6 +126,15 @@ impl IpcClient {
     /// whose framing was lost after a failed exchange (see `desynced`).
     async fn open_stream(name: &str) -> Result<(BufReader<RecvHalf>, SendHalf)> {
         let s = settings();
+        let connection_help = || {
+            if s.supervisor.auto_start {
+                "ensure the supervisor is running with: pitchfork supervisor start".to_string()
+            } else {
+                "supervisor auto-start is disabled; start it with your service manager or run: \
+                 pitchfork supervisor start"
+                    .to_string()
+            }
+        };
         let connect_attempts = u32::try_from(s.ipc.connect_attempts).unwrap_or_else(|_| {
             warn!(
                 "ipc.connect_attempts value {} is out of range (0-{}), clamping to 5",
@@ -174,9 +183,7 @@ impl IpcClient {
                             return Err(IpcError::ConnectionFailed {
                                 attempts: connect_attempts,
                                 source: Some(err),
-                                help:
-                                    "ensure the supervisor is running with: pitchfork supervisor start"
-                                        .to_string(),
+                                help: connection_help(),
                             }
                             .into());
                         }
@@ -186,8 +193,7 @@ impl IpcClient {
             Err(IpcError::ConnectionFailed {
                 attempts: connect_attempts,
                 source: None,
-                help: "ensure the supervisor is running with: pitchfork supervisor start"
-                    .to_string(),
+                help: connection_help(),
             }
             .into())
         })
@@ -197,7 +203,8 @@ impl IpcClient {
                 attempts: connect_attempts,
                 source: None,
                 help: format!(
-                    "connection timed out after {connect_timeout:?}; ensure the supervisor is running with: pitchfork supervisor start"
+                    "connection timed out after {connect_timeout:?}; {}",
+                    connection_help()
                 ),
             }
             .into())

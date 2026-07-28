@@ -132,6 +132,7 @@ mod tests {
         assert_eq!(settings.tui.stat_history, 60);
 
         // Test supervisor settings
+        assert!(settings.supervisor.auto_start);
         assert_eq!(settings.supervisor.ready_check_interval, "500ms");
         assert_eq!(settings.supervisor.file_watch_debounce, "1s");
         assert_eq!(settings.supervisor.user, "");
@@ -256,6 +257,7 @@ log_level = "warn"
             std::env::set_var("PITCHFORK_AUTOSTOP_DELAY", "10m");
             std::env::set_var("PITCHFORK_INTERVAL", "5s");
             std::env::set_var("PITCHFORK_IPC_CONNECT_ATTEMPTS", "20");
+            std::env::set_var("PITCHFORK_SUPERVISOR_AUTO_START", "false");
             std::env::set_var("PITCHFORK_WEB_AUTO_START", "true");
         }
 
@@ -266,6 +268,7 @@ log_level = "warn"
         assert_eq!(settings.general.autostop_delay, "10m");
         assert_eq!(settings.general.interval, "5s");
         assert_eq!(settings.ipc.connect_attempts, 20);
+        assert!(!settings.supervisor.auto_start);
         assert!(settings.web.auto_start);
 
         // Fields with no corresponding env var set remain at defaults
@@ -278,6 +281,7 @@ log_level = "warn"
             std::env::remove_var("PITCHFORK_AUTOSTOP_DELAY");
             std::env::remove_var("PITCHFORK_INTERVAL");
             std::env::remove_var("PITCHFORK_IPC_CONNECT_ATTEMPTS");
+            std::env::remove_var("PITCHFORK_SUPERVISOR_AUTO_START");
             std::env::remove_var("PITCHFORK_WEB_AUTO_START");
         }
     }
@@ -512,6 +516,7 @@ auto_start = true
 bind_port = 8080
 
 [settings.supervisor]
+auto_start = false
 user = "postgres"
 "#;
 
@@ -528,6 +533,7 @@ user = "postgres"
         assert_eq!(settings.general.log_level, "debug");
         assert!(settings.web.auto_start);
         assert_eq!(settings.web.bind_port, 8080);
+        assert!(!settings.supervisor.auto_start);
         assert_eq!(settings.supervisor.user, "postgres");
         assert_eq!(settings.general.interval, "10s");
         assert_eq!(settings.ipc.connect_attempts, 5);

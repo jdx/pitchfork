@@ -116,6 +116,17 @@ teardown() {
   assert_output --partial "7s"
 }
 
+@test "settings set supports disabling supervisor auto-start" {
+  run pitchfork settings set supervisor.auto_start false
+  assert_success
+  assert_file_contains "pitchfork.toml" 'auto_start = false'
+  assert_file_contains "pitchfork.toml" "\[settings\.supervisor\]"
+
+  run pitchfork settings get supervisor.auto_start
+  assert_success
+  assert_output "false"
+}
+
 # ============================================================================
 # Group C: config precedence
 # ============================================================================

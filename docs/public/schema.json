@@ -1083,6 +1083,13 @@
     "SettingsSupervisorPartial": {
       "type": "object",
       "properties": {
+        "auto_start": {
+          "description": "Automatically start the supervisor when a client command needs it",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "cleanup_orphans": {
           "description": "Reconcile orphaned daemon processes when supervisor starts",
           "type": [
