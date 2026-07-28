@@ -3068,10 +3068,23 @@
               "supervisor",
               "status"
             ],
-            "usage": "supervisor status",
+            "usage": "supervisor status [--json]",
             "subcommands": {},
             "args": [],
-            "flags": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "help": "Output in JSON format",
+                "help_first_line": "Output in JSON format",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              }
+            ],
             "mounts": [],
             "effect": "read",
             "hide": false,
