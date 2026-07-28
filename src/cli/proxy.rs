@@ -437,7 +437,11 @@ impl Add {
             );
         }
 
-        let dir = self.dir.clone().unwrap_or_else(|| crate::env::CWD.clone());
+        let dir = self
+            .dir
+            .as_ref()
+            .map(crate::env::expand_tilde)
+            .unwrap_or_else(|| crate::env::CWD.clone());
         let dir = dir.canonicalize().unwrap_or(dir);
 
         let daemon = self.daemon.as_deref();

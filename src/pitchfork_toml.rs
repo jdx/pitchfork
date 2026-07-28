@@ -1135,7 +1135,7 @@ impl PitchforkToml {
             pt.slugs.insert(
                 slug,
                 SlugEntry {
-                    dir: entry.dir.map(PathBuf::from),
+                    dir: entry.dir.map(env::expand_tilde),
                     namespace: entry.namespace,
                     daemon: entry.daemon,
                 },
@@ -1147,7 +1147,7 @@ impl PitchforkToml {
             pt.namespaces.insert(
                 name,
                 NamespaceEntry {
-                    dir: PathBuf::from(entry.dir),
+                    dir: env::expand_tilde(entry.dir),
                 },
             );
         }
@@ -1550,7 +1550,7 @@ impl PitchforkToml {
         pt.namespaces.insert(
             name.to_string(),
             NamespaceEntry {
-                dir: PathBuf::from(dir),
+                dir: env::expand_tilde(dir),
             },
         );
         pt.write_unlocked()?;
@@ -1792,6 +1792,30 @@ user = "postgres"
             .get(&DaemonId::new("test-project", "api"))
             .unwrap();
         assert_eq!(daemon.user.as_deref(), Some("postgres"));
+    }
+
+    #[test]
+    fn test_registry_dirs_expand_tilde() {
+        let pt = PitchforkToml::parse_str(
+            r#"
+[slugs.api]
+dir = "~/projects/api"
+
+[namespaces.web]
+dir = "~/projects/web"
+"#,
+            Path::new("/tmp/config.toml"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            pt.slugs["api"].dir,
+            Some(crate::env::HOME_DIR.join("projects/api"))
+        );
+        assert_eq!(
+            pt.namespaces["web"].dir,
+            crate::env::HOME_DIR.join("projects/web")
+        );
     }
 
     #[test]
