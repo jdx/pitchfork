@@ -202,6 +202,9 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
   const connected = ref(false)
   const hasMoreHistory = ref(true)
   const loadingMore = ref(false)
+  // Incremented each time a clear sentinel is received. loadMoreHistory
+  // checks this to discard results if a clear happened while fetching.
+  const clearEpoch = ref(0)
   let abort: AbortController | null = null
   const MAX_LINES = 10000
 
@@ -261,6 +264,7 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
           // Clear sentinel: flush the buffer and skip.
           if (part === '{"_clear":true}') {
             lines.value = []
+            clearEpoch.value++
             continue
           }
           try {
@@ -304,6 +308,7 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
     if (oldestId === undefined) return 0
 
     loadingMore.value = true
+    const epochBeforeFetch = clearEpoch.value
 
     const params = new URLSearchParams()
     params.set('before_id', String(oldestId))
@@ -342,6 +347,10 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
       if (entries.length < 100) {
         hasMoreHistory.value = false
       }
+
+      // Discard results if a clear happened while fetching — those entries
+      // belong to a pre-clear snapshot and would resurrect deleted logs.
+      if (clearEpoch.value !== epochBeforeFetch) return 0
 
       lines.value.unshift(...entries)
       return entries.length
