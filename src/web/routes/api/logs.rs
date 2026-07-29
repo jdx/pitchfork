@@ -254,6 +254,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
         return Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/x-ndjson")
+            .header("x-log-generation", initial_gen.unwrap_or(0).to_string())
             .body(Body::from(body))
             .unwrap();
     }
@@ -338,7 +339,9 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
                 // buffer, then reset cursor and skip this batch.
                 last_clear_gen = current_gen;
                 last_id = 0;
-                yield Ok::<Vec<u8>, Infallible>(b"{\"_clear\":true}\n".to_vec());
+                yield Ok::<Vec<u8>, Infallible>(
+                    format!("{{\"_clear\":true,\"_gen\":{}}}\n", current_gen).into_bytes(),
+                );
                 continue;
             }
 
@@ -367,6 +370,7 @@ pub async fn tail(Path(id): Path<String>, Query(query): Query<TailQuery>) -> Res
     Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/x-ndjson")
+        .header("x-log-generation", initial_gen.unwrap_or(0).to_string())
         .body(Body::from_stream(stream))
         .unwrap()
 }

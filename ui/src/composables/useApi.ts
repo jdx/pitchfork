@@ -202,9 +202,10 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
   const connected = ref(false)
   const hasMoreHistory = ref(true)
   const loadingMore = ref(false)
-  // Incremented each time a clear sentinel is received. loadMoreHistory
-  // checks this to discard results if a clear happened while fetching.
-  const clearEpoch = ref(0)
+  // Current log-clear generation known to the stream. Updated from the
+  // initial response header and clear sentinels. loadMoreHistory compares
+  // its response generation against this to discard stale pre-clear entries.
+  const streamGen = ref(0)
   let abort: AbortController | null = null
   const MAX_LINES = 10000
 
@@ -248,6 +249,8 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
         return
       }
       connected.value = true
+      // Track the generation from the initial atomic snapshot.
+      streamGen.value = Number(res.headers.get('x-log-generation') ?? 0)
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
@@ -261,10 +264,15 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
         buf = parts.pop() ?? ''
         const entries: StructuredLogEntry[] = []
         for (const part of parts) {
-          // Clear sentinel: flush the buffer and skip.
-          if (part === '{"_clear":true}') {
+          // Clear sentinel: flush the buffer, update generation, and skip.
+          if (part.startsWith('{"_clear":')) {
             lines.value = []
-            clearEpoch.value++
+            try {
+              const meta = JSON.parse(part) as { _gen?: number }
+              if (meta._gen !== undefined) streamGen.value = meta._gen
+            } catch {
+              // malformed sentinel — still flushed
+            }
             continue
           }
           try {
@@ -308,7 +316,7 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
     if (oldestId === undefined) return 0
 
     loadingMore.value = true
-    const epochBeforeFetch = clearEpoch.value
+    const genBeforeFetch = streamGen.value
 
     const params = new URLSearchParams()
     params.set('before_id', String(oldestId))
@@ -350,7 +358,15 @@ export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = r
 
       // Discard results if a clear happened while fetching — those entries
       // belong to a pre-clear snapshot and would resurrect deleted logs.
-      if (clearEpoch.value !== epochBeforeFetch) return 0
+      // Compare the response's generation (from the atomic snapshot) against
+      // the stream's current generation. If the stream advanced (via a clear
+      // sentinel or a reconnect with a newer generation), the response is stale.
+      const responseGen = Number(res.headers.get('x-log-generation') ?? 0)
+      if (responseGen < streamGen.value) return 0
+
+      // Also check against the pre-fetch snapshot in case the stream
+      // disconnected without delivering a clear sentinel.
+      if (streamGen.value !== genBeforeFetch) return 0
 
       lines.value.unshift(...entries)
       return entries.length
