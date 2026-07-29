@@ -41,10 +41,10 @@ The registration mode is determined automatically based on whether the command r
 
 If you need the supervisor to run as root (e.g. to manage system-level processes), use `sudo pitchfork boot enable`.
 
-However, if you still want state files, IPC sockets and daemon processes to belong to a specific user rather than root, set `supervisor.user` in your global config (`/etc/pitchfork/config.toml` or `~/.config/pitchfork/config.toml`):
+However, if you still want state files, IPC sockets and daemon processes to belong to a specific user rather than root, set `settings.supervisor.user` in your global config (`/etc/pitchfork/config.toml` or `~/.config/pitchfork/config.toml`):
 
 ```toml
-[supervisor]
+[settings.supervisor]
 user = "alice"
 ```
 
@@ -79,6 +79,22 @@ When boot start is enabled:
 1. System login (user-level) or system startup (system-level) triggers the pitchfork supervisor
 2. Supervisor starts all daemons with `boot_start = true`
 3. Daemons run in the background
+
+### Prevent fallback supervisor starts
+
+When systemd, launchd, or another service manager is the only intended owner of
+the supervisor, disable client-side auto-start in your global configuration:
+
+```toml
+[settings.supervisor]
+auto_start = false
+```
+
+Commands such as `pitchfork list`, the TUI, and shell activation will then
+connect to the managed supervisor without spawning an unmanaged replacement if
+the service is unavailable or still starting. Explicit
+`pitchfork supervisor start` and `pitchfork supervisor run` commands remain
+available.
 
 ## Typical Setup
 

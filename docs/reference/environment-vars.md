@@ -38,6 +38,22 @@ PITCHFORK_WEB_PORT=19876 pitchfork supervisor start --force
 
 If the specified port is in use, pitchfork tries up to 10 consecutive ports.
 
+## `PITCHFORK_SUPERVISOR_AUTO_START`
+
+Controls whether client commands automatically launch a background supervisor
+when none is running. The default is `true`.
+
+Set it to `false` when systemd, launchd, or another service manager owns the
+supervisor:
+
+```bash
+export PITCHFORK_SUPERVISOR_AUTO_START=false
+```
+
+Client commands then fail with an actionable connection error instead of
+spawning an unmanaged supervisor. Explicit `pitchfork supervisor start` and
+`pitchfork supervisor run` commands are unaffected.
+
 ## Daemon Process Variables
 
 These environment variables are automatically set for every daemon process and its [lifecycle hooks](/guides/lifecycle-hooks).

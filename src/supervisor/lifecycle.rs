@@ -146,6 +146,25 @@ fn stop_cmd_probe_state(probe: &mut Option<CmdProbe>) {
     }
 }
 
+/// Spawn a detached task that kills a daemon's process group after its
+/// readiness checks are exhausted, logging a failed kill instead of
+/// discarding it. The returned handle is awaited before the readiness
+/// failure is reported so the process group is down by then.
+fn spawn_ready_fail_kill(
+    id: DaemonId,
+    pid: u32,
+    stop_cfg: crate::config_types::StopConfig,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Err(e) = PROCS
+            .kill_process_group_async(pid, stop_cfg.signal.into(), stop_cfg.timeout)
+            .await
+        {
+            error!("daemon {id}: failed to kill pid {pid} after readiness failure: {e}");
+        }
+    })
+}
+
 /// Returns true if any configured readiness check can still succeed.
 /// A check with no timeout is unbounded; a timed check can still succeed until its
 /// deadline fires. `ready_delay` is only used as a fallback when no other check is
@@ -187,6 +206,17 @@ impl Supervisor {
             }
         }
 
+        // Serialize against any in-flight stop of this daemon: a stop now
+        // waits for the whole process group to exit, so the Stopping window
+        // can last seconds instead of milliseconds. Starting through that
+        // window would collide with the dying instance (duplicate processes,
+        // port conflicts). Acquiring the stop lock waits the stop out; the
+        // state is re-read afterwards. The guard is owned and handed to
+        // run_once, which holds it until the new daemon's Running state and
+        // PID are persisted — releasing it before that point would let a
+        // concurrent run pass this same check (duplicate processes) or let a
+        // concurrent stop see no PID and return without stopping anything.
+        let mut stop_guard = Some(self.stop_lock(id).await.lock_owned().await);
         let daemon = self.get_daemon(id).await;
         if let Some(daemon) = daemon {
             // Stopping state is treated as "not running" - the monitoring task will clean it up
@@ -196,7 +226,7 @@ impl Supervisor {
                 && let Some(pid) = daemon.pid
             {
                 if opts.force {
-                    self.stop(id).await?;
+                    self.stop_locked(id).await?;
                     info!("run: stop completed for daemon {id}");
                 } else {
                     warn!("daemon {id} already running with pid {pid}");
@@ -214,7 +244,14 @@ impl Supervisor {
                 retry_opts.retry_count = attempt;
                 retry_opts.cmd = cmd.clone();
 
-                let result = self.run_once(retry_opts).await?;
+                // The first attempt starts under the guard held since the
+                // running check above; later attempts re-acquire it so stops
+                // are not locked out during the backoff sleeps.
+                let guard = match stop_guard.take() {
+                    Some(guard) => guard,
+                    None => self.stop_lock(id).await.lock_owned().await,
+                };
+                let result = self.run_once(retry_opts, guard).await?;
 
                 match result {
                     IpcResponse::DaemonReady { daemon } => {
@@ -251,11 +288,24 @@ impl Supervisor {
         }
 
         // No retry or wait_ready is false
-        self.run_once(opts).await
+        let guard = match stop_guard.take() {
+            Some(guard) => guard,
+            None => self.stop_lock(id).await.lock_owned().await,
+        };
+        self.run_once(opts, guard).await
     }
 
-    /// Run a daemon once (single attempt)
-    pub(crate) async fn run_once(&self, opts: RunOptions) -> Result<IpcResponse> {
+    /// Run a daemon once (single attempt).
+    ///
+    /// `stop_guard` is this daemon's stop lock, acquired by `run` before the
+    /// already-running check. It is held through spawning until the Running
+    /// state and PID are persisted (or an early failure returns), then dropped
+    /// before the potentially unbounded readiness wait.
+    pub(crate) async fn run_once(
+        &self,
+        opts: RunOptions,
+        stop_guard: tokio::sync::OwnedMutexGuard<()>,
+    ) -> Result<IpcResponse> {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
 
@@ -672,6 +722,12 @@ impl Supervisor {
             )
             .await?;
 
+        // Running state and PID are now persisted: concurrent run/stop calls
+        // observe a running daemon and behave correctly, so release the stop
+        // lock rather than holding it through the readiness wait below, which
+        // can take arbitrarily long.
+        drop(stop_guard);
+
         let id_clone = id.clone();
         let ready_delay = opts.ready_delay;
         let ready_output = opts.ready_output.clone();
@@ -1009,6 +1065,14 @@ impl Supervisor {
                 detect_and_store_active_port(id.clone(), daemon_pid);
             }
 
+            // Set when readiness checks exhaust. The group kill runs as a
+            // separate task so this loop can exit and the post-loop drain
+            // keeps consuming output — children logging during SIGTERM
+            // cleanup would otherwise block on a full pipe and never exit.
+            // The ready failure is only sent once the kill task completes,
+            // so the retry loop cannot respawn into the dying group.
+            let mut ready_fail_kill: Option<tokio::task::JoinHandle<()>> = None;
+
             loop {
                 // biased: evaluate in exit → output → delay order so that
                 // process exit pre-empts both buffered output and the delay
@@ -1144,11 +1208,11 @@ impl Supervisor {
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
                             stop_cmd_probe_state(&mut cmd_probe);
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Err(Some(124)));
-                            }
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1175,11 +1239,11 @@ impl Supervisor {
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
                             stop_cmd_probe_state(&mut cmd_probe);
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Err(Some(124)));
-                            }
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1243,11 +1307,11 @@ impl Supervisor {
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
                             stop_cmd_probe_state(&mut cmd_probe);
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Err(Some(124)));
-                            }
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1378,11 +1442,11 @@ impl Supervisor {
                         );
                         if !any_remaining {
                             error!("daemon {id}: all readiness checks exhausted, failing");
-                            if let Some(tx) = ready_tx.take() {
-                                let _ = tx.send(Err(Some(124)));
-                            }
-                            let stop_cfg = opts.stop_signal.unwrap_or_default();
-                            let _ = PROCS.kill_process_group_async(daemon_pid, stop_cfg.signal.into(), stop_cfg.timeout).await;
+                            ready_fail_kill = Some(spawn_ready_fail_kill(
+                                id.clone(),
+                                daemon_pid,
+                                opts.stop_signal.unwrap_or_default(),
+                            ));
                             break;
                         }
                     }
@@ -1508,6 +1572,18 @@ impl Supervisor {
                     }
                 }
             };
+
+            // If the loop exited via readiness exhaustion, wait for the group
+            // kill to finish before reporting the failure so the retry loop
+            // (or a waiting client) cannot start a replacement while the old
+            // process group is still terminating.
+            if let Some(kill) = ready_fail_kill {
+                let _ = kill.await;
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(Some(124)));
+                }
+            }
+
             let current_daemon = SUPERVISOR.get_daemon(&id).await;
 
             // Signal that this monitoring task is processing its exit path.
@@ -1672,6 +1748,16 @@ impl Supervisor {
 
     /// Stop a running daemon
     pub async fn stop(&self, id: &DaemonId) -> Result<IpcResponse> {
+        // Hold the daemon's stop lock for the whole stop (including the
+        // whole-group termination wait) so starts and concurrent stops of the
+        // same daemon serialize against it instead of racing the Stopping window.
+        let lock = self.stop_lock(id).await;
+        let _guard = lock.lock().await;
+        self.stop_locked(id).await
+    }
+
+    /// Stop implementation. Caller must hold the daemon's stop lock.
+    async fn stop_locked(&self, id: &DaemonId) -> Result<IpcResponse> {
         let pitchfork_id = DaemonId::pitchfork();
         if *id == pitchfork_id {
             return Ok(IpcResponse::Error(
@@ -1728,10 +1814,16 @@ impl Supervisor {
                         .await
                     {
                         debug!("failed to kill pid {pid}: {e}");
-                        // Check if the process is actually stopped despite the error
-                        if PROCS.is_running(pid) {
-                            // Process still running after kill attempt - set back to Running
-                            debug!("failed to stop pid {pid}: process still running after kill");
+                        // Check if the process group is actually gone despite the
+                        // error. Checking only the leader here would mark the daemon
+                        // Stopped while surviving group members (e.g. one stuck in
+                        // uninterruptible sleep) are still alive — letting a restart
+                        // collide with them.
+                        if PROCS.process_group_alive(pid) {
+                            // Group still has live members - set back to Running
+                            debug!(
+                                "failed to stop pid {pid}: process group still alive after kill"
+                            );
                             self.upsert_daemon(
                                 UpsertDaemonOpts::builder(id.clone())
                                     .set(|o| {
@@ -1743,16 +1835,19 @@ impl Supervisor {
                             .await?;
                             return Ok(IpcResponse::DaemonStopFailed {
                                 error: format!(
-                                    "process {pid} still running after kill attempt: {e}"
+                                    "process group of {pid} still alive after kill attempt: {e}"
                                 ),
                             });
                         }
                     }
 
                     // Process successfully stopped
-                    // Note: kill_async uses SIGTERM -> wait ~3s -> SIGKILL strategy,
-                    // and also detects zombie processes, so by the time it returns,
-                    // the process should be fully terminated.
+                    // Note: kill_process_group_async waits for the ENTIRE process
+                    // group to exit (stop signal -> stop_timeout -> SIGKILL, then a
+                    // bounded verification), so a replacement daemon can be started
+                    // without colliding with a still-terminating instance. The only
+                    // exception is a member stuck in uninterruptible sleep, which is
+                    // logged with a warning.
                     self.upsert_daemon(
                         UpsertDaemonOpts::builder(id.clone())
                             .set(|o| {

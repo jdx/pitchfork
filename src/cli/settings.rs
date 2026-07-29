@@ -427,6 +427,7 @@ fn get_tui_value(g: &crate::settings::SettingsTui, field: &str) -> String {
 
 fn get_supervisor_value(g: &crate::settings::SettingsSupervisor, field: &str) -> String {
     match field {
+        "auto_start" => g.auto_start.to_string(),
         "ready_check_interval" => g.ready_check_interval.clone(),
         "file_watch_debounce" => g.file_watch_debounce.clone(),
         "log_flush_interval" => g.log_flush_interval.clone(),
@@ -622,6 +623,7 @@ fn apply_supervisor_value(
     typ: &str,
 ) -> Result<()> {
     match field {
+        "auto_start" => partial.auto_start = Some(parse_bool_value(value)?),
         "ready_check_interval" => partial.ready_check_interval = Some(value.to_string()),
         "file_watch_debounce" => partial.file_watch_debounce = Some(value.to_string()),
         "log_flush_interval" => partial.log_flush_interval = Some(value.to_string()),

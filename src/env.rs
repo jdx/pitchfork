@@ -83,8 +83,21 @@ pub static IPC_SOCK_MAIN: Lazy<PathBuf> = Lazy::new(|| IPC_SOCK_DIR.join("main.s
 pub static ORIGINAL_PATH: Lazy<Option<String>> = Lazy::new(|| var("PATH").ok());
 pub static IPC_JSON: Lazy<bool> = Lazy::new(|| !var_false("IPC_JSON"));
 
+/// Expand a leading `~` path component to the current Pitchfork user's home.
+///
+/// This intentionally supports only `~` and `~/...`, not `~user` or shell
+/// expansions such as `$HOME`. Pitchfork's home resolution accounts for the
+/// original user when running under `sudo`.
+pub fn expand_tilde(path: impl AsRef<std::path::Path>) -> PathBuf {
+    let path = path.as_ref();
+    match path.strip_prefix("~") {
+        Ok(rest) => HOME_DIR.join(rest),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 fn var_path(name: &str) -> Option<PathBuf> {
-    var(name).map(PathBuf::from).ok()
+    var(name).map(expand_tilde).ok()
 }
 
 fn var_log_level(name: &str) -> Option<log::LevelFilter> {
@@ -132,4 +145,29 @@ fn configured_supervisor_user_home_dir() -> Option<PathBuf> {
     }
 
     home_dir_for_user(user)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn expand_tilde_replaces_home_prefix() {
+        assert_eq!(
+            expand_tilde("~/projects/api"),
+            HOME_DIR.join("projects/api")
+        );
+        assert_eq!(expand_tilde("~"), *HOME_DIR);
+    }
+
+    #[test]
+    fn expand_tilde_leaves_other_paths_unchanged() {
+        assert_eq!(
+            expand_tilde("/srv/projects/api"),
+            Path::new("/srv/projects/api")
+        );
+        assert_eq!(expand_tilde("projects/api"), Path::new("projects/api"));
+        assert_eq!(expand_tilde("~other/api"), Path::new("~other/api"));
+    }
 }

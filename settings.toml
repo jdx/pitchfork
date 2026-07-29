@@ -600,6 +600,30 @@ in the TUI before automatically clearing.
 
 [supervisor]
 
+[supervisor.auto_start]
+type = "Bool"
+env = "PITCHFORK_SUPERVISOR_AUTO_START"
+default = "true"
+description = "Automatically start the supervisor when a client command needs it"
+docs = """
+When enabled (default), commands such as `pitchfork start`, `pitchfork list`,
+the TUI, and shell activation start a background supervisor automatically when
+one is not already running.
+
+Disable this when the supervisor is managed by systemd, launchd, or another
+service manager:
+
+```toml
+[settings.supervisor]
+auto_start = false
+```
+
+With auto-start disabled, client commands wait for the configured IPC
+connection attempts and then fail with an actionable error instead of spawning
+an unmanaged supervisor. Explicit `pitchfork supervisor start` and
+`pitchfork supervisor run` commands are unaffected.
+"""
+
 [supervisor.ready_check_interval]
 type = "Duration"
 env = "PITCHFORK_READY_CHECK_INTERVAL"
