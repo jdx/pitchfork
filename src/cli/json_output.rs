@@ -1,3 +1,4 @@
+use crate::log_store::LogEntry;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -31,6 +32,11 @@ pub struct JsonStatusEntry {
 
 #[derive(Serialize)]
 pub struct JsonLogEntry {
+    /// SQLite row id, used by the webui for backward pagination (scroll-up
+    /// history loading). Skipped in serialization when 0 to avoid changing
+    /// the CLI --json output shape for non-web callers.
+    #[serde(skip_serializing_if = "is_zero_id")]
+    pub id: i64,
     pub timestamp: String,
     pub daemon_id: String,
     pub message: String,
@@ -44,6 +50,29 @@ pub struct JsonLogEntry {
     /// not structured (plain text).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Value>,
+}
+
+fn is_zero_id(id: &i64) -> bool {
+    *id == 0
+}
+
+impl From<LogEntry> for JsonLogEntry {
+    fn from(e: LogEntry) -> Self {
+        let fields = e
+            .fields_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok());
+        JsonLogEntry {
+            id: e.id,
+            timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
+            daemon_id: e.daemon_id,
+            message: console::strip_ansi_codes(&e.message).to_string(),
+            level: e.level,
+            msg: e.msg,
+            logger: e.logger,
+            fields,
+        }
+    }
 }
 
 #[derive(Serialize)]

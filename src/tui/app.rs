@@ -1505,6 +1505,7 @@ impl App {
             limit: Some(TUI_LOG_LIMIT),
             order_desc: true,
             after_id: None,
+            before_id: None,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
             include_structured: false,

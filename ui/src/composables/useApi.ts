@@ -1,6 +1,6 @@
 import { ref, shallowRef, watchEffect, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
-import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree } from '@/types/api'
+import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree, StructuredLogEntry } from '@/types/api'
 
 const API_BASE = (() => {
   const base = (window as any).__PITCHFORK_BASE__ as string | undefined
@@ -184,10 +184,28 @@ export function useDaemonActions() {
   return { start, stop, restart, enable, disable, acting }
 }
 
-export function useLogStream(id: Ref<string>) {
-  const lines = ref<string[]>([])
+export interface LogStreamFilters {
+  since?: string
+  until?: string
+  level?: string
+  grep?: string
+  regex?: string
+  logger?: string
+  jq?: string
+  caseSensitive?: boolean
+  lines?: number
+}
+
+export function useLogStream(id: Ref<string>, filters: Ref<LogStreamFilters> = ref({})) {
+  const lines = ref<StructuredLogEntry[]>([])
   const error = ref<string | null>(null)
   const connected = ref(false)
+  const hasMoreHistory = ref(true)
+  const loadingMore = ref(false)
+  // Current log-clear generation known to the stream. Updated from the
+  // initial response header and clear sentinels. loadMoreHistory compares
+  // its response generation against this to discard stale pre-clear entries.
+  const streamGen = ref(0)
   let abort: AbortController | null = null
   const MAX_LINES = 10000
 
@@ -200,12 +218,28 @@ export function useLogStream(id: Ref<string>) {
   async function connect() {
     lines.value = []
     error.value = null
+    hasMoreHistory.value = true
+    loadingMore.value = false
     const currentAbort = new AbortController()
     abort = currentAbort
 
+    const params = new URLSearchParams()
+    const f = filters.value
+    if (f.level) params.set('level', f.level)
+    if (f.logger) params.set('logger', f.logger)
+    if (f.grep) params.set('grep', f.grep)
+    if (f.regex) params.set('regex', f.regex)
+    if (f.since) params.set('since', f.since)
+    if (f.until) params.set('until', f.until)
+    if (f.caseSensitive) params.set('case_sensitive', 'true')
+    if (f.jq) params.set('jq', f.jq)
+    if (f.lines !== undefined) params.set('lines', String(f.lines))
+    const query = params.toString()
+
     try {
+      const url = `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail${query ? `?${query}` : ''}`
       const res = await fetch(
-        `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail`,
+        url,
         { signal: currentAbort.signal, headers: getAuthHeaders() },
       )
       if (currentAbort.signal.aborted) return
@@ -215,6 +249,8 @@ export function useLogStream(id: Ref<string>) {
         return
       }
       connected.value = true
+      // Track the generation from the initial atomic snapshot.
+      streamGen.value = Number(res.headers.get('x-log-generation') ?? 0)
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
@@ -226,12 +262,37 @@ export function useLogStream(id: Ref<string>) {
         buf += decoder.decode(value, { stream: true })
         const parts = buf.split('\n')
         buf = parts.pop() ?? ''
-        lines.value.push(...parts)
+        const entries: StructuredLogEntry[] = []
+        for (const part of parts) {
+          // Clear sentinel: flush the buffer, update generation, and skip.
+          if (part.startsWith('{"_clear":')) {
+            lines.value = []
+            try {
+              const meta = JSON.parse(part) as { _gen?: number }
+              if (meta._gen !== undefined) streamGen.value = meta._gen
+            } catch {
+              // malformed sentinel — still flushed
+            }
+            continue
+          }
+          try {
+            const parsed = JSON.parse(part) as StructuredLogEntry
+            entries.push(parsed)
+          } catch {
+            entries.push({ timestamp: '', daemon_id: '', message: part })
+          }
+        }
+        lines.value.push(...entries)
         trimLines()
       }
 
       if (buf && !currentAbort.signal.aborted) {
-        lines.value.push(buf)
+        try {
+          const parsed = JSON.parse(buf) as StructuredLogEntry
+          lines.value.push(parsed)
+        } catch {
+          lines.value.push({ timestamp: '', daemon_id: '', message: buf })
+        }
         trimLines()
       }
     } catch (e: any) {
@@ -245,6 +306,77 @@ export function useLogStream(id: Ref<string>) {
     }
   }
 
+  async function loadMoreHistory(): Promise<number> {
+    if (loadingMore.value) return 0
+    if (lines.value.length === 0) return 0
+    if (lines.value.length >= MAX_LINES) return 0
+    if (!hasMoreHistory.value) return 0
+
+    const oldestId = lines.value[0].id
+    if (oldestId === undefined) return 0
+
+    loadingMore.value = true
+    const genBeforeFetch = streamGen.value
+
+    const params = new URLSearchParams()
+    params.set('before_id', String(oldestId))
+    params.set('lines', '100')
+    const f = filters.value
+    if (f.level) params.set('level', f.level)
+    if (f.logger) params.set('logger', f.logger)
+    if (f.grep) params.set('grep', f.grep)
+    if (f.regex) params.set('regex', f.regex)
+    if (f.since) params.set('since', f.since)
+    if (f.until) params.set('until', f.until)
+    if (f.caseSensitive) params.set('case_sensitive', 'true')
+    if (f.jq) params.set('jq', f.jq)
+
+    try {
+      const url = `${API_BASE}/logs/${encodeURIComponent(id.value)}/tail?${params.toString()}`
+      const res = await fetch(url, { headers: getAuthHeaders() })
+      if (!res.ok) return 0
+
+      const text = await res.text()
+      const entries: StructuredLogEntry[] = []
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const parsed = JSON.parse(line) as StructuredLogEntry
+          entries.push(parsed)
+        } catch {
+          entries.push({ timestamp: '', daemon_id: '', message: line })
+        }
+      }
+
+      if (entries.length === 0) {
+        hasMoreHistory.value = false
+        return 0
+      }
+      if (entries.length < 100) {
+        hasMoreHistory.value = false
+      }
+
+      // Discard results if a clear happened while fetching — those entries
+      // belong to a pre-clear snapshot and would resurrect deleted logs.
+      // Compare the response's generation (from the atomic snapshot) against
+      // the stream's current generation. If the stream advanced (via a clear
+      // sentinel or a reconnect with a newer generation), the response is stale.
+      const responseGen = Number(res.headers.get('x-log-generation') ?? 0)
+      if (responseGen < streamGen.value) return 0
+
+      // Also check against the pre-fetch snapshot in case the stream
+      // disconnected without delivering a clear sentinel.
+      if (streamGen.value !== genBeforeFetch) return 0
+
+      lines.value.unshift(...entries)
+      return entries.length
+    } catch {
+      return 0
+    } finally {
+      loadingMore.value = false
+    }
+  }
+
   watchEffect((onCleanup) => {
     connect()
     onCleanup(() => {
@@ -252,7 +384,7 @@ export function useLogStream(id: Ref<string>) {
     })
   })
 
-  return { lines, error, connected }
+  return { lines, error, connected, hasMoreHistory, loadingMore, loadMoreHistory }
 }
 
 export function useStats(pollInterval = 3000) {
