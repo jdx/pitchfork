@@ -9,7 +9,7 @@
       "type": "object",
       "additionalProperties": false,
       "patternProperties": {
-        "^[\\w.-]+(/[\\w.-]+)?$": {
+        "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$": {
           "$ref": "#/$defs/PitchforkTomlDaemon"
         }
       }
@@ -24,6 +24,13 @@
         "type": "string"
       }
     },
+    "groups": {
+      "description": "Named groups of daemons for batch operations.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/GroupEntryRaw"
+      }
+    },
     "namespace": {
       "description": "Optional explicit namespace declared in this file.\n\nThis applies to per-file read/write flows. Merged configs may contain\ndaemons from multiple namespaces and leave this as `None`.",
       "type": [
@@ -31,10 +38,24 @@
         "null"
       ]
     },
+    "namespaces": {
+      "description": "Namespace registry (merged from global config files).\nMaps namespace names to their project directory.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/NamespaceEntryRaw"
+      }
+    },
     "settings": {
       "description": "Settings configuration (merged from all config files).\n\n**Note:** This field exists for serialization round-trips and for\n`PitchforkToml::merge()` to collect per-file overrides.  It is **not**\nconsumed by the global `settings()` singleton, which is populated\nindependently by `Settings::load()` to avoid a circular dependency\nbetween `PitchforkToml` and `Settings`.  Do not rely on mutations to\nthis field being reflected in `settings()`.",
       "$ref": "#/$defs/SettingsPartial",
       "default": {}
+    },
+    "slugs": {
+      "description": "Slug registry (merged from global config files).\nMaps slug names to their project directory and optional daemon name.\nOnly populated from global config files (`~/.config/pitchfork/config.toml`\nor `/etc/pitchfork/config.toml`).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/SlugEntryRaw"
+      }
     }
   },
   "$defs": {
@@ -71,13 +92,44 @@
     "DaemonId": {
       "description": "Daemon name (e.g. 'api') or qualified ID ('namespace/name') for cross-namespace references",
       "type": "string",
-      "pattern": "^[\\w.-]+(/[\\w.-]+)?$"
+      "not": {
+        "pattern": "\\.\\.|--|(^|/)-|-($|/)|^\\.$|^\\./|/\\.$"
+      },
+      "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$"
+    },
+    "GroupEntryRaw": {
+      "description": "Raw group entry as read from TOML.\n```toml\n[groups.backend]\ndaemons = [\"api\", \"worker\"]\n```",
+      "type": "object",
+      "properties": {
+        "daemons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DaemonId"
+          }
+        }
+      },
+      "required": [
+        "daemons"
+      ]
     },
     "MemoryLimit": {
       "description": "A byte size, as either a human-readable string (e.g. \"1.5 KiB\") or a number of bytes",
       "type": [
         "string",
         "integer"
+      ]
+    },
+    "NamespaceEntryRaw": {
+      "description": "Raw namespace entry as read from TOML.\n```toml\n[namespaces.myproject]\ndir = \"/home/user/projects/myproject\"\n```",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "Project directory containing the pitchfork.toml",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir"
       ]
     },
     "OnOutputHook": {
@@ -1031,6 +1083,13 @@
     "SettingsSupervisorPartial": {
       "type": "object",
       "properties": {
+        "auto_start": {
+          "description": "Automatically start the supervisor when a client command needs it",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "cleanup_orphans": {
           "description": "Reconcile orphaned daemon processes when supervisor starts",
           "type": [
@@ -1224,6 +1283,33 @@
         },
         "sse_poll_interval": {
           "description": "Server-Sent Events poll interval for log streaming",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SlugEntryRaw": {
+      "description": "Raw slug entry as read from TOML (uses String for dir path).\nFormat in global config:\n```toml\n[slugs]\napi = { dir = \"/home/user/my-api\", daemon = \"server\" }\ndocs = { dir = \"/home/user/docs-site\" }  # daemon defaults to slug name\n```",
+      "type": "object",
+      "properties": {
+        "daemon": {
+          "description": "Daemon name within that project (defaults to slug name if omitted)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dir": {
+          "description": "Project directory containing the pitchfork.toml",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "namespace": {
+          "description": "Namespace reference (alternative to dir)",
           "type": [
             "string",
             "null"

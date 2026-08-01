@@ -5,3 +5,4 @@ node_modules
 /ui/dist
 /ui/playwright-report
 /ui/test-results
+.slim/deepwork/

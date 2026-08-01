@@ -96,6 +96,10 @@ run = [
 ]
 
 [tools]
+# Pinned rather than "latest" because tak is the measuring instrument: an
+# upgrade that changes how it samples would land in the series as a step change
+# in pitchfork's numbers, indistinguishable from a real regression. Bump deliberately.
+"github:jdx/tak" = "0.0.4"
 aube = "latest"
 cargo-binstall = "latest"
 communique = "latest"
@@ -105,3 +109,21 @@ pkl = "latest"
 usage = "latest" # for rendering CLI usage
 "cargo:cargo-nextest" = "latest"
 rust = "stable"
+
+# Instruction-counted benchmarks (see tak.toml). Needs valgrind for the counts;
+# without it tak reports wall clock only and says so, so this still works on
+# macOS where there is no usable cachegrind.
+# `depends` on build:ui because the release binary embeds ui/dist via
+# RustEmbed, and cargo will not compile without it.
+[tasks.perf]
+depends = ["build:ui"]
+dir = "{{config_root}}"
+run = ["cargo build --release", "tak run"]
+
+# Same measurement, appended to refs/notes/tak for this commit. Run by the
+# `perf` workflow on every push to main; the notes are the history. Safe to run
+# locally — nothing leaves the machine until `tak push`.
+[tasks."perf:record"]
+depends = ["build:ui"]
+dir = "{{config_root}}"
+run = ["cargo build --release", "tak run --record"]

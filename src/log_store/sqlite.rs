@@ -13,6 +13,39 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Convert a text filter value to a JSON literal string for use with
+/// SQLite's `json()` function. This ensures `json_each.value` (which returns
+/// native SQLite types) is compared against the correct type:
+///
+/// - `"true"` / `"false"` → JSON boolean (SQLite integer 1/0)
+/// - `"null"` → JSON null (SQLite NULL)
+/// - `"42"` / `"3.14"` → JSON number (SQLite integer/real)
+/// - `"hello"` → JSON string `"hello"`
+///
+/// Without this conversion, binding `8080` as text would never match
+/// `json_each.value` returning integer `8080`.
+fn text_to_json_literal(value: &str) -> String {
+    // Boolean
+    if value.eq_ignore_ascii_case("true") {
+        return "true".to_string();
+    }
+    if value.eq_ignore_ascii_case("false") {
+        return "false".to_string();
+    }
+    // Null
+    if value.eq_ignore_ascii_case("null") {
+        return "null".to_string();
+    }
+    // Number: validate as a JSON number (stricter than f64::parse, which
+    // accepts "+42", "1.", ".5", "inf", "nan" — none are valid JSON and
+    // would cause SQLite's json_extract to fail).
+    if let Ok(serde_json::Value::Number(_)) = serde_json::from_str(value) {
+        return value.to_string();
+    }
+    // String: JSON-escape and quote
+    serde_json::to_string(value).unwrap_or_else(|_| format!(r#""{value}""#))
+}
+
 /// Registers a `regexp` SQL function backed by the `regex` crate.
 ///
 /// SQLite does not ship a REGEXP implementation by default. This function
@@ -609,6 +642,11 @@ impl SqliteLogStore {
             query_params.push(Box::new(after_id));
         }
 
+        if let Some(before_id) = opts.before_id {
+            conditions.push(format!("id < ?{}", query_params.len() + 1));
+            query_params.push(Box::new(before_id));
+        }
+
         if let Some((start, end)) = id_range {
             conditions.push(format!("id > ?{}", query_params.len() + 1));
             query_params.push(Box::new(start));
@@ -670,11 +708,42 @@ impl SqliteLogStore {
                     }
                 }
                 FieldFilter::FieldEq { key, value } => {
-                    let param_index = query_params.len() + 1;
+                    let key_idx = query_params.len() + 1;
+                    let val_idx = query_params.len() + 2;
+                    // Use json_each with parameterized key to avoid JSON path
+                    // interpolation. This correctly handles keys containing '.'
+                    // (e.g. "request.id") which json_extract would treat as
+                    // nested traversal, and prevents SQL injection from
+                    // untrusted key input (CLI --field doesn't validate keys).
+                    //
+                    // Match both the typed JSON value and the raw text.
+                    // json_each.value has no type affinity, so comparing it
+                    // IS ? (text) only matches string values, not integers
+                    // or booleans. This prevents a string field storing "42"
+                    // or "true" from being unreachable via field filters.
+                    //
+                    // Typed path:   json_each.value IS json_extract(json_literal, '$')
+                    //   matches numbers, booleans, null (native SQLite types)
+                    // Text path:    json_each.value IS ? (raw text)
+                    //   matches string fields whose value textually resembles
+                    //   a primitive (e.g. field storing "true", "42", "null")
+                    let json_literal = text_to_json_literal(value);
+                    let raw_idx = query_params.len() + 3;
                     conditions.push(format!(
-                        "json_extract(fields_json, '$.{key}') = ?{param_index}"
+                        "EXISTS (SELECT 1 FROM json_each(fields_json) \
+                         WHERE json_each.key = ?{key_idx} \
+                           AND (json_each.value IS json_extract(?{val_idx}, '$') \
+                                OR json_each.value IS ?{raw_idx}))"
                     ));
+                    query_params.push(Box::new(key.clone()));
+                    query_params.push(Box::new(json_literal));
                     query_params.push(Box::new(value.clone()));
+                }
+                FieldFilter::LoggerContains(pattern) => {
+                    let param_index = query_params.len() + 1;
+                    conditions.push(format!("logger LIKE ?{param_index} ESCAPE '\\'"));
+                    let escaped = crate::log_store::escape_like_pattern(pattern);
+                    query_params.push(Box::new(format!("%{escaped}%")));
                 }
             }
         }
@@ -838,6 +907,59 @@ impl SqliteLogStore {
         }
         Ok(entries)
     }
+
+    /// Return distinct non-null logger values for a daemon, sorted alphabetically.
+    ///
+    /// Scans only the most recent 5000 entries for performance — autocomplete
+    /// only needs a representative sample, not the full history.
+    pub fn distinct_loggers(&self, daemon_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT logger FROM ( \
+                  SELECT logger FROM log_entries \
+                  WHERE daemon_id = ?1 AND logger IS NOT NULL \
+                  ORDER BY id DESC LIMIT 5000 \
+                 ) ORDER BY logger",
+            )
+            .into_diagnostic()?;
+        let rows = stmt
+            .query_map(params![daemon_id], |row| row.get::<_, String>(0))
+            .into_diagnostic()?;
+        let mut loggers = Vec::new();
+        for row in rows {
+            loggers.push(row.into_diagnostic()?);
+        }
+        Ok(loggers)
+    }
+
+    /// Return distinct keys from the `fields_json` column for a daemon.
+    ///
+    /// Uses `json_each` to extract all object keys across recent structured log
+    /// entries, returning a sorted unique list. Useful for jq autocomplete.
+    /// Scans only the most recent 5000 entries for performance.
+    pub fn distinct_field_keys(&self, daemon_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT je.key \
+                 FROM ( \
+                   SELECT fields_json FROM log_entries \
+                   WHERE daemon_id = ?1 AND fields_json IS NOT NULL \
+                   ORDER BY id DESC LIMIT 5000 \
+                 ), json_each(fields_json) AS je \
+                 ORDER BY je.key",
+            )
+            .into_diagnostic()?;
+        let rows = stmt
+            .query_map(params![daemon_id], |row| row.get::<_, String>(0))
+            .into_diagnostic()?;
+        let mut keys = Vec::new();
+        for row in rows {
+            keys.push(row.into_diagnostic()?);
+        }
+        Ok(keys)
+    }
 }
 
 impl LogStore for SqliteLogStore {
@@ -956,6 +1078,7 @@ impl LogStore for SqliteLogStore {
             limit: None,
             order_desc: false,
             after_id,
+            before_id: None,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
             include_structured: false,
@@ -1070,6 +1193,45 @@ impl LogStore for SqliteLogStore {
                     .map_err(|_| miette::miette!("log clear generation cannot be negative"))
             })
             .transpose()
+    }
+
+    fn query_with_generation(
+        &self,
+        opts: &LogQuery,
+        daemon_id: &DaemonId,
+    ) -> Result<(Vec<LogEntry>, Option<u64>)> {
+        let conn = self.conn.lock().unwrap();
+        // Wrap both reads in a single transaction so a concurrent clear
+        // cannot interleave between them. In WAL mode, BEGIN acquires a
+        // consistent snapshot that both statements share.
+        //
+        // Intentionally call build_query_sql + execute_built_query directly
+        // instead of self.query(): the latter may delegate to query_parallel
+        // which opens separate connections outside this transaction, breaking
+        // the snapshot guarantee.
+        conn.execute_batch("BEGIN").into_diagnostic()?;
+        let result = (|| {
+            let (sql, query_params) = Self::build_query_sql(opts, None);
+            let entries = Self::execute_built_query(&conn, &sql, &query_params)?;
+            let generation: Option<i64> = conn
+                .query_row(
+                    "SELECT generation FROM log_clear_generations WHERE daemon_id = ?1",
+                    params![daemon_id.qualified()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .into_diagnostic()?;
+            let generation = generation
+                .map(|g| {
+                    u64::try_from(g)
+                        .map_err(|_| miette::miette!("log clear generation cannot be negative"))
+                })
+                .transpose()?;
+            Ok((entries, generation))
+        })();
+        // Always rollback (read transaction just needs to end).
+        let _ = conn.execute_batch("ROLLBACK");
+        result
     }
 }
 
@@ -1186,8 +1348,53 @@ fn auto_migrate_legacy_logs(store: &SqliteLogStore) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::text_to_json_literal;
     use super::*;
     use crate::log_store::LogStore;
+
+    #[test]
+    fn test_json_literal_booleans() {
+        assert_eq!(text_to_json_literal("true"), "true");
+        assert_eq!(text_to_json_literal("TRUE"), "true");
+        assert_eq!(text_to_json_literal("false"), "false");
+        assert_eq!(text_to_json_literal("False"), "false");
+    }
+
+    #[test]
+    fn test_json_literal_null() {
+        assert_eq!(text_to_json_literal("null"), "null");
+        assert_eq!(text_to_json_literal("NULL"), "null");
+    }
+
+    #[test]
+    fn test_json_literal_valid_numbers() {
+        assert_eq!(text_to_json_literal("42"), "42");
+        assert_eq!(text_to_json_literal("-1"), "-1");
+        assert_eq!(text_to_json_literal("0"), "0");
+        assert_eq!(text_to_json_literal("3.14"), "3.14");
+        assert_eq!(text_to_json_literal("1e10"), "1e10");
+        assert_eq!(text_to_json_literal("1.5e-3"), "1.5e-3");
+    }
+
+    #[test]
+    fn test_json_literal_rejects_invalid_json_numbers() {
+        // f64::parse accepts these but they are not valid JSON numbers,
+        // so they must be treated as strings (quoted) instead.
+        assert_eq!(text_to_json_literal("+42"), r#""+42""#);
+        assert_eq!(text_to_json_literal("1."), r#""1.""#);
+        assert_eq!(text_to_json_literal(".5"), r#"".5""#);
+        assert_eq!(text_to_json_literal("inf"), r#""inf""#);
+        assert_eq!(text_to_json_literal("nan"), r#""nan""#);
+        assert_eq!(text_to_json_literal("infinity"), r#""infinity""#);
+    }
+
+    #[test]
+    fn test_json_literal_strings() {
+        assert_eq!(text_to_json_literal("hello"), r#""hello""#);
+        assert_eq!(text_to_json_literal("req_1"), r#""req_1""#);
+        // String with special chars gets JSON-escaped
+        assert_eq!(text_to_json_literal(r#"a"b"#), r#""a\"b""#);
+    }
 
     /// A writer that finds the lock held must wait for it, not give up. WAL
     /// serializes writers, so without `busy_timeout` the second writer takes

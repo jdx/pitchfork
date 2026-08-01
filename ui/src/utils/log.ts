@@ -1,12 +1,11 @@
+import type { StructuredLogEntry } from '@/types/api'
+
 export interface ParsedLogLine {
   timestamp: string | null
+  level: string | null
   raw: string
   html: string
 }
-
-// Strip the fixed `<ts> ` prefix prepended by the web log API
-// (src/web/routes/api/logs.rs: `{ts} {msg}`); keep the message verbatim.
-const LOG_PREFIX_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$/
 
 // Match all CSI sequences (ESC[...X)
 const CSI_PATTERN = /\x1b\[[\d;?]*[A-Za-z]/g
@@ -211,25 +210,100 @@ function renderSegment(text: string, state: ColorState): string {
   return `<span style="${styles.join(';')}">${escapeHtml(text)}</span>`
 }
 
-export function parseLogLines(lines: string[]): ParsedLogLine[] {
-  return lines.map((line) => parseLogLine(line))
+const KNOWN_FIELD_KEYS = new Set([
+  'level', 'severity', 'lvl', 'PRIORITY', '@level',
+  'msg', 'message', 'event', '@message',
+  'logger', 'name', 'component', 'module',
+  'timestamp', 'ts', 'time', '@timestamp',
+])
+
+function formatFieldValue(value: unknown): { html: string; text: string } {
+  if (value === null) {
+    return { html: '<span class="log-field-null">null</span>', text: 'null' }
+  }
+  if (typeof value === 'boolean') {
+    if (value) {
+      return { html: '<span class="log-field-true">true</span>', text: 'true' }
+    }
+    return { html: '<span class="log-field-false">false</span>', text: 'false' }
+  }
+  if (typeof value === 'number') {
+    const s = String(value)
+    return { html: `<span class="log-field-number">${s}</span>`, text: s }
+  }
+  if (typeof value === 'string') {
+    const needsQuotes = value === '' || /[\s=]/.test(value) || value === 'true' || value === 'false' || value === 'null' || !isNaN(Number(value))
+    const text = needsQuotes ? `"${value}"` : value
+    return { html: `<span class="log-field-string">${escapeHtml(text)}</span>`, text }
+  }
+  const text = JSON.stringify(value)
+  return { html: `<span class="log-field-complex">${escapeHtml(text)}</span>`, text }
 }
 
-export function parseLogLine(line: string): ParsedLogLine {
-  const match = line.match(LOG_PREFIX_RE)
-  if (match) {
-    const [, timestamp, content] = match
-    const cleaned = preprocess(content)
+function formatFields(fields: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(fields)) {
+    if (KNOWN_FIELD_KEYS.has(key)) continue
+    const formatted = formatFieldValue(value)
+    parts.push(`<span class="log-field-key">${escapeHtml(key)}</span>=${formatted.html}`)
+  }
+  return parts.join(' ')
+}
+
+function levelBadge(level: string): string {
+  const mapping: Record<string, { abbrev: string; className: string }> = {
+    error: { abbrev: 'ERR', className: 'log-level-error' },
+    warn: { abbrev: 'WRN', className: 'log-level-warn' },
+    warning: { abbrev: 'WRN', className: 'log-level-warn' },
+    info: { abbrev: 'INF', className: 'log-level-info' },
+    debug: { abbrev: 'DBG', className: 'log-level-debug' },
+    trace: { abbrev: 'TRC', className: 'log-level-trace' },
+  }
+  const mapped = mapping[level.toLowerCase()]
+  if (!mapped) return ''
+  return `<span class="log-level-badge ${mapped.className}"><span class="log-level-bracket">[</span>${mapped.abbrev}<span class="log-level-bracket">]</span></span>`
+}
+
+export function parseLogLines(entries: StructuredLogEntry[]): ParsedLogLine[] {
+  return entries.map((entry) => parseLogLine(entry))
+}
+
+export function parseLogLine(entry: StructuredLogEntry): ParsedLogLine {
+  const timestamp = entry.timestamp || null
+
+  // Unstructured: none of the structured fields are present
+  const isStructured = entry.level !== undefined || entry.msg !== undefined || entry.logger !== undefined || entry.fields !== undefined
+  if (!isStructured) {
+    const cleaned = preprocess(entry.message)
     return {
       timestamp,
+      level: null,
       raw: cleaned.replace(COLOR_CSI, ''),
       html: ansiToHtml(cleaned),
     }
   }
-  const cleaned = preprocess(line)
+
+  // Structured
+  const level = entry.level ?? null
+  const messageSource = entry.msg !== undefined && entry.msg !== '' ? entry.msg : entry.message
+  const cleanedMessage = preprocess(messageSource)
+  const messageHtml = ansiToHtml(cleanedMessage)
+
+  const badge = level ? levelBadge(level) : ''
+  const loggerHtml = entry.logger ? `<span class="log-logger">${escapeHtml(entry.logger)}</span><span class="log-sep">: </span>` : ''
+  const fieldsHtml = entry.fields ? formatFields(entry.fields) : ''
+  const sep = fieldsHtml ? '<span class="log-sep"> &gt; </span>' : ''
+
+  let msgClass = 'log-msg'
+  if (level === 'error') msgClass += ' log-msg-error'
+  else if (level === 'warn') msgClass += ' log-msg-warn'
+
+  const html = badge + (badge ? ' ' : '') + loggerHtml + `<span class="${msgClass}">${messageHtml}</span>` + sep + fieldsHtml
+
   return {
-    timestamp: null,
-    raw: cleaned.replace(COLOR_CSI, ''),
-    html: ansiToHtml(cleaned),
+    timestamp,
+    level,
+    raw: entry.message,
+    html,
   }
 }

@@ -604,6 +604,7 @@ impl Logs {
             limit: if !has_time_filter { self.n } else { None },
             order_desc: !has_time_filter,
             after_id: None,
+            before_id: None,
             message_filters,
             field_filters,
             include_structured: jq_filter.is_some() || !self.raw,
@@ -707,6 +708,7 @@ impl Logs {
             limit: if !has_time_filter { self.n } else { None },
             order_desc: !has_time_filter,
             after_id: None,
+            before_id: None,
             message_filters,
             field_filters,
             include_structured: true,
@@ -737,24 +739,7 @@ impl Logs {
             entries = entries.split_off(entries.len() - n);
         }
 
-        let json_entries: Vec<JsonLogEntry> = entries
-            .into_iter()
-            .map(|e| {
-                let fields = e
-                    .fields_json
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok());
-                JsonLogEntry {
-                    timestamp: e.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    daemon_id: e.daemon_id,
-                    message: console::strip_ansi_codes(&e.message).to_string(),
-                    level: e.level,
-                    msg: e.msg,
-                    logger: e.logger,
-                    fields,
-                }
-            })
-            .collect();
+        let json_entries: Vec<JsonLogEntry> = entries.into_iter().map(Into::into).collect();
 
         print_json(&json_entries)
     }
@@ -949,6 +934,7 @@ pub async fn tail_logs(
                 limit: None,
                 order_desc: false,
                 after_id,
+                before_id: None,
                 message_filters: message_filters.clone(),
                 field_filters: field_filters.clone(),
                 include_structured: jq_filter.is_some() || !raw,
@@ -1237,6 +1223,7 @@ pub fn collect_startup_logs(
         limit: None,
         order_desc: false,
         after_id: None,
+        before_id: None,
         message_filters: Vec::new(),
         field_filters: Vec::new(),
         include_structured: false,

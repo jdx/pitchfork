@@ -44,6 +44,8 @@ pub enum FieldFilter {
     LevelMin(String),
     /// Match entries where `json_extract(fields_json, '$.key') = value`.
     FieldEq { key: String, value: String },
+    /// Match entries where the `logger` column contains the substring.
+    LoggerContains(String),
 }
 
 /// Levels at or above the given threshold, ordered low→high.
@@ -92,6 +94,9 @@ pub struct LogQuery {
     pub limit: Option<usize>,
     pub order_desc: bool,
     pub after_id: Option<i64>,
+    /// When set, only return entries with id < before_id (used for backward
+    /// pagination — loading older history on scroll-up).
+    pub before_id: Option<i64>,
     /// Filters applied to the message text. Multiple filters are combined with OR.
     pub message_filters: Vec<MessageFilter>,
     /// Filters applied to structured fields. Multiple filters are combined with AND.
@@ -225,6 +230,7 @@ pub trait LogStore: Send + Sync {
             limit: Some(1),
             order_desc: true,
             after_id: None,
+            before_id: None,
             message_filters: Vec::new(),
             field_filters: Vec::new(),
             include_structured: false,
@@ -241,6 +247,21 @@ pub trait LogStore: Send + Sync {
     fn last_clear_generation(&self, daemon_id: &DaemonId) -> Result<Option<u64>> {
         let _ = daemon_id;
         Ok(None)
+    }
+
+    /// Query logs and the current clear generation atomically.
+    ///
+    /// This acquires a single connection lock and wraps both reads in one
+    /// transaction so that a concurrent `clear` cannot pair stale history
+    /// with a new generation (which would evade clear detection).
+    fn query_with_generation(
+        &self,
+        opts: &LogQuery,
+        daemon_id: &DaemonId,
+    ) -> Result<(Vec<LogEntry>, Option<u64>)> {
+        let entries = self.query(opts)?;
+        let generation = self.last_clear_generation(daemon_id)?;
+        Ok((entries, generation))
     }
 }
 

@@ -564,13 +564,7 @@ impl IpcClient {
                         }
 
                         let is_explicit = explicitly_requested.contains(&id);
-                        let task = Self::spawn_start_task(
-                            self.clone(),
-                            id,
-                            &rendered_config,
-                            is_explicit,
-                            &opts,
-                        );
+                        let task = Self::spawn_start_task(id, &rendered_config, is_explicit, &opts);
                         tasks.push(task);
                     }
                 }
@@ -653,7 +647,6 @@ impl IpcClient {
                     if let Some(ref cmd) = adhoc_daemon.cmd {
                         let is_explicit = explicitly_requested.contains(&id);
                         let task = Self::spawn_adhoc_start_task(
-                            self.clone(),
                             id,
                             cmd.clone(),
                             adhoc_daemon.dir.clone().unwrap_or_default(),
@@ -719,6 +712,19 @@ impl IpcClient {
         })
     }
 
+    /// Open a dedicated IPC connection for a parallel task.
+    ///
+    /// The wire protocol has no request IDs, so a connection can only carry one
+    /// in-flight request at a time. Tasks that run concurrently (parallel
+    /// start/stop within a dependency level) must therefore each use their own
+    /// connection — sharing one would mis-attribute responses between daemons
+    /// (e.g. a ready daemon reported as failed with another daemon's exit code).
+    async fn connect_dedicated() -> Result<Self> {
+        // The caller already connected once, so the supervisor is running —
+        // no autostart needed.
+        Self::connect(false).await
+    }
+
     /// Spawn a task to start a single daemon
     ///
     /// This encapsulates the start logic for one daemon, allowing parallel execution
@@ -726,8 +732,10 @@ impl IpcClient {
     /// - Command parsing
     /// - Config merging (CLI options override config file)
     /// - IPC communication with supervisor
+    ///
+    /// Each task uses its own dedicated IPC connection so concurrent responses
+    /// are attributed deterministically (see [`Self::connect_dedicated`]).
     fn spawn_start_task(
-        ipc: Arc<Self>,
         id: DaemonId,
         daemon_config: &PitchforkTomlDaemon,
         is_explicitly_requested: bool,
@@ -769,7 +777,10 @@ impl IpcClient {
                 (None, None)
             };
 
-            let result = ipc.run(run_opts).await;
+            let result = match Self::connect_dedicated().await {
+                Ok(ipc) => ipc.run(run_opts).await,
+                Err(e) => Err(e),
+            };
 
             // Stop log streaming and wait for the task to fully exit
             if let Some(tx) = &log_stop_tx {
@@ -791,9 +802,11 @@ impl IpcClient {
     ///
     /// This handles restarting ad-hoc daemons that were originally started
     /// via `pitchfork run` command.
+    ///
+    /// Each task uses its own dedicated IPC connection so concurrent responses
+    /// are attributed deterministically (see [`Self::connect_dedicated`]).
     #[allow(clippy::too_many_arguments)]
     fn spawn_adhoc_start_task(
-        ipc: Arc<Self>,
         id: DaemonId,
         cmd: Vec<String>,
         dir: PathBuf,
@@ -858,7 +871,10 @@ impl IpcClient {
                 (None, None)
             };
 
-            let result = ipc.run(run_opts).await;
+            let result = match Self::connect_dedicated().await {
+                Ok(ipc) => ipc.run(run_opts).await,
+                Err(e) => Err(e),
+            };
 
             // Stop log streaming and wait for the task to fully exit
             if let Some(tx) = &log_stop_tx {
@@ -879,13 +895,14 @@ impl IpcClient {
     /// Spawn a task to stop a single daemon
     ///
     /// Similar to spawn_start_task, this allows parallel stopping of daemons
-    /// within the same dependency level.
-    fn spawn_stop_task(
-        ipc: Arc<Self>,
-        id: DaemonId,
-    ) -> tokio::task::JoinHandle<(DaemonId, Result<()>)> {
+    /// within the same dependency level, on a dedicated IPC connection
+    /// (see [`Self::connect_dedicated`]).
+    fn spawn_stop_task(id: DaemonId) -> tokio::task::JoinHandle<(DaemonId, Result<()>)> {
         tokio::spawn(async move {
-            let result = ipc.stop(id.clone()).await.map(|_| ());
+            let result = match Self::connect_dedicated().await {
+                Ok(ipc) => ipc.stop(id.clone()).await.map(|_| ()),
+                Err(e) => Err(e),
+            };
             (id, result)
         })
     }
@@ -992,7 +1009,7 @@ impl IpcClient {
             // Stop all daemons in this level concurrently
             let mut tasks = Vec::new();
             for id in to_stop {
-                let task = Self::spawn_stop_task(self.clone(), id);
+                let task = Self::spawn_stop_task(id);
                 tasks.push(task);
             }
 
@@ -1079,7 +1096,7 @@ pub fn resolve_config_base_dir(config_path: Option<&Path>) -> PathBuf {
 pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
     let base_dir = resolve_config_base_dir(config_path);
     match dir {
-        Some(d) => base_dir.join(d),
+        Some(d) => base_dir.join(crate::env::expand_tilde(d)),
         None => base_dir,
     }
 }
@@ -1206,6 +1223,15 @@ mod tests {
             Some(Path::new("/projects/myapp/pitchfork.toml")),
         );
         assert_eq!(result, PathBuf::from("/opt/myapp"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_tilde() {
+        let result = resolve_daemon_dir(
+            Some("~/projects/myapp"),
+            Some(Path::new("/projects/other/pitchfork.toml")),
+        );
+        assert_eq!(result, crate::env::HOME_DIR.join("projects/myapp"));
     }
 
     #[test]

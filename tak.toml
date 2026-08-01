@@ -1,0 +1,23 @@
+# Instruction-counted benchmarks, measured by tak (https://github.com/jdx/tak).
+#
+# Pure CPU against pitchfork's own definitions: no daemon, no supervisor, no
+# state directory, no network. Hermeticity was checked by running each with the
+# proxy pointed at a dead port; both succeed unchanged and both outputs are
+# byte-identical run to run.
+#
+# `--version` is deliberately absent. It measures clap rather than pitchfork,
+# and a subject that can reach the network retires a different number of
+# instructions depending on conditions unrelated to the code under test.
+
+# The whole command tree, walked and serialised to ~38KB of KDL. A subcommand
+# added with an expensive default shows up here first, and every invocation pays
+# the clap construction it measures.
+[bench.usage]
+cmd = ["./target/release/pitchfork", "usage"]
+
+# The API schema, ~37KB of JSON — a different serialisation path over a
+# different tree. Reading them together separates a change in the command
+# definitions from one in the API surface.
+[bench.schema]
+cmd = ["./target/release/pitchfork", "schema"]
+runs = 10
