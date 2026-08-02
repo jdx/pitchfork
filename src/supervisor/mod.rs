@@ -379,6 +379,15 @@ impl Supervisor {
         #[cfg(unix)]
         fix_state_dir_permissions();
 
+        // Self-heal: if the boot registration points to a stale binary path
+        // (e.g. after a brew/mise upgrade), re-register with the current path.
+        // Runs in the background — must not block or fail supervisor startup.
+        tokio::task::spawn_blocking(|| {
+            if let Ok(boot_manager) = crate::boot_manager::BootManager::new() {
+                boot_manager.check_and_reregister_if_stale();
+            }
+        });
+
         // If the previous supervisor died uncleanly, its daemon child processes
         // may still be alive (orphaned, re-parented to init).  Terminate them
         // before starting replacements so we don't end up with duplicate

@@ -33,7 +33,7 @@ default = ["proxy-tls"]
 proxy-tls = ["rcgen", "tokio-rustls", "rustls-pemfile", "x509-parser"]
 
 [dependencies]
-auto-launcher = "1.0.3"
+auto-launcher = "1.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_usage = "4"
