@@ -51,7 +51,7 @@ EOF
 @test "start with no arguments is rejected" {
   run pitchfork start
   assert_failure
-  assert_output --partial "No daemons available to start"
+  assert_output --partial "No daemon ID specified"
 }
 
 @test "logs on daemon with no logs returns empty without error" {

@@ -87,6 +87,10 @@ impl Restart {
         let no_target =
             self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all;
 
+        if no_target {
+            super::interactive::require_interactive_terminal()?;
+        }
+
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
         let ids: Vec<DaemonId> = if self.all {

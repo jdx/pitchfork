@@ -112,6 +112,12 @@ impl Start {
         let no_target =
             self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all;
 
+        // When no target is specified, verify we're in an interactive terminal
+        // before connecting to the supervisor (which may auto-start it).
+        if no_target {
+            super::interactive::require_interactive_terminal()?;
+        }
+
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
         // Compute daemon IDs to start

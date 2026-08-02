@@ -10,12 +10,27 @@ use crate::daemon_id::DaemonId;
 use demand::{DemandOption, MultiSelect};
 use std::io::IsTerminal;
 
-/// If stdout is a TTY, prompt the user to select one or more daemons from
-/// `candidates`. Returns the selected `DaemonId`s.
+/// Returns `Ok(())` if both stdin and stdout are TTYs, so the interactive
+/// prompt can read keyboard input and render the UI.
 ///
-/// If stdout is not a TTY (piped/redirected), returns an error instructing the
-/// user to provide daemon IDs explicitly, preserving the original non-interactive
-/// behavior.
+/// Call this before connecting to the supervisor (which may auto-start it)
+/// to avoid side effects when the command is non-interactive.
+pub(crate) fn require_interactive_terminal() -> Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        miette::bail!(
+            "No daemon ID specified. Provide one or more daemon IDs, \
+             or run in an interactive terminal to use the selection prompt."
+        );
+    }
+    Ok(())
+}
+
+/// Prompt the user to select one or more daemons from `candidates` via a
+/// fuzzy-filterable multi-select prompt. Returns the selected `DaemonId`s.
+///
+/// Caller must ensure [`require_interactive_terminal`] has been checked
+/// beforehand if the IPC connection has side effects (e.g. supervisor
+/// auto-start).
 pub(crate) fn select_daemons_interactively(
     candidates: &[DaemonId],
     action: &str,
@@ -24,12 +39,9 @@ pub(crate) fn select_daemons_interactively(
         miette::bail!("No daemons available to {action}");
     }
 
-    if !std::io::stdout().is_terminal() {
-        miette::bail!(
-            "No daemon ID specified. Provide one or more daemon IDs, \
-             or run in an interactive terminal to use the selection prompt."
-        );
-    }
+    // Defense-in-depth: caller should have checked already, but verify again
+    // in case this function is called from a context that didn't.
+    require_interactive_terminal()?;
 
     let title = format!("Select daemon(s) to {action}");
 
