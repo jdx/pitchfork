@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.20.0](https://github.com/jdx/pitchfork/compare/v2.19.0...v2.20.0) - 2026-08-02
+
+### Added
+
+- *(supervisor)* expand ~ in daemon dir using effective user's home ([#708](https://github.com/jdx/pitchfork/pull/708))
+- *(boot)* auto-heal stale boot registration on supervisor startup ([#707](https://github.com/jdx/pitchfork/pull/707))
+- *(web)* structured log display with filters in webui ([#630](https://github.com/jdx/pitchfork/pull/630))
+- *(supervisor)* allow disabling client auto-start ([#678](https://github.com/jdx/pitchfork/pull/678))
+- *(supervisor)* add --json flag to supervisor status ([#601](https://github.com/jdx/pitchfork/pull/601))
+- *(config)* expand home-relative paths ([#675](https://github.com/jdx/pitchfork/pull/675))
+- *(logs)* let the sink serve on_output hooks ([#668](https://github.com/jdx/pitchfork/pull/668))
+- *(usage)* declare what each command does to the world ([#666](https://github.com/jdx/pitchfork/pull/666))
+- *(logs)* let the sink decide ready_output ([#667](https://github.com/jdx/pitchfork/pull/667))
+
+### Fixed
+
+- deterministic IPC response attribution and whole-group stop wait ([#606](https://github.com/jdx/pitchfork/pull/606))
+- *(config)* include registries in schema ([#671](https://github.com/jdx/pitchfork/pull/671))
+
+### Other
+
+- *(deps)* update rust crate libc to v0.2.189 ([#703](https://github.com/jdx/pitchfork/pull/703))
+- *(deps)* update rust crate clap to v4.6.4 ([#702](https://github.com/jdx/pitchfork/pull/702))
+- *(deps)* update rust crate glob to v0.3.4 ([#701](https://github.com/jdx/pitchfork/pull/701))
+- *(deps)* update rust crate tokio-util to v0.7.19 ([#699](https://github.com/jdx/pitchfork/pull/699))
+- *(deps)* update rust crate libc to v0.2.188 ([#698](https://github.com/jdx/pitchfork/pull/698))
+- *(deps)* update rust crate syn to v3 ([#697](https://github.com/jdx/pitchfork/pull/697))
+- *(deps)* update rust crate hyper to v1.11.0 ([#695](https://github.com/jdx/pitchfork/pull/695))
+- *(deps)* update rust crate tokio to v1.53.1 ([#692](https://github.com/jdx/pitchfork/pull/692))
+- *(deps)* update rust crate thiserror to v2.0.19 ([#691](https://github.com/jdx/pitchfork/pull/691))
+- *(deps)* update rust crate serde to v1.0.229 ([#689](https://github.com/jdx/pitchfork/pull/689))
+- *(deps)* update rust crate quote to v1.0.47 ([#687](https://github.com/jdx/pitchfork/pull/687))
+- *(deps)* update rust crate serde_json to v1.0.151 ([#690](https://github.com/jdx/pitchfork/pull/690))
+- *(deps)* update rust crate libc to v0.2.187 ([#685](https://github.com/jdx/pitchfork/pull/685))
+- *(deps)* update rust crate proc-macro2 to v1.0.107 ([#686](https://github.com/jdx/pitchfork/pull/686))
+- *(deps)* update rust crate clx to v3.0.2 ([#684](https://github.com/jdx/pitchfork/pull/684))
+- *(deps)* update rust crate clap to v4.6.3 ([#683](https://github.com/jdx/pitchfork/pull/683))
+- *(deps)* use rust-aware cargo resolver ([#677](https://github.com/jdx/pitchfork/pull/677))
+- *(deps)* update clx ([#672](https://github.com/jdx/pitchfork/pull/672))
+
 ## [2.19.0](https://github.com/jdx/pitchfork/compare/v2.18.0...v2.19.0) - 2026-07-25
 
 ### Added
