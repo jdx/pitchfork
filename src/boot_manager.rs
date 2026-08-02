@@ -250,11 +250,10 @@ mod imp {
                 re-registering with current path '{current_bin}'"
             );
 
-            // Re-register: disable then enable to overwrite the stale registration.
-            if let Err(e) = self.current.disable() {
-                warn!("failed to disable stale boot registration: {e}");
-                return;
-            }
+            // Re-register by overwriting the existing registration file.
+            // Calling enable() directly (without disable first) ensures that
+            // if it fails, the stale registration is still present rather than
+            // missing entirely — a stale path is better than no path.
             if let Err(e) = self.current.enable() {
                 warn!("failed to re-register boot start with current path: {e}");
                 return;
