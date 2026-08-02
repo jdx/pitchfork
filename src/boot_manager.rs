@@ -220,6 +220,48 @@ mod imp {
             }
             Ok(())
         }
+
+        /// Check whether the registered boot binary path matches the current
+        /// `PITCHFORK_BIN`. If stale (binary moved after a package-manager upgrade),
+        /// re-register at the current privilege level so the next boot uses the
+        /// correct path.
+        ///
+        /// This is a no-op when boot start is not enabled, or when the registered
+        /// path already matches. Errors are logged and swallowed — this is a
+        /// best-effort self-heal that must not block supervisor startup.
+        pub fn check_and_reregister_if_stale(&self) {
+            let current_bin = env::PITCHFORK_BIN.to_string_lossy().to_string();
+
+            let registered = match self.current.get_registered_app_path() {
+                Ok(Some(path)) => path,
+                Ok(None) => return, // not registered, nothing to do
+                Err(e) => {
+                    warn!("failed to read registered boot path: {e}");
+                    return;
+                }
+            };
+
+            if registered == current_bin {
+                return; // path matches, all good
+            }
+
+            info!(
+                "boot registration points to stale binary path '{registered}', \
+                re-registering with current path '{current_bin}'"
+            );
+
+            // Re-register: disable then enable to overwrite the stale registration.
+            if let Err(e) = self.current.disable() {
+                warn!("failed to disable stale boot registration: {e}");
+                return;
+            }
+            if let Err(e) = self.current.enable() {
+                warn!("failed to re-register boot start with current path: {e}");
+                return;
+            }
+
+            info!("boot registration updated to current binary path");
+        }
     }
 }
 
