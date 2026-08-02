@@ -6,7 +6,6 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::ui::style::{ncyan, ndim};
-use miette::ensure;
 use std::sync::Arc;
 
 /// Shared long help for the `start` command and its implicit fallback form.
@@ -110,10 +109,8 @@ pub struct Start {
 
 impl Start {
     pub async fn run(&self) -> Result<()> {
-        ensure!(
-            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
-            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
-        );
+        let no_target =
+            self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all;
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
@@ -124,6 +121,18 @@ impl Start {
             IpcClient::get_global_configured_daemons()?
         } else if self.local {
             IpcClient::get_local_configured_daemons()?
+        } else if no_target {
+            let all = IpcClient::get_all_configured_daemons()?;
+            // Without --force, exclude daemons that are already running so the
+            // user doesn't accidentally restart them.
+            let candidates = if self.force {
+                all
+            } else {
+                let running: std::collections::HashSet<DaemonId> =
+                    ipc.get_running_daemons().await?.into_iter().collect();
+                all.into_iter().filter(|id| !running.contains(id)).collect()
+            };
+            super::interactive::select_daemons_interactively(&candidates, "start")?
         } else {
             PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
@@ -179,8 +188,7 @@ impl Start {
                     let slug_name =
                         PitchforkToml::find_slug_for_daemon_in_registry(id, &global_slugs);
                     if let Some(proxy_url) = build_proxy_url(slug_name.as_deref(), &s) {
-                        let display_name =
-                            id.styled_display_name(None::<std::iter::Empty<&DaemonId>>);
+                        let display_name = id.styled_qualified();
                         println!(
                             "  {} {} {}",
                             ndim("↳"),
