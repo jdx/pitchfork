@@ -89,9 +89,20 @@ pub static IPC_JSON: Lazy<bool> = Lazy::new(|| !var_false("IPC_JSON"));
 /// expansions such as `$HOME`. Pitchfork's home resolution accounts for the
 /// original user when running under `sudo`.
 pub fn expand_tilde(path: impl AsRef<std::path::Path>) -> PathBuf {
+    expand_tilde_for_user(path, None)
+}
+
+/// Expand a leading `~` to the home directory of `user`.
+///
+/// When `user` is `None`, empty, or the system lookup fails, falls back to
+/// `HOME_DIR` (the supervisor's home). This matches Unix semantics where `~`
+/// in a process's working directory refers to that process's effective user.
+///
+/// Only `~` and `~/...` are supported — not `~user` or shell expansions.
+pub fn expand_tilde_for_user(path: impl AsRef<std::path::Path>, user: Option<&str>) -> PathBuf {
     let path = path.as_ref();
     match path.strip_prefix("~") {
-        Ok(rest) => HOME_DIR.join(rest),
+        Ok(rest) => home_dir_for_effective_user(user).join(rest),
         Err(_) => path.to_path_buf(),
     }
 }
@@ -128,6 +139,37 @@ fn home_dir_for_user(username: &str) -> Option<PathBuf> {
         .map(|u| u.dir)
 }
 
+/// Look up a home directory by username or numeric UID string.
+#[cfg(unix)]
+fn home_dir_by_user_spec(user: &str) -> Option<PathBuf> {
+    if user.chars().all(|c| c.is_ascii_digit()) {
+        let uid = user.parse::<u32>().ok()?;
+        nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .map(|u| u.dir)
+    } else {
+        home_dir_for_user(user)
+    }
+}
+
+/// Resolve the home directory for an effective daemon user.
+///
+/// Returns `HOME_DIR` when `user` is `None`, empty, or the lookup fails.
+#[cfg(unix)]
+pub(crate) fn home_dir_for_effective_user(user: Option<&str>) -> PathBuf {
+    let user = user.map(str::trim).filter(|u| !u.is_empty());
+    match user {
+        Some(u) => home_dir_by_user_spec(u).unwrap_or_else(|| HOME_DIR.clone()),
+        None => HOME_DIR.clone(),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn home_dir_for_effective_user(_user: Option<&str>) -> PathBuf {
+    HOME_DIR.clone()
+}
+
 #[cfg(unix)]
 fn configured_supervisor_user_home_dir() -> Option<PathBuf> {
     let s = crate::settings::settings();
@@ -135,16 +177,7 @@ fn configured_supervisor_user_home_dir() -> Option<PathBuf> {
     if user.is_empty() {
         return None;
     }
-
-    if user.chars().all(|c| c.is_ascii_digit()) {
-        let uid = user.parse::<u32>().ok()?;
-        return nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
-            .ok()
-            .flatten()
-            .map(|u| u.dir);
-    }
-
-    home_dir_for_user(user)
+    home_dir_by_user_spec(user)
 }
 
 #[cfg(test)]
@@ -169,5 +202,34 @@ mod tests {
         );
         assert_eq!(expand_tilde("projects/api"), Path::new("projects/api"));
         assert_eq!(expand_tilde("~other/api"), Path::new("~other/api"));
+    }
+
+    #[test]
+    fn expand_tilde_for_user_none_uses_supervisor_home() {
+        assert_eq!(expand_tilde_for_user("~/data", None), HOME_DIR.join("data"));
+    }
+
+    #[test]
+    fn expand_tilde_for_user_empty_uses_supervisor_home() {
+        assert_eq!(
+            expand_tilde_for_user("~/data", Some("")),
+            HOME_DIR.join("data")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_for_user_nonexistent_falls_back_to_supervisor_home() {
+        assert_eq!(
+            expand_tilde_for_user("~/data", Some("nonexistent_user_xyz")),
+            HOME_DIR.join("data")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_for_user_leaves_non_tilde_unchanged() {
+        assert_eq!(
+            expand_tilde_for_user("/srv/api", Some("postgres")),
+            Path::new("/srv/api")
+        );
     }
 }

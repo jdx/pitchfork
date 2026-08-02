@@ -1093,10 +1093,18 @@ pub fn resolve_config_base_dir(config_path: Option<&Path>) -> PathBuf {
 ///
 /// If `dir` is set in config, resolve it relative to the project base directory.
 /// Otherwise, use the project base directory directly.
-pub fn resolve_daemon_dir(dir: Option<&str>, config_path: Option<&Path>) -> PathBuf {
+///
+/// When `user` is provided, a leading `~` in `dir` expands to that user's home
+/// directory (matching Unix semantics for the daemon's effective user). When
+/// `user` is `None`, `~` expands to the supervisor's home.
+pub fn resolve_daemon_dir(
+    dir: Option<&str>,
+    config_path: Option<&Path>,
+    user: Option<&str>,
+) -> PathBuf {
     let base_dir = resolve_config_base_dir(config_path);
     match dir {
-        Some(d) => base_dir.join(crate::env::expand_tilde(d)),
+        Some(d) => base_dir.join(crate::env::expand_tilde_for_user(d, user)),
         None => base_dir,
     }
 }
@@ -1201,7 +1209,11 @@ mod tests {
     #[test]
     fn test_resolve_daemon_dir_none() {
         // No dir set, config at /projects/myapp/pitchfork.toml -> /projects/myapp
-        let result = resolve_daemon_dir(None, Some(Path::new("/projects/myapp/pitchfork.toml")));
+        let result = resolve_daemon_dir(
+            None,
+            Some(Path::new("/projects/myapp/pitchfork.toml")),
+            None,
+        );
         assert_eq!(result, PathBuf::from("/projects/myapp"));
     }
 
@@ -1211,6 +1223,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("frontend"),
             Some(Path::new("/projects/myapp/pitchfork.toml")),
+            None,
         );
         assert_eq!(result, PathBuf::from("/projects/myapp/frontend"));
     }
@@ -1221,6 +1234,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("/opt/myapp"),
             Some(Path::new("/projects/myapp/pitchfork.toml")),
+            None,
         );
         assert_eq!(result, PathBuf::from("/opt/myapp"));
     }
@@ -1230,21 +1244,46 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("~/projects/myapp"),
             Some(Path::new("/projects/other/pitchfork.toml")),
+            None,
         );
         assert_eq!(result, crate::env::HOME_DIR.join("projects/myapp"));
     }
 
     #[test]
+    fn test_resolve_daemon_dir_tilde_with_user() {
+        // ~ with a nonexistent user falls back to HOME_DIR.
+        let result = resolve_daemon_dir(
+            Some("~/data"),
+            Some(Path::new("/projects/other/pitchfork.toml")),
+            Some("nonexistent_user_xyz"),
+        );
+        assert_eq!(result, crate::env::HOME_DIR.join("data"));
+    }
+
+    #[test]
+    fn test_resolve_daemon_dir_tilde_with_current_user() {
+        // ~ with the current user expands to their home via passwd lookup.
+        let current_user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+        let expected = crate::env::home_dir_for_effective_user(Some(&current_user)).join("data");
+        let result = resolve_daemon_dir(
+            Some("~/data"),
+            Some(Path::new("/projects/other/pitchfork.toml")),
+            Some(&current_user),
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[test]
     fn test_resolve_daemon_dir_no_config_path() {
         // No config path -> defaults to CWD
-        let result = resolve_daemon_dir(None, None);
+        let result = resolve_daemon_dir(None, None, None);
         assert_eq!(result, crate::env::CWD.to_path_buf());
     }
 
     #[test]
     fn test_resolve_daemon_dir_relative_no_config_path() {
         // Relative dir but no config path -> relative to CWD
-        let result = resolve_daemon_dir(Some("subdir"), None);
+        let result = resolve_daemon_dir(Some("subdir"), None, None);
         assert_eq!(result, crate::env::CWD.join("subdir"));
     }
 
@@ -1254,6 +1293,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("services/api"),
             Some(Path::new("/projects/myapp/pitchfork.toml")),
+            None,
         );
         assert_eq!(result, PathBuf::from("/projects/myapp/services/api"));
     }
@@ -1264,6 +1304,7 @@ mod tests {
         let result = resolve_daemon_dir(
             None,
             Some(Path::new("/projects/myapp/.config/pitchfork.toml")),
+            None,
         );
         assert_eq!(
             result,
@@ -1278,6 +1319,7 @@ mod tests {
         let result = resolve_daemon_dir(
             None,
             Some(Path::new("/projects/myapp/.config/pitchfork.local.toml")),
+            None,
         );
         assert_eq!(
             result,
@@ -1292,6 +1334,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("frontend"),
             Some(Path::new("/projects/myapp/.config/pitchfork.toml")),
+            None,
         );
         assert_eq!(
             result,
@@ -1306,6 +1349,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("frontend"),
             Some(Path::new("/projects/myapp/.config/pitchfork.local.toml")),
+            None,
         );
         assert_eq!(
             result,
@@ -1320,6 +1364,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("/opt/service"),
             Some(Path::new("/projects/myapp/.config/pitchfork.toml")),
+            None,
         );
         assert_eq!(
             result,
@@ -1334,6 +1379,7 @@ mod tests {
         let result = resolve_daemon_dir(
             Some("/opt/service"),
             Some(Path::new("/projects/myapp/.config/pitchfork.local.toml")),
+            None,
         );
         assert_eq!(
             result,
@@ -1346,7 +1392,7 @@ mod tests {
     fn test_resolve_daemon_dir_global_config_normal() {
         // Global config (~/.config/pitchfork/config.toml) should use normal resolution (parent)
         let global_path = env::PITCHFORK_GLOBAL_CONFIG_USER.as_path();
-        let result = resolve_daemon_dir(None, Some(global_path));
+        let result = resolve_daemon_dir(None, Some(global_path), None);
         assert_eq!(
             result,
             global_path.parent().unwrap(),

@@ -1665,6 +1665,22 @@ pub struct PitchforkTomlDaemon {
 }
 
 impl PitchforkTomlDaemon {
+    /// Effective user for this daemon: per-daemon `user` overrides `settings.supervisor.user`.
+    ///
+    /// Returns `None` when neither is set (inherit the supervisor's user).
+    pub fn effective_user(&self) -> Option<String> {
+        let daemon_user = self
+            .user
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty());
+        daemon_user.map(str::to_owned).or_else(|| {
+            let s = crate::settings::settings();
+            let su = s.supervisor.user.trim();
+            (!su.is_empty()).then(|| su.to_owned())
+        })
+    }
+
     /// Build RunOptions from this daemon configuration.
     ///
     /// Carries over all config fields and resolves the working directory.
@@ -1676,7 +1692,12 @@ impl PitchforkTomlDaemon {
     ) -> crate::daemon::RunOptions {
         use crate::daemon::RunOptions;
 
-        let dir = crate::ipc::batch::resolve_daemon_dir(self.dir.as_deref(), self.path.as_deref());
+        let effective_user = self.effective_user();
+        let dir = crate::ipc::batch::resolve_daemon_dir(
+            self.dir.as_deref(),
+            self.path.as_deref(),
+            effective_user.as_deref(),
+        );
         let slug = crate::pitchfork_toml::PitchforkToml::read_global_slugs()
             .into_iter()
             .find(|(slug, entry)| {

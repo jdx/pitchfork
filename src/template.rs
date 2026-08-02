@@ -65,9 +65,11 @@ impl TemplateContext {
         daemon_configs: &IndexMap<DaemonId, PitchforkTomlDaemon>,
     ) -> Self {
         let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        let effective_user = daemon_config.effective_user();
         let dir = crate::ipc::batch::resolve_daemon_dir(
             daemon_config.dir.as_deref(),
             daemon_config.path.as_deref(),
+            effective_user.as_deref(),
         );
 
         let self_state = DaemonTemplateState {
@@ -85,9 +87,11 @@ impl TemplateContext {
         let mut daemon_states = HashMap::new();
         for (dep_id, ports) in resolved_daemons {
             if let Some(config) = daemon_configs.get(dep_id) {
+                let dep_effective_user = config.effective_user();
                 let dep_dir = crate::ipc::batch::resolve_daemon_dir(
                     config.dir.as_deref(),
                     config.path.as_deref(),
+                    dep_effective_user.as_deref(),
                 );
                 let state = DaemonTemplateState {
                     ports: ports.clone(),
