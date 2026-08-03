@@ -2,7 +2,6 @@ use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
-use miette::ensure;
 use std::sync::Arc;
 
 /// Sends a stop signal to a daemon
@@ -75,10 +74,12 @@ pub struct Stop {
 
 impl Stop {
     pub async fn run(&self) -> Result<()> {
-        ensure!(
-            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
-            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
-        );
+        let no_target =
+            self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all;
+
+        if no_target {
+            super::interactive::require_interactive_terminal()?;
+        }
 
         let ipc = Arc::new(IpcClient::connect(false).await?);
 
@@ -86,6 +87,9 @@ impl Stop {
             ipc.get_running_daemons().await?
         } else if self.global || self.local {
             ipc.get_running_configured_daemons(self.global).await?
+        } else if no_target {
+            let candidates = ipc.get_running_daemons().await?;
+            super::interactive::select_daemons_interactively(&candidates, "stop")?
         } else {
             PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };

@@ -12,6 +12,7 @@ mod completion;
 mod daemons;
 mod disable;
 mod enable;
+mod interactive;
 pub mod json_output;
 mod list;
 pub mod log_sink;

@@ -208,26 +208,6 @@ impl DaemonId {
             .join(format!("{safe}.log"))
     }
 
-    /// Returns a styled display name for terminal output (stdout).
-    ///
-    /// The namespace part is displayed in dim color, followed by `/` and the name.
-    /// If `all_ids` is provided and the name is unique, only the name is shown.
-    pub fn styled_display_name<'a, I>(&self, all_ids: Option<I>) -> String
-    where
-        I: Iterator<Item = &'a DaemonId>,
-    {
-        let show_full = match all_ids {
-            Some(ids) => ids.filter(|other| other.name == self.name).count() > 1,
-            None => true,
-        };
-
-        if show_full {
-            self.styled_qualified()
-        } else {
-            self.name.clone()
-        }
-    }
-
     /// Returns the qualified format with dim namespace for terminal output (stdout).
     ///
     /// Format: `<dim>namespace</dim>/name`
@@ -475,31 +455,6 @@ mod tests {
         // Invalid - empty
         assert!(DaemonId::try_new("", "api").is_err());
         assert!(DaemonId::try_new("project", "").is_err());
-    }
-
-    #[test]
-    fn test_daemon_id_styled_display_name() {
-        let id1 = DaemonId::new("project-a", "api");
-        let id2 = DaemonId::new("project-b", "api");
-        let id3 = DaemonId::new("global", "worker");
-
-        let all_ids = [&id1, &id2, &id3];
-
-        // "api" is ambiguous → full qualified ID must appear in the output
-        let out1 = id1.styled_display_name(Some(all_ids.iter().copied()));
-        let out2 = id2.styled_display_name(Some(all_ids.iter().copied()));
-        assert!(
-            out1.contains("project-a") && out1.contains("api"),
-            "ambiguous id1 should show namespace: {out1}"
-        );
-        assert!(
-            out2.contains("project-b") && out2.contains("api"),
-            "ambiguous id2 should show namespace: {out2}"
-        );
-
-        // "worker" is unique → only the short name
-        let out3 = id3.styled_display_name(Some(all_ids.iter().copied()));
-        assert_eq!(out3, "worker", "unique id3 should show only short name");
     }
 
     #[test]

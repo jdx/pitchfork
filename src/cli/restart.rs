@@ -3,7 +3,6 @@ use crate::daemon_id::DaemonId;
 use crate::ipc::batch::{StartOptions, update_job_with_result};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
-use miette::ensure;
 use std::sync::Arc;
 
 /// Restarts a daemon (stops then starts it)
@@ -85,10 +84,12 @@ pub struct Restart {
 
 impl Restart {
     pub async fn run(&self) -> Result<()> {
-        ensure!(
-            self.local || self.global || self.all || !self.id.is_empty() || self.group.is_some(),
-            "At least one daemon ID, --group, or one of --all / --local / --global must be provided"
-        );
+        let no_target =
+            self.id.is_empty() && self.group.is_none() && !self.local && !self.global && !self.all;
+
+        if no_target {
+            super::interactive::require_interactive_terminal()?;
+        }
 
         let ipc = Arc::new(IpcClient::connect(true).await?);
 
@@ -96,6 +97,9 @@ impl Restart {
             ipc.get_running_daemons().await?
         } else if self.global || self.local {
             ipc.get_running_configured_daemons(self.global).await?
+        } else if no_target {
+            let candidates = ipc.get_running_daemons().await?;
+            super::interactive::select_daemons_interactively(&candidates, "restart")?
         } else {
             PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
