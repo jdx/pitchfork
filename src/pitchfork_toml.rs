@@ -6,8 +6,12 @@ use crate::state_file::StateFile;
 use crate::{Result, env};
 use indexmap::IndexMap;
 use miette::Context;
+use once_cell::sync::Lazy;
 use schemars::JsonSchema;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex as StdMutex;
+use std::time::SystemTime;
 
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
@@ -240,7 +244,7 @@ struct PitchforkTomlDaemonRaw {
 ///
 /// Note: When read from a file, daemon keys are short names (e.g., "api").
 /// After merging, keys become qualified DaemonIds (e.g., "project/api").
-#[derive(Debug, Default, JsonSchema)]
+#[derive(Debug, Clone, Default, JsonSchema)]
 #[schemars(title = "Pitchfork Configuration")]
 pub struct PitchforkToml {
     /// Map of daemon IDs to their configurations
@@ -433,6 +437,87 @@ fn namespace_from_file(path: &Path) -> Result<String> {
 /// - `/home/user/中文目录/pitchfork.toml` → error unless `namespace = "..."` is set
 pub fn namespace_from_path(path: &Path) -> Result<String> {
     namespace_from_file(path)
+}
+
+/// Cached result of `all_merged_from`, keyed by the cwd used to discover config paths.
+///
+/// The cache key is the canonical cwd `PathBuf`. The entry stores the merged
+/// [`PitchforkToml`] plus a snapshot of every source file's (mtime, size) at
+/// cache time. A cache hit requires the same set of paths with identical
+/// mtimes **and** sizes.
+///
+/// Tracking size in addition to mtime catches timestamp-preserving content
+/// changes (e.g. `cp --preserve=timestamps`, same-second edits on filesystems
+/// with coarse mtime granularity like NFS) that mtime alone would miss.
+///
+/// **Known limitation**: an equal-size content replacement that also preserves
+/// mtime will not be detected. This is an accepted trade-off — fully closing
+/// this gap would require hashing file contents on every cache hit, negating
+/// the I/O savings the cache exists to provide. In practice, editors and `git
+/// pull` always change mtime, and `cp --preserve=timestamps` almost always
+/// changes size. The `ReloadConfig` IPC handler (`settings reload`) serves as
+/// an explicit escape hatch to force a full re-read when needed.
+struct ConfigCacheEntry {
+    config: PitchforkToml,
+    /// (path, (mtime, size)) snapshot — order matches `list_paths_from` at cache time.
+    source_meta: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+}
+
+/// Global config parse cache, keyed by canonical cwd.
+///
+/// Uses a `std::sync::Mutex` (not tokio) because config parsing is CPU-bound
+/// and callers like `spawn_blocking(PitchforkToml::all_merged)` run outside
+/// the async runtime. Contention is minimal: the mutex is held only for the
+/// metadata comparison and the occasional re-read, not across I/O.
+static CONFIG_CACHE: Lazy<StdMutex<HashMap<PathBuf, ConfigCacheEntry>>> =
+    Lazy::new(|| StdMutex::new(HashMap::new()));
+
+/// Compare a list of paths' current (mtime, size) against a cached snapshot.
+///
+/// Returns `true` if every path exists (or not) and has the same mtime and
+/// size as when the snapshot was taken. Any difference — a new file, a deleted
+/// file, a changed mtime, or a changed size — invalidates the cache.
+fn meta_matches(paths: &[PathBuf], snapshot: &[(PathBuf, Option<(SystemTime, u64)>)]) -> bool {
+    if paths.len() != snapshot.len() {
+        return false;
+    }
+    paths
+        .iter()
+        .zip(snapshot.iter())
+        .all(|(p, (snap_p, snap_meta))| p == snap_p && current_meta(p) == *snap_meta)
+}
+
+/// Best-effort (mtime, size) — `None` if the path doesn't exist or metadata fails.
+fn current_meta(path: &Path) -> Option<(SystemTime, u64)> {
+    let md = std::fs::metadata(path).ok()?;
+    Some((md.modified().ok()?, md.len()))
+}
+
+/// Snapshot all (path, (mtime, size)) pairs for a list of paths.
+fn snapshot_meta(paths: &[PathBuf]) -> Vec<(PathBuf, Option<(SystemTime, u64)>)> {
+    paths.iter().map(|p| (p.clone(), current_meta(p))).collect()
+}
+
+/// Invalidate the entire config parse cache.
+///
+/// Called after any config file write (`write()`, `write_unlocked()`,
+/// `add_slug_with_namespace()`, `remove_slug()`, `register_namespace()`,
+/// `remove_namespace()`) so that subsequent `all_merged_from` calls re-read
+/// from disk.
+///
+/// Also called by `settings reload` (via IPC `ReloadConfig`) so that external
+/// edits to config files are picked up.
+///
+/// **Cross-process note**: CLI and supervisor are separate processes with
+/// independent caches. When the CLI calls this after `write_unlocked()`, it
+/// only clears the CLI's own cache (which is about to exit anyway). The
+/// supervisor relies on mtime change detection to pick up CLI-written changes.
+/// The `ReloadConfig` IPC handler is the one that matters — it clears the
+/// supervisor's cache.
+pub fn invalidate_config_cache() {
+    if let Ok(mut cache) = CONFIG_CACHE.lock() {
+        cache.clear();
+    }
 }
 
 impl PitchforkToml {
@@ -910,26 +995,71 @@ impl PitchforkToml {
     ///
     /// This prevents ID conflicts when multiple projects define daemons with the same name.
     ///
+    /// Results are cached by cwd and invalidated when any source file's mtime
+    /// changes or when [`invalidate_config_cache`] is called (e.g. after a
+    /// config write via `write()` / `write_unlocked()`).
+    ///
     /// # Errors
     /// Returns an error if any config file fails to parse. Aborts with an error
     /// if two *different* project config files produce the same namespace (e.g. two
     /// `pitchfork.toml` files in separate directories that share the same directory name).
     pub fn all_merged_from(cwd: &Path) -> Result<PitchforkToml> {
-        use std::collections::HashMap;
-
         let paths = Self::list_paths_from(cwd);
-        let mut ns_to_origin: HashMap<String, (PathBuf, PathBuf)> = HashMap::new();
+
+        // Fast path: check the cache under a short-lived lock.
+        // We canonicalize cwd for a stable key. If canonicalization fails
+        // (e.g. the directory was just deleted), fall back to the raw path.
+        let cache_key = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+
+        {
+            let cache = CONFIG_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(entry) = cache.get(&cache_key)
+                && meta_matches(&paths, &entry.source_meta)
+            {
+                return Ok(entry.config.clone());
+            }
+        }
+
+        // Cache miss: snapshot (mtime, size) BEFORE reading.
+        // If a file changes during the read, the snapshot (old mtime/size) won't
+        // match the current values on the next call, forcing a re-read.
+        // Taking the snapshot after the read would store old content with new
+        // metadata, serving stale data indefinitely.
+        let snapshot = snapshot_meta(&paths);
+        let pt = Self::all_merged_from_uncached(&paths)?;
+
+        // Store in cache.
+        let mut cache = CONFIG_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        cache.insert(
+            cache_key,
+            ConfigCacheEntry {
+                config: pt.clone(),
+                source_meta: snapshot,
+            },
+        );
+
+        Ok(pt)
+    }
+
+    /// Uncached merge of all configuration files from a list of paths.
+    ///
+    /// This is the original merge logic extracted from `all_merged_from` so that
+    /// the cache layer can wrap it without duplicating the algorithm.
+    fn all_merged_from_uncached(paths: &[PathBuf]) -> Result<PitchforkToml> {
+        use std::collections::HashMap as StdHashMap;
+
+        let mut ns_to_origin: StdHashMap<String, (PathBuf, PathBuf)> = StdHashMap::new();
 
         let mut pt = Self::default();
         for p in paths {
-            match Self::read(&p) {
+            match Self::read(p) {
                 Ok(pt2) => {
                     // Detect collisions for all existing project configs, including
                     // pitchfork.local.toml. Allow sibling base/local files in the same
                     // directory to share a namespace, including siblings via .config subfolder
-                    if p.exists() && !is_global_config(&p) {
-                        let ns = namespace_from_path(&p)?;
-                        let origin_dir = if is_dot_config_pitchfork(&p) {
+                    if p.exists() && !is_global_config(p) {
+                        let ns = namespace_from_path(p)?;
+                        let origin_dir = if is_dot_config_pitchfork(p) {
                             p.parent().and_then(|d| d.parent())
                         } else {
                             p.parent()
@@ -1344,6 +1474,7 @@ impl PitchforkToml {
                 path: path.clone(),
                 details: Some(e.to_string()),
             })?;
+            invalidate_config_cache();
             Ok(())
         } else {
             Err(FileError::NoPath.into())
@@ -1899,5 +2030,107 @@ dir = "~/projects/web"
         let parsed = PitchforkToml::read(&path).unwrap();
         assert_eq!(parsed.settings.web.auto_start, Some(true));
         assert!(parsed.slugs.contains_key("api"));
+    }
+
+    #[test]
+    fn test_config_cache_hit_and_invalidation() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        let config_path = dir.join("pitchfork.toml");
+        std::fs::write(&config_path, "[daemons.api]\nrun = \"echo v1\"\n").unwrap();
+
+        // Clear any pre-existing cache entries for this directory.
+        super::invalidate_config_cache();
+
+        // First call: cache miss, reads from disk.
+        let pt1 = PitchforkToml::all_merged_from(dir).unwrap();
+        let daemon_id = DaemonId::new(namespace_from_path(&config_path).unwrap(), "api");
+        assert_eq!(pt1.daemons[&daemon_id].run, "echo v1");
+
+        // Second call: should be a cache hit (same mtime).
+        let pt2 = PitchforkToml::all_merged_from(dir).unwrap();
+        assert_eq!(pt2.daemons[&daemon_id].run, "echo v1");
+
+        // Modify the config file — mtime changes, cache should miss.
+        // Sleep briefly to ensure mtime resolution differs.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&config_path, "[daemons.api]\nrun = \"echo v2\"\n").unwrap();
+
+        let pt3 = PitchforkToml::all_merged_from(dir).unwrap();
+        assert_eq!(pt3.daemons[&daemon_id].run, "echo v2");
+
+        // Explicit invalidation should also force a re-read.
+        super::invalidate_config_cache();
+        let pt4 = PitchforkToml::all_merged_from(dir).unwrap();
+        assert_eq!(pt4.daemons[&daemon_id].run, "echo v2");
+
+        // Clean up.
+        super::invalidate_config_cache();
+    }
+
+    #[test]
+    fn test_config_cache_invalidation_on_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        let config_path = dir.join("pitchfork.toml");
+        std::fs::write(&config_path, "[daemons.api]\nrun = \"echo v1\"\n").unwrap();
+
+        super::invalidate_config_cache();
+
+        // Populate cache.
+        let pt1 = PitchforkToml::all_merged_from(dir).unwrap();
+        let daemon_id = DaemonId::new(namespace_from_path(&config_path).unwrap(), "api");
+        assert_eq!(pt1.daemons[&daemon_id].run, "echo v1");
+
+        // Write via PitchforkToml::write() — should invalidate cache.
+        let mut pt = PitchforkToml::read(&config_path).unwrap();
+        pt.daemons.get_mut(&daemon_id).unwrap().run = "echo v3".to_string();
+        // write() needs the path set and namespace match
+        let _ = pt.write();
+
+        // Next read should see the updated value, not the cached one.
+        let pt2 = PitchforkToml::all_merged_from(dir).unwrap();
+        assert_eq!(pt2.daemons[&daemon_id].run, "echo v3");
+
+        super::invalidate_config_cache();
+    }
+
+    #[test]
+    fn test_config_cache_size_invalidation() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        let config_path = dir.join("pitchfork.toml");
+        std::fs::write(&config_path, "[daemons.api]\nrun = \"echo v1\"\n").unwrap();
+
+        super::invalidate_config_cache();
+
+        // Populate cache.
+        let pt1 = PitchforkToml::all_merged_from(dir).unwrap();
+        let daemon_id = DaemonId::new(namespace_from_path(&config_path).unwrap(), "api");
+        assert_eq!(pt1.daemons[&daemon_id].run, "echo v1");
+
+        // Capture the original mtime, then write different-size content and
+        // restore the *same* mtime — simulating `cp --preserve=timestamps`
+        // or a same-second edit on a coarse-grained filesystem.
+        let original_mtime = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        std::fs::write(&config_path, "[daemons.api]\nrun = \"echo different\"\n").unwrap();
+        // On Windows, set_times requires the file handle to be opened with
+        // write access; File::open is read-only.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&config_path)
+            .unwrap();
+        let times = std::fs::FileTimes::new().set_modified(original_mtime);
+        file.set_times(times).unwrap();
+
+        // Size changed (shorter run string), so cache should miss even though
+        // mtime is identical.
+        let pt2 = PitchforkToml::all_merged_from(dir).unwrap();
+        assert_eq!(
+            pt2.daemons[&daemon_id].run, "echo different",
+            "cache should invalidate on size change even with identical mtime"
+        );
+
+        super::invalidate_config_cache();
     }
 }
