@@ -80,14 +80,18 @@ pub struct Supervisor {
         Mutex<HashMap<DaemonId, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
-    /// Tracks in-flight hook tasks so shutdown can wait for them to complete
+    /// Tracks in-flight hook tasks so shutdown can wait for them to complete.
+    /// Finished handles are pruned on each push to avoid unbounded growth.
     pub(crate) hook_tasks: Mutex<Vec<JoinHandle<()>>>,
-    /// Number of monitoring tasks that are still running (between process exit
-    /// and hook registration completion). Used by `close()` to know when it is
-    /// safe to drain `hook_tasks`.
+    /// Number of monitor tasks currently running. Each monitor task registers
+    /// a `MonitorGuard` at start (before any lifecycle work) and drops it on
+    /// exit, decrementing this counter and notifying `monitor_done`. Used by
+    /// `close()` to wait until all monitors have exited and registered any
+    /// hook tasks before draining those.
     pub(crate) active_monitors: AtomicU32,
-    /// Signalled by each monitoring task after it finishes registering hooks
-    /// (or decides it has nothing to register). `close()` waits on this.
+    /// Signalled by each monitor task when it exits (via `MonitorGuard::drop`).
+    /// `close()` waits on this to ensure no monitor is still mid-flight
+    /// before collecting hook task handles.
     pub(crate) monitor_done: Notify,
     /// Cancellation token for the proxy server — cancelled on shutdown to
     /// stop accepting new connections and drain in-flight ones.
@@ -1132,11 +1136,12 @@ impl Supervisor {
             handle.shutdown();
         }
 
-        // Wait for all in-flight monitoring tasks to finish registering their
-        // hook handles. Each monitoring task increments `active_monitors` when
-        // its process exits, and decrements it (+ notifies `monitor_done`)
-        // after all fire_hook() calls complete. This replaces the old
-        // yield_now() approach which had a race window.
+        // Wait for all in-flight monitor tasks to finish so that any drain
+        // and hook tasks they spawned are registered before we collect them.
+        // Each monitor task increments `active_monitors` at start (via a
+        // `MonitorGuard`) and decrements it + notifies `monitor_done` when
+        // the guard drops on exit (covering both the normal exit path and
+        // the early-return PID-takeover path).
         let drain_timeout = time::sleep(Duration::from_secs(5));
         tokio::pin!(drain_timeout);
         loop {
@@ -1146,11 +1151,12 @@ impl Supervisor {
             tokio::select! {
                 _ = self.monitor_done.notified() => {}
                 _ = &mut drain_timeout => {
-                    warn!("timed out waiting for monitoring tasks to register hooks, proceeding with shutdown");
+                    warn!("timed out waiting for monitor tasks to exit, proceeding with shutdown");
                     break;
                 }
             }
         }
+
         let handles: Vec<JoinHandle<()>> = std::mem::take(&mut *self.hook_tasks.lock().await);
         let hook_timeout = Duration::from_secs(30);
         for handle in handles {

@@ -146,6 +146,38 @@ fn stop_cmd_probe_state(probe: &mut Option<CmdProbe>) {
     }
 }
 
+/// RAII guard tracking a monitor task's lifetime against
+/// `SUPERVISOR.active_monitors`. Created at the very start of each monitor
+/// `tokio::spawn` task (before any lifecycle work) and dropped on every exit
+/// path, including the early-return PID-takeover path. On `Drop`, it
+/// decrements `active_monitors` and notifies `monitor_done` so `close()`
+/// can reliably observe when all monitors have finished and registered any
+/// drain/hook tasks they spawned.
+struct MonitorGuard;
+
+impl Drop for MonitorGuard {
+    fn drop(&mut self) {
+        SUPERVISOR
+            .active_monitors
+            .fetch_sub(1, atomic::Ordering::Release);
+        SUPERVISOR.monitor_done.notify_waiters();
+    }
+}
+
+/// Spawn a background task that drains remaining in-flight output lines
+/// from a daemon's output channel and persists them to the log store.
+///
+/// This is used after a daemon process exits to capture trailing log lines
+/// that were still in the mpsc channel or OS pipe buffer. The drain is bounded
+/// by a 5s deadline to guard against stuck readers (e.g. PTY master FD not
+/// closing). Lines are batched (up to 100) and flushed via `spawn_blocking`
+/// to avoid blocking the async runtime on SQLite writes.
+///
+/// Each `spawn_blocking` write is awaited before the next batch begins and
+/// before the drain task exits, guaranteeing that all writes are persisted
+/// (no detached writes) when the returned `JoinHandle` resolves.
+///
+
 /// Spawn a detached task that kills a daemon's process group after its
 /// readiness checks are exhausted, logging a failed kill instead of
 /// discarding it. The returned handle is awaited before the readiness
@@ -804,6 +836,21 @@ impl Supervisor {
             // explicitly once the daemon exits, before the drain below.
             let output_relay = output_relay;
 
+            // Register with `close()` *before* any lifecycle work so that
+            // shutdown reliably waits for this monitor to finish (and to
+            // register any drain/hook tasks it spawns) regardless of which
+            // exit path is taken. The guard is dropped on every return path,
+            // decrementing `active_monitors` and notifying `monitor_done`.
+            //
+            // Increment first, then construct the guard: if guard
+            // construction were to fail (e.g. panic) the count would still
+            // be balanced; and Drop cannot run before the matching
+            // increment because there is no await point between them.
+            SUPERVISOR
+                .active_monitors
+                .fetch_add(1, atomic::Ordering::Release);
+            let _monitor_guard = MonitorGuard;
+
             // Merge all output sources (PTY master OR stdout+stderr, or a
             // sink's IPC reports) into a single channel.
             let mut output_rx = output_rx;
@@ -879,7 +926,10 @@ impl Supervisor {
                 .log_format
                 .clone()
                 .unwrap_or_else(|| crate::settings::settings().logs.log_format.clone());
-            let parse_line = move |line: &str| crate::log_parse::parse(line, &log_format);
+            let parse_line = {
+                let log_format = log_format.clone();
+                move |line: &str| crate::log_parse::parse(line, &log_format)
+            };
 
             const LOG_BATCH_SIZE: usize = 100;
             const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(100);
@@ -1500,36 +1550,64 @@ impl Supervisor {
                 }
             }
 
-            // Snapshot the daemon state BEFORE draining output.
+            // --- Exit path ---
             //
-            // The drain can take up to 5s (e.g. when child processes keep the
-            // stdout pipe open). During that time, a subsequent start() call
-            // (e.g. from `pitchfork restart`) can upsert the daemon with a new
-            // PID and Running status. If we only checked state AFTER the drain,
-            // the monitoring task would see d.pid != Some(old_pid) && !is_stopped()
-            // && !is_stopping() and return early without firing on_stop/on_exit
-            // hooks.
+            // The process has exited (or is about to). This section performs
+            // cleanup in a specific order to handle concurrent stop()/start()
+            // races correctly:
             //
-            // By snapshotting is_stopping before the drain, we preserve the
-            // knowledge that stop() was called, so hooks fire correctly even
-            // if start() has since changed the state.
-            let pre_drain_daemon = SUPERVISOR.get_daemon(&id).await;
-            let pre_drain_is_stopping = pre_drain_daemon
-                .as_ref()
-                .is_some_and(|d| d.status.is_stopped() || d.status.is_stopping());
+            //   1. Snapshot whether stop() had been called before exit cleanup
+            //      began. This is the "stop intent" signal.
+            //   2. Flush already-buffered logs (NOT a full drain yet).
+            //   3. Clear active_port *only if* the daemon record still
+            //      belongs to this monitor's PID (checked while holding the
+            //      state_file lock). This preserves a replacement process's
+            //      active_port when a concurrent start() has upserted a
+            //      different PID.
+            //   4. Decide whether this monitor still owns the daemon (PID
+            //      takeover check), determine exit reason, update state, and
+            //      fire hooks.
+            //   5. Spawn a background drain task to capture remaining
+            //      in-flight output lines and register it with close() so
+            //      shutdown awaits it. The 5s drain window stays off the
+            //      monitor critical path so concurrent start() is not blocked.
+            //
+            // The `MonitorGuard` registered at the top of this task is
+            // dropped on every return path below (including the PID-takeover
+            // early return), so `close()` sees `active_monitors` drop to 0
+            // only after this whole section (and any spawned drain/hook
+            // registration) completes.
 
-            // Drain any in-flight output lines that were still in the mpsc
-            // channel or the OS pipe buffer when the child exited. Without
-            // this, trailing log lines from short-lived daemons get dropped.
-            // The reader tasks drop their senders on EOF, so recv() returns
-            // None when all data has been consumed. A total deadline of 5 s
-            // guards against a stuck reader (e.g. PTY master FD not closing)
-            // while ensuring drain doesn't block post-exit cleanup indefinitely.
+            // (1) Snapshot stop intent before any cleanup that could race with
+            //     a concurrent start(). `stop_intent_observed` means "stop()
+            //     was called at some point before exit cleanup began".
             //
-            // Stop accepting relayed output first: the relay holds a sender of
-            // its own, so leaving it registered would keep the channel open and
-            // make every drain wait out the whole deadline. Readiness is moot
-            // now anyway — the process has exited.
+            //     This snapshot is necessary because start() (e.g. from
+            //     `pitchfork restart`) can upsert a new PID with Running status
+            //     while this task is running. Without the snapshot, the
+            //     PID-takeover check below would see the new PID + Running and
+            //     bail out, skipping on_stop/on_exit hooks.
+            let pre_cleanup_daemon = SUPERVISOR.get_daemon(&id).await;
+            let was_stopped_before_cleanup = pre_cleanup_daemon
+                .as_ref()
+                .is_some_and(|d| d.status.is_stopped());
+            let was_stopping_before_cleanup = pre_cleanup_daemon
+                .as_ref()
+                .is_some_and(|d| d.status.is_stopping());
+            let stop_intent_observed = was_stopped_before_cleanup || was_stopping_before_cleanup;
+
+            // (2) Drain any in-flight output lines that were still in the mpsc
+            //     channel or the OS pipe buffer when the child exited. Without
+            //     this, trailing log lines from short-lived daemons get dropped.
+            //     The reader tasks drop their senders on EOF, so recv() returns
+            //     None when all data has been consumed. A total deadline of 5 s
+            //     guards against a stuck reader (e.g. PTY master FD not closing)
+            //     while ensuring drain doesn't block post-exit cleanup indefinitely.
+            //
+            //     Stop accepting relayed output first: the relay holds a sender of
+            //     its own, so leaving it registered would keep the channel open and
+            //     make every drain wait out the whole deadline. Readiness is moot
+            //     now anyway — the process has exited.
             drop(output_relay);
             let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
@@ -1553,10 +1631,23 @@ impl Supervisor {
                 let _ = handle.await;
             }
 
-            // Clear active_port since the process is no longer running
+            // (3) Clear active_port since the process is no longer running.
+            //     The clear is gated on a PID ownership check (performed while
+            //     holding the state_file lock to avoid TOCTOU) so a concurrent
+            //     start() that has upserted a different PID keeps its
+            //     active_port intact. `stop_intent_observed` is intentionally
+            //     NOT the clear condition: stop() does not upsert a new PID, so
+            //     if the record's PID still matches, we own the port and must
+            //     clear it.
             {
                 let mut state_file = SUPERVISOR.state_file.lock().await;
-                state_file.clear_active_port(&id);
+                let belongs_to_this_monitor = state_file
+                    .daemons
+                    .get(&id)
+                    .is_some_and(|d| d.pid == Some(pid));
+                if belongs_to_this_monitor {
+                    state_file.clear_active_port(&id);
+                }
             }
 
             // Get the final exit status
@@ -1586,50 +1677,36 @@ impl Supervisor {
 
             let current_daemon = SUPERVISOR.get_daemon(&id).await;
 
-            // Signal that this monitoring task is processing its exit path.
-            // The RAII guard will decrement the counter and notify close()
-            // when the task finishes (including all fire_hook registrations),
-            // regardless of which return path is taken.
-            SUPERVISOR
-                .active_monitors
-                .fetch_add(1, atomic::Ordering::Release);
-            struct MonitorGuard;
-            impl Drop for MonitorGuard {
-                fn drop(&mut self) {
-                    SUPERVISOR
-                        .active_monitors
-                        .fetch_sub(1, atomic::Ordering::Release);
-                    SUPERVISOR.monitor_done.notify_waiters();
-                }
-            }
-            let _monitor_guard = MonitorGuard;
-            // Check if this monitoring task is for the current daemon process.
-            // If the daemon was intentionally stopped (pre_drain_is_stopping),
-            // skip this check — we must still fire on_stop/on_exit hooks even
-            // if start() has since changed the PID and status.
-            if !pre_drain_is_stopping
+            // (4a) PID-takeover check. If the daemon was intentionally stopped
+            //      (stop_intent_observed), skip this check — we must still fire
+            //      on_stop/on_exit hooks even if start() has since changed the
+            //      PID and status.
+            if !stop_intent_observed
                 && (current_daemon.is_none()
                     || current_daemon.as_ref().is_some_and(|d| {
                         d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
                     }))
             {
-                // Another process has taken over, don't update status
+                // Another process has taken over. Output was already drained
+                // above; return without updating state or firing hooks. The
+                // `MonitorGuard` at the top of this task drops here,
+                // decrementing `active_monitors` and notifying `monitor_done`.
                 return;
             }
-            // Capture the intentional-stop flag. Combine pre-drain and
-            // post-drain state to handle both race orders:
-            //  - stop() set Stopping before drain → pre_drain_is_stopping
-            //  - stop() set Stopped during drain → current_daemon.is_stopped()
+            // (4b) Determine the effective stop flag. Combine the pre-cleanup
+            //      snapshot with the current state to cover both race orders:
+            //        - stop() set Stopping before cleanup → stop_intent_observed
+            //        - stop() set Stopped during cleanup  → current.is_stopped()
             let already_stopped = current_daemon
                 .as_ref()
                 .is_some_and(|d| d.status.is_stopped());
             let is_stopping = already_stopped
-                || pre_drain_is_stopping
+                || stop_intent_observed
                 || current_daemon
                     .as_ref()
                     .is_some_and(|d| d.status.is_stopping());
 
-            // --- Phase 1: Determine exit_code, exit_reason, and update daemon state ---
+            // (4c) Determine exit_code, exit_reason, and update daemon state.
             let (exit_code, exit_reason) = match (&exit_status, is_stopping) {
                 (Ok(status), true) => {
                     // Intentional stop (by pitchfork). status.code() returns None
@@ -1647,11 +1724,10 @@ impl Supervisor {
             };
 
             // Update daemon state unless stop() already did it (won the race),
-            // OR the daemon was intentionally stopped before the drain
-            // (pre_drain_is_stopping). In the latter case, start() may have
-            // upserted Running during the 5s drain, and we must NOT overwrite
-            // it with Stopped — that would undo the restart.
-            if !already_stopped && !pre_drain_is_stopping {
+            // OR stop intent was observed before cleanup. In the latter case,
+            // start() may have upserted Running during cleanup, and we must
+            // NOT overwrite it with Stopped — that would undo the restart.
+            if !already_stopped && !stop_intent_observed {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
@@ -1681,13 +1757,12 @@ impl Supervisor {
                 }
             }
 
-            // --- Phase 2: Fire hooks ---
+            // (4d) Fire hooks based on exit reason.
             let hook_extra_env = vec![
                 ("PITCHFORK_EXIT_CODE".to_string(), exit_code.to_string()),
                 ("PITCHFORK_EXIT_REASON".to_string(), exit_reason.to_string()),
             ];
 
-            // Determine which hooks to fire based on exit reason
             let hooks_to_fire: Vec<HookType> = match exit_reason {
                 "stop" => vec![HookType::OnStop, HookType::OnExit],
                 "exit" => vec![HookType::OnExit],
@@ -1709,6 +1784,11 @@ impl Supervisor {
                 )
                 .await;
             }
+
+            // Output was already drained inline above (step 2) before hooks
+            // fired, so there is nothing left to do here. The `MonitorGuard`
+            // at the top of this task drops as the task ends, decrementing
+            // `active_monitors` and notifying `monitor_done`.
         });
 
         // If wait_ready is true, wait for readiness notification
@@ -2602,5 +2682,28 @@ mod ready_check_tests {
         let _ = cancel_tx.send(());
         let status = result_rx.await.unwrap().unwrap();
         assert!(!status.success());
+    }
+}
+
+#[cfg(test)]
+mod output_drain_tests {
+    use super::*;
+    use crate::log_store::LogStore;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_db_path() -> PathBuf {
+        let seq = TEST_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "pitchfork-drain-test-{seq}-{}.sqlite",
+            std::process::id()
+        ))
+    }
+
+    fn cleanup_db(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 }
