@@ -140,6 +140,7 @@ impl Supervisor {
             }
             IpcRequest::ReloadConfig => {
                 tokio::task::spawn_blocking(|| {
+                    crate::pitchfork_toml::invalidate_config_cache();
                     crate::settings::reload_settings();
                     crate::logger::apply_settings();
                 })
