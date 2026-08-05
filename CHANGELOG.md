@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.21.0](https://github.com/jdx/pitchfork/compare/v2.20.0...v2.21.0) - 2026-08-05
+
+### Added
+
+- *(config)* add mtime-based cache for config parsing ([#711](https://github.com/jdx/pitchfork/pull/711))
+- *(start)* interactive daemon selection via demand multi-select ([#709](https://github.com/jdx/pitchfork/pull/709))
+
+### Fixed
+
+- *(deps)* update rust crate rmcp to v3 ([#725](https://github.com/jdx/pitchfork/pull/725))
+- *(deps)* update rust crate clap_usage to v5 ([#724](https://github.com/jdx/pitchfork/pull/724))
+
+### Other
+
+- *(deps)* update rust crate tera to v2.1.0 ([#722](https://github.com/jdx/pitchfork/pull/722))
+- *(deps)* update rust crate schemars to v1.2.2 ([#716](https://github.com/jdx/pitchfork/pull/716))
+- *(deps)* update rust crate tokio-stream to v0.1.19 ([#717](https://github.com/jdx/pitchfork/pull/717))
+- *(deps)* update rust crate mdns-sd to v0.20.3 ([#715](https://github.com/jdx/pitchfork/pull/715))
+
 ## [2.20.0](https://github.com/jdx/pitchfork/compare/v2.19.0...v2.20.0) - 2026-08-02
 
 ### Added
