@@ -9,8 +9,9 @@ use rmcp::{
     RoleServer, ServiceExt,
     handler::server::{ServerHandler, tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ErrorData, Implementation,
-        InitializeResult, ListToolsResult, PaginatedRequestParams, ServerCapabilities,
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
+        ErrorData, Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams,
+        ServerCapabilities,
     },
     schemars::JsonSchema,
     service::RequestContext,
@@ -444,18 +445,14 @@ impl ServerHandler for PitchforkServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> std::result::Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult {
-            meta: None,
-            tools: self.tool_router.list_all(),
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all()))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> std::result::Result<CallToolResult, ErrorData> {
+    ) -> std::result::Result<CallToolResponse, ErrorData> {
         let tool_call_context =
             rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         self.tool_router.call(tool_call_context).await
