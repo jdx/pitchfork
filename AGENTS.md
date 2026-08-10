@@ -104,6 +104,12 @@ Configs merge in order (later overrides earlier):
 - **Daemon commands**: Run via the shell verbatim; do NOT prepend `exec` — it breaks compound commands (e.g. `exec a && b` silently drops `b`). Users can add `exec` themselves in the run string for single commands
 - **Idiomatical Rust**: Prefer Idiomatical Rust patterns and idioms
 
+## Dependency Updates
+
+- Use the lowest compatibility-significant specificity in `Cargo.toml` (for example, `"1"` for stable 1.x dependencies).
+- When the existing manifest requirement accepts a routine dependency update, change only `Cargo.lock`.
+- Keep lockfile updates focused and avoid unrelated transitive dependency churn.
+
 ## Conventional Commits
 
 All commit messages and PR titles MUST follow conventional commit format:
