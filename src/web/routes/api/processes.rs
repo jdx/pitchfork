@@ -33,8 +33,15 @@ pub async fn tree(
         return Ok(Json(vec![]));
     };
 
-    PROCS.refresh_processes();
-    let tree = build_tree(root_pid);
+    let tree = tokio::task::spawn_blocking(move || {
+        PROCS.refresh_if_stale();
+        build_tree(root_pid)
+    })
+    .await
+    .map_err(|e| {
+        log::error!("Failed to build process tree: {e}");
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(tree))
 }
 

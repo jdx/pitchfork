@@ -207,10 +207,14 @@ fn entry_to_api(
 async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
     let entries = get_all_daemons_direct(&SUPERVISOR).await?;
 
-    // Batch refresh process stats for all running daemons
+    // Batch refresh process stats for all running daemons.
+    // The full /proc scan is throttled (refresh_if_stale) and runs on a
+    // blocking worker so the async handler never blocks the executor.
     let pids: Vec<u32> = entries.iter().filter_map(|e| e.daemon.pid).collect();
     let stats_map = if !pids.is_empty() {
-        PROCS.refresh_and_get_batch_stats(&pids)
+        tokio::task::spawn_blocking(move || PROCS.refresh_and_get_batch_stats_if_stale(&pids))
+            .await
+            .map_err(|e| miette::miette!("process stats refresh failed: {e}"))?
     } else {
         std::collections::HashMap::new()
     };
@@ -242,9 +246,15 @@ pub async fn show(Path(id): Path<String>) -> Result<Json<ApiDaemonEntry>, axum::
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(axum::http::StatusCode::NOT_FOUND)?;
 
-    // Fetch stats for just this daemon's PID (if running)
+    // Fetch stats for just this daemon's PID (if running).
+    // Throttled refresh on a blocking worker; see build_daemon_entries.
     let stats_map = if let Some(pid) = entry.daemon.pid {
-        PROCS.refresh_and_get_batch_stats(&[pid])
+        tokio::task::spawn_blocking(move || PROCS.refresh_and_get_batch_stats_if_stale(&[pid]))
+            .await
+            .map_err(|e| {
+                log::error!("Failed to refresh process stats: {e}");
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            })?
     } else {
         std::collections::HashMap::new()
     };

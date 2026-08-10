@@ -9,6 +9,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use sysinfo::ProcessesToUpdate;
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
@@ -23,8 +24,18 @@ type ParentToChildren = HashMap<u32, Vec<u32>>;
 /// Map from PID to process name and optional executable path.
 type ProcessNames = HashMap<u32, (String, Option<String>)>;
 
+/// How often a full process-table refresh may run. High-frequency callers
+/// (web API polling, TUI frames) share one full scan instead of each paying
+/// the ~40ms /proc walk on every call. Targeted `refresh_pids` calls are not
+/// throttled. sysinfo's `cpu_usage()` is a delta between refreshes, so a
+/// longer window also smooths the reported CPU%.
+const FULL_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+
 pub struct Procs {
     system: Mutex<sysinfo::System>,
+    /// When the last full process-table refresh ran. `None` until the first
+    /// refresh forces the initial scan (the table starts empty).
+    last_full_refresh: Mutex<Option<Instant>>,
 }
 
 pub static PROCS: Lazy<Procs> = Lazy::new(Procs::new);
@@ -51,6 +62,7 @@ impl Procs {
         // PIDs) or refresh_processes() (for full-system stats) explicitly.
         Self {
             system: Mutex::new(sysinfo::System::new()),
+            last_full_refresh: Mutex::new(None),
         }
     }
 
@@ -643,6 +655,33 @@ impl Procs {
             .refresh_processes(ProcessesToUpdate::Some(&sysinfo_pids), true);
     }
 
+    /// Full process-table refresh, throttled to at most once per
+    /// [`FULL_REFRESH_INTERVAL`] **among the callers that use this gated
+    /// path** (web API polling, TUI frames, process-tree endpoints). Callers
+    /// that bypass the gate — e.g. `refresh_processes()` directly in the
+    /// active-port probe — do not update `last_full_refresh`, so a gated
+    /// caller right after may still pay a scan. The first call always
+    /// refreshes.
+    ///
+    /// Callers that need to observe *new* descendants (e.g. the active-port
+    /// probe right after a daemon spawns) must still call `refresh_processes`
+    /// directly, since a throttled refresh may miss children forked since the
+    /// last scan.
+    ///
+    /// Lock order: this method holds `last_full_refresh` while
+    /// `refresh_processes` takes `system`. Never acquire `system` first and
+    /// then call this method, or the reverse order would deadlock.
+    pub(crate) fn refresh_if_stale(&self) {
+        let mut last = self
+            .last_full_refresh
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if last.is_none_or(|t| t.elapsed() >= FULL_REFRESH_INTERVAL) {
+            self.refresh_processes();
+            *last = Some(Instant::now());
+        }
+    }
+
     /// Get aggregated stats for multiple process trees in a single pass.
     ///
     /// Builds the parent→children map once (O(N)) and then BFS-es from each
@@ -715,12 +754,29 @@ impl Procs {
     }
     /// Refresh the process tree, then call [`Self::get_batch_group_stats`].
     ///
-    /// Convenience wrapper that guarantees `get_batch_group_stats` sees a
-    /// fresh snapshot of /proc (or its equivalent).  Returns a PID →
-    /// [`ProcessStats`] map so callers do not have to repeat the same
-    /// `filter_map`/`collect` boilerplate.
+    /// Always performs a fresh full refresh. This is the correct entry point
+    /// for callers that need a new sample rather than a cached one — notably
+    /// the resource-limit checks, where counting the same cached CPU sample
+    /// twice as two violations would silently weaken enforcement.
+    ///
+    /// Returns a PID → [`ProcessStats`] map so callers do not have to repeat
+    /// the same `filter_map`/`collect` boilerplate.
     pub fn refresh_and_get_batch_stats(&self, pids: &[u32]) -> HashMap<u32, ProcessStats> {
         self.refresh_processes();
+        self.get_batch_group_stats(pids)
+            .into_iter()
+            .filter_map(|(pid, stats)| stats.map(|s| (pid, s)))
+            .collect()
+    }
+
+    /// Like [`Self::refresh_and_get_batch_stats`], but the full refresh is
+    /// throttled to at most once per [`FULL_REFRESH_INTERVAL`]. Concurrent or
+    /// frequent callers (web API polling, TUI frames) share a single scan and
+    /// read the cached process table in between. Do not use this for resource
+    /// enforcement: a cached CPU sample must not be counted as a new
+    /// violation.
+    pub fn refresh_and_get_batch_stats_if_stale(&self, pids: &[u32]) -> HashMap<u32, ProcessStats> {
+        self.refresh_if_stale();
         self.get_batch_group_stats(pids)
             .into_iter()
             .filter_map(|(pid, stats)| stats.map(|s| (pid, s)))
@@ -1348,6 +1404,46 @@ mod tests {
              descendants: {child_pids:?}, direct RSS: {direct_memory}, \
              descendant RSS: {descendant_memory}, reported RSS: {}",
             stats.memory_bytes
+        );
+    }
+
+    #[test]
+    fn full_refresh_is_throttled_by_ttl() {
+        let procs = Procs::new();
+
+        // First call always refreshes: the table starts empty.
+        assert!(
+            procs.last_full_refresh.lock().unwrap().is_none(),
+            "fresh Procs should have no recorded refresh"
+        );
+        procs.refresh_if_stale();
+        let first = procs.last_full_refresh.lock().unwrap().unwrap();
+        assert!(first.elapsed() < FULL_REFRESH_INTERVAL);
+
+        // A second call within the TTL window must NOT refresh again: the
+        // recorded timestamp must stay identical (a refresh would advance it).
+        procs.refresh_if_stale();
+        let second = procs.last_full_refresh.lock().unwrap().unwrap();
+        assert_eq!(
+            second, first,
+            "refresh_if_stale within TTL must skip the refresh and keep the timestamp"
+        );
+
+        // Simulate an expired TTL: force the recorded timestamp into the past,
+        // then confirm the next call refreshes and advances the timestamp.
+        let expired = Instant::now()
+            .checked_sub(FULL_REFRESH_INTERVAL + Duration::from_secs(1))
+            .expect("system has been up long enough to backdate by 6s");
+        *procs.last_full_refresh.lock().unwrap() = Some(expired);
+        procs.refresh_if_stale();
+        let third = procs.last_full_refresh.lock().unwrap().unwrap();
+        assert!(
+            third > expired,
+            "refresh_if_stale after expired TTL must refresh and advance the timestamp"
+        );
+        assert!(
+            third.elapsed() < FULL_REFRESH_INTERVAL,
+            "fresh timestamp after expired-TTL refresh should be recent"
         );
     }
 }
