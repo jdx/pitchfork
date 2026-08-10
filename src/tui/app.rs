@@ -1223,7 +1223,7 @@ impl App {
     fn refresh_process_stats(&mut self) {
         let pids: Vec<u32> = self.daemons.iter().filter_map(|d| d.pid).collect();
         if !pids.is_empty() {
-            PROCS.refresh_processes();
+            PROCS.refresh_if_stale();
         }
         self.process_stats.clear();
 
