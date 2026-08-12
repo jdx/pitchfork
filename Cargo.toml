@@ -38,7 +38,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_usage = "5"
 clx = "3"
-comfy-table = { version = "7", features = ["custom_styling"] }
+comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"
 cron = "0.17"
 dirs = "6"
