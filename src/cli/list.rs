@@ -150,7 +150,7 @@ impl List {
 
         let mut table = Table::new();
         table
-            .load_preset(comfy_table::presets::NOTHING)
+            .load_style(comfy_table::presets::NOTHING)
             .set_content_arrangement(ContentArrangement::Disabled);
         if !self.hide_header && console::user_attended() {
             table.set_header(vec!["Name", "Status", ""]);
