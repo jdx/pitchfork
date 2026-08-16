@@ -277,6 +277,14 @@ impl schemars::JsonSchema for DaemonId {
     }
 }
 
+/// Validates a namespace string using the same rules as daemon ID components.
+///
+/// Used for user-provided namespaces that arrive on their own (e.g. the
+/// `--namespace` CLI flag) rather than as part of a full daemon ID.
+pub fn validate_namespace(namespace: &str) -> Result<()> {
+    validate_component(namespace, "namespace")
+}
+
 /// Validates a single component (namespace or name) of a daemon ID.
 fn validate_component(s: &str, component_name: &str) -> Result<()> {
     if s.is_empty() {
@@ -641,6 +649,19 @@ mod tests {
     fn test_daemon_id_rejects_current_dir() {
         assert!(DaemonId::try_new(".", "api").is_err());
         assert!(DaemonId::try_new("project", ".").is_err());
+    }
+
+    #[test]
+    fn test_validate_namespace() {
+        assert!(validate_namespace("frontend").is_ok());
+        assert!(validate_namespace("global").is_ok());
+        assert!(validate_namespace("my-project").is_ok());
+        // Same rules as daemon ID components
+        assert!(validate_namespace("").is_err());
+        assert!(validate_namespace("my--ns").is_err());
+        assert!(validate_namespace("a/b").is_err());
+        assert!(validate_namespace("has space").is_err());
+        assert!(validate_namespace("-lead").is_err());
     }
 
     // Hash and equality tests for HashMap usage

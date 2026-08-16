@@ -944,13 +944,46 @@
                 ]
               }
             }
+          },
+          {
+            "name": "namespace",
+            "usage": "--namespace… <NAMESPACE>",
+            "help": "Only show daemons in this namespace (repeatable for OR logic)",
+            "help_first_line": "Only show daemons in this namespace (repeatable for OR logic)",
+            "short": [],
+            "long": [
+              "namespace"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "NAMESPACE",
+              "usage": "<NAMESPACE>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "project",
+            "usage": "--project",
+            "help": "Only show daemons in the current project's namespace",
+            "help_long": "Only show daemons in the current project's namespace\n\nThe namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.",
+            "help_first_line": "Only show daemons in the current project's namespace",
+            "short": [],
+            "long": [
+              "project"
+            ],
+            "hide": false,
+            "global": false
           }
         ],
         "mounts": [],
         "effect": "read",
         "hide": false,
         "help": "List all daemons",
-        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n  pitchfork list --status running  Show only running daemons\n  pitchfork ls --status available --status stopped\n                                  Show daemons that are available OR stopped\n\nOutput:\n  Name    Status\n  api     running    https://api.localhost\n  worker  available\n  db      errored    exit code 127",
+        "help_long": "List all daemons\n\nDisplays a table of all tracked daemons with their PIDs, status,\nwhether they are disabled, and any error messages.\n\nThis command shows both:\n- Active daemons (currently running or stopped)\n- Available daemons (defined in config but not yet started)\n\nExample:\n  pitchfork list\n  pitchfork ls                    Alias for 'list'\n  pitchfork list --hide-header    Output without column headers\n  pitchfork list --status running  Show only running daemons\n  pitchfork ls --status available --status stopped\n                                  Show daemons that are available OR stopped\n  pitchfork list --namespace frontend\n                                  Show only daemons in the 'frontend' namespace\n  pitchfork list --project        Show only the current project's daemons\n\nOutput:\n  Name    Status\n  api     running    https://api.localhost\n  worker  available\n  db      errored    exit code 127",
         "name": "list",
         "aliases": [
           "ls"
@@ -3131,13 +3164,48 @@
         "full_cmd": [
           "tui"
         ],
-        "usage": "tui",
+        "usage": "tui [--namespace… <NAMESPACE>] [--project]",
         "subcommands": {},
         "args": [],
-        "flags": [],
+        "flags": [
+          {
+            "name": "namespace",
+            "usage": "--namespace… <NAMESPACE>",
+            "help": "Only show daemons in this namespace (repeatable for OR logic)",
+            "help_first_line": "Only show daemons in this namespace (repeatable for OR logic)",
+            "short": [],
+            "long": [
+              "namespace"
+            ],
+            "var": true,
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "NAMESPACE",
+              "usage": "<NAMESPACE>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            }
+          },
+          {
+            "name": "project",
+            "usage": "--project",
+            "help": "Only show daemons in the current project's namespace",
+            "help_long": "Only show daemons in the current project's namespace\n\nThe namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.",
+            "help_first_line": "Only show daemons in the current project's namespace",
+            "short": [],
+            "long": [
+              "project"
+            ],
+            "hide": false,
+            "global": false
+          }
+        ],
         "mounts": [],
         "hide": false,
         "help": "Launch the interactive TUI dashboard",
+        "help_long": "Launch the interactive TUI dashboard\n\nShows live daemon status with fuzzy search, sorting, batch operations,\nlog viewing, and a config editor.\n\nThe dashboard can be scoped to one or more namespaces; the fuzzy search\n(`/`) then operates within the scoped set.\n\nExample:\n  pitchfork tui\n  pitchfork tui --namespace frontend\n                                  Show only daemons in the 'frontend' namespace\n  pitchfork tui --project         Show only the current project's daemons",
         "name": "tui",
         "aliases": [],
         "hidden_aliases": [],

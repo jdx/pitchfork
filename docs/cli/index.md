@@ -49,5 +49,5 @@
 - [`pitchfork supervisor start [-f --force]`](/cli/supervisor/start.md)
 - [`pitchfork supervisor status [--json]`](/cli/supervisor/status.md)
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
-- [`pitchfork tui`](/cli/tui.md)
+- [`pitchfork tui [--namespace… <NAMESPACE>] [--project]`](/cli/tui.md)
 - [`pitchfork wait <ID>`](/cli/wait.md)

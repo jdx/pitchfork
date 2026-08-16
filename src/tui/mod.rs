@@ -4,7 +4,7 @@ mod ui;
 
 use crate::Result;
 use crate::daemon_id::DaemonId;
-use crate::daemon_list::DaemonListEntry;
+use crate::daemon_list::{DaemonListEntry, NamespaceFilter};
 use crate::ipc::batch::{StartOptions, StartResult, StopResult};
 use crate::ipc::client::IpcClient;
 use crate::settings::settings;
@@ -74,7 +74,7 @@ enum TaskResult {
     RefreshNetwork(Vec<listeners::Listener>),
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(namespace_filter: NamespaceFilter) -> Result<()> {
     // Suppress terminal logging while TUI is active (logs still go to file)
     let prev_log_level = log::max_level();
     log::set_max_level(LevelFilter::Off);
@@ -87,7 +87,7 @@ pub async fn run() -> Result<()> {
     let mut terminal = Terminal::new(backend).into_diagnostic()?;
 
     // Run with cleanup guaranteed
-    let result = run_with_cleanup(&mut terminal).await;
+    let result = run_with_cleanup(&mut terminal, namespace_filter).await;
 
     // Restore terminal (always runs)
     let _ = disable_raw_mode();
@@ -104,12 +104,15 @@ pub async fn run() -> Result<()> {
     result
 }
 
-async fn run_with_cleanup(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+async fn run_with_cleanup(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    namespace_filter: NamespaceFilter,
+) -> Result<()> {
     // Connect to supervisor (auto-start if needed)
     let client = Arc::new(IpcClient::connect(true).await?);
 
     // Create app state
-    let mut app = App::new();
+    let mut app = App::new(namespace_filter);
     app.refresh(&client).await?;
 
     // Run main loop
@@ -156,7 +159,12 @@ async fn run_app(
                             app.set_message(format!("Failed to start {id}: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::Stop { id, result } => {
                     app.stop_loading();
@@ -166,7 +174,12 @@ async fn run_app(
                         Ok(false) => app.set_message(format!("Daemon {id} was not running")),
                         Err(e) => app.set_message(format!("Failed to stop {id}: {e}")),
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::Restart { id, result } => {
                     app.stop_loading();
@@ -182,7 +195,12 @@ async fn run_app(
                             app.set_message(format!("Failed to restart {id}: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::Enable { id, result } => {
                     app.stop_loading();
@@ -191,7 +209,12 @@ async fn run_app(
                         Ok(_) => app.set_message(format!("Enabled {id}")),
                         Err(e) => app.set_message(format!("Failed to enable {id}: {e}")),
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::Disable { id, result } => {
                     app.stop_loading();
@@ -200,7 +223,12 @@ async fn run_app(
                         Ok(_) => app.set_message(format!("Disabled {id}")),
                         Err(e) => app.set_message(format!("Failed to disable {id}: {e}")),
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::BatchStart { count, result } => {
                     app.stop_loading();
@@ -221,7 +249,12 @@ async fn run_app(
                             app.set_message(format!("Failed to start daemons: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::BatchStop { count, result } => {
                     app.stop_loading();
@@ -238,7 +271,12 @@ async fn run_app(
                             app.set_message(format!("Failed to stop daemons: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::BatchRestart { count, result } => {
                     app.stop_loading();
@@ -259,21 +297,36 @@ async fn run_app(
                             app.set_message(format!("Failed to restart daemons: {e}"));
                         }
                     }
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::BatchEnable { count } => {
                     app.stop_loading();
                     in_flight = false;
                     app.clear_selection();
                     app.set_message(format!("Enabled {count} daemons"));
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::BatchDisable { count } => {
                     app.stop_loading();
                     in_flight = false;
                     app.clear_selection();
                     app.set_message(format!("Disabled {count} daemons"));
-                    spawn_refresh(Arc::clone(client), tx.clone(), false);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 TaskResult::Refresh {
                     result,
@@ -364,7 +417,12 @@ async fn run_app(
                 event::Action::Refresh if !in_flight => {
                     in_flight = true;
                     app.start_loading("Refreshing...");
-                    spawn_refresh(Arc::clone(client), tx.clone(), true);
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        true,
+                        app.namespace_filter.clone(),
+                    );
                 }
                 event::Action::OpenEditorNew => {
                     app.open_file_selector();
@@ -378,7 +436,12 @@ async fn run_app(
                         Ok(true) => {
                             app.stop_loading();
                             app.close_editor();
-                            spawn_refresh(Arc::clone(client), tx.clone(), false);
+                            spawn_refresh(
+                                Arc::clone(client),
+                                tx.clone(),
+                                false,
+                                app.namespace_filter.clone(),
+                            );
                         }
                         Ok(false) => {
                             app.stop_loading();
@@ -490,7 +553,12 @@ async fn run_app(
                                         app.set_message(format!("Delete failed: {e}"));
                                     }
                                 }
-                                spawn_refresh(Arc::clone(client), tx.clone(), false);
+                                spawn_refresh(
+                                    Arc::clone(client),
+                                    tx.clone(),
+                                    false,
+                                    app.namespace_filter.clone(),
+                                );
                             }
                             app::PendingAction::DiscardEditorChanges => {
                                 app.close_editor();
@@ -508,8 +576,9 @@ async fn run_app(
             let is_network = app.view == app::View::Network;
             let client_ref = Arc::clone(client);
             let tx_ref = tx.clone();
+            let ns_filter = app.namespace_filter.clone();
             tokio::spawn(async move {
-                let entries = App::fetch_daemon_data(&client_ref).await;
+                let entries = App::fetch_daemon_data(&client_ref, &ns_filter).await;
                 let _ = tx_ref.send(TaskResult::Refresh {
                     result: entries,
                     clears_in_flight: false,
@@ -537,9 +606,10 @@ fn spawn_refresh(
     client: Arc<IpcClient>,
     tx: tokio::sync::mpsc::UnboundedSender<TaskResult>,
     clears_in_flight: bool,
+    namespace_filter: NamespaceFilter,
 ) {
     tokio::spawn(async move {
-        let entries = App::fetch_daemon_data(&client).await;
+        let entries = App::fetch_daemon_data(&client, &namespace_filter).await;
         let _ = tx.send(TaskResult::Refresh {
             result: entries,
             clears_in_flight,

@@ -21,6 +21,9 @@ Example:
   pitchfork list --status running  Show only running daemons
   pitchfork ls --status available --status stopped
                                   Show daemons that are available OR stopped
+  pitchfork list --namespace frontend
+                                  Show only daemons in the 'frontend' namespace
+  pitchfork list --project        Show only the current project's daemons
 
 Output:
   Name    Status
@@ -54,3 +57,13 @@ Values: running, stopped, waiting, stopping, failed, errored, available, disable
 - `errored`
 - `available`
 - `disabled`
+
+### `--namespace… <NAMESPACE>`
+
+Only show daemons in this namespace (repeatable for OR logic)
+
+### `--project`
+
+Only show daemons in the current project's namespace
+
+The namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.
