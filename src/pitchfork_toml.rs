@@ -447,7 +447,11 @@ pub fn namespace_from_path(path: &Path) -> Result<String> {
 /// *file* (not a directory) pointing at the common gitdir, so we check
 /// existence rather than `is_dir()`.
 fn find_project_root(dir: &Path) -> Option<PathBuf> {
-    let mut current = dir;
+    // Canonicalize the start dir so a symlinked path resolves into the
+    // repository hierarchy before traversing parents; otherwise `parent()`
+    // walks outside the repo and misses `.git`/`.jj`.
+    let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let mut current = canonical_dir.as_path();
     loop {
         if current.join(".git").exists() || current.join(".jj").exists() {
             return Some(current.to_path_buf());
@@ -2216,6 +2220,26 @@ dir = "~/projects/web"
         std::fs::write(wt.join(".git"), "gitdir: /tmp/some-common-gitdir\n").unwrap();
 
         assert_eq!(find_project_root(&wt), Some(wt));
+    }
+
+    /// A symlinked start dir must resolve into the repository hierarchy so
+    /// `parent()` traversal does not walk out of the repo.
+    #[cfg(unix)]
+    #[test]
+    fn test_find_project_root_resolves_symlinked_start_dir() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("real-repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+
+        let sub = repo.join("sub/dir");
+        std::fs::create_dir_all(&sub).unwrap();
+        let link = temp.path().join("link-to-sub");
+        symlink(&sub, &link).unwrap();
+
+        assert_eq!(find_project_root(&link), Some(repo));
     }
 
     /// Build a real git repository with a linked worktree and assert that

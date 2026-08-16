@@ -94,7 +94,7 @@ pitchfork status api          # myapp/api, unaffected by the worktree
 
 Daemons started in a worktree run with the worktree directory as their working directory, and supervisor background tasks (cron scheduling, boot_start, file watching) automatically discover daemons defined in every worktree of a repository.
 
-The only requirement is that worktree directories have distinct names — which is the default when you create worktrees per branch.
+Automatic worktree isolation applies when namespaces are derived from project directories — so worktree directories need distinct names (the default when you create worktrees per branch). If a config sets an explicit top-level `namespace`, it overrides the directory-derived namespace, so give each worktree a distinct explicit namespace to keep same-named daemons from colliding.
 
 ## Display Behavior
 
