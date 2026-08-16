@@ -2207,7 +2207,9 @@ dir = "~/projects/web"
         let sub = repo.join("sub/dir");
         std::fs::create_dir_all(&sub).unwrap();
 
-        assert_eq!(find_project_root(&sub), Some(repo));
+        // `find_project_root` canonicalizes, so compare against the canonical
+        // path (on Windows this differs by the `\\?\` verbatim prefix).
+        assert_eq!(find_project_root(&sub), Some(repo.canonicalize().unwrap()));
     }
 
     #[test]
@@ -2219,7 +2221,7 @@ dir = "~/projects/web"
         std::fs::create_dir(&wt).unwrap();
         std::fs::write(wt.join(".git"), "gitdir: /tmp/some-common-gitdir\n").unwrap();
 
-        assert_eq!(find_project_root(&wt), Some(wt));
+        assert_eq!(find_project_root(&wt), Some(wt.canonicalize().unwrap()));
     }
 
     /// A symlinked start dir must resolve into the repository hierarchy so
