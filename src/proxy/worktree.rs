@@ -437,7 +437,9 @@ mod tests {
 
         let entries = discover_git_worktrees(&repo);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path, repo);
+        // Fast path canonicalizes, so compare against the canonical path
+        // (on Windows this differs by the `\\?\` verbatim prefix).
+        assert_eq!(entries[0].path, repo.canonicalize().unwrap());
         assert_eq!(entries[0].branch, "main");
         assert_eq!(entries[0].sanitized_branch, "main");
     }
