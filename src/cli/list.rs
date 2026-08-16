@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::cli::json_output::{JsonListEntry, print_json};
-use crate::daemon_list::get_all_daemons;
+use crate::daemon_list::{NamespaceFilter, get_all_daemons};
 use crate::daemon_status::DaemonStatus;
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
@@ -49,6 +49,9 @@ Example:
   pitchfork list --status running  Show only running daemons
   pitchfork ls --status available --status stopped
                                   Show daemons that are available OR stopped
+  pitchfork list --namespace frontend
+                                  Show only daemons in the 'frontend' namespace
+  pitchfork list --project        Show only the current project's daemons
 
 Output:
   Name    Status
@@ -70,6 +73,18 @@ pub struct List {
     /// Values: running, stopped, waiting, stopping, failed, errored, available, disabled
     #[clap(long, value_enum)]
     status: Vec<StatusFilter>,
+
+    /// Only show daemons in this namespace (repeatable for OR logic)
+    #[clap(long)]
+    namespace: Vec<String>,
+
+    /// Only show daemons in the current project's namespace
+    ///
+    /// The namespace is resolved from the current directory the same way
+    /// short daemon IDs are: the nearest config file's namespace, falling
+    /// back to 'global' when no config file is found.
+    #[clap(long)]
+    project: bool,
 }
 
 impl List {
@@ -77,7 +92,8 @@ impl List {
         let client = IpcClient::connect(true).await?;
 
         let s = settings();
-        let mut entries = get_all_daemons(&client).await?;
+        let ns_filter = NamespaceFilter::from_flags(&self.namespace, self.project)?;
+        let mut entries = get_all_daemons(&client, &ns_filter).await?;
         let global_slugs = PitchforkToml::read_global_slugs();
 
         if !self.status.is_empty() {

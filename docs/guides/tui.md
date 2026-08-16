@@ -10,6 +10,27 @@ pitchfork tui
 
 The TUI connects to the supervisor automatically, starting it if needed.
 
+## Namespace Scoping
+
+By default the dashboard shows daemons from every [namespace](/concepts/namespaces). To scope it:
+
+```bash
+# Only daemons in the 'frontend' namespace
+pitchfork tui --namespace frontend
+
+# Multiple namespaces (OR logic)
+pitchfork tui --namespace frontend --namespace backend
+
+# Only the current project's namespace, resolved from the current
+# directory the same way short daemon IDs are (nearest config file's
+# namespace, falling back to 'global')
+pitchfork tui --project
+```
+
+Scoping happens when the daemon list is fetched, so search (`/`), sorting, and batch operations all work within the scoped set. When the view is scoped to a single namespace, that namespace is hoisted into the daemons panel title and rows show bare daemon names.
+
+The same `--namespace` and `--project` flags work with `pitchfork list`.
+
 ## Features
 
 ### Dashboard View

@@ -135,7 +135,7 @@ impl PitchforkServer {
             .await
             .map_err(|e| internal_err(format!("Failed to connect to supervisor: {e}")))?;
 
-        let entries = get_all_daemons(&client)
+        let entries = get_all_daemons(&client, &crate::daemon_list::NamespaceFilter::default())
             .await
             .map_err(|e| internal_err(format!("Failed to list daemons: {e}")))?;
 

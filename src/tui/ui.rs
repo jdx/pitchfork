@@ -164,17 +164,27 @@ fn draw_daemon_table(f: &mut Frame, area: Rect, app: &App) {
     let filtered = app.filtered_daemons();
 
     if filtered.is_empty() {
-        let msg = if app.daemons.is_empty() {
-            "No daemons running. Start one with: pitchfork start <name>"
+        // Keep the hoisted single-namespace title even with no rows: when the
+        // list is scoped to exactly one namespace, the scope is still known.
+        let title = match app.namespace_filter.single() {
+            Some(ns) => format!(" Daemons — {ns} "),
+            None => " Daemons ".to_string(),
+        };
+        let msg = if !app.daemons.is_empty() {
+            "No daemons match the search query".to_string()
+        } else if let Some(ns) = app.namespace_filter.single() {
+            format!("No daemons in namespace {ns}")
+        } else if !app.namespace_filter.is_empty() {
+            "No daemons in the selected namespaces".to_string()
         } else {
-            "No daemons match the search query"
+            "No daemons running. Start one with: pitchfork start <name>".to_string()
         };
         let paragraph = Paragraph::new(msg)
             .alignment(Alignment::Center)
             .style(Style::default().fg(GRAY))
             .block(
                 Block::default()
-                    .title(" Daemons ")
+                    .title(title)
                     .title_style(Style::default().fg(RED).bold())
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(RED)),

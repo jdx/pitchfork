@@ -95,6 +95,22 @@ frontend/api  12345  running
 backend/api   12346  running
 ```
 
+## Scoping Lists to Namespaces
+
+`pitchfork list` and `pitchfork tui` can be scoped to one or more namespaces:
+
+```bash
+# Only show daemons in the 'frontend' namespace
+pitchfork list --namespace frontend
+
+# Multiple namespaces (OR logic)
+pitchfork list --namespace frontend --namespace backend
+
+# Only the current project's namespace, resolved from the current directory
+# the same way short daemon IDs are
+pitchfork tui --project
+```
+
 ## Naming Rules
 
 Daemon IDs have the following restrictions:

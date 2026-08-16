@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
-use crate::daemon_list::DaemonListEntry;
+use crate::daemon_list::{DaemonListEntry, NamespaceFilter};
 use crate::ipc::client::IpcClient;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
@@ -931,11 +931,15 @@ pub struct App {
     pub network_scroll_offset: usize,
     pub network_selected_pid: Option<u32>, // Store PID to ensure correct targeting
     pub network_visible_rows: usize,       // Cached visible row count for scroll calculations
+    // Namespace scope from `--namespace`/`--project`; applied when fetching
+    // the daemon list, so search/sort/selection all operate on the scoped set
+    pub namespace_filter: NamespaceFilter,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(namespace_filter: NamespaceFilter) -> Self {
         Self {
+            namespace_filter,
             daemons: Vec::new(),
             disabled: Vec::new(),
             selected: 0,
@@ -1247,9 +1251,12 @@ impl App {
     }
 
     /// Fetch fresh daemon data from IPC. Called from a background task.
-    pub async fn fetch_daemon_data(client: &Arc<IpcClient>) -> Result<Vec<DaemonListEntry>> {
+    pub async fn fetch_daemon_data(
+        client: &Arc<IpcClient>,
+        namespace_filter: &NamespaceFilter,
+    ) -> Result<Vec<DaemonListEntry>> {
         use crate::daemon_list::get_all_daemons;
-        get_all_daemons(client).await
+        get_all_daemons(client, namespace_filter).await
     }
 
     /// Apply previously fetched daemon data to update app state.
@@ -1291,7 +1298,7 @@ impl App {
     }
 
     pub async fn refresh(&mut self, client: &Arc<IpcClient>) -> Result<()> {
-        let entries = Self::fetch_daemon_data(client).await?;
+        let entries = Self::fetch_daemon_data(client, &self.namespace_filter).await?;
         self.apply_refresh(entries);
         Ok(())
     }
@@ -1726,6 +1733,6 @@ impl App {
 
 impl Default for App {
     fn default() -> Self {
-        Self::new()
+        Self::new(NamespaceFilter::default())
     }
 }
