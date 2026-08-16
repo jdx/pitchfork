@@ -439,6 +439,27 @@ pub fn namespace_from_path(path: &Path) -> Result<String> {
     namespace_from_file(path)
 }
 
+/// Find the nearest ancestor directory of `dir` that contains a `.git` or
+/// `.jj` marker (the project root of a git worktree / jj workspace).
+///
+/// Returns `None` when `dir` is not inside any git/jj project, so callers can
+/// fall back to non-worktree behavior. In a linked git worktree, `.git` is a
+/// *file* (not a directory) pointing at the common gitdir, so we check
+/// existence rather than `is_dir()`.
+fn find_project_root(dir: &Path) -> Option<PathBuf> {
+    // Canonicalize the start dir so a symlinked path resolves into the
+    // repository hierarchy before traversing parents; otherwise `parent()`
+    // walks outside the repo and misses `.git`/`.jj`.
+    let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let mut current = canonical_dir.as_path();
+    loop {
+        if current.join(".git").exists() || current.join(".jj").exists() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
 /// Cached result of `all_merged_from`, keyed by the cwd used to discover config paths.
 ///
 /// The cache key is the canonical cwd `PathBuf`. The entry stores the merged
@@ -959,7 +980,13 @@ impl PitchforkToml {
     /// Use this when you need a complete view (e.g. `start` for a daemon from
     /// another namespace).
     pub fn all_merged_all_namespaces() -> Result<Self> {
-        let mut pt = Self::all_merged_from(&env::CWD)?;
+        Self::all_merged_all_namespaces_from(&env::CWD)
+    }
+
+    /// Core of [`Self::all_merged_all_namespaces`], parameterized by the
+    /// starting directory so it is testable without touching the global `CWD`.
+    pub(crate) fn all_merged_all_namespaces_from(start_dir: &Path) -> Result<Self> {
+        let mut pt = Self::all_merged_from(start_dir)?;
 
         let namespaces = Self::read_global_namespaces();
         for (ns_name, entry) in namespaces {
@@ -979,6 +1006,36 @@ impl PitchforkToml {
                         "Failed to load namespace '{ns_name}' from {}: {e}",
                         entry.dir.display()
                     );
+                }
+            }
+        }
+
+        // Auto-discover git worktrees / jj workspaces under the current
+        // project, so daemons defined in a worktree are visible to supervisor
+        // background tasks (cron registration, boot_start, file watch) even
+        // when that worktree's namespace was never registered in
+        // `[namespaces]`. Discovery spawns a `git`/`jj` subprocess (<1ms) and
+        // the per-worktree config reads are cached by `CONFIG_CACHE`, so no
+        // extra caching layer is needed here.
+        if let Some(project_root) = find_project_root(start_dir) {
+            let worktrees = crate::proxy::worktree::discover_worktrees(&project_root);
+            for wt in &worktrees {
+                match Self::all_merged_from(&wt.path) {
+                    Ok(wt_config) => {
+                        for (daemon_id, daemon_config) in wt_config.daemons {
+                            if !pt.daemons.contains_key(&daemon_id) {
+                                pt.daemons.insert(daemon_id, daemon_config);
+                            }
+                        }
+                        pt.settings.merge_from(&wt_config.settings);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to load worktree '{}' config from {}: {e}",
+                            wt.branch,
+                            wt.path.display()
+                        );
+                    }
                 }
             }
         }
@@ -2131,6 +2188,160 @@ dir = "~/projects/web"
             "cache should invalidate on size change even with identical mtime"
         );
 
+        super::invalidate_config_cache();
+    }
+
+    #[test]
+    fn test_find_project_root_in_plain_dir_returns_none() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(find_project_root(temp.path()), None);
+    }
+
+    #[test]
+    fn test_find_project_root_finds_git_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+
+        let sub = repo.join("sub/dir");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        // `find_project_root` canonicalizes, so compare against the canonical
+        // path (on Windows this differs by the `\\?\` verbatim prefix).
+        assert_eq!(find_project_root(&sub), Some(repo.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn test_find_project_root_accepts_git_file_marker() {
+        // Linked git worktrees store `.git` as a *file* pointing at the
+        // common gitdir, so `exists()` (not `is_dir()`) is the right check.
+        let temp = tempfile::tempdir().unwrap();
+        let wt = temp.path().join("my-worktree");
+        std::fs::create_dir(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: /tmp/some-common-gitdir\n").unwrap();
+
+        assert_eq!(find_project_root(&wt), Some(wt.canonicalize().unwrap()));
+    }
+
+    /// A symlinked start dir must resolve into the repository hierarchy so
+    /// `parent()` traversal does not walk out of the repo.
+    #[cfg(unix)]
+    #[test]
+    fn test_find_project_root_resolves_symlinked_start_dir() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("real-repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+
+        let sub = repo.join("sub/dir");
+        std::fs::create_dir_all(&sub).unwrap();
+        let link = temp.path().join("link-to-sub");
+        symlink(&sub, &link).unwrap();
+
+        assert_eq!(find_project_root(&link), Some(repo));
+    }
+
+    /// Build a real git repository with a linked worktree and assert that
+    /// `all_merged_all_namespaces_from` picks up daemons from both.
+    #[test]
+    fn test_all_merged_all_namespaces_discovers_worktrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir(&repo).unwrap();
+
+        // git worktree add requires at least one commit.
+        let git_init = std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(&repo)
+            .output()
+            .expect("git init");
+        assert!(git_init.status.success(), "git init failed: {:?}", git_init);
+
+        std::fs::write(repo.join("main.toml"), "hello\n").unwrap();
+
+        let git_commit = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=pitchfork-test",
+                "-c",
+                "user.email=pitchfork-test@example.com",
+                "add",
+                "-A",
+            ])
+            .current_dir(&repo)
+            .output()
+            .expect("git add");
+        assert!(git_commit.status.success());
+
+        let git_commit = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=pitchfork-test",
+                "-c",
+                "user.email=pitchfork-test@example.com",
+                "commit",
+                "-m",
+                "init",
+            ])
+            .current_dir(&repo)
+            .output()
+            .expect("git commit");
+        assert!(
+            git_commit.status.success(),
+            "git commit failed: {:?}",
+            git_commit
+        );
+
+        let wt = temp.path().join("my-repo-feature");
+        let git_wt = std::process::Command::new("git")
+            .args(["worktree", "add", "-b", "feature-x", wt.to_str().unwrap()])
+            .current_dir(&repo)
+            .output()
+            .expect("git worktree add");
+        assert!(
+            git_wt.status.success(),
+            "git worktree add failed: {:?}",
+            git_wt
+        );
+
+        // Config in the main checkout.
+        std::fs::write(
+            repo.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"echo main\"\n",
+        )
+        .unwrap();
+        // Config in the linked worktree (different namespace: dir name).
+        std::fs::write(
+            wt.join("pitchfork.toml"),
+            "[daemons.worker]\nrun = \"echo wt\"\n",
+        )
+        .unwrap();
+
+        super::invalidate_config_cache();
+
+        // Resolve from inside the worktree: both namespaces must be visible.
+        let pt = PitchforkToml::all_merged_all_namespaces_from(&wt).unwrap();
+
+        let main_id = DaemonId::new("my-repo", "api");
+        let wt_id = DaemonId::new("my-repo-feature", "worker");
+        assert!(
+            pt.daemons.contains_key(&main_id),
+            "main checkout daemon missing"
+        );
+        assert!(pt.daemons.contains_key(&wt_id), "worktree daemon missing");
+
+        // Resolving from the main checkout must also see the worktree daemon.
+        let pt_from_main = PitchforkToml::all_merged_all_namespaces_from(&repo).unwrap();
+        assert!(pt_from_main.daemons.contains_key(&wt_id));
+
+        // Clean up.
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", wt.to_str().unwrap()])
+            .current_dir(&repo)
+            .output();
         super::invalidate_config_cache();
     }
 }
