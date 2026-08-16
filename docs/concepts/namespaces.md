@@ -78,6 +78,24 @@ This is useful when:
 
 Qualified IDs are parsed directly and work even when there is no local `pitchfork.toml`.
 
+## Git Worktrees
+
+Pitchfork supports Git worktrees out of the box — no extra configuration required.
+
+Namespaces are derived from the directory a project config lives in, and every worktree is a separate directory. Each worktree therefore gets its own namespace automatically, so daemons defined in a worktree never collide with daemons in the main checkout or in other worktrees, even when they define daemons with the same name.
+
+```bash
+cd ~/myapp-feature            # a linked worktree
+pitchfork start api           # starts myapp-feature/api
+
+cd ~/myapp                    # the main checkout
+pitchfork status api          # myapp/api, unaffected by the worktree
+```
+
+Daemons started in a worktree run with the worktree directory as their working directory, and supervisor background tasks (cron scheduling, boot_start, file watching) automatically discover daemons defined in every worktree of a repository.
+
+The only requirement is that worktree directories have distinct names — which is the default when you create worktrees per branch.
+
 ## Display Behavior
 
 Pitchfork intelligently shows or hides namespaces in output:

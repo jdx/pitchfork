@@ -180,6 +180,43 @@ fn get_jj_workspace_root(project_dir: &Path, name: &str) -> Option<PathBuf> {
 // ─── git worktree discovery ───────────────────────────────────────────────────
 
 fn discover_git_worktrees(project_dir: &Path) -> Vec<WorktreeEntry> {
+    // Fast path: a main checkout (`.git` is a directory) with no linked
+    // worktrees has exactly one worktree — itself. `git worktree list`
+    // enumerates the same data by reading `<gitdir>/worktrees/`, so probing
+    // that directory lets us skip the subprocess in the common
+    // single-checkout case. The entry is built from `.git/HEAD` and the
+    // canonicalized project dir, then fed through the same parser.
+    let git_dir = project_dir.join(".git");
+    if git_dir.is_dir() {
+        let worktrees_dir = git_dir.join("worktrees");
+        let has_linked = match std::fs::read_dir(&worktrees_dir) {
+            Ok(mut it) => it.next().is_some(),
+            Err(_) => false,
+        };
+        if !has_linked {
+            // `git worktree list` reports canonical paths (symlinks resolved),
+            // so resolve the same way to keep the fast path identical.
+            let path = project_dir
+                .canonicalize()
+                .unwrap_or_else(|_| project_dir.to_path_buf());
+            // Detached HEAD → no `branch` line, matching porcelain output.
+            let branch = std::fs::read_to_string(git_dir.join("HEAD"))
+                .ok()
+                .and_then(|h| {
+                    h.trim()
+                        .strip_prefix("ref: refs/heads/")
+                        .map(str::to_string)
+                });
+            let porcelain = match &branch {
+                Some(b) => format!("worktree {}\nbranch refs/heads/{b}\n\n", path.display()),
+                None => format!("worktree {}\n\n", path.display()),
+            };
+            return parse_git_worktree_output(porcelain.as_bytes());
+        }
+    }
+
+    // Otherwise (linked worktree, or main checkout with linked worktrees)
+    // spawn `git worktree list` for the full authoritative enumeration.
     let output = match Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(project_dir)
@@ -384,6 +421,87 @@ mod tests {
         let input = b"worktree /home/user/myapp\nHEAD abc123\nbranch refs/heads/---\n\n";
         let entries = parse_git_worktree_output(input);
         assert_eq!(entries.len(), 0);
+    }
+
+    /// Main checkout with no linked worktrees must be handled without
+    /// spawning git: the single worktree entry comes from `.git/HEAD`.
+    #[test]
+    fn test_discover_git_worktrees_single_checkout_no_spawn() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        std::fs::create_dir_all(git_dir.join("refs")).unwrap();
+        // No `worktrees/` directory at all → single checkout fast path.
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let entries = discover_git_worktrees(&repo);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path, repo);
+        assert_eq!(entries[0].branch, "main");
+        assert_eq!(entries[0].sanitized_branch, "main");
+    }
+
+    /// An empty `worktrees/` directory also hits the single-checkout fast
+    /// path (git may leave an empty dir around).
+    #[test]
+    fn test_discover_git_worktrees_empty_worktrees_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        std::fs::create_dir_all(git_dir.join("worktrees")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let entries = discover_git_worktrees(&repo);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].branch, "main");
+    }
+
+    /// Detached HEAD main checkout yields no entry, matching what
+    /// `git worktree list --porcelain` reports (branch lines absent).
+    #[test]
+    fn test_discover_git_worktrees_single_checkout_detached() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        std::fs::create_dir_all(git_dir.join("refs")).unwrap();
+        std::fs::write(
+            git_dir.join("HEAD"),
+            "0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+
+        let entries = discover_git_worktrees(&repo);
+        assert_eq!(entries.len(), 0);
+    }
+
+    /// The fast path must report the canonical path (symlinks resolved), same
+    /// as `git worktree list --porcelain` does, so discovery results do not
+    /// depend on which alias the caller used.
+    #[cfg(unix)]
+    #[test]
+    fn test_discover_git_worktrees_canonicalizes_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("real-repo");
+        std::fs::create_dir(&repo).unwrap();
+        let git_dir = repo.join(".git");
+        std::fs::create_dir_all(git_dir.join("refs")).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+
+        let link = temp.path().join("link-to-repo");
+        symlink(&repo, &link).unwrap();
+
+        let entries = discover_git_worktrees(&link);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].path,
+            repo.canonicalize().unwrap(),
+            "fast path must resolve the symlink like git does"
+        );
     }
 
     #[test]
