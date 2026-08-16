@@ -8,24 +8,25 @@ use crate::cli::json_output::{JsonLanInfo, JsonProxyStatus, JsonSlugEntry, print
     long_about = "\
 Manage the pitchfork reverse proxy
 
-The reverse proxy routes requests from stable slug-based URLs like:
-  https://myapp.localhost
-
-to the daemon's actual listening port (e.g. localhost:3000).
+The reverse proxy routes requests from stable slug-based URLs like
+`https://myapp.localhost` to the daemon's actual listening port (e.g.
+localhost:3000).
 
 Slugs are defined in the global config (~/.config/pitchfork/config.toml)
 under [slugs]. Each slug maps to a project directory and daemon name.
 
 Enable the proxy in your pitchfork.toml or settings:
-  [settings.proxy]
-  enable = true
+
+    [settings.proxy]
+    enable = true
 
 Subcommands:
-  trust     Install the proxy's TLS certificate into the system trust store
-  untrust   Remove the proxy's TLS certificate from the system trust store
-  add       Add a slug mapping to the global config
-  remove    Remove a slug mapping from the global config
-  status    Show all registered slugs and their current state"
+
+    trust     Install the proxy's TLS certificate into the system trust store
+    untrust   Remove the proxy's TLS certificate from the system trust store
+    add       Add a slug mapping to the global config
+    remove    Remove a slug mapping from the global config
+    status    Show all registered slugs and their current state"
 )]
 pub struct Proxy {
     #[clap(subcommand)]
@@ -74,8 +75,11 @@ impl Proxy {
 /// This DOES require sudo on Linux.
 ///
 /// Example:
-///   pitchfork proxy trust
-///   sudo pitchfork proxy trust    # Linux only
+///
+/// ```text
+/// pitchfork proxy trust
+/// sudo pitchfork proxy trust    # Linux only
+/// ```
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment)]
 struct Trust {
@@ -121,8 +125,11 @@ impl Trust {
 /// and runs the appropriate update command.
 ///
 /// Example:
-///   pitchfork proxy untrust
-///   sudo pitchfork proxy untrust    # Linux only
+///
+/// ```text
+/// pitchfork proxy untrust
+/// sudo pitchfork proxy untrust    # Linux only
+/// ```
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment)]
 struct Untrust {
@@ -392,9 +399,12 @@ impl ProxyStatus {
 /// If --daemon is not specified, defaults to the slug name.
 ///
 /// Example:
-///   pitchfork proxy add api
-///   pitchfork proxy add api --daemon server
-///   pitchfork proxy add api --dir /home/user/my-api --daemon server
+///
+/// ```text
+/// pitchfork proxy add api
+/// pitchfork proxy add api --daemon server
+/// pitchfork proxy add api --dir /home/user/my-api --daemon server
+/// ```
 #[derive(Debug, clap::Args)]
 #[clap(verbatim_doc_comment)]
 struct Add {
@@ -514,7 +524,10 @@ impl Add {
 /// Remove a slug mapping from the global config
 ///
 /// Example:
-///   pitchfork proxy remove api
+///
+/// ```text
+/// pitchfork proxy remove api
+/// ```
 #[derive(Debug, clap::Args)]
 #[clap(visible_alias = "rm", verbatim_doc_comment)]
 struct Remove {

@@ -14,14 +14,15 @@ Creates tab-completion scripts for your shell. Requires the 'usage' CLI tool.
 Supported shells: bash, zsh, fish
 
 Installation:
-  bash:
-    pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork
 
-  zsh:
-    pitchfork completion zsh > ~/.zfunc/_pitchfork
+    bash:
+      pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork
 
-  fish:
-    pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish"
+    zsh:
+      pitchfork completion zsh > ~/.zfunc/_pitchfork
+
+    fish:
+      pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish"
 )]
 pub struct Completion {
     /// Shell to generate completions for (bash, zsh, fish)

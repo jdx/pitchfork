@@ -11,13 +11,14 @@ use crate::pitchfork_toml::PitchforkToml;
 Prevent a daemon from restarting
 
 Disables a daemon to prevent it from being started automatically or manually.
-The daemon will remain disabled until 'pitchfork enable' is called.
+The daemon will remain disabled until `pitchfork enable` is called.
 Useful for temporarily stopping a service without removing it from config.
 
 Examples:
-  pitchfork disable api           Prevent daemon from starting
-  pitchfork d api                 Alias for 'disable'
-  pitchfork list                  Shows 'disabled' status in output"
+
+    pitchfork disable api           Prevent daemon from starting
+    pitchfork d api                 Alias for 'disable'
+    pitchfork list                  Shows 'disabled' status in output"
 )]
 pub struct Disable {
     /// Name of the daemon to disable

@@ -12,17 +12,18 @@ use std::sync::Arc;
     long_about = "\
 Restarts a daemon (stops then starts it)
 
-Equivalent to 'start --force' - stops the daemon (SIGTERM) then starts it again
+Equivalent to `start --force` - stops the daemon (SIGTERM) then starts it again
 from the pitchfork.toml configuration with dependency resolution.
 
 Examples:
-  pitchfork restart api           Restart a single daemon
-  pitchfork restart api worker    Restart multiple daemons
-  pitchfork restart --group backend Restart all daemons in the 'backend' group
-  pitchfork restart --all         Restart all running daemons
-  pitchfork restart -l            Restart all local daemons in pitchfork.toml
-  pitchfork restart -g            Restart all global daemons in config.toml
-  pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
+
+    pitchfork restart api           Restart a single daemon
+    pitchfork restart api worker    Restart multiple daemons
+    pitchfork restart --group backend Restart all daemons in the 'backend' group
+    pitchfork restart --all         Restart all running daemons
+    pitchfork restart -l            Restart all local daemons in pitchfork.toml
+    pitchfork restart -g            Restart all global daemons in config.toml
+    pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready"
 )]
 pub struct Restart {
     /// ID of the daemon(s) to restart

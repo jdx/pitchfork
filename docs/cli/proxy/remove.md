@@ -8,7 +8,10 @@
 Remove a slug mapping from the global config
 
 Example:
-  pitchfork proxy remove api
+
+```text
+pitchfork proxy remove api
+```
 
 ## Arguments
 

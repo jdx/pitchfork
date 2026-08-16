@@ -25,18 +25,20 @@ Settings can be configured in multiple ways (in order of precedence):
 5. Built-in defaults (lowest priority)
 
 Subcommands:
-  list    List all available settings with types and defaults
-  get     Get the current value of a setting
-  set     Set a setting value in a config file
+
+    list    List all available settings with types and defaults
+    get     Get the current value of a setting
+    set     Set a setting value in a config file
 
 Examples:
-  pitchfork settings                        Show all current settings
-  pitchfork settings list                   List all available settings
-  pitchfork settings get general.log_level  Get a specific setting
-  pitchfork settings set general.log_level debug
-  pitchfork settings set web.auto_start true --global
-  pitchfork settings set supervisor.stop_timeout 10s --local
-  pitchfork settings set supervisor.stop_timeout 10s --project"
+
+    pitchfork settings                        Show all current settings
+    pitchfork settings list                   List all available settings
+    pitchfork settings get general.log_level  Get a specific setting
+    pitchfork settings set general.log_level debug
+    pitchfork settings set web.auto_start true --global
+    pitchfork settings set supervisor.stop_timeout 10s --local
+    pitchfork settings set supervisor.stop_timeout 10s --project"
 )]
 pub struct Settings {
     #[clap(subcommand)]

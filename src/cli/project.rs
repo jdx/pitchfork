@@ -68,8 +68,9 @@ Displays a table of active project sessions with their host PID, directory,
 liveness status, and recorded process title.
 
 Example:
-  pitchfork project list
-  pitchfork project list --json"
+
+    pitchfork project list
+    pitchfork project list --json"
 )]
 pub struct List {
     /// Output in JSON format

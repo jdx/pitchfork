@@ -11,11 +11,13 @@ use crate::pitchfork_toml::PitchforkToml;
 Allow a daemon to start
 
 Re-enables a previously disabled daemon, allowing it to be started manually
-or automatically. Use this after 'pitchfork disable' to restore normal operation.
+or automatically. Use this after `pitchfork disable` to restore normal
+operation.
 
 Examples:
-  pitchfork enable api            Enable a disabled daemon
-  pitchfork e api                 Alias for 'enable'"
+
+    pitchfork enable api            Enable a disabled daemon
+    pitchfork e api                 Alias for 'enable'"
 )]
 pub struct Enable {
     /// Name of the daemon to enable

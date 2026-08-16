@@ -45,22 +45,24 @@ to AI assistants (Claude, Cursor, etc.) over stdin/stdout using JSON-RPC.
 Typically used as a subprocess by an MCP-aware AI agent.
 
 Examples:
-  # In claude_desktop_config.json or similar:
-  {
-    \"mcpServers\": {
-      \"pitchfork\": {
-        \"command\": \"pitchfork\",
-        \"args\": [\"mcp\"]
-      }
+
+    # In claude_desktop_config.json or similar:
+    {
+        \"mcpServers\": {
+            \"pitchfork\": {
+                \"command\": \"pitchfork\",
+                \"args\": [\"mcp\"]
+            }
+        }
     }
-  }
 
 Tools provided:
-  pitchfork_status    List all daemons and their state
-  pitchfork_start     Start a named daemon
-  pitchfork_stop      Stop a named daemon
-  pitchfork_restart   Restart a named daemon
-  pitchfork_logs      Return recent log output for a daemon"
+
+    pitchfork_status    List all daemons and their state
+    pitchfork_start     Start a named daemon
+    pitchfork_stop      Stop a named daemon
+    pitchfork_restart   Restart a named daemon
+    pitchfork_logs      Return recent log output for a daemon"
 )]
 pub struct Mcp {}
 
@@ -488,26 +490,26 @@ impl Mcp {
 
 static AFTER_LONG_HELP: &str = r#"Examples:
 
-  # Start the MCP server (used by AI assistant tools)
-  $ pitchfork mcp
+    # Start the MCP server (used by AI assistant tools)
+    $ pitchfork mcp
 
-  # Claude Desktop configuration (claude_desktop_config.json):
-  {
-    "mcpServers": {
-      "pitchfork": {
-        "command": "pitchfork",
-        "args": ["mcp"]
+    # Claude Desktop configuration (claude_desktop_config.json):
+    {
+      "mcpServers": {
+        "pitchfork": {
+          "command": "pitchfork",
+          "args": ["mcp"]
+        }
       }
     }
-  }
 
-  # Interactive testing with JSON-RPC:
-  $ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | pitchfork mcp
+    # Interactive testing with JSON-RPC:
+    $ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | pitchfork mcp
 
-  # Available tools:
-  - pitchfork_status  - List all daemons and their state
-  - pitchfork_start   - Start daemon(s) by name
-  - pitchfork_stop    - Stop daemon(s) by name
-  - pitchfork_restart - Restart daemon(s) by name
-  - pitchfork_logs    - Return recent log output for daemon(s)
+# Available tools:
+- pitchfork_status  - List all daemons and their state
+- pitchfork_start   - Start daemon(s) by name
+- pitchfork_stop    - Stop daemon(s) by name
+- pitchfork_restart - Restart daemon(s) by name
+- pitchfork_logs    - Return recent log output for daemon(s)
 "#;

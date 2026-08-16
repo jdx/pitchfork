@@ -13,12 +13,14 @@ boots. Uses platform-specific mechanisms (launchd on macOS, systemd on Linux).
 
 When run as root (or via sudo), registers a system-level entry that starts
 pitchfork for all users:
-  macOS: /Library/LaunchDaemons/pitchfork.plist
-  Linux: /etc/systemd/system/pitchfork.service
+
+    macOS: /Library/LaunchDaemons/pitchfork.plist
+    Linux: /etc/systemd/system/pitchfork.service
 
 When run as a normal user, registers a user-level entry:
-  macOS: ~/Library/LaunchAgents/pitchfork.plist
-  Linux: ~/.config/systemd/user/pitchfork.service
+
+    macOS: ~/Library/LaunchAgents/pitchfork.plist
+    Linux: ~/.config/systemd/user/pitchfork.service
 
 To run the supervisor as root but keep state files and IPC sockets in a
 specific user's home directory, set `settings.supervisor.user` in the global
@@ -26,15 +28,17 @@ pitchfork configuration (~/.config/pitchfork/config.toml or
 /etc/pitchfork/config.toml).
 
 Subcommands:
-  enable    Register pitchfork to start on boot
-  disable   Remove pitchfork from boot startup
-  status    Check if boot start is currently enabled
+
+    enable    Register pitchfork to start on boot
+    disable   Remove pitchfork from boot startup
+    status    Check if boot start is currently enabled
 
 Examples:
-  pitchfork boot enable           Start pitchfork on system boot (user-level)
-  sudo pitchfork boot enable      Start pitchfork on system boot (system-level)
-  pitchfork boot disable          Don't start pitchfork on boot
-  pitchfork boot status           Check boot start status"
+
+    pitchfork boot enable           Start pitchfork on system boot (user-level)
+    sudo pitchfork boot enable      Start pitchfork on system boot (system-level)
+    pitchfork boot disable          Don't start pitchfork on boot
+    pitchfork boot status           Check boot start status"
 )]
 pub struct Boot {
     #[clap(subcommand)]
@@ -50,12 +54,14 @@ Enable boot start for pitchfork supervisor
 Registers pitchfork to start automatically when the system boots.
 
 When run as root (or via sudo): creates a system-level entry
-  macOS: /Library/LaunchDaemons/pitchfork.plist
-  Linux: /etc/systemd/system/pitchfork.service
+
+    macOS: /Library/LaunchDaemons/pitchfork.plist
+    Linux: /etc/systemd/system/pitchfork.service
 
 When run as a normal user: creates a user-level entry
-  macOS: ~/Library/LaunchAgents/pitchfork.plist
-  Linux: ~/.config/systemd/user/pitchfork.service
+
+    macOS: ~/Library/LaunchAgents/pitchfork.plist
+    Linux: ~/.config/systemd/user/pitchfork.service
 
 If you want the supervisor to run as root but keep state files and IPC sockets
 under a specific user's home directory, configure `settings.supervisor.user`

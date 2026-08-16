@@ -16,20 +16,21 @@ Daemons are defined in pitchfork.toml with a `[daemons.<name>]` section.
 The command waits for the daemon to be ready before returning.
 
 Examples:
-  pitchfork start api           Start a single daemon
-  pitchfork start api worker    Start multiple daemons
-  pitchfork start --group backend Start all daemons in the 'backend' group
-  pitchfork start -l            Start all local daemons in pitchfork.toml
-  pitchfork start -g            Start all global daemons in config.toml
-  pitchfork start -a            Start all daemons (local and global)
-  pitchfork start api -f        Restart daemon if already running
-  pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
-  pitchfork start api --output 'Listening on'
-                                Wait for output pattern before ready
-  pitchfork start api --http http://localhost:8080/health
-                                Wait for HTTP endpoint to return 2xx
-  pitchfork start api --port 8080
-                                Wait for TCP port to be listening";
+
+    pitchfork start api           Start a single daemon
+    pitchfork start api worker    Start multiple daemons
+    pitchfork start --group backend Start all daemons in the 'backend' group
+    pitchfork start -l            Start all local daemons in pitchfork.toml
+    pitchfork start -g            Start all global daemons in config.toml
+    pitchfork start -a            Start all daemons (local and global)
+    pitchfork start api -f        Restart daemon if already running
+    pitchfork start api --delay 5 Wait 5 seconds for daemon to be ready
+    pitchfork start api --output 'Listening on'
+                                  Wait for output pattern before ready
+    pitchfork start api --http http://localhost:8080/health
+                                  Wait for HTTP endpoint to return 2xx
+    pitchfork start api --port 8080
+                                  Wait for TCP port to be listening";
 
 /// Starts a daemon from a pitchfork.toml file
 #[derive(Debug, clap::Args)]
