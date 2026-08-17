@@ -2,7 +2,7 @@
 min_usage_version "4.0"
 name pitchfork
 bin pitchfork
-version "2.21.0"
+version "2.22.0"
 about "Daemons with DX"
 usage "Usage: pitchfork <COMMAND>"
 cmd activate help="Activate pitchfork in your shell session" effect=read {

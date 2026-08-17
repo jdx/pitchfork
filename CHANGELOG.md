@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.22.0](https://github.com/jdx/pitchfork/compare/v2.21.0...v2.22.0) - 2026-08-17
+
+### Added
+
+- *(config)* auto-discover daemons in git worktrees and jj workspaces ([#737](https://github.com/jdx/pitchfork/pull/737))
+- *(tui)* add namespace scoping to tui and list ([#736](https://github.com/jdx/pitchfork/pull/736))
+
+### Fixed
+
+- *(proxy)* release config lock before hosts sync to avoid self-deadlock ([#739](https://github.com/jdx/pitchfork/pull/739))
+- *(cli)* render command examples as code blocks in generated docs ([#738](https://github.com/jdx/pitchfork/pull/738))
+- *(deps)* update rust crate comfy-table to v8 ([#734](https://github.com/jdx/pitchfork/pull/734))
+
+### Other
+
+- *(supervisor)* throttle full process-table refreshes with TTL cache ([#728](https://github.com/jdx/pitchfork/pull/728))
+
 ## [2.21.0](https://github.com/jdx/pitchfork/compare/v2.20.0...v2.21.0) - 2026-08-10
 
 ### Added
