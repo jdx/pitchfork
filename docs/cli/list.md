@@ -15,21 +15,23 @@ This command shows both:
 - Available daemons (defined in config but not yet started)
 
 Example:
-  pitchfork list
-  pitchfork ls                    Alias for 'list'
-  pitchfork list --hide-header    Output without column headers
-  pitchfork list --status running  Show only running daemons
-  pitchfork ls --status available --status stopped
-                                  Show daemons that are available OR stopped
-  pitchfork list --namespace frontend
-                                  Show only daemons in the 'frontend' namespace
-  pitchfork list --project        Show only the current project's daemons
+
+    pitchfork list
+    pitchfork ls                    Alias for 'list'
+    pitchfork list --hide-header    Output without column headers
+    pitchfork list --status running  Show only running daemons
+    pitchfork ls --status available --status stopped
+                                    Show daemons that are available OR stopped
+    pitchfork list --namespace frontend
+                                    Show only daemons in the 'frontend' namespace
+    pitchfork list --project        Show only the current project's daemons
 
 Output:
-  Name    Status
-  api     running    https://api.localhost
-  worker  available
-  db      errored    exit code 127
+
+    Name    Status
+    api     running    https://api.localhost
+    worker  available
+    db      errored    exit code 127
 
 ## Flags
 

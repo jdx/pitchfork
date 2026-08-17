@@ -23,25 +23,26 @@ The daemon will be added to the nearest pitchfork.toml found in the
 filesystem hierarchy starting from the current directory.
 
 Examples:
-  pitchfork daemons add api bun run server
-                                 Add daemon using positional args
-  pitchfork daemons add api --run 'npm start'
-                                 Add daemon with explicit run command
-  pitchfork daemons add api -- bun run server
-                                 Add daemon with explicit args after --
-  pitchfork daemons add api --run 'npm start' --retry 3
-                                 Add with retry policy
-  pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'
-                                 Add with file watching
-  pitchfork daemons add api --run 'npm start' --autostart --autostop
-                                 Add with auto start/stop hooks
-  pitchfork daemons add worker --run './worker' --depends api
-                                 Add with daemon dependency
-  pitchfork daemons add api --run 'npm start' --local
-                                  Add to pitchfork.local.toml instead
-  pitchfork daemons add api --run 'npm start' --global
+
+    pitchfork daemons add api bun run server
+                                     Add daemon using positional args
+    pitchfork daemons add api --run 'npm start'
+                                     Add daemon with explicit run command
+    pitchfork daemons add api -- bun run server
+                                     Add daemon with explicit args after --
+    pitchfork daemons add api --run 'npm start' --retry 3
+                                     Add with retry policy
+    pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'
+                                     Add with file watching
+    pitchfork daemons add api --run 'npm start' --autostart --autostop
+                                     Add with auto start/stop hooks
+    pitchfork daemons add worker --run './worker' --depends api
+                                     Add with daemon dependency
+    pitchfork daemons add api --run 'npm start' --local
+                                   Add to pitchfork.local.toml instead
+    pitchfork daemons add api --run 'npm start' --global
                                   Add to ~/.config/pitchfork/config.toml instead
-  pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
+    pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
                                   Add cron daemon that triggers immediately
 "
 )]

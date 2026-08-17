@@ -323,22 +323,23 @@ Shows logs from managed daemons. Logs are stored in the pitchfork logs directory
 and include timestamps for filtering.
 
 Examples:
-  pitchfork logs api              Show all logs for 'api' (paged if needed)
-  pitchfork logs api worker       Show logs for multiple daemons
-  pitchfork logs                  Show logs for all daemons
-  pitchfork logs api -n 50        Show last 50 lines
-  pitchfork logs api --follow     Follow logs in real-time
-  pitchfork logs api --since '2024-01-15 10:00:00'
-                                  Show logs since a specific time (forward)
-  pitchfork logs api --since '10:30:00'
-                                  Show logs since 10:30:00 today
-  pitchfork logs api --since '10:30' --until '12:00'
-                                  Show logs since 10:30:00 until 12:00:00 today
-  pitchfork logs api --since 5min Show logs from last 5 minutes
-  pitchfork logs api --raw        Output raw log lines without formatting
-  pitchfork logs api --raw -n 100 Output last 100 raw log lines
-  pitchfork logs api --clear      Delete logs for 'api'
-  pitchfork logs --clear          Delete logs for all daemons"
+
+    pitchfork logs api              Show all logs for 'api' (paged if needed)
+    pitchfork logs api worker       Show logs for multiple daemons
+    pitchfork logs                  Show logs for all daemons
+    pitchfork logs api -n 50        Show last 50 lines
+    pitchfork logs api --follow     Follow logs in real-time
+    pitchfork logs api --since '2024-01-15 10:00:00'
+                                    Show logs since a specific time (forward)
+    pitchfork logs api --since '10:30:00'
+                                    Show logs since 10:30:00 today
+    pitchfork logs api --since '10:30' --until '12:00'
+                                    Show logs since 10:30:00 until 12:00:00 today
+    pitchfork logs api --since 5min Show logs from last 5 minutes
+    pitchfork logs api --raw        Output raw log lines without formatting
+    pitchfork logs api --raw -n 100 Output last 100 raw log lines
+    pitchfork logs api --clear      Delete logs for 'api'
+    pitchfork logs --clear          Delete logs for all daemons"
 )]
 pub struct Logs {
     /// Show only logs for the specified daemon(s)

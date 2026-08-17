@@ -7,23 +7,24 @@
 Runs a one-off daemon
 
 Runs a command as a managed daemon without needing a pitchfork.toml.
-The daemon is tracked by pitchfork and can be monitored with 'pitchfork status'.
+The daemon is tracked by pitchfork and can be monitored with `pitchfork status`.
 
 Examples:
-  pitchfork run api -- npm run dev
-                                Run npm as daemon named 'api'
-  pitchfork run api -f -- npm run dev
-                                Force restart if 'api' is running
-  pitchfork run api --retry 3 -- ./server
-                                Restart up to 3 times on failure
-  pitchfork run api -d 5 -- ./server
-                                Wait 5 seconds for ready check
-  pitchfork run api -o 'Listening' -- ./server
-                                Wait for output pattern before ready
-  pitchfork run api --http http://localhost:8080/health -- ./server
-                                Wait for HTTP endpoint to return 2xx
-  pitchfork run api --port 8080 -- ./server
-                                Wait for TCP port to be listening
+
+    pitchfork run api -- npm run dev
+                                  Run npm as daemon named 'api'
+    pitchfork run api -f -- npm run dev
+                                  Force restart if 'api' is running
+    pitchfork run api --retry 3 -- ./server
+                                  Restart up to 3 times on failure
+    pitchfork run api -d 5 -- ./server
+                                  Wait 5 seconds for ready check
+    pitchfork run api -o 'Listening' -- ./server
+                                  Wait for output pattern before ready
+    pitchfork run api --http http://localhost:8080/health -- ./server
+                                  Wait for HTTP endpoint to return 2xx
+    pitchfork run api --port 8080 -- ./server
+                                  Wait for TCP port to be listening
 
 ## Arguments
 

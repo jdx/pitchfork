@@ -15,10 +15,11 @@ The dashboard can be scoped to one or more namespaces; the fuzzy search
 (`/`) then operates within the scoped set.
 
 Example:
-  pitchfork tui
-  pitchfork tui --namespace frontend
-                                  Show only daemons in the 'frontend' namespace
-  pitchfork tui --project         Show only the current project's daemons"
+
+    pitchfork tui
+    pitchfork tui --namespace frontend
+                                    Show only daemons in the 'frontend' namespace
+    pitchfork tui --project         Show only the current project's daemons"
 )]
 pub struct Tui {
     /// Only show daemons in this namespace (repeatable for OR logic)

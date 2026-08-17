@@ -23,8 +23,11 @@ detected automatically based on the running distribution:
 This DOES require sudo on Linux.
 
 Example:
-  pitchfork proxy trust
-  sudo pitchfork proxy trust    # Linux only
+
+```text
+pitchfork proxy trust
+sudo pitchfork proxy trust    # Linux only
+```
 
 ## Flags
 

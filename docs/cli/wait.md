@@ -13,9 +13,10 @@ log output in real-time. Exits with the same status code as the daemon.
 Useful in scripts that need to wait for a daemon to complete.
 
 Examples:
-  pitchfork wait api              Wait for 'api' to stop
-  pitchfork w api                 Alias for 'wait'
-  pitchfork wait api && echo done Run command after daemon stops
+
+    pitchfork wait api              Wait for 'api' to stop
+    pitchfork w api                 Alias for 'wait'
+    pitchfork wait api && echo done Run command after daemon stops
 
 ## Arguments
 

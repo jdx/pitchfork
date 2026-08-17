@@ -19,12 +19,14 @@ Shows detailed information about a single daemon including its PID and
 current status (running, stopped, failed, etc.).
 
 Example:
-  pitchfork status api
+
+    pitchfork status api
 
 Output:
-  Name: api
-  PID: 12345
-  Status: running"
+
+    Name: api
+    PID: 12345
+    Status: running"
 )]
 pub struct Status {
     /// Name of the daemon to check

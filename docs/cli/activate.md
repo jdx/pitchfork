@@ -12,14 +12,15 @@ directories. Required for auto-start/stop features in pitchfork.toml.
 Supported shells: bash, zsh, fish
 
 Add to your shell config:
-  bash (~/.bashrc):
-    eval "$(pitchfork activate bash)"
 
-  zsh (~/.zshrc):
-    eval "$(pitchfork activate zsh)"
+    bash (~/.bashrc):
+      eval "$(pitchfork activate bash)"
 
-  fish (~/.config/fish/config.fish):
-    pitchfork activate fish | source
+    zsh (~/.zshrc):
+      eval "$(pitchfork activate zsh)"
+
+    fish (~/.config/fish/config.fish):
+      pitchfork activate fish | source
 
 ## Arguments
 

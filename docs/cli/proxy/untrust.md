@@ -14,8 +14,11 @@ On Linux, removes the certificate from the distro-specific CA directory
 and runs the appropriate update command.
 
 Example:
-  pitchfork proxy untrust
-  sudo pitchfork proxy untrust    # Linux only
+
+```text
+pitchfork proxy untrust
+sudo pitchfork proxy untrust    # Linux only
+```
 
 ## Flags
 

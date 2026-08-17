@@ -14,5 +14,6 @@ Use this to clear out old entries after stopping daemons manually or
 after daemons have failed.
 
 Examples:
-  pitchfork clean                 Remove all stopped/failed entries
-  pitchfork c                     Alias for 'clean'
+
+    pitchfork clean                 Remove all stopped/failed entries
+    pitchfork c                     Alias for 'clean'

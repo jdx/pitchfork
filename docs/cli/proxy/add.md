@@ -13,9 +13,12 @@ If --dir is not specified, uses the current directory.
 If --daemon is not specified, defaults to the slug name.
 
 Example:
-  pitchfork proxy add api
-  pitchfork proxy add api --daemon server
-  pitchfork proxy add api --dir /home/user/my-api --daemon server
+
+```text
+pitchfork proxy add api
+pitchfork proxy add api --daemon server
+pitchfork proxy add api --dir /home/user/my-api --daemon server
+```
 
 ## Arguments
 
