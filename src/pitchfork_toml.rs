@@ -1629,7 +1629,7 @@ impl PitchforkToml {
             })?;
         }
 
-        let _lock = xx::fslock::get(global_path, false)
+        let lock = xx::fslock::get(global_path, false)
             .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
 
         let mut pt = if global_path.exists() {
@@ -1648,11 +1648,21 @@ impl PitchforkToml {
         if let Some(ns) = namespace
             && !pt.namespaces.contains_key(ns)
         {
+            // Resolve against the already-parsed `pt` instead of
+            // SlugEntry::resolve_dir(): that re-reads the global config via
+            // read(), which would re-acquire the lock held above (flock is per
+            // open file description, so the same process deadlocks on itself).
             let dir = pt
                 .slugs
                 .get(slug)
-                .and_then(|e| e.resolve_dir())
-                .or_else(|| namespace.and_then(|_| env::CWD.as_path().canonicalize().ok()));
+                .and_then(|e| {
+                    e.dir.clone().or_else(|| {
+                        e.namespace
+                            .as_ref()
+                            .and_then(|ns| pt.namespaces.get(ns).map(|entry| entry.dir.clone()))
+                    })
+                })
+                .or_else(|| env::CWD.as_path().canonicalize().ok());
             if let Some(ref d) = dir {
                 pt.namespaces
                     .insert(ns.to_string(), NamespaceEntry { dir: d.clone() });
@@ -1668,6 +1678,10 @@ impl PitchforkToml {
             },
         );
         pt.write_unlocked()?;
+        // Release the config lock before syncing hosts: sync_hosts_from_settings()
+        // re-reads the global config via read(), which acquires this same lock and
+        // would deadlock against our own held lock.
+        drop(lock);
         crate::proxy::hosts::sync_hosts_from_settings();
         Ok(())
     }
@@ -1679,7 +1693,7 @@ impl PitchforkToml {
             return Ok(false);
         }
 
-        let _lock = xx::fslock::get(global_path, false)
+        let lock = xx::fslock::get(global_path, false)
             .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
 
         let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
@@ -1691,6 +1705,10 @@ impl PitchforkToml {
         let removed = pt.slugs.shift_remove(slug).is_some();
         if removed {
             pt.write_unlocked()?;
+            // Release the config lock before syncing hosts: sync_hosts_from_settings()
+            // re-reads the global config via read(), which acquires this same lock and
+            // would deadlock against our own held lock.
+            drop(lock);
             crate::proxy::hosts::sync_hosts_from_settings();
         }
         Ok(removed)
