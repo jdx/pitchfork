@@ -16,26 +16,6 @@ const MARKER_START: &str = "# pitchfork-start";
 const MARKER_END: &str = "# pitchfork-end";
 static BLANK_LINES_RE: OnceLock<regex::Regex> = OnceLock::new();
 
-/// Path to the hosts file on the current platform.
-///
-/// `PITCHFORK_HOSTS_FILE` overrides the path; tests use it to keep the sync
-/// away from the real system hosts file.
-fn hosts_path() -> std::path::PathBuf {
-    if let Some(p) = std::env::var_os("PITCHFORK_HOSTS_FILE") {
-        return std::path::PathBuf::from(p);
-    }
-    if cfg!(windows) {
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
-        std::path::PathBuf::from(system_root)
-            .join("System32")
-            .join("drivers")
-            .join("etc")
-            .join("hosts")
-    } else {
-        std::path::PathBuf::from("/etc/hosts")
-    }
-}
-
 /// Sync the given slug hostnames into /etc/hosts.
 ///
 /// Builds the expected hosts block and replaces (or appends) the
@@ -101,7 +81,7 @@ pub fn clean_hosts_file() {
 
 /// Read /etc/hosts, replace the marked block, write back atomically.
 fn write_hosts_block(entries: &[String]) {
-    let path = hosts_path();
+    let path = crate::env::PITCHFORK_HOSTS_FILE.clone();
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
