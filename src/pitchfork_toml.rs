@@ -1629,7 +1629,7 @@ impl PitchforkToml {
             })?;
         }
 
-        let lock = xx::fslock::get(global_path, false)
+        let _lock = xx::fslock::get(global_path, false)
             .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
 
         let mut pt = if global_path.exists() {
@@ -1678,11 +1678,13 @@ impl PitchforkToml {
             },
         );
         pt.write_unlocked()?;
-        // Release the config lock before syncing hosts: sync_hosts_from_settings()
-        // re-reads the global config via read(), which acquires this same lock and
-        // would deadlock against our own held lock.
-        drop(lock);
-        crate::proxy::hosts::sync_hosts_from_settings();
+        // Sync hosts from the in-memory slug set, not sync_hosts_from_settings():
+        // that re-reads the global config via read(), which acquires the lock held
+        // above — flock is per open file description, so re-acquiring in the same
+        // process deadlocks against our own lock. Staying under the lock also keeps
+        // hosts writes ordered with config mutations across concurrent commands.
+        let slug_names: Vec<String> = pt.slugs.keys().cloned().collect();
+        crate::proxy::hosts::sync_hosts_from_settings_with_slugs(&slug_names);
         Ok(())
     }
 
@@ -1693,7 +1695,7 @@ impl PitchforkToml {
             return Ok(false);
         }
 
-        let lock = xx::fslock::get(global_path, false)
+        let _lock = xx::fslock::get(global_path, false)
             .wrap_err_with(|| format!("failed to acquire lock on {}", global_path.display()))?;
 
         let raw = std::fs::read_to_string(global_path).map_err(|e| FileError::ReadError {
@@ -1705,11 +1707,13 @@ impl PitchforkToml {
         let removed = pt.slugs.shift_remove(slug).is_some();
         if removed {
             pt.write_unlocked()?;
-            // Release the config lock before syncing hosts: sync_hosts_from_settings()
-            // re-reads the global config via read(), which acquires this same lock and
-            // would deadlock against our own held lock.
-            drop(lock);
-            crate::proxy::hosts::sync_hosts_from_settings();
+            // Sync hosts from the in-memory slug set, not sync_hosts_from_settings():
+            // that re-reads the global config via read(), which acquires the lock held
+            // above — flock is per open file description, so re-acquiring in the same
+            // process deadlocks against our own lock. Staying under the lock also keeps
+            // hosts writes ordered with config mutations across concurrent commands.
+            let slug_names: Vec<String> = pt.slugs.keys().cloned().collect();
+            crate::proxy::hosts::sync_hosts_from_settings_with_slugs(&slug_names);
         }
         Ok(removed)
     }

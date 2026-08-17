@@ -17,7 +17,13 @@ const MARKER_END: &str = "# pitchfork-end";
 static BLANK_LINES_RE: OnceLock<regex::Regex> = OnceLock::new();
 
 /// Path to the hosts file on the current platform.
+///
+/// `PITCHFORK_HOSTS_FILE` overrides the path; tests use it to keep the sync
+/// away from the real system hosts file.
 fn hosts_path() -> std::path::PathBuf {
+    if let Some(p) = std::env::var_os("PITCHFORK_HOSTS_FILE") {
+        return std::path::PathBuf::from(p);
+    }
     if cfg!(windows) {
         let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
         std::path::PathBuf::from(system_root)
@@ -30,19 +36,18 @@ fn hosts_path() -> std::path::PathBuf {
     }
 }
 
-/// Sync all registered slug hostnames into /etc/hosts.
+/// Sync the given slug hostnames into /etc/hosts.
 ///
-/// Reads the current slug table from global config, builds the expected
-/// hosts block, and replaces (or appends) the pitchfork-managed block.
+/// Builds the expected hosts block and replaces (or appends) the
+/// pitchfork-managed block.
 ///
 /// Best-effort: logs a warning on failure (e.g. permission denied) and
 /// does not prevent proxy startup.
-pub fn sync_hosts_file(bind_ip: &str, tld: &str) {
-    let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    let mut entries: Vec<String> = Vec::new();
-    for slug in slugs.keys() {
-        entries.push(format!("{bind_ip} {slug}.{tld}"));
-    }
+fn sync_hosts_file_with_slugs(bind_ip: &str, tld: &str, slug_names: &[String]) {
+    let entries: Vec<String> = slug_names
+        .iter()
+        .map(|slug| format!("{bind_ip} {slug}.{tld}"))
+        .collect();
     write_hosts_block(&entries);
 }
 
@@ -51,6 +56,18 @@ pub fn sync_hosts_file(bind_ip: &str, tld: &str) {
 /// Used when slug registrations change while the proxy is already running.
 /// In LAN mode, entries are mapped to the detected LAN IP instead of 127.0.0.1.
 pub fn sync_hosts_from_settings() {
+    let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let slug_names: Vec<String> = slugs.keys().cloned().collect();
+    sync_hosts_from_settings_with_slugs(&slug_names);
+}
+
+/// Like `sync_hosts_from_settings`, but with a caller-provided slug list.
+///
+/// Use this from code that holds the global config fslock: reading the slug
+/// registry here would re-acquire that lock via `PitchforkToml::read()`, and
+/// flock(2) is per open file description, so the same process would deadlock
+/// against its own held lock.
+pub fn sync_hosts_from_settings_with_slugs(slug_names: &[String]) {
     let s = settings();
     if s.proxy.enable && s.proxy.sync_hosts {
         let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
@@ -71,7 +88,7 @@ pub fn sync_hosts_from_settings() {
         } else {
             s.proxy.host.clone()
         };
-        sync_hosts_file(&ip, tld);
+        sync_hosts_file_with_slugs(&ip, tld, slug_names);
     }
 }
 
