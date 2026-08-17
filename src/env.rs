@@ -66,6 +66,25 @@ pub static PITCHFORK_STATE_DIR: Lazy<PathBuf> = Lazy::new(|| {
 });
 pub static PITCHFORK_STATE_FILE: Lazy<PathBuf> =
     Lazy::new(|| PITCHFORK_STATE_DIR.join("state.toml"));
+/// Path to the hosts file managed by the proxy's hosts sync.
+///
+/// `PITCHFORK_HOSTS_FILE` overrides the platform default; tests use it to
+/// keep the sync away from the real system hosts file.
+pub static PITCHFORK_HOSTS_FILE: Lazy<PathBuf> = Lazy::new(|| {
+    if let Some(p) = var_path("PITCHFORK_HOSTS_FILE") {
+        return p;
+    }
+    if cfg!(windows) {
+        let system_root = var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        PathBuf::from(system_root)
+            .join("System32")
+            .join("drivers")
+            .join("etc")
+            .join("hosts")
+    } else {
+        PathBuf::from("/etc/hosts")
+    }
+});
 pub static PITCHFORK_LOG: Lazy<log::LevelFilter> =
     Lazy::new(|| var_log_level("PITCHFORK_LOG").unwrap_or(log::LevelFilter::Info));
 pub static PITCHFORK_LOG_FILE_LEVEL: Lazy<log::LevelFilter> =
