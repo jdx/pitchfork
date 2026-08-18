@@ -8,6 +8,7 @@ use crate::daemon::Daemon;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
+use crate::error::FileError;
 use crate::pitchfork_toml::CpuLimit;
 use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::MemoryLimit;
@@ -30,13 +31,23 @@ fn should_clean_daemon(
     daemon: &Daemon,
     namespaces: &[String],
     daemons: &[DaemonId],
-    prune: bool,
 ) -> bool {
     let namespace_matches =
         namespaces.is_empty() || namespaces.iter().any(|ns| ns == id.namespace());
     let daemon_matches = daemons.is_empty() || daemons.contains(id);
-    let prune_matches = !prune || daemon.dir.as_ref().is_none_or(|dir| !dir.exists());
-    daemon.pid.is_none() && namespace_matches && daemon_matches && prune_matches
+    daemon.pid.is_none() && namespace_matches && daemon_matches
+}
+
+fn prune_candidate(
+    id: &DaemonId,
+    daemon: &Daemon,
+    namespaces: &[String],
+    daemons: &[DaemonId],
+) -> Option<(DaemonId, PathBuf)> {
+    should_clean_daemon(id, daemon, namespaces, daemons)
+        .then(|| daemon.dir.clone())
+        .flatten()
+        .map(|dir| (id.clone(), dir))
 }
 
 /// Options for upserting a daemon's state.
@@ -396,7 +407,7 @@ impl Supervisor {
 
     /// Clean up daemons that have no PID
     pub(crate) async fn clean(&self) -> Result<()> {
-        self.clean_filtered(&[], &[], false).await;
+        self.clean_filtered(&[], &[], false).await?;
         Ok(())
     }
 
@@ -406,15 +417,51 @@ impl Supervisor {
         namespaces: &[String],
         daemons: &[DaemonId],
         prune: bool,
-    ) -> u64 {
+    ) -> Result<u64> {
+        if prune {
+            let candidates: Vec<(DaemonId, PathBuf)> = {
+                let state_file = self.state_file.lock().await;
+                state_file
+                    .daemons
+                    .iter()
+                    .filter_map(|(id, daemon)| prune_candidate(id, daemon, namespaces, daemons))
+                    .collect()
+            };
+
+            let mut missing = HashMap::new();
+            for (id, dir) in candidates {
+                if !tokio::fs::try_exists(&dir)
+                    .await
+                    .map_err(|source| FileError::ReadError {
+                        path: dir.clone(),
+                        source,
+                    })?
+                {
+                    missing.insert(id, dir);
+                }
+            }
+
+            let mut removed = 0;
+            let mut state_file = self.state_file.lock().await;
+            state_file.retain_daemons(|id, daemon| {
+                let remove = should_clean_daemon(id, daemon, namespaces, daemons)
+                    && missing
+                        .get(id)
+                        .is_some_and(|missing_dir| daemon.dir.as_ref() == Some(missing_dir));
+                removed += u64::from(remove);
+                !remove
+            });
+            return Ok(removed);
+        }
+
         let mut removed = 0;
         let mut state_file = self.state_file.lock().await;
         state_file.retain_daemons(|id, daemon| {
-            let remove = should_clean_daemon(id, daemon, namespaces, daemons, prune);
+            let remove = should_clean_daemon(id, daemon, namespaces, daemons);
             removed += u64::from(remove);
             !remove
         });
-        removed
+        Ok(removed)
     }
 
     /// Return the union of active directories from shell tracking and project
@@ -558,41 +605,33 @@ mod tests {
             &daemon(&api, None, None),
             &namespaces,
             &daemons,
-            false
         ));
         assert!(!should_clean_daemon(
             &worker,
             &daemon(&worker, None, None),
             &namespaces,
             &daemons,
-            false
         ));
         assert!(!should_clean_daemon(
             &api,
             &daemon(&api, Some(42), None),
             &namespaces,
             &daemons,
-            false
         ));
     }
 
     #[test]
-    fn prune_only_matches_missing_directories() {
-        let temp = tempfile::tempdir().unwrap();
+    fn prune_candidates_require_a_recorded_directory() {
         let id = DaemonId::new("project-a", "api");
-        assert!(!should_clean_daemon(
-            &id,
-            &daemon(&id, None, Some(temp.path().to_path_buf())),
-            &[],
-            &[],
-            true
-        ));
-        assert!(should_clean_daemon(
-            &id,
-            &daemon(&id, None, Some(temp.path().join("removed"))),
-            &[],
-            &[],
-            true
-        ));
+        assert!(prune_candidate(&id, &daemon(&id, None, None), &[], &[]).is_none());
+        assert_eq!(
+            prune_candidate(
+                &id,
+                &daemon(&id, None, Some(PathBuf::from("missing"))),
+                &[],
+                &[]
+            ),
+            Some((id, PathBuf::from("missing")))
+        );
     }
 }

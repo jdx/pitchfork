@@ -135,7 +135,7 @@ impl Supervisor {
                 daemons,
                 prune,
             } => {
-                let count = self.clean_filtered(&namespaces, &daemons, prune).await;
+                let count = self.clean_filtered(&namespaces, &daemons, prune).await?;
                 IpcResponse::Cleaned { count }
             }
             IpcRequest::GetDisabledDaemons => {

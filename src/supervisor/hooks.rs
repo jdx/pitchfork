@@ -11,6 +11,7 @@ use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
 use indexmap::IndexMap;
+use miette::IntoDiagnostic;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -49,8 +50,10 @@ fn get_hook_cmd(
     })
 }
 
-fn load_hook_config(daemon_dir: &std::path::Path) -> Result<PitchforkToml> {
-    PitchforkToml::all_merged_all_namespaces_from(daemon_dir)
+async fn load_hook_config(daemon_dir: PathBuf) -> Result<PitchforkToml> {
+    tokio::task::spawn_blocking(move || PitchforkToml::all_merged_all_namespaces_from(&daemon_dir))
+        .await
+        .into_diagnostic()?
 }
 
 /// Create a tokio Command for a hook using the configured `general.shell`
@@ -93,10 +96,12 @@ pub(crate) async fn fire_hook(
     extra_env: Vec<(String, String)>,
 ) {
     let handle = tokio::spawn(async move {
-        let pt = load_hook_config(&daemon_dir).unwrap_or_else(|e| {
-            warn!("Failed to load config for hook '{hook_type}': {e}");
-            PitchforkToml::default()
-        });
+        let pt = load_hook_config(daemon_dir.clone())
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Failed to load config for hook '{hook_type}': {e}");
+                PitchforkToml::default()
+            });
         let hook_cmd = pt
             .daemons
             .get(&daemon_id)
@@ -183,7 +188,9 @@ pub(crate) async fn fire_output_hook(
 ) {
     let handle = tokio::spawn(async move {
         // Render Tera templates in output hook command
-        let pt = load_hook_config(&daemon_dir).unwrap_or_default();
+        let pt = load_hook_config(daemon_dir.clone())
+            .await
+            .unwrap_or_default();
         let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
             Ok(cmd) => cmd,
             Err(e) => {
@@ -287,28 +294,30 @@ async fn render_hook_template(
 mod tests {
     use super::*;
 
-    #[test]
-    fn hook_config_is_loaded_from_each_daemon_directory() {
+    #[tokio::test]
+    async fn hook_config_is_loaded_from_each_daemon_directory() {
         let temp = tempfile::tempdir().unwrap();
         let first = temp.path().join("worktree-one");
         let second = temp.path().join("worktree-two");
-        std::fs::create_dir(&first).unwrap();
-        std::fs::create_dir(&second).unwrap();
-        std::fs::write(
+        tokio::fs::create_dir(&first).await.unwrap();
+        tokio::fs::create_dir(&second).await.unwrap();
+        tokio::fs::write(
             first.join("pitchfork.toml"),
             "[daemons.api]\nrun = \"true\"\n[daemons.api.hooks]\non_ready = \"echo one\"\n",
         )
+        .await
         .unwrap();
-        std::fs::write(
+        tokio::fs::write(
             second.join("pitchfork.toml"),
             "[daemons.api]\nrun = \"true\"\n[daemons.api.hooks]\non_ready = \"echo two\"\n",
         )
+        .await
         .unwrap();
 
         let first_id = DaemonId::new("worktree-one", "api");
         let second_id = DaemonId::new("worktree-two", "api");
-        let first_config = load_hook_config(&first).unwrap();
-        let second_config = load_hook_config(&second).unwrap();
+        let first_config = load_hook_config(first).await.unwrap();
+        let second_config = load_hook_config(second).await.unwrap();
 
         assert_eq!(
             get_hook_cmd(&first_config.daemons[&first_id].hooks, &HookType::OnReady),
