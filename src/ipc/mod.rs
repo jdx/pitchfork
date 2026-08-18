@@ -96,6 +96,13 @@ pub enum IpcRequest {
     /// Ask the supervisor for the URL of the web UI, if it is running.
     /// Reflects the actual bound address, not static config.
     GetWebUrl,
+    /// Remove stopped daemon registrations matching the supplied filters.
+    /// Appended to preserve the wire indexes of existing variants.
+    CleanFiltered {
+        namespaces: Vec<String>,
+        daemons: Vec<DaemonId>,
+        prune: bool,
+    },
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -175,6 +182,10 @@ pub enum IpcResponse {
     DaemonNotFound,
     /// Snapshot of all project sessions (response to `GetProjectSessions`).
     ProjectSessions(Vec<ProjectSessionInfo>),
+    /// Number of daemon registrations removed by `CleanFiltered`.
+    Cleaned {
+        count: u64,
+    },
 }
 fn fs_name(name: &str) -> Result<Name<'_>> {
     // Unix: use a filesystem path for the AF_UNIX socket.
@@ -236,5 +247,39 @@ fn deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
         rmp_serde::from_slice(&bytes)
             .into_diagnostic()
             .wrap_err("failed to deserialize IPC MessagePack response")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filtered_clean_ipc_round_trips() {
+        let request = IpcRequest::CleanFiltered {
+            namespaces: vec!["worktree".to_string()],
+            daemons: vec![DaemonId::new("worktree", "api")],
+            prune: true,
+        };
+        let mut bytes = serialize(&request).unwrap();
+        bytes.push(b'\n');
+        let decoded: IpcRequest = deserialize(&bytes).unwrap();
+        match decoded {
+            IpcRequest::CleanFiltered {
+                namespaces,
+                daemons,
+                prune,
+            } => {
+                assert_eq!(namespaces, ["worktree"]);
+                assert_eq!(daemons, [DaemonId::new("worktree", "api")]);
+                assert!(prune);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+
+        let mut bytes = serialize(&IpcResponse::Cleaned { count: 3 }).unwrap();
+        bytes.push(b'\n');
+        let decoded: IpcResponse = deserialize(&bytes).unwrap();
+        assert!(matches!(decoded, IpcResponse::Cleaned { count: 3 }));
     }
 }

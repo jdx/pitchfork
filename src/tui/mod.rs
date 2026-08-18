@@ -61,6 +61,9 @@ enum TaskResult {
     BatchDisable {
         count: usize,
     },
+    Clean {
+        result: crate::Result<u64>,
+    },
     Refresh {
         result: crate::Result<Vec<DaemonListEntry>>,
         /// Whether this refresh completing should clear `in_flight`.
@@ -328,6 +331,23 @@ async fn run_app(
                         app.namespace_filter.clone(),
                     );
                 }
+                TaskResult::Clean { result } => {
+                    app.stop_loading();
+                    in_flight = false;
+                    match result {
+                        Ok(count) => app.set_message(format!(
+                            "Removed {count} stopped/failed daemon registration(s)"
+                        )),
+                        Err(e) => app.set_message(format!("Remove failed: {e}")),
+                    }
+                    app.clear_selection();
+                    spawn_refresh(
+                        Arc::clone(client),
+                        tx.clone(),
+                        false,
+                        app.namespace_filter.clone(),
+                    );
+                }
                 TaskResult::Refresh {
                     result,
                     clears_in_flight,
@@ -532,6 +552,19 @@ async fn run_app(
                                         let _ = client.disable(id.clone()).await;
                                     }
                                     let _ = tx.send(TaskResult::BatchDisable { count });
+                                });
+                            }
+                            app::PendingAction::Clean(ids) => {
+                                in_flight = true;
+                                app.start_loading(format!(
+                                    "Removing {} daemon registration(s)...",
+                                    ids.len()
+                                ));
+                                let client = Arc::clone(client);
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    let result = client.clean_filtered(vec![], ids, false).await;
+                                    let _ = tx.send(TaskResult::Clean { result });
                                 });
                             }
                             app::PendingAction::DeleteDaemon { id, config_path } => {

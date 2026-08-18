@@ -42,7 +42,7 @@ run = "npm run server"
 All configuration uses TOML format:
 
 ```toml
-namespace = "my-project" # optional, per-file namespace override
+namespace = "my-project" # optional, project-directory namespace override
 
 [daemons.<daemon-name>]
 run = "command to execute"
@@ -68,14 +68,15 @@ The `--` sequence is reserved for internal use (namespace encoding). See [Namesp
 
 - Global config files (`/etc/pitchfork/config.toml`, `~/.config/pitchfork/config.toml`) use namespace `global`
 - Project config files (`.config/pitchfork.toml`, `.config/pitchfork.local.toml`, `pitchfork.toml`, `pitchfork.local.toml`) use:
-  - Top-level `namespace = "..."` if set in the config file
+  - Top-level `namespace = "..."` if set in any of the four config files in that project directory
   - Otherwise, the parent directory name as namespace
 - For `.config/pitchfork.toml` and `.config/pitchfork.local.toml`, the namespace is derived from the project directory (the `.config` directory's parent), not from `.config` itself
 - If the derived directory name is invalid (`--`, spaces, non-ASCII, etc.), parsing fails and you should set top-level `namespace`
 
 ### Top-level `namespace` (optional)
 
-Overrides the namespace used for all daemons in that specific config file.
+Overrides the namespace used for all daemons in the four project config files
+in that directory.
 
 ```toml
 namespace = "frontend"
@@ -86,8 +87,9 @@ run = "npm run dev"
 
 Notes:
 
-- `pitchfork.local.toml` shares namespace with sibling `pitchfork.toml`
-- If both declare `namespace`, the values must match
+- One declaration applies to `.config/pitchfork.toml`,
+  `.config/pitchfork.local.toml`, `pitchfork.toml`, and `pitchfork.local.toml`
+- If multiple files declare `namespace`, every value must match
 - Global config files must use `global`
 
 ## Daemon Options
@@ -270,7 +272,9 @@ depends = ["api"]
 ### `ready_cmd`
 
 Shell command to poll for readiness. Daemon is ready when command exits with code 0.
-Supports [templates](/guides/configuration-templates).
+Supports [templates](/guides/configuration-templates). It receives the same configured
+environment and pitchfork metadata as the daemon, including `$PORT`, `$PORT0`,
+`$PORT1`, and so on after port auto-bumping.
 
 ```toml
 [daemons.postgres]
@@ -280,6 +284,11 @@ ready_cmd = "pg_isready -h localhost"
 [daemons.redis]
 run = "redis-server"
 ready_cmd = "redis-cli ping"
+
+[daemons.api]
+run = "./server --port $PORT"
+port = { expect = [3000], bump = 10 }
+ready_cmd = "curl -f http://localhost:$PORT/health"
 ```
 
 ### `depends`

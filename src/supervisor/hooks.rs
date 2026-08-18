@@ -11,6 +11,7 @@ use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
 use indexmap::IndexMap;
+use miette::IntoDiagnostic;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -49,6 +50,12 @@ fn get_hook_cmd(
     })
 }
 
+async fn load_hook_config(daemon_dir: PathBuf) -> Result<PitchforkToml> {
+    tokio::task::spawn_blocking(move || PitchforkToml::all_merged_all_namespaces_from(&daemon_dir))
+        .await
+        .into_diagnostic()?
+}
+
 /// Create a tokio Command for a hook using the configured `general.shell`
 /// setting (same shell used for daemon `run` commands). Returns an error
 /// if the shell setting is empty or unparseable, matching daemon startup
@@ -74,7 +81,7 @@ fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
 
 /// Fire a hook command as a fire-and-forget tokio task.
 ///
-/// Reads the hook command from fresh config (`PitchforkToml::all_merged()`),
+/// Reads the hook command from fresh config rooted at the daemon's directory,
 /// then spawns it in the background. Errors are logged but never block the caller.
 ///
 /// The spawned task is also registered in `SUPERVISOR.hook_tasks` so that
@@ -89,10 +96,12 @@ pub(crate) async fn fire_hook(
     extra_env: Vec<(String, String)>,
 ) {
     let handle = tokio::spawn(async move {
-        let pt = PitchforkToml::all_merged_all_namespaces().unwrap_or_else(|e| {
-            warn!("Failed to load config for hook '{hook_type}': {e}");
-            PitchforkToml::default()
-        });
+        let pt = load_hook_config(daemon_dir.clone())
+            .await
+            .unwrap_or_else(|e| {
+                warn!("Failed to load config for hook '{hook_type}': {e}");
+                PitchforkToml::default()
+            });
         let hook_cmd = pt
             .daemons
             .get(&daemon_id)
@@ -179,7 +188,9 @@ pub(crate) async fn fire_output_hook(
 ) {
     let handle = tokio::spawn(async move {
         // Render Tera templates in output hook command
-        let pt = PitchforkToml::all_merged_all_namespaces().unwrap_or_default();
+        let pt = load_hook_config(daemon_dir.clone())
+            .await
+            .unwrap_or_default();
         let cmd = match render_hook_template(&cmd, &daemon_id, &pt).await {
             Ok(cmd) => cmd,
             Err(e) => {
@@ -277,4 +288,46 @@ async fn render_hook_template(
     }
 
     template::render_template(template_str, &ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hook_config_is_loaded_from_each_daemon_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("worktree-one");
+        let second = temp.path().join("worktree-two");
+        tokio::fs::create_dir(&first).await.unwrap();
+        tokio::fs::create_dir(&second).await.unwrap();
+        tokio::fs::write(
+            first.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n[daemons.api.hooks]\non_ready = \"echo one\"\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            second.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n[daemons.api.hooks]\non_ready = \"echo two\"\n",
+        )
+        .await
+        .unwrap();
+
+        let first_id = DaemonId::new("worktree-one", "api");
+        let second_id = DaemonId::new("worktree-two", "api");
+        let first_config = load_hook_config(first).await.unwrap();
+        let second_config = load_hook_config(second).await.unwrap();
+
+        assert_eq!(
+            get_hook_cmd(&first_config.daemons[&first_id].hooks, &HookType::OnReady),
+            Some("echo one".to_string())
+        );
+        assert_eq!(
+            get_hook_cmd(&second_config.daemons[&second_id].hooks, &HookType::OnReady),
+            Some("echo two".to_string())
+        );
+        assert!(!first_config.daemons.contains_key(&second_id));
+        assert!(!second_config.daemons.contains_key(&first_id));
+    }
 }

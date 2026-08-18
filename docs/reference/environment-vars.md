@@ -56,7 +56,8 @@ spawning an unmanaged supervisor. Explicit `pitchfork supervisor start` and
 
 ## Daemon Process Variables
 
-These environment variables are automatically set for every daemon process and its [lifecycle hooks](/guides/lifecycle-hooks).
+These environment variables are automatically set for every daemon process, its
+`ready_cmd` probes, and its [lifecycle hooks](/guides/lifecycle-hooks).
 
 ### `PITCHFORK_DAEMON_ID`
 

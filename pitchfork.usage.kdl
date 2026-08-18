@@ -120,8 +120,16 @@ after daemons have failed.
 Examples:
 
     pitchfork clean                 Remove all stopped/failed entries
+    pitchfork clean my-worktree     Remove entries in one namespace
+    pitchfork clean --daemon api    Remove the local namespace's api entry
+    pitchfork clean --prune         Remove entries whose directories disappeared
     pitchfork c                     Alias for 'clean'
 """#
+    flag --daemon help="Only clean these daemons (repeatable; bare names use the current namespace)" var=#true {
+        arg <ID>
+    }
+    flag --prune help="Only clean registrations whose working directories no longer exist"
+    arg "[NAMESPACE]…" help="Only clean daemon registrations in these namespaces" required=#false var=#true
 }
 cmd daemons help="List configured daemons from all merged config files." effect=read {
     alias daemon

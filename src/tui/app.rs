@@ -833,6 +833,7 @@ pub enum PendingAction {
     BatchStop(Vec<DaemonId>),
     BatchRestart(Vec<DaemonId>),
     BatchDisable(Vec<DaemonId>),
+    Clean(Vec<DaemonId>),
     // Config editor actions
     DeleteDaemon { id: String, config_path: PathBuf },
     DiscardEditorChanges,

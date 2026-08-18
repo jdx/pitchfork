@@ -14,7 +14,7 @@
 - [`pitchfork boot enable`](/cli/boot/enable.md)
 - [`pitchfork boot disable`](/cli/boot/disable.md)
 - [`pitchfork boot status`](/cli/boot/status.md)
-- [`pitchfork clean`](/cli/clean.md)
+- [`pitchfork clean [--daemon… <ID>] [--prune] [NAMESPACE]…`](/cli/clean.md)
 - [`pitchfork daemons [--json] <SUBCOMMAND>`](/cli/daemons.md)
 - [`pitchfork daemons add [FLAGS] <ID> [ARGS]…`](/cli/daemons/add.md)
 - [`pitchfork daemons remove [FLAGS] <ID>`](/cli/daemons/remove.md)

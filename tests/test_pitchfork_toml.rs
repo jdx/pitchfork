@@ -1743,8 +1743,96 @@ run = "echo local"
     assert!(result.is_err(), "mismatched local namespace should fail");
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("does not match sibling"),
+        msg.contains("does not match directory-level namespace"),
         "error should explain mismatch, got: {msg}"
+    );
+}
+
+#[test]
+fn test_namespace_override_applies_to_all_project_config_files() {
+    let temp = TempDir::new().unwrap();
+    let family = [
+        ".config/pitchfork.toml",
+        ".config/pitchfork.local.toml",
+        "pitchfork.toml",
+        "pitchfork.local.toml",
+    ];
+
+    for (source_index, source) in family.iter().enumerate() {
+        let project = temp.path().join(format!("项目-{source_index}"));
+        fs::create_dir_all(project.join(".config")).unwrap();
+        for (daemon_index, config) in family.iter().enumerate() {
+            let namespace = if config == source {
+                "namespace = \"team\"\n"
+            } else {
+                ""
+            };
+            fs::write(
+                project.join(config),
+                format!(
+                    "{namespace}[daemons.daemon{daemon_index}]\nrun = \"echo {daemon_index}\"\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        let pt = pitchfork_toml::PitchforkToml::all_merged_from(&project).unwrap();
+        for daemon_index in 0..family.len() {
+            assert!(
+                pt.daemons
+                    .contains_key(&DaemonId::parse(&format!("team/daemon{daemon_index}")).unwrap()),
+                "override in {source} did not apply to daemon{daemon_index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_directory_namespace_override_conflict_across_config_locations() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join(".config")).unwrap();
+    fs::write(
+        temp.path().join(".config/pitchfork.toml"),
+        "namespace = \"dot\"\n",
+    )
+    .unwrap();
+    fs::write(temp.path().join("pitchfork.toml"), "namespace = \"root\"\n").unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::all_merged_from(temp.path()).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("does not match directory-level namespace"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn test_parse_str_uses_unsaved_namespace_when_checking_directory_family() {
+    let temp = TempDir::new().unwrap();
+    fs::create_dir_all(temp.path().join(".config")).unwrap();
+    fs::write(
+        temp.path().join(".config/pitchfork.toml"),
+        "namespace = \"team\"\n",
+    )
+    .unwrap();
+    let target = temp.path().join("pitchfork.toml");
+
+    let parsed =
+        pitchfork_toml::PitchforkToml::parse_str("[daemons.api]\nrun = \"echo api\"\n", &target)
+            .unwrap();
+    assert!(
+        parsed
+            .daemons
+            .contains_key(&DaemonId::parse("team/api").unwrap())
+    );
+
+    let err = pitchfork_toml::PitchforkToml::parse_str(
+        "namespace = \"other\"\n[daemons.api]\nrun = \"echo api\"\n",
+        &target,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("does not match directory-level namespace")
     );
 }
 

@@ -17,6 +17,7 @@ use crate::settings::settings;
 use crate::shell::Shell;
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
+use indexmap::IndexMap;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -33,6 +34,24 @@ use tokio::time;
 /// Cache for compiled regex patterns to avoid recompilation on daemon restarts
 static REGEX_CACHE: Lazy<std::sync::Mutex<HashMap<String, Regex>>> =
     Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn resolve_configured_ready_port(
+    configured_port: u16,
+    expected_ports: &[u16],
+    resolved_ports: &[u16],
+) -> u16 {
+    let bump_offset = resolved_ports
+        .first()
+        .unwrap_or(&0)
+        .saturating_sub(*expected_ports.first().unwrap_or(&0));
+    if expected_ports.contains(&configured_port) && bump_offset > 0 {
+        configured_port
+            .checked_add(bump_offset)
+            .unwrap_or(configured_port)
+    } else {
+        configured_port
+    }
+}
 
 #[cfg(unix)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +99,39 @@ struct CmdProbe {
 /// The probe is started with `kill_on_drop(true)` as a cancellation fallback. The
 /// spawned task waits for the process to exit; if cancellation is requested, it
 /// kills the child and waits for it to reap before reporting the result.
-fn spawn_cmd_probe(id: &DaemonId, cmd: &str, dir: &std::path::Path) -> CmdProbe {
+fn apply_runtime_env(
+    command: &mut tokio::process::Command,
+    id: &DaemonId,
+    retry_count: u32,
+    daemon_env: Option<&IndexMap<String, String>>,
+    resolved_ports: &[u16],
+) {
+    if let Some(ref path) = *env::ORIGINAL_PATH {
+        command.env("PATH", path);
+    }
+    if let Some(env_vars) = daemon_env {
+        command.envs(env_vars);
+    }
+    command
+        .env("PITCHFORK_DAEMON_ID", id.qualified())
+        .env("PITCHFORK_DAEMON_NAMESPACE", id.namespace())
+        .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
+    if let Some(port) = resolved_ports.first() {
+        command.env("PORT", port.to_string());
+        for (index, port) in resolved_ports.iter().enumerate() {
+            command.env(format!("PORT{index}"), port.to_string());
+        }
+    }
+}
+
+fn spawn_cmd_probe(
+    id: &DaemonId,
+    cmd: &str,
+    dir: &std::path::Path,
+    retry_count: u32,
+    daemon_env: Option<&IndexMap<String, String>>,
+    resolved_ports: &[u16],
+) -> CmdProbe {
     // Use the configured general.shell setting (same as daemon run and hooks)
     // instead of default_for_platform(). On Windows, default_for_platform()
     // returns Shell::Cmd which cannot parse Unix-style commands like
@@ -102,6 +153,7 @@ fn spawn_cmd_probe(id: &DaemonId, cmd: &str, dir: &std::path::Path) -> CmdProbe 
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
+    apply_runtime_env(&mut command, id, retry_count, daemon_env, resolved_ports);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
@@ -336,18 +388,11 @@ impl Supervisor {
                     let ready_port = if let Some(configured_port) =
                         opts.ready_port.as_ref().and_then(|p| p.as_port())
                     {
-                        // If ready_port matches one of the expected ports, apply the same bump offset
-                        let bump_offset = resolved
-                            .first()
-                            .unwrap_or(&0)
-                            .saturating_sub(*expected_ports.first().unwrap_or(&0));
-                        if expected_ports.contains(&configured_port) && bump_offset > 0 {
-                            configured_port
-                                .checked_add(bump_offset)
-                                .or(Some(configured_port))
-                        } else {
-                            Some(configured_port)
-                        }
+                        Some(resolve_configured_ready_port(
+                            configured_port,
+                            &expected_ports,
+                            &resolved,
+                        ))
                     } else if opts.ready_output.is_none()
                         && opts.ready_http.is_none()
                         && opts.ready_cmd.is_none()
@@ -593,32 +638,13 @@ impl Supervisor {
         #[cfg(not(unix))]
         cmd.stdin(std::process::Stdio::null());
 
-        // Ensure daemon can find user tools by using the original PATH
-        if let Some(ref path) = *env::ORIGINAL_PATH {
-            cmd.env("PATH", path);
-        }
-
-        // Apply custom environment variables from config
-        if let Some(ref env_vars) = opts.env {
-            cmd.envs(env_vars);
-        }
-
-        // Inject pitchfork metadata env vars AFTER user env so they can't be overwritten
-        cmd.env("PITCHFORK_DAEMON_ID", id.qualified());
-        cmd.env("PITCHFORK_DAEMON_NAMESPACE", id.namespace());
-        cmd.env("PITCHFORK_RETRY_COUNT", opts.retry_count.to_string());
-
-        // Inject the resolved ports for the daemon to use
-        if !resolved_ports.is_empty() {
-            // Set PORT to the first port for backward compatibility
-            // When there's only one port, both PORT and PORT0 will be set to the same value.
-            // This follows the convention used by many deployment platforms (Heroku, etc.).
-            cmd.env("PORT", resolved_ports[0].to_string());
-            // Set individual ports as PORT0, PORT1, etc.
-            for (i, port) in resolved_ports.iter().enumerate() {
-                cmd.env(format!("PORT{i}"), port.to_string());
-            }
-        }
+        apply_runtime_env(
+            &mut cmd,
+            id,
+            opts.retry_count,
+            opts.env.as_ref(),
+            &resolved_ports,
+        );
 
         // Inject proxy-related environment variables
         inject_proxy_env(&mut cmd, &opts.slug);
@@ -744,6 +770,8 @@ impl Supervisor {
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
         let hook_daemon_env = opts.env.clone();
+        let readiness_daemon_env = opts.env.clone();
+        let readiness_resolved_ports = daemon.resolved_port.clone();
         let on_output_hook = opts.on_output_hook.clone();
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
@@ -992,7 +1020,14 @@ impl Supervisor {
                 .and_then(|c| c.timeout)
                 .map(|d| Box::pin(time::sleep(d)));
             if let Some(ref cmd) = ready_cmd {
-                cmd_probe = Some(spawn_cmd_probe(&id, &cmd.run, daemon_dir.as_path()));
+                cmd_probe = Some(spawn_cmd_probe(
+                    &id,
+                    &cmd.run,
+                    daemon_dir.as_path(),
+                    hook_retry_count,
+                    readiness_daemon_env.as_ref(),
+                    &readiness_resolved_ports,
+                ));
             }
 
             // Use a channel to communicate process exit status
@@ -1379,7 +1414,14 @@ impl Supervisor {
                         }
                     }, if !ready_notified && ready_cmd.is_some() && !cmd_exhausted && cmd_probe.is_none() => {
                         if let Some(ref cmd) = ready_cmd {
-                            cmd_probe = Some(spawn_cmd_probe(&id, &cmd.run, daemon_dir.as_path()));
+                            cmd_probe = Some(spawn_cmd_probe(
+                                &id,
+                                &cmd.run,
+                                daemon_dir.as_path(),
+                                hook_retry_count,
+                                readiness_daemon_env.as_ref(),
+                                &readiness_resolved_ports,
+                            ));
                         }
                         cmd_respawn_delay = None;
                     }
@@ -2586,7 +2628,7 @@ mod ready_check_tests {
     #[tokio::test]
     async fn spawn_cmd_probe_reports_success() {
         let id = DaemonId::new("global", "probe-test");
-        let probe = spawn_cmd_probe(&id, "true", &std::env::temp_dir());
+        let probe = spawn_cmd_probe(&id, "true", &std::env::temp_dir(), 0, None, &[]);
         let status = probe.result_rx.await.unwrap().unwrap();
         assert!(status.success());
     }
@@ -2594,7 +2636,7 @@ mod ready_check_tests {
     #[tokio::test]
     async fn spawn_cmd_probe_stops_on_request() {
         let id = DaemonId::new("global", "probe-test");
-        let probe = spawn_cmd_probe(&id, "sleep 30", &std::env::temp_dir());
+        let probe = spawn_cmd_probe(&id, "sleep 30", &std::env::temp_dir(), 0, None, &[]);
         let CmdProbe {
             cancel_tx,
             result_rx,
@@ -2602,5 +2644,31 @@ mod ready_check_tests {
         let _ = cancel_tx.send(());
         let status = result_rx.await.unwrap().unwrap();
         assert!(!status.success());
+    }
+
+    #[tokio::test]
+    async fn spawn_cmd_probe_receives_daemon_and_resolved_port_environment() {
+        let id = DaemonId::new("worktree", "api");
+        let daemon_env = IndexMap::from([("CUSTOM_VALUE".to_string(), "yes".to_string())]);
+        let probe = spawn_cmd_probe(
+            &id,
+            r#"test "$CUSTOM_VALUE" = yes && test "$PORT" = 4100 && test "$PORT0" = 4100 && test "$PORT1" = 5100 && test "$PITCHFORK_DAEMON_ID" = worktree/api && test "$PITCHFORK_RETRY_COUNT" = 2"#,
+            &std::env::temp_dir(),
+            2,
+            Some(&daemon_env),
+            &[4100, 5100],
+        );
+        let status = probe.result_rx.await.unwrap().unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn configured_ready_port_follows_expected_port_bump() {
+        assert_eq!(resolve_configured_ready_port(3000, &[3000], &[3004]), 3004);
+        assert_eq!(
+            resolve_configured_ready_port(4000, &[3000, 4000], &[3003, 4003]),
+            4003
+        );
+        assert_eq!(resolve_configured_ready_port(8080, &[3000], &[3004]), 8080);
     }
 }

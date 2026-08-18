@@ -190,6 +190,31 @@ fn handle_dashboard_event(
             }
             Ok(None)
         }
+        KeyCode::Delete => {
+            let ids: Vec<DaemonId> = if app.has_selection() {
+                app.selected_daemon_ids()
+            } else {
+                app.selected_daemon()
+                    .map(|daemon| vec![daemon.id.clone()])
+                    .unwrap_or_default()
+            }
+            .into_iter()
+            .filter(|id| {
+                app.daemons.iter().any(|entry| {
+                    entry.id == *id
+                        && !app.config_daemon_ids.contains(id)
+                        && entry.pid.is_none()
+                        && (entry.status.is_stopped()
+                            || entry.status.is_failed()
+                            || entry.status.is_errored())
+                })
+            })
+            .collect();
+            if !ids.is_empty() {
+                app.confirm_action(PendingAction::Clean(ids));
+            }
+            Ok(None)
+        }
         KeyCode::Char('r') => {
             // Restart requires confirmation (for running daemons)
             if app.has_selection() {
@@ -784,5 +809,54 @@ fn handle_file_select_event(app: &mut App, key: KeyCode) -> Result<Option<Action
             Ok(None)
         }
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::Daemon;
+    use crate::daemon_list::NamespaceFilter;
+    use crate::daemon_status::DaemonStatus;
+
+    fn daemon(id: DaemonId, status: DaemonStatus, pid: Option<u32>) -> Daemon {
+        Daemon {
+            id,
+            status,
+            pid,
+            ..Daemon::default()
+        }
+    }
+
+    #[test]
+    fn delete_selects_only_stopped_state_backed_daemons() {
+        let stopped = DaemonId::new("worktree", "stopped");
+        let running = DaemonId::new("worktree", "running");
+        let available = DaemonId::new("worktree", "available");
+        let mut app = App::new(NamespaceFilter::default());
+        app.daemons = vec![
+            daemon(stopped.clone(), DaemonStatus::Stopped, None),
+            daemon(running.clone(), DaemonStatus::Running, Some(42)),
+            daemon(available.clone(), DaemonStatus::Stopped, None),
+        ];
+        app.config_daemon_ids.insert(available.clone());
+        app.multi_select = [stopped.clone(), running, available].into_iter().collect();
+
+        handle_dashboard_event(&mut app, KeyCode::Delete, KeyModifiers::NONE).unwrap();
+        match app.pending_action.take() {
+            Some(PendingAction::Clean(ids)) => assert_eq!(ids, [stopped]),
+            other => panic!("unexpected pending action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_ignores_config_only_daemon() {
+        let available = DaemonId::new("worktree", "available");
+        let mut app = App::new(NamespaceFilter::default());
+        app.daemons = vec![daemon(available.clone(), DaemonStatus::Stopped, None)];
+        app.config_daemon_ids.insert(available);
+
+        handle_dashboard_event(&mut app, KeyCode::Delete, KeyModifiers::NONE).unwrap();
+        assert!(app.pending_action.is_none());
     }
 }

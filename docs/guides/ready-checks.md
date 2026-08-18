@@ -138,13 +138,21 @@ ready_cmd = "pg_isready -h localhost"
 [daemons.worker]
 run = "./start-worker.sh"
 ready_cmd = { run = "test -f /tmp/worker.ready", timeout = "60s" }
+
+[daemons.web]
+run = "./web --port $PORT"
+port = { expect = [3000], bump = 10 }
+# PORT is the resolved value, including any bump selected by pitchfork
+ready_cmd = "curl -sf http://localhost:$PORT/health"
 ```
 
 **Best for:** Services that require custom readiness logic or external tools.
 
 ::: tip
 The command check polls every 500ms. Add a `timeout` to cap how long the check
-will poll. Use this when you need more complex readiness checks than the built-in options provide.
+will poll. Readiness commands inherit the daemon's configured environment,
+pitchfork metadata, and resolved `$PORT`, `$PORT0`, `$PORT1`, ... variables.
+Use this when you need more complex readiness checks than the built-in options provide.
 :::
 
 ## Templates
