@@ -1282,7 +1282,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let help_text = match app.view {
         View::Dashboard if app.search_active => "Type to search  Enter:finish  Esc:clear",
         View::Dashboard if app.has_selection() => {
-            "Space:toggle  Ctrl+A:all  c:clear  s:start  x:stop  r:restart  d:disable  e:enable"
+            "Space:toggle  Ctrl+A:all  c:clear  s:start  x:stop  Del:remove  r:restart  d:disable  e:enable"
         }
         View::Dashboard if !app.search_query.is_empty() => {
             "/:search  q/Esc:clear  j/k:nav  Space:select  s:start  a:toggle-avail  p:ports  ?:help"
@@ -1357,6 +1357,7 @@ fn draw_help_overlay(f: &mut Frame) {
         )]),
         Line::from("  s           Start stopped daemon(s)"),
         Line::from("  x           Stop running daemon(s)"),
+        Line::from("  Delete      Remove stopped/failed registration(s)"),
         Line::from("  r           Restart daemon(s)"),
         Line::from("  e           Enable disabled daemon(s)"),
         Line::from("  d           Disable daemon(s)"),
@@ -1454,6 +1455,10 @@ fn draw_confirm_overlay(f: &mut Frame, app: &App) {
         Some(PendingAction::BatchStop(ids)) => ("Stop", format!("{} daemons", ids.len())),
         Some(PendingAction::BatchRestart(ids)) => ("Restart", format!("{} daemons", ids.len())),
         Some(PendingAction::BatchDisable(ids)) => ("Disable", format!("{} daemons", ids.len())),
+        Some(PendingAction::Clean(ids)) => (
+            "Remove",
+            format!("{} stopped/failed daemon registration(s)", ids.len()),
+        ),
         Some(PendingAction::DeleteDaemon { id, .. }) => {
             ("Delete", format!("daemon '{id}' from config"))
         }

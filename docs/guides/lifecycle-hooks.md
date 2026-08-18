@@ -158,7 +158,8 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - Hooks are **fire-and-forget** — they run in the background and never block the daemon
 - Hook commands run in the daemon's working directory
 - Errors in hooks are logged but do not affect the daemon
-- Hooks read fresh configuration from `pitchfork.toml` each time they fire
+- Hooks read fresh configuration from the daemon's own directory each time they
+  fire, independent of the directory where the per-user supervisor started
 
 ## Examples
 

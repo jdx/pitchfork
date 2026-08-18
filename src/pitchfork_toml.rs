@@ -291,21 +291,8 @@ pub(crate) fn is_global_config(path: &Path) -> bool {
     path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
 }
 
-fn is_local_config(path: &Path) -> bool {
-    path.file_name()
-        .map(|n| n == "pitchfork.local.toml")
-        .unwrap_or(false)
-}
-
 pub(crate) fn is_dot_config_pitchfork(path: &Path) -> bool {
     path.ends_with(".config/pitchfork.toml") || path.ends_with(".config/pitchfork.local.toml")
-}
-
-fn sibling_base_config(path: &Path) -> Option<PathBuf> {
-    if !is_local_config(path) {
-        return None;
-    }
-    path.parent().map(|p| p.join("pitchfork.toml"))
 }
 
 fn parse_namespace_override_from_content(path: &Path, content: &str) -> Result<Option<String>> {
@@ -337,6 +324,69 @@ fn read_namespace_override_from_file(path: &Path) -> Result<Option<String>> {
         source: e,
     })?;
     parse_namespace_override_from_content(path, &content)
+}
+
+fn project_config_dir(path: &Path) -> Option<&Path> {
+    if is_dot_config_pitchfork(path) {
+        path.parent().and_then(Path::parent)
+    } else {
+        path.parent()
+    }
+}
+
+fn project_config_family(path: &Path) -> Vec<PathBuf> {
+    let Some(dir) = project_config_dir(path) else {
+        return vec![path.to_path_buf()];
+    };
+    vec![
+        dir.join(".config/pitchfork.toml"),
+        dir.join(".config/pitchfork.local.toml"),
+        dir.join("pitchfork.toml"),
+        dir.join("pitchfork.local.toml"),
+    ]
+}
+
+/// Resolve one namespace override shared by all project config files in a
+/// directory. `content_override` represents unsaved content for `path`.
+fn directory_namespace_override(
+    path: &Path,
+    content_override: Option<&str>,
+) -> Result<Option<String>> {
+    if is_global_config(path) {
+        return match content_override {
+            Some(content) => parse_namespace_override_from_content(path, content),
+            None => read_namespace_override_from_file(path),
+        };
+    }
+
+    let mut selected: Option<(String, PathBuf)> = None;
+    for candidate in project_config_family(path) {
+        let explicit = if candidate == path {
+            match content_override {
+                Some(content) => parse_namespace_override_from_content(&candidate, content)?,
+                None => read_namespace_override_from_file(&candidate)?,
+            }
+        } else {
+            read_namespace_override_from_file(&candidate)?
+        };
+        let Some(namespace) = explicit else { continue };
+        if let Some((selected_namespace, selected_path)) = &selected
+            && selected_namespace != &namespace
+        {
+            return Err(ConfigParseError::InvalidNamespace {
+                path: candidate,
+                namespace,
+                reason: format!(
+                    "namespace does not match directory-level namespace '{}' declared in {}",
+                    selected_namespace,
+                    selected_path.display()
+                ),
+            }
+            .into());
+        }
+        selected = Some((namespace, candidate));
+    }
+    Ok(selected.map(|(namespace, _)| namespace))
 }
 
 fn validate_namespace(path: &Path, namespace: &str) -> Result<String> {
@@ -399,28 +449,8 @@ fn namespace_from_path_with_override(path: &Path, explicit: Option<&str>) -> Res
 }
 
 fn namespace_from_file(path: &Path) -> Result<String> {
-    let explicit = read_namespace_override_from_file(path)?;
-    let base_explicit = sibling_base_config(path)
-        .filter(|p| p.exists())
-        .map(|p| read_namespace_override_from_file(&p))
-        .transpose()?
-        .flatten();
-
-    if let (Some(local_ns), Some(base_ns)) = (explicit.as_deref(), base_explicit.as_deref())
-        && local_ns != base_ns
-    {
-        return Err(ConfigParseError::InvalidNamespace {
-            path: path.to_path_buf(),
-            namespace: local_ns.to_string(),
-            reason: format!(
-                "namespace '{local_ns}' does not match sibling pitchfork.toml namespace '{base_ns}'"
-            ),
-        }
-        .into());
-    }
-
-    let effective_explicit = explicit.as_deref().or(base_explicit.as_deref());
-    namespace_from_path_with_override(path, effective_explicit)
+    let explicit = directory_namespace_override(path, None)?;
+    namespace_from_path_with_override(path, explicit.as_deref())
 }
 
 /// Extracts a namespace from a config file path.
@@ -796,39 +826,22 @@ impl PitchforkToml {
         config.resolve_daemon_id_with_namespace(user_id, &ns)
     }
 
-    /// Like `resolve_id`, but allows ad-hoc short IDs by falling back to
-    /// `global/<id>` when no configured daemon matches.
+    /// Like `resolve_id`, but allows ad-hoc short IDs in the current directory's
+    /// derived namespace.
     ///
     /// This is intended for commands such as `pitchfork run` that create
     /// managed daemons without requiring prior config entries.
     pub fn resolve_id_allow_adhoc(user_id: &str) -> Result<DaemonId> {
+        Self::resolve_id_allow_adhoc_from(user_id, &env::CWD)
+    }
+
+    fn resolve_id_allow_adhoc_from(user_id: &str, dir: &Path) -> Result<DaemonId> {
         if user_id.contains('/') {
             return DaemonId::parse(user_id);
         }
 
-        let config = Self::all_merged()?;
-        let ns = Self::namespace_for_dir(&env::CWD)?;
-
-        let preferred_id = DaemonId::try_new(&ns, user_id)?;
-        if config.daemons.contains_key(&preferred_id) {
-            return Ok(preferred_id);
-        }
-
-        let matches = config.resolve_daemon_id(user_id)?;
-        if matches.len() > 1 {
-            let mut candidates: Vec<String> = matches.iter().map(|id| id.qualified()).collect();
-            candidates.sort();
-            return Err(miette::miette!(
-                "daemon '{}' is ambiguous; matches: {}. Use a qualified daemon ID (namespace/name)",
-                user_id,
-                candidates.join(", ")
-            ));
-        }
-        if let Some(id) = matches.into_iter().next() {
-            return Ok(id);
-        }
-
-        DaemonId::try_new("global", user_id)
+        let ns = Self::namespace_for_dir(dir)?;
+        DaemonId::try_new(ns, user_id)
     }
 
     /// Convenience method: resolves multiple user IDs using the merged config and current directory.
@@ -1171,31 +1184,8 @@ impl PitchforkToml {
         let raw_config: PitchforkTomlRaw = toml::from_str(content)
             .map_err(|e| ConfigParseError::from_toml_error(path, content.to_string(), e))?;
 
-        let namespace = {
-            let base_explicit = sibling_base_config(path)
-                .filter(|p| p.exists())
-                .map(|p| read_namespace_override_from_file(&p))
-                .transpose()?
-                .flatten();
-
-            if is_local_config(path)
-                && let (Some(local_ns), Some(base_ns)) =
-                    (raw_config.namespace.as_deref(), base_explicit.as_deref())
-                && local_ns != base_ns
-            {
-                return Err(ConfigParseError::InvalidNamespace {
-                    path: path.to_path_buf(),
-                    namespace: local_ns.to_string(),
-                    reason: format!(
-                        "namespace '{local_ns}' does not match sibling pitchfork.toml namespace '{base_ns}'"
-                    ),
-                }
-                .into());
-            }
-
-            let explicit = raw_config.namespace.as_deref().or(base_explicit.as_deref());
-            namespace_from_path_with_override(path, explicit)?
-        };
+        let explicit = directory_namespace_override(path, Some(content))?;
+        let namespace = namespace_from_path_with_override(path, explicit.as_deref())?;
         let mut pt = Self::new(path.to_path_buf());
         pt.namespace = raw_config.namespace.clone();
 
@@ -2365,5 +2355,30 @@ dir = "~/projects/web"
             .current_dir(&repo)
             .output();
         super::invalidate_config_cache();
+    }
+
+    #[test]
+    fn test_adhoc_id_uses_invocation_directory_namespace() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("feature-tree");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.other]\nrun = \"true\"\n",
+        )
+        .unwrap();
+
+        let id = PitchforkToml::resolve_id_allow_adhoc_from("api", &project).unwrap();
+        assert_eq!(id, DaemonId::new("feature-tree", "api"));
+        let qualified =
+            PitchforkToml::resolve_id_allow_adhoc_from("explicit/api", &project).unwrap();
+        assert_eq!(qualified, DaemonId::new("explicit", "api"));
+    }
+
+    #[test]
+    fn test_adhoc_id_falls_back_to_global_without_project_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = PitchforkToml::resolve_id_allow_adhoc_from("api", temp.path()).unwrap();
+        assert_eq!(id, DaemonId::new("global", "api"));
     }
 }

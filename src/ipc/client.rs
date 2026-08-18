@@ -524,6 +524,25 @@ impl IpcClient {
         Ok(())
     }
 
+    pub async fn clean_filtered(
+        &self,
+        namespaces: Vec<String>,
+        daemons: Vec<DaemonId>,
+        prune: bool,
+    ) -> Result<u64> {
+        let rsp = self
+            .request(IpcRequest::CleanFiltered {
+                namespaces,
+                daemons,
+                prune,
+            })
+            .await?;
+        match rsp {
+            IpcResponse::Cleaned { count } => Ok(count),
+            rsp => Err(Self::unexpected_response("Cleaned", &rsp).into()),
+        }
+    }
+
     pub async fn get_disabled_daemons(&self) -> Result<Vec<DaemonId>> {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {

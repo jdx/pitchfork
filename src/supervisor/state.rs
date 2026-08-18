@@ -25,6 +25,20 @@ use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+fn should_clean_daemon(
+    id: &DaemonId,
+    daemon: &Daemon,
+    namespaces: &[String],
+    daemons: &[DaemonId],
+    prune: bool,
+) -> bool {
+    let namespace_matches =
+        namespaces.is_empty() || namespaces.iter().any(|ns| ns == id.namespace());
+    let daemon_matches = daemons.is_empty() || daemons.contains(id);
+    let prune_matches = !prune || daemon.dir.as_ref().is_none_or(|dir| !dir.exists());
+    daemon.pid.is_none() && namespace_matches && daemon_matches && prune_matches
+}
+
 /// Options for upserting a daemon's state.
 ///
 /// Use `UpsertDaemonOpts::builder(id)` to create, then set fields directly and call `.build()`.
@@ -382,9 +396,25 @@ impl Supervisor {
 
     /// Clean up daemons that have no PID
     pub(crate) async fn clean(&self) -> Result<()> {
-        let mut state_file = self.state_file.lock().await;
-        state_file.retain_daemons(|_id, d| d.pid.is_some());
+        self.clean_filtered(&[], &[], false).await;
         Ok(())
+    }
+
+    /// Clean up PID-less daemon registrations matching all supplied filters.
+    pub(crate) async fn clean_filtered(
+        &self,
+        namespaces: &[String],
+        daemons: &[DaemonId],
+        prune: bool,
+    ) -> u64 {
+        let mut removed = 0;
+        let mut state_file = self.state_file.lock().await;
+        state_file.retain_daemons(|id, daemon| {
+            let remove = should_clean_daemon(id, daemon, namespaces, daemons, prune);
+            removed += u64::from(remove);
+            !remove
+        });
+        removed
     }
 
     /// Return the union of active directories from shell tracking and project
@@ -500,5 +530,69 @@ impl Supervisor {
         } else {
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn daemon(id: &DaemonId, pid: Option<u32>, dir: Option<PathBuf>) -> Daemon {
+        Daemon {
+            id: id.clone(),
+            pid,
+            dir,
+            ..Daemon::default()
+        }
+    }
+
+    #[test]
+    fn clean_filters_intersect_and_preserve_running_daemons() {
+        let api = DaemonId::new("project-a", "api");
+        let worker = DaemonId::new("project-a", "worker");
+        let namespaces = vec!["project-a".to_string()];
+        let daemons = vec![api.clone()];
+
+        assert!(should_clean_daemon(
+            &api,
+            &daemon(&api, None, None),
+            &namespaces,
+            &daemons,
+            false
+        ));
+        assert!(!should_clean_daemon(
+            &worker,
+            &daemon(&worker, None, None),
+            &namespaces,
+            &daemons,
+            false
+        ));
+        assert!(!should_clean_daemon(
+            &api,
+            &daemon(&api, Some(42), None),
+            &namespaces,
+            &daemons,
+            false
+        ));
+    }
+
+    #[test]
+    fn prune_only_matches_missing_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let id = DaemonId::new("project-a", "api");
+        assert!(!should_clean_daemon(
+            &id,
+            &daemon(&id, None, Some(temp.path().to_path_buf())),
+            &[],
+            &[],
+            true
+        ));
+        assert!(should_clean_daemon(
+            &id,
+            &daemon(&id, None, Some(temp.path().join("removed"))),
+            &[],
+            &[],
+            true
+        ));
     }
 }

@@ -130,6 +130,14 @@ impl Supervisor {
                 self.clean().await?;
                 IpcResponse::Ok
             }
+            IpcRequest::CleanFiltered {
+                namespaces,
+                daemons,
+                prune,
+            } => {
+                let count = self.clean_filtered(&namespaces, &daemons, prune).await;
+                IpcResponse::Cleaned { count }
+            }
             IpcRequest::GetDisabledDaemons => {
                 let disabled = self.state_file.lock().await.disabled.clone();
                 IpcResponse::DisabledDaemons(disabled.into_iter().collect())
