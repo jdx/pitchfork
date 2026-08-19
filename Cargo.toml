@@ -52,7 +52,7 @@ jaq-core = "3"
 jaq-json = "2"
 jaq-std = "3"
 log = { version = "0.4", features = ["serde"] }
-mdns-sd = "0.20"
+mdns-sd = "0.21"
 miette = { version = "7", features = ["fancy"] }
 notify = { version = "8" }
 notify-debouncer-full = "0.7"
