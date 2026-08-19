@@ -1212,7 +1212,7 @@ mod tests {
                 "--nocapture",
             ])
             .env("PITCHFORK_TEST_PROJECT_MISE_MODE", mode)
-            .env_remove("PITCHFORK_GENERAL_MISE")
+            .env_remove("PITCHFORK_MISE")
             .output()
             .await
             .unwrap();
