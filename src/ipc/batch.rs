@@ -1195,33 +1195,59 @@ mod tests {
 
     #[tokio::test]
     async fn build_run_options_resolves_mise_from_daemon_project() {
-        let project = tempfile::tempdir().unwrap();
-        let config_path = project.path().join("pitchfork.toml");
-        let project_mise = !crate::settings::settings().general.mise;
-        tokio::fs::write(
-            &config_path,
-            format!("[settings.general]\nmise = {project_mise}\n"),
-        )
-        .await
-        .unwrap();
-
-        let id = DaemonId::try_new("other-project", "api").unwrap();
-        let daemon_config = PitchforkTomlDaemon {
-            run: "echo ready".to_string(),
-            path: Some(config_path),
-            ..PitchforkTomlDaemon::default()
-        };
-
-        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
-
-        assert_eq!(run_opts.mise, Some(project_mise));
+        run_project_mise_test_in_sanitized_child("project").await;
     }
 
     #[tokio::test]
     async fn build_run_options_resolves_mise_from_daemon_dot_config() {
+        run_project_mise_test_in_sanitized_child("dot-config").await;
+    }
+
+    async fn run_project_mise_test_in_sanitized_child(mode: &str) {
+        const CHILD_SENTINEL: &str = "project-mise-sanitized-child-ran";
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ipc::batch::tests::build_run_options_resolves_mise_in_sanitized_child",
+                "--nocapture",
+            ])
+            .env("PITCHFORK_TEST_PROJECT_MISE_MODE", mode)
+            .env_remove("PITCHFORK_GENERAL_MISE")
+            .output()
+            .await
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "sanitized child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(CHILD_SENTINEL),
+            "sanitized child test did not run:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn build_run_options_resolves_mise_in_sanitized_child() {
+        let Ok(mode) = std::env::var("PITCHFORK_TEST_PROJECT_MISE_MODE") else {
+            return;
+        };
+        eprintln!("project-mise-sanitized-child-ran");
+
         let project = tempfile::tempdir().unwrap();
-        let config_dir = project.path().join(".config");
-        tokio::fs::create_dir(&config_dir).await.unwrap();
+        let config_dir = match mode.as_str() {
+            "project" => project.path().to_path_buf(),
+            "dot-config" => {
+                let config_dir = project.path().join(".config");
+                tokio::fs::create_dir(&config_dir).await.unwrap();
+                config_dir
+            }
+            _ => panic!("unknown project mise test mode: {mode}"),
+        };
         let config_path = config_dir.join("pitchfork.toml");
         let project_mise = !crate::settings::settings().general.mise;
         tokio::fs::write(
