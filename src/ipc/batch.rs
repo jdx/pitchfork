@@ -1209,6 +1209,31 @@ mod tests {
     }
 
     #[test]
+    fn build_run_options_resolves_mise_from_daemon_dot_config() {
+        let project = tempfile::tempdir().unwrap();
+        let config_dir = project.path().join(".config");
+        std::fs::create_dir(&config_dir).unwrap();
+        let config_path = config_dir.join("pitchfork.toml");
+        let project_mise = !crate::settings::settings().general.mise;
+        std::fs::write(
+            &config_path,
+            format!("[settings.general]\nmise = {project_mise}\n"),
+        )
+        .unwrap();
+
+        let id = DaemonId::try_new("other-project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            path: Some(config_path),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+
+        assert_eq!(run_opts.mise, Some(project_mise));
+    }
+
+    #[test]
     fn build_run_options_preserves_daemon_mise_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {

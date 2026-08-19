@@ -147,7 +147,12 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
                 // Find project-level pitchfork.toml files
                 let mut project_paths = xx::file::find_up_all(
                     start_dir,
-                    &["pitchfork.local.toml", "pitchfork.toml"]
+                    &[
+                        "pitchfork.local.toml",
+                        "pitchfork.toml",
+                        ".config/pitchfork.local.toml",
+                        ".config/pitchfork.toml",
+                    ]
                 );
                 project_paths.reverse();
                 paths.extend(project_paths);
