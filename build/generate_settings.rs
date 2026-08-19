@@ -100,13 +100,21 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
             /// 3. Project-level: pitchfork.toml files from root to current directory
             /// Environment variables override all file-based settings.
             pub fn load() -> Self {
+                Self::load_from_dir(&crate::env::CWD)
+            }
+
+            /// Load settings for a specific project directory, then overlay environment variables.
+            ///
+            /// This is used when operating on daemons from registered namespaces whose project
+            /// settings may differ from those of the invoking process's current directory.
+            pub fn load_from_dir(start_dir: &std::path::Path) -> Self {
                 // Start with defaults
                 let mut settings = Self::default();
 
                 // Load and merge from all pitchfork.toml files
                 // Note: We can't use PitchforkToml::all_merged() here to avoid circular dependency
                 // Instead, we load each config file directly
-                for path in Self::config_paths() {
+                for path in Self::config_paths_from(start_dir) {
                     if path.exists() {
                         match std::fs::read_to_string(&path) {
                             Err(e) => eprintln!("pitchfork: warning: failed to read {}: {}", path.display(), e),
@@ -131,14 +139,14 @@ fn generate_settings_struct(settings: &Table) -> Result<String, Box<dyn std::err
             }
 
             /// Get all config file paths in precedence order (lowest to highest)
-            fn config_paths() -> Vec<std::path::PathBuf> {
+            fn config_paths_from(start_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
                 let mut paths = Vec::new();
                 paths.push(crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM.clone());
                 paths.push(crate::env::PITCHFORK_GLOBAL_CONFIG_USER.clone());
 
                 // Find project-level pitchfork.toml files
                 let mut project_paths = xx::file::find_up_all(
-                    &*crate::env::CWD,
+                    start_dir,
                     &["pitchfork.local.toml", "pitchfork.toml"]
                 );
                 project_paths.reverse();

@@ -112,14 +112,15 @@ pub fn build_run_options(
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
     // Resolve the project-scoped setting in the client process. The supervisor is
-    // long-lived and may have been started from a different directory, so asking
-    // it to resolve `None` against its own Settings instance loses values from the
-    // calling project's `[settings.general]` table.
-    run_opts.mise = Some(
-        run_opts
+    // long-lived and may have been started from a different directory. Use this
+    // daemon's defining config path rather than the invoking client's CWD because
+    // batch operations can include daemons from other registered namespaces.
+    run_opts.mise = Some(run_opts.mise.unwrap_or_else(|| {
+        let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
+        crate::settings::Settings::load_from_dir(&project_dir)
+            .general
             .mise
-            .unwrap_or(crate::settings::settings().general.mise),
-    );
+    }));
     run_opts.wait_ready = true;
     run_opts.ready_delay = run_opts.ready_delay.or(Some(3));
 
@@ -1182,6 +1183,29 @@ mod tests {
             run_opts.mise,
             Some(crate::settings::settings().general.mise)
         );
+    }
+
+    #[test]
+    fn build_run_options_resolves_mise_from_daemon_project() {
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        let project_mise = !crate::settings::settings().general.mise;
+        std::fs::write(
+            &config_path,
+            format!("[settings.general]\nmise = {project_mise}\n"),
+        )
+        .unwrap();
+
+        let id = DaemonId::try_new("other-project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            path: Some(config_path),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+
+        assert_eq!(run_opts.mise, Some(project_mise));
     }
 
     #[test]
