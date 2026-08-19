@@ -111,6 +111,15 @@ pub fn build_run_options(
         .map_err(|e| format!("Failed to parse command: {e}"))?;
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
+    // Resolve the project-scoped setting in the client process. The supervisor is
+    // long-lived and may have been started from a different directory, so asking
+    // it to resolve `None` against its own Settings instance loses values from the
+    // calling project's `[settings.general]` table.
+    run_opts.mise = Some(
+        run_opts
+            .mise
+            .unwrap_or(crate::settings::settings().general.mise),
+    );
     run_opts.wait_ready = true;
     run_opts.ready_delay = run_opts.ready_delay.or(Some(3));
 
@@ -1157,6 +1166,36 @@ mod tests {
 
         assert_eq!(ready_http.url, "http://localhost:3000/health");
         assert_eq!(ready_http.status, vec![401]);
+    }
+
+    #[test]
+    fn build_run_options_resolves_global_mise_for_supervisor() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+
+        assert_eq!(
+            run_opts.mise,
+            Some(crate::settings::settings().general.mise)
+        );
+    }
+
+    #[test]
+    fn build_run_options_preserves_daemon_mise_override() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            mise: Some(!crate::settings::settings().general.mise),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+
+        assert_eq!(run_opts.mise, daemon_config.mise);
     }
 
     #[test]
