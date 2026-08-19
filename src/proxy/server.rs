@@ -1559,7 +1559,7 @@ async fn try_auto_start_inner(
         ..crate::ipc::batch::StartOptions::default()
     };
     let mut run_opts =
-        match crate::ipc::batch::build_run_options(daemon_id, &daemon_config, Some(&opts)) {
+        match crate::ipc::batch::build_run_options(daemon_id, &daemon_config, Some(&opts)).await {
             Ok(o) => o,
             Err(e) => {
                 log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");

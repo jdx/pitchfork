@@ -39,19 +39,30 @@ EOF
   assert_output --partial "got_sigint"
 }
 
-@test "mise=true wraps run command with mise x" {
+@test "settings.general.mise loads the project mise environment" {
   command -v mise >/dev/null 2>&1 || skip "mise not installed"
+  export PITCHFORK_MISE_BIN
+  PITCHFORK_MISE_BIN="$(command -v mise)"
+  pitchfork supervisor start --force >/dev/null
 
-  create_pitchfork_toml <<EOF
+  cat >mise.toml <<'EOF'
+[env]
+PITCHFORK_MISE_TEST = "loaded_from_mise"
+EOF
+  mise trust mise.toml
+
+  create_pitchfork_toml <<'EOF'
 [daemons.mise_test]
-run = "echo hello_from_mise"
-mise = true
+run = "echo $PITCHFORK_MISE_TEST"
 ready_delay = 1
+
+[settings.general]
+mise = true
 EOF
 
   run pitchfork start mise_test
   assert_success
-  wait_for_logs mise_test "hello_from_mise" 10
+  wait_for_logs mise_test "loaded_from_mise" 10
 }
 
 @test "cpu_limit triggers on high CPU usage" {
