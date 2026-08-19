@@ -102,7 +102,7 @@ pub struct StartOptions {
 /// - Command parsing from the config's run string
 /// - Extracting all config values (cron, retry, ready checks, depends, etc.)
 /// - Merging CLI/API overrides with config defaults
-pub fn build_run_options(
+pub async fn build_run_options(
     id: &DaemonId,
     daemon_config: &PitchforkTomlDaemon,
     overrides: Option<&StartOptions>,
@@ -115,12 +115,17 @@ pub fn build_run_options(
     // long-lived and may have been started from a different directory. Use this
     // daemon's defining config path rather than the invoking client's CWD because
     // batch operations can include daemons from other registered namespaces.
-    run_opts.mise = Some(run_opts.mise.unwrap_or_else(|| {
+    if run_opts.mise.is_none() {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
-        crate::settings::Settings::load_from_dir(&project_dir)
-            .general
-            .mise
-    }));
+        let project_mise = tokio::task::spawn_blocking(move || {
+            crate::settings::Settings::load_from_dir(&project_dir)
+                .general
+                .mise
+        })
+        .await
+        .map_err(|e| format!("Failed to load project settings: {e}"))?;
+        run_opts.mise = Some(project_mise);
+    }
     run_opts.wait_ready = true;
     run_opts.ready_delay = run_opts.ready_delay.or(Some(3));
 
@@ -755,11 +760,11 @@ impl IpcClient {
         let mut start_opts = opts.clone();
         start_opts.force = opts.force && is_explicitly_requested;
 
-        let run_opts = build_run_options(&id, daemon_config, Some(&start_opts));
+        let daemon_config = daemon_config.clone();
         let quiet = opts.quiet;
 
         tokio::spawn(async move {
-            let run_opts = match run_opts {
+            let run_opts = match build_run_options(&id, &daemon_config, Some(&start_opts)).await {
                 Ok(opts) => opts,
                 Err(e) => {
                     return SpawnTaskResult {
@@ -946,8 +951,9 @@ impl IpcClient {
         // Render Tera templates and merge top-level env (per-daemon wins).
         render_daemon_config(id, &mut daemon_config, &pt)?;
 
-        let run_opts =
-            build_run_options(id, &daemon_config, overrides).map_err(|e| miette::miette!("{e}"))?;
+        let run_opts = build_run_options(id, &daemon_config, overrides)
+            .await
+            .map_err(|e| miette::miette!("{e}"))?;
 
         self.run(run_opts).await
     }
@@ -1145,8 +1151,8 @@ mod tests {
         assert!(!ready_http.accepts_status(200));
     }
 
-    #[test]
-    fn build_run_options_preserves_ready_http_status_for_cli_http_override() {
+    #[tokio::test]
+    async fn build_run_options_preserves_ready_http_status_for_cli_http_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
             run: "echo ready".to_string(),
@@ -1162,22 +1168,24 @@ mod tests {
             ..StartOptions::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts))
+            .await
+            .unwrap();
         let ready_http = run_opts.ready_http.unwrap();
 
         assert_eq!(ready_http.url, "http://localhost:3000/health");
         assert_eq!(ready_http.status, vec![401]);
     }
 
-    #[test]
-    fn build_run_options_resolves_global_mise_for_supervisor() {
+    #[tokio::test]
+    async fn build_run_options_resolves_global_mise_for_supervisor() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
             run: "echo ready".to_string(),
             ..PitchforkTomlDaemon::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
 
         assert_eq!(
             run_opts.mise,
@@ -1185,15 +1193,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_run_options_resolves_mise_from_daemon_project() {
+    #[tokio::test]
+    async fn build_run_options_resolves_mise_from_daemon_project() {
         let project = tempfile::tempdir().unwrap();
         let config_path = project.path().join("pitchfork.toml");
         let project_mise = !crate::settings::settings().general.mise;
-        std::fs::write(
+        tokio::fs::write(
             &config_path,
             format!("[settings.general]\nmise = {project_mise}\n"),
         )
+        .await
         .unwrap();
 
         let id = DaemonId::try_new("other-project", "api").unwrap();
@@ -1203,22 +1212,23 @@ mod tests {
             ..PitchforkTomlDaemon::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
 
         assert_eq!(run_opts.mise, Some(project_mise));
     }
 
-    #[test]
-    fn build_run_options_resolves_mise_from_daemon_dot_config() {
+    #[tokio::test]
+    async fn build_run_options_resolves_mise_from_daemon_dot_config() {
         let project = tempfile::tempdir().unwrap();
         let config_dir = project.path().join(".config");
-        std::fs::create_dir(&config_dir).unwrap();
+        tokio::fs::create_dir(&config_dir).await.unwrap();
         let config_path = config_dir.join("pitchfork.toml");
         let project_mise = !crate::settings::settings().general.mise;
-        std::fs::write(
+        tokio::fs::write(
             &config_path,
             format!("[settings.general]\nmise = {project_mise}\n"),
         )
+        .await
         .unwrap();
 
         let id = DaemonId::try_new("other-project", "api").unwrap();
@@ -1228,13 +1238,13 @@ mod tests {
             ..PitchforkTomlDaemon::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
 
         assert_eq!(run_opts.mise, Some(project_mise));
     }
 
-    #[test]
-    fn build_run_options_preserves_daemon_mise_override() {
+    #[tokio::test]
+    async fn build_run_options_preserves_daemon_mise_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
             run: "echo ready".to_string(),
@@ -1242,13 +1252,13 @@ mod tests {
             ..PitchforkTomlDaemon::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, None).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
 
         assert_eq!(run_opts.mise, daemon_config.mise);
     }
 
-    #[test]
-    fn build_run_options_preserves_ready_port_timeout_for_cli_port_override() {
+    #[tokio::test]
+    async fn build_run_options_preserves_ready_port_timeout_for_cli_port_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
             run: "echo ready".to_string(),
@@ -1264,15 +1274,17 @@ mod tests {
             ..StartOptions::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts))
+            .await
+            .unwrap();
         let ready_port = run_opts.ready_port.unwrap();
 
         assert_eq!(ready_port.port, Some(4000));
         assert_eq!(ready_port.timeout, Some(Duration::from_secs(45)));
     }
 
-    #[test]
-    fn build_run_options_preserves_ready_output_timeout_for_cli_output_override() {
+    #[tokio::test]
+    async fn build_run_options_preserves_ready_output_timeout_for_cli_output_override() {
         let id = DaemonId::try_new("project", "api").unwrap();
         let daemon_config = PitchforkTomlDaemon {
             run: "echo ready".to_string(),
@@ -1287,7 +1299,9 @@ mod tests {
             ..StartOptions::default()
         };
 
-        let run_opts = build_run_options(&id, &daemon_config, Some(&opts)).unwrap();
+        let run_opts = build_run_options(&id, &daemon_config, Some(&opts))
+            .await
+            .unwrap();
         let ready_output = run_opts.ready_output.unwrap();
 
         assert_eq!(ready_output.pattern, "DONE");
