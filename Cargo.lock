@@ -4492,12 +4492,12 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "usage-argv"
 version = "5.1.0"
-source = "git+https://github.com/jdx/usage?branch=agent%2Fvalue-enum-binding#95de9c831203049dead55a1d682d2b8958f27333"
+source = "git+https://github.com/jdx/usage?branch=agent%2Fvalue-enum-binding#0e51a29c9dfd2a9d68981e4f706b8c2444160e86"
 
 [[package]]
 name = "usage-derive"
 version = "5.1.0"
-source = "git+https://github.com/jdx/usage?branch=agent%2Fvalue-enum-binding#95de9c831203049dead55a1d682d2b8958f27333"
+source = "git+https://github.com/jdx/usage?branch=agent%2Fvalue-enum-binding#0e51a29c9dfd2a9d68981e4f706b8c2444160e86"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4508,7 +4508,7 @@ dependencies = [
 [[package]]
 name = "usage-rs"
 version = "5.1.0"
-source = "git+https://github.com/jdx/usage?branch=agent%2Fvalue-enum-binding#95de9c831203049dead55a1d682d2b8958f27333"
+source = "git+https://github.com/jdx/usage?branch=agent%2Fvalue-enum-binding#0e51a29c9dfd2a9d68981e4f706b8c2444160e86"
 dependencies = [
  "usage-argv",
  "usage-derive",
