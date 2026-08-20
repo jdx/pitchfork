@@ -7,10 +7,10 @@ use itertools::Itertools;
 use miette::IntoDiagnostic;
 use std::collections::HashSet;
 
-#[derive(Debug, clap::Args)]
-#[clap(hide = true, verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct Cd {
-    #[clap(long)]
+    #[usage(long)]
     shell_pid: u32,
 }
 

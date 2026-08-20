@@ -2,8 +2,7 @@ use crate::Result;
 use serde::Serialize;
 
 /// Generate JSON documentation for the web API endpoints
-#[derive(Debug, clap::Args)]
-#[clap(hide = true)]
+#[derive(Debug, usage_rs::Args)]
 pub struct ApiSchema;
 
 #[derive(Serialize)]

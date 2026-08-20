@@ -6,3 +6,4 @@ node_modules
 /ui/playwright-report
 /ui/test-results
 .slim/deepwork/
+.mise/usage-cli-6/

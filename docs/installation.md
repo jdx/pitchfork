@@ -33,7 +33,7 @@ pitchfork --version
 Pitchfork supports tab completion for bash, zsh, and fish.
 
 ::: tip
-Shell completion requires the [`usage`](https://usage.jdx.dev) CLI tool to be installed.
+Shell completion is generated directly by pitchfork; no separate tool is required.
 :::
 
 ::: code-group

@@ -3,9 +3,8 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 
 /// Allow a daemon to start
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "e",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Allow a daemon to start

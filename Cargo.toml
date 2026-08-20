@@ -35,8 +35,7 @@ proxy-tls = ["rcgen", "tokio-rustls", "rustls-pemfile", "x509-parser"]
 [dependencies]
 auto-launcher = "1"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive", "env"] }
-clap_usage = "5"
+usage_rs = { package = "usage-rs", git = "https://github.com/jdx/usage", branch = "agent/value-enum-binding", features = ["completions"] }
 clx = "3"
 comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"

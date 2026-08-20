@@ -1,7 +1,7 @@
 use crate::Result;
 
 /// Show the companies sponsoring pitchfork and the jdx.dev open source tools
-#[derive(Debug, clap::Args)]
+#[derive(Debug, usage_rs::Args)]
 pub struct Sponsors;
 
 impl Sponsors {

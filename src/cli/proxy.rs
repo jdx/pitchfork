@@ -2,8 +2,8 @@ use crate::Result;
 use crate::cli::json_output::{JsonLanInfo, JsonProxyStatus, JsonSlugEntry, print_json};
 
 /// Manage the pitchfork reverse proxy
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Manage the pitchfork reverse proxy
@@ -29,16 +29,17 @@ Subcommands:
     status    Show all registered slugs and their current state"
 )]
 pub struct Proxy {
-    #[clap(subcommand)]
+    #[usage(subcommand)]
     command: ProxyCommands,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum ProxyCommands {
     Trust(Trust),
     Untrust(Untrust),
     Status(ProxyStatus),
     Add(Add),
+    #[usage(alias = "rm")]
     Remove(Remove),
 }
 
@@ -80,11 +81,11 @@ impl Proxy {
 /// pitchfork proxy trust
 /// sudo pitchfork proxy trust    # Linux only
 /// ```
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 struct Trust {
     /// Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)
-    #[clap(long)]
+    #[usage(long)]
     cert: Option<std::path::PathBuf>,
 }
 
@@ -130,11 +131,11 @@ impl Trust {
 /// pitchfork proxy untrust
 /// sudo pitchfork proxy untrust    # Linux only
 /// ```
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 struct Untrust {
     /// Path to the certificate file (defaults to pitchfork's auto-generated cert)
-    #[clap(long)]
+    #[usage(long)]
     cert: Option<std::path::PathBuf>,
 }
 
@@ -157,11 +158,11 @@ impl Untrust {
 ///
 /// Displays the proxy configuration and lists all slugs from the global config
 /// with their project directory, daemon name, and current status (running/stopped, port).
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 struct ProxyStatus {
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 
@@ -405,19 +406,19 @@ impl ProxyStatus {
 /// pitchfork proxy add api --daemon server
 /// pitchfork proxy add api --dir /home/user/my-api --daemon server
 /// ```
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 struct Add {
     /// The slug name (used in proxy URLs, e.g. api → api.localhost)
     slug: String,
     /// Project directory (defaults to current directory)
-    #[clap(long)]
+    #[usage(long)]
     dir: Option<std::path::PathBuf>,
     /// Daemon name within the project (defaults to slug name)
-    #[clap(long)]
+    #[usage(long)]
     daemon: Option<String>,
     /// Namespace to associate with the slug. If not provided, derived from the project directory.
-    #[clap(long)]
+    #[usage(long)]
     namespace: Option<String>,
 }
 
@@ -528,8 +529,8 @@ impl Add {
 /// ```text
 /// pitchfork proxy remove api
 /// ```
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "rm", verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 struct Remove {
     /// The slug name to remove
     slug: String,

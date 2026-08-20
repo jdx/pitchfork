@@ -19,10 +19,16 @@ run as boot start (auto-start boot_start daemons)
 
 Enable container/PID1 mode (reap zombies, forward signals)
 
+**Environment Variable:** `PITCHFORK_CONTAINER`
+
 ### `--web-port <WEB_PORT>`
 
 Enable web UI on specified port (tries up to 10 ports if in use)
 
+**Environment Variable:** `PITCHFORK_WEB_PORT`
+
 ### `--web-path <WEB_PATH>`
 
 Serve web UI under a path prefix (e.g. "ps" serves at /ps/)
+
+**Environment Variable:** `PITCHFORK_WEB_PATH`

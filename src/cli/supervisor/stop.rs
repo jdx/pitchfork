@@ -6,8 +6,8 @@ use crate::env;
 use crate::state_file::StateFile;
 
 /// Stops the internal pitchfork daemon running in the background
-#[derive(Debug, clap::Args)]
-#[clap()]
+#[derive(Debug, usage_rs::Args)]
+#[usage()]
 pub struct Stop {}
 
 impl Stop {

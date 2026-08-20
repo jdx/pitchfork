@@ -14,8 +14,8 @@ use comfy_table::{Cell, Color, ContentArrangement, Table};
 /// the list entry's flags instead. The remaining values match the corresponding
 /// `DaemonStatus` variant (only on non-available entries, since an available
 /// daemon displays as "available" regardless of its underlying status).
-#[derive(Clone, Debug, clap::ValueEnum)]
-#[clap(rename_all = "snake_case")]
+#[derive(Clone, Debug, usage_rs::ValueEnum)]
+#[usage(rename_all = "snake_case")]
 enum StatusFilter {
     Running,
     Stopped,
@@ -28,9 +28,8 @@ enum StatusFilter {
 }
 
 /// List all daemons
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "ls",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 List all daemons
@@ -63,21 +62,21 @@ Output:
 )]
 pub struct List {
     /// Hide the table header row
-    #[clap(long)]
+    #[usage(long)]
     hide_header: bool,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 
     /// Filter daemons by status (repeatable for OR logic)
     ///
     /// Values: running, stopped, waiting, stopping, failed, errored, available, disabled
-    #[clap(long, value_enum)]
+    #[usage(long, value_enum)]
     status: Vec<StatusFilter>,
 
     /// Only show daemons in this namespace (repeatable for OR logic)
-    #[clap(long)]
+    #[usage(long)]
     namespace: Vec<String>,
 
     /// Only show daemons in the current project's namespace
@@ -85,7 +84,7 @@ pub struct List {
     /// The namespace is resolved from the current directory the same way
     /// short daemon IDs are: the nearest config file's namespace, falling
     /// back to 'global' when no config file is found.
-    #[clap(long)]
+    #[usage(long)]
     project: bool,
 }
 

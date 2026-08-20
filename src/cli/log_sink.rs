@@ -38,15 +38,15 @@ const MAX_LINE_BYTES: usize = 64 * 1024;
 /// the daemon is neither killed by SIGPIPE nor blocked, and no output is lost.
 /// Exits when the pipe reaches end of file, which happens once the daemon and
 /// every descendant holding the write end have gone.
-#[derive(Debug, clap::Args)]
-#[clap(hide = true, verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct LogSink {
     /// Qualified id of the daemon whose output this is
-    #[clap(long)]
+    #[usage(long)]
     daemon_id: String,
 
     /// Log format to parse lines with (`json`, `logfmt`, `auto`, or `text`)
-    #[clap(long, default_value = "text")]
+    #[usage(long, default = "text")]
     log_format: String,
 
     /// Regex whose first match means the daemon is ready
@@ -54,7 +54,7 @@ pub struct LogSink {
     /// Set for a daemon configured with `ready_output`. The supervisor cannot
     /// match it itself — this process holds the output — so the match is
     /// reported back over IPC.
-    #[clap(long)]
+    #[usage(long)]
     ready_pattern: Option<String>,
 
     /// Token identifying the start attempt this sink belongs to
@@ -62,26 +62,26 @@ pub struct LogSink {
     /// Quoted back when reporting a match. The supervisor drops reports whose
     /// token is no longer current, so a sink still draining a failed attempt
     /// cannot mark that daemon's retry ready.
-    #[clap(long, default_value_t = 0)]
+    #[usage(long, default_value_t = 0, default = "0")]
     relay_token: u64,
 
     /// Report lines so the supervisor can fire the daemon's `on_output` hook
     ///
     /// Without `--output-filter` or `--output-regex` every line qualifies,
     /// which is what a hook with no pattern asks for.
-    #[clap(long)]
+    #[usage(long)]
     report_output: bool,
 
     /// Only report lines containing this substring
-    #[clap(long)]
+    #[usage(long)]
     output_filter: Option<String>,
 
     /// Only report lines matching this regex
-    #[clap(long)]
+    #[usage(long)]
     output_regex: Option<String>,
 
     /// Shortest gap between reported lines, in milliseconds
-    #[clap(long, default_value_t = 1000)]
+    #[usage(long, default_value_t = 1000, default = "1000")]
     output_debounce_ms: u64,
 }
 

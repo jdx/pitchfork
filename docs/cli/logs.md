@@ -47,9 +47,10 @@ Delete logs
 
 Show last N lines of logs
 
-Only applies when --since/--until is not used. Without this option, all logs are shown.
+Only applies when --since/--until is not used.
+Without this option, all logs are shown.
 
-### `-t --tail`
+### `-t -f --tail --follow`
 
 Show logs in real-time
 
@@ -57,13 +58,18 @@ Show logs in real-time
 
 Show logs from this time
 
-Supports multiple formats: - Full datetime: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM" - Time only: "HH:MM:SS" or "HH:MM" (uses today's date) - Relative time: "5min", "2h", "1d" (e.g., last 5 minutes)
+Supports multiple formats:
+- Full datetime: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM"
+- Time only: "HH:MM:SS" or "HH:MM" (uses today's date)
+- Relative time: "5min", "2h", "1d" (e.g., last 5 minutes)
 
 ### `-u --until <UNTIL>`
 
 Show logs until this time
 
-Supports multiple formats: - Full datetime: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM" - Time only: "HH:MM:SS" or "HH:MM" (uses today's date)
+Supports multiple formats:
+- Full datetime: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM"
+- Time only: "HH:MM:SS" or "HH:MM" (uses today's date)
 
 ### `--no-pager`
 
@@ -95,19 +101,24 @@ Make --grep matching case-sensitive
 
 Filter by minimum log level (error, warn, info, debug, trace)
 
-Shows entries at or above the given severity. For example, `--level warn` shows warn and error. Only effective for daemons with log_format json or logfmt.
+Shows entries at or above the given severity.
+For example, `--level warn` shows warn and error.
+Only effective for daemons with log_format json or logfmt.
 
 ### `--field… <KEY=VALUE>`
 
 Filter by structured field value (KEY=VALUE, can be repeated)
 
-Extracts the value from fields_json using json_extract($.KEY). Multiple --field options are combined with AND.
+Extracts the value from fields_json using json_extract($.KEY).
+Multiple --field options are combined with AND.
 
 ### `--jq <EXPR>`
 
 Filter log entries with a jq expression
 
-Each log entry is serialized as a JSON object with fields: timestamp, daemon_id, message, level, msg, logger, fields. Entries for which the expression produces a truthy value are shown.
+Each log entry is serialized as a JSON object with fields:
+timestamp, daemon_id, message, level, msg, logger, fields.
+Entries for which the expression produces a truthy value are shown.
 
 ### `--no-timestamp`
 
