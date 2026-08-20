@@ -76,7 +76,7 @@ depends = ["build"]
 # Temporary until usage 6.x is released: render with the exact CLI revision that
 # understands the dialect emitted by the git-pinned usage-rs dependency.
 run = [
-  "cargo install --git https://github.com/jdx/usage --rev 01a1c8735998769a946f6a7bf95250717e94c6e9 --locked --root .mise/usage-cli-6 usage-cli",
+  "cargo install --git https://github.com/jdx/usage --rev af0b5dfeb46183096127c706bcd81deaf75a5c01 --locked --root .mise/usage-cli-6 usage-cli",
   "pitchfork usage > pitchfork.usage.kdl",
   "rm -rf docs/cli && mkdir -p docs/cli",
   ".mise/usage-cli-6/bin/usage g markdown -mf pitchfork.usage.kdl --out-dir docs/cli --url-prefix /cli",
