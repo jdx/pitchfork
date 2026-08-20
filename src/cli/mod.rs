@@ -161,7 +161,7 @@ pub async fn run() -> Result<()> {
                     stdout.flush().await.into_diagnostic()?;
                     Ok(())
                 }
-                Err(usage_rs::Error::Version) => {
+                Err(usage_rs::Error::Version { .. }) => {
                     let rendered = format!("pitchfork {}\n", env!("CARGO_PKG_VERSION"));
                     let mut stdout = tokio::io::stdout();
                     stdout
