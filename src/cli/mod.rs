@@ -212,7 +212,7 @@ mod tests {
     fn bare_invocation_requests_help_instead_of_entering_the_start_fallback() {
         assert!(matches!(
             Cli::parse_from(&[]),
-            Err(usage_rs::Error::Help { .. })
+            Err(usage_rs::Error::MissingArgsHelp { .. })
         ));
     }
 
