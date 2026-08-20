@@ -6,6 +6,7 @@ about "Daemons with DX"
 unknown_flags error
 external_subcommand #true
 arg_required_else_help #true
+subcommand_required #true
 cmd activate help="Activate pitchfork in your shell session" effect=read {
     long_help "Activate pitchfork in your shell session\n\nGenerates shell code that enables automatic daemon management when changing\ndirectories. Required for auto-start/stop features in pitchfork.toml.\n\nSupported shells: bash, zsh, fish\n\nAdd to your shell config:\n\n    bash (~/.bashrc):\n      eval \"$(pitchfork activate bash)\"\n\n    zsh (~/.zshrc):\n      eval \"$(pitchfork activate zsh)\"\n\n    fish (~/.config/fish/config.fish):\n      pitchfork activate fish | source"
     arg <SHELL> help="Shell to activate (bash, zsh, fish)" {

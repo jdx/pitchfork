@@ -3555,6 +3555,7 @@
     "mounts": [],
     "unknown_flags": null,
     "hide": false,
+    "subcommand_required": true,
     "external_subcommand": true,
     "arg_required_else_help": true,
     "args_override_self": true,
