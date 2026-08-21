@@ -42,7 +42,8 @@ mod wait;
     about = env!("CARGO_PKG_DESCRIPTION"),
     completion,
     unknown_flags = "error",
-    arg_required_else_help
+    arg_required_else_help,
+    config = crate::settings::Settings
 )]
 struct Cli {
     #[usage(subcommand)]

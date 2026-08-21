@@ -73,7 +73,7 @@ run = "aube install && exec aube run docs:build"
 
 [tasks."build:usage"]
 description = "Build the usage CLI matching the generated spec dialect"
-run = "cargo install --force --git https://github.com/jdx/usage --rev 7e6e349e35716ef2095be9a6adceb1281470683f --locked --root .mise/usage-cli-6 usage-cli"
+run = "cargo install --force --git https://github.com/jdx/usage --rev 3c84ac415d26abc3033df78e1ba3efd2fdaf5c66 --locked --root .mise/usage-cli-6 usage-cli"
 sources = ["Cargo.lock", "mise.toml"]
 outputs = [".mise/usage-cli-6/bin/usage"]
 

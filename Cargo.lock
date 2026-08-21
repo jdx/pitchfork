@@ -2779,7 +2779,6 @@ dependencies = [
  "fuzzy-matcher",
  "glob",
  "globset",
- "heck",
  "http-body-util",
  "humanbyte",
  "humantime",
@@ -2803,8 +2802,6 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "once_cell",
- "proc-macro2",
- "quote",
  "ratatui",
  "rcgen",
  "regex",
@@ -2821,7 +2818,6 @@ dependencies = [
  "serde_json",
  "shell-words",
  "strum",
- "syn 3.0.3",
  "sysinfo",
  "tempfile",
  "tera",
@@ -2832,6 +2828,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tower-http 0.7.0",
+ "usage-config",
  "usage-rs",
  "uuid",
  "vte 0.15.0",
@@ -4492,12 +4489,20 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "usage-argv"
 version = "5.1.0"
-source = "git+https://github.com/jdx/usage?rev=7e6e349e35716ef2095be9a6adceb1281470683f#7e6e349e35716ef2095be9a6adceb1281470683f"
+source = "git+https://github.com/jdx/usage?rev=3c84ac415d26abc3033df78e1ba3efd2fdaf5c66#3c84ac415d26abc3033df78e1ba3efd2fdaf5c66"
+
+[[package]]
+name = "usage-config"
+version = "5.1.0"
+source = "git+https://github.com/jdx/usage?rev=3c84ac415d26abc3033df78e1ba3efd2fdaf5c66#3c84ac415d26abc3033df78e1ba3efd2fdaf5c66"
+dependencies = [
+ "toml",
+]
 
 [[package]]
 name = "usage-derive"
 version = "5.1.0"
-source = "git+https://github.com/jdx/usage?rev=7e6e349e35716ef2095be9a6adceb1281470683f#7e6e349e35716ef2095be9a6adceb1281470683f"
+source = "git+https://github.com/jdx/usage?rev=3c84ac415d26abc3033df78e1ba3efd2fdaf5c66#3c84ac415d26abc3033df78e1ba3efd2fdaf5c66"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4508,9 +4513,10 @@ dependencies = [
 [[package]]
 name = "usage-rs"
 version = "5.1.0"
-source = "git+https://github.com/jdx/usage?rev=7e6e349e35716ef2095be9a6adceb1281470683f#7e6e349e35716ef2095be9a6adceb1281470683f"
+source = "git+https://github.com/jdx/usage?rev=3c84ac415d26abc3033df78e1ba3efd2fdaf5c66#3c84ac415d26abc3033df78e1ba3efd2fdaf5c66"
 dependencies = [
  "usage-argv",
+ "usage-config",
  "usage-derive",
 ]
 
