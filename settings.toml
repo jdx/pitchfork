@@ -78,6 +78,31 @@ For example, set console to `"info"` but file to `"debug"` to keep
 detailed logs for troubleshooting without cluttering the console.
 """
 
+[general.worktree]
+type = "Bool"
+env = "PITCHFORK_WORKTREE"
+deprecated_env = "PITCHFORK_PROXY_WORKTREE"
+default = "true"
+description = "Enable git worktree / jj workspace auto-discovery"
+docs = """
+When enabled (default), pitchfork automatically discovers git worktrees and jj
+workspaces. This drives two behaviors:
+
+1. Proxy slug routing: subdomain prefixes are routed to the daemon running in
+   the matching worktree / workspace directory.
+2. Config discovery: daemons defined in a worktree / workspace are visible to
+   supervisor background tasks (cron registration, boot_start, file watch)
+   even when that namespace was never registered in `[namespaces]`.
+
+Each worktree / workspace gets its own namespace (the directory name), so
+multiple copies can run the same daemon name without conflict. Branch /
+workspace names are sanitized for URL compatibility: `feature/my-endpoint`
+becomes `feature-my-endpoint`.
+
+Set to `false` to disable all worktree/workspace discovery. Only the main
+project directory is used.
+"""
+
 [general.mise]
 type = "Bool"
 env = "PITCHFORK_MISE"
@@ -1071,33 +1096,6 @@ subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but
 all share the same backend server.
 
 Set to `false` to require exact hostname matches only.
-"""
-
-[proxy.worktree]
-type = "Bool"
-env = "PITCHFORK_PROXY_WORKTREE"
-default = "true"
-description = "Enable git worktree / jj workspace auto-discovery for slug routing"
-docs = """
-When enabled (default), pitchfork automatically detects git worktrees or jj
-workspaces for registered slugs and routes subdomain prefixes to the
-corresponding worktree / workspace.
-
-For example, with slug "myapp" pointing to /home/user/myapp (main branch),
-a git worktree at /home/user/myapp-feature-a (branch feature-a) or a jj
-workspace at /home/user/myapp-feature-a is automatically discovered.
-Requests to feature-a.myapp.localhost are routed to the daemon running in
-that directory.
-
-Each worktree / workspace gets its own namespace (the directory name), so
-multiple copies can run the same daemon name without conflict.
-
-Branch / workspace names are sanitized for URL compatibility:
-`feature/my-endpoint` becomes `feature-my-endpoint`, accessed as
-`feature-my-endpoint.myapp.localhost`.
-
-Set to `false` to disable worktree/workspace discovery. Only the main
-project directory will be used for slug routing.
 """
 
 [proxy.lan]
