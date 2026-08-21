@@ -368,6 +368,7 @@ fn get_general_value(g: &crate::settings::SettingsGeneral, field: &str) -> Strin
         "mise_bin" => g.mise_bin.clone(),
         "shell" => g.shell.clone(),
         "startup_log_timestamps" => g.startup_log_timestamps.to_string(),
+        "worktree" => g.worktree.to_string(),
         _ => String::new(),
     }
 }
@@ -462,7 +463,6 @@ fn get_proxy_value(g: &crate::settings::SettingsProxy, field: &str) -> String {
         "auto_start_timeout" => g.auto_start_timeout.clone(),
         "sync_hosts" => g.sync_hosts.to_string(),
         "wildcard" => g.wildcard.to_string(),
-        "worktree" => g.worktree.to_string(),
         "lan" => g.lan.to_string(),
         "lan_ip" => g.lan_ip.clone(),
         _ => String::new(),
@@ -522,6 +522,7 @@ fn apply_general_value(
         "mise_bin" => partial.mise_bin = Some(value.to_string()),
         "shell" => partial.shell = Some(value.to_string()),
         "startup_log_timestamps" => partial.startup_log_timestamps = Some(parse_bool_value(value)?),
+        "worktree" => partial.worktree = Some(parse_bool_value(value)?),
         _ => bail!("unknown general setting '{field}'"),
     }
     let _ = typ;
@@ -667,7 +668,6 @@ fn apply_proxy_value(
         "auto_start_timeout" => partial.auto_start_timeout = Some(value.to_string()),
         "sync_hosts" => partial.sync_hosts = Some(parse_bool_value(value)?),
         "wildcard" => partial.wildcard = Some(parse_bool_value(value)?),
-        "worktree" => partial.worktree = Some(parse_bool_value(value)?),
         "lan" => partial.lan = Some(parse_bool_value(value)?),
         "lan_ip" => partial.lan_ip = Some(value.to_string()),
         _ => bail!("unknown proxy setting '{field}'"),

@@ -824,6 +824,13 @@
             "boolean",
             "null"
           ]
+        },
+        "worktree": {
+          "description": "Enable git worktree / jj workspace auto-discovery",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },
@@ -1066,13 +1073,6 @@
         },
         "wildcard": {
           "description": "Enable wildcard subdomain matching for proxy routes",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "worktree": {
-          "description": "Enable git worktree / jj workspace auto-discovery for slug routing",
           "type": [
             "boolean",
             "null"

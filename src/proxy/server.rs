@@ -94,7 +94,7 @@ static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
 fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
     let mut entries = std::collections::HashMap::with_capacity(global_slugs.len());
-    let worktree_enabled = crate::settings::settings().proxy.worktree;
+    let worktree_enabled = crate::settings::settings().general.worktree;
     for (slug, entry) in &global_slugs {
         let ns = entry.resolve_namespace();
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();

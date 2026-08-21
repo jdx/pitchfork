@@ -1030,7 +1030,12 @@ impl PitchforkToml {
         // `[namespaces]`. Discovery spawns a `git`/`jj` subprocess (<1ms) and
         // the per-worktree config reads are cached by `CONFIG_CACHE`, so no
         // extra caching layer is needed here.
-        if let Some(project_root) = find_project_root(start_dir) {
+        //
+        // Controlled by the `general.worktree` setting (default on); when
+        // disabled, no discovery runs and no `git`/`jj` subprocess is spawned.
+        if crate::settings::settings().general.worktree
+            && let Some(project_root) = find_project_root(start_dir)
+        {
             let worktrees = crate::proxy::worktree::discover_worktrees(&project_root);
             for wt in &worktrees {
                 match Self::all_merged_from(&wt.path) {
