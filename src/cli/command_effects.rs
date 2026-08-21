@@ -57,6 +57,7 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     ("proxy untrust", Write),
     ("schema", Read),
     ("settings", Read),
+    ("settings explain", Read),
     ("settings get", Read),
     ("settings list", Read),
     ("settings set", Write),

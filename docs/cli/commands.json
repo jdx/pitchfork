@@ -2719,6 +2719,39 @@
             "aliases": [],
             "hidden_aliases": [],
             "examples": []
+          },
+          "explain": {
+            "full_cmd": [
+              "settings",
+              "explain"
+            ],
+            "usage": "settings explain <KEY>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "KEY",
+                "usage": "<KEY>",
+                "help": "Setting key in dot notation (e.g., general.log_level, web.auto_start)",
+                "help_first_line": "Setting key in dot notation (e.g., general.log_level, web.auto_start)",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [],
+            "mounts": [],
+            "effect": "read",
+            "unknown_flags": null,
+            "hide": false,
+            "args_override_self": true,
+            "help": "Show where a setting's value came from",
+            "help_long": "Show where a setting's value came from\n\nNames the exact place that won — the variable, or the file and the key\ninside it — along with everything else that was considered and every other\nway the setting can be reached.",
+            "name": "explain",
+            "aliases": [
+              "why"
+            ],
+            "hidden_aliases": [],
+            "examples": []
           }
         },
         "args": [],
@@ -2743,7 +2776,7 @@
         "args_override_self": true,
         "args_conflicts_with_subcommands": true,
         "help": "View and modify pitchfork settings",
-        "help_long": "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n\n    list    List all available settings with types and defaults\n    get     Get the current value of a setting\n    set     Set a setting value in a config file\n\nExamples:\n\n    pitchfork settings                        Show all current settings\n    pitchfork settings list                   List all available settings\n    pitchfork settings get general.log_level  Get a specific setting\n    pitchfork settings set general.log_level debug\n    pitchfork settings set web.auto_start true --global\n    pitchfork settings set supervisor.stop_timeout 10s --local\n    pitchfork settings set supervisor.stop_timeout 10s --project",
+        "help_long": "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n\n    list     List all available settings with types and defaults\n    get      Get the current value of a setting\n    set      Set a setting value in a config file\n    explain  Show where a setting's value came from\n\nExamples:\n\n    pitchfork settings                            Show all current settings\n    pitchfork settings list                       List all available settings\n    pitchfork settings get general.log_level      Get a specific setting\n    pitchfork settings explain general.log_level  Show what set it\n    pitchfork settings set general.log_level debug\n    pitchfork settings set web.auto_start true --global\n    pitchfork settings set supervisor.stop_timeout 10s --local\n    pitchfork settings set supervisor.stop_timeout 10s --project",
         "name": "settings",
         "aliases": [
           "setting"

@@ -4,7 +4,7 @@ use crate::cli::json_output::{JsonSettingEntry, print_json};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::{SettingsPartial, settings_resolved};
 use miette::{IntoDiagnostic, bail};
-use usage_rs::config::{PropMeta, Registry, Resolved, Ty};
+use usage_rs::config::{PropMeta, Registry, Resolved, SourceKind, Ty};
 
 const LOG_LEVEL_VALUES: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
@@ -29,15 +29,17 @@ Settings can be configured in multiple ways (in order of precedence):
 
 Subcommands:
 
-    list    List all available settings with types and defaults
-    get     Get the current value of a setting
-    set     Set a setting value in a config file
+    list     List all available settings with types and defaults
+    get      Get the current value of a setting
+    set      Set a setting value in a config file
+    explain  Show where a setting's value came from
 
 Examples:
 
-    pitchfork settings                        Show all current settings
-    pitchfork settings list                   List all available settings
-    pitchfork settings get general.log_level  Get a specific setting
+    pitchfork settings                            Show all current settings
+    pitchfork settings list                       List all available settings
+    pitchfork settings get general.log_level      Get a specific setting
+    pitchfork settings explain general.log_level  Show what set it
     pitchfork settings set general.log_level debug
     pitchfork settings set web.auto_start true --global
     pitchfork settings set supervisor.stop_timeout 10s --local
@@ -61,6 +63,9 @@ enum Commands {
     Get(GetCmd),
     /// Set a setting value in a config file
     Set(SetCmd),
+    /// Show where a setting's value came from
+    #[usage(alias = "why")]
+    Explain(ExplainCmd),
 }
 
 /// List all available settings with types and defaults
@@ -88,6 +93,18 @@ pub struct GetCmd {
     json: bool,
 }
 
+/// Show where a setting's value came from
+///
+/// Names the exact place that won — the variable, or the file and the key
+/// inside it — along with everything else that was considered and every other
+/// way the setting can be reached.
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+pub struct ExplainCmd {
+    /// Setting key in dot notation (e.g., general.log_level, web.auto_start)
+    key: String,
+}
+
 /// Set a setting value in a config file
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
@@ -113,6 +130,7 @@ impl Settings {
             Some(Commands::List(cmd)) => cmd.run(),
             Some(Commands::Get(cmd)) => cmd.run(),
             Some(Commands::Set(cmd)) => cmd.run().await,
+            Some(Commands::Explain(cmd)) => cmd.run(),
             None => show_all_settings(self.json),
         }
     }
@@ -143,6 +161,28 @@ fn current_value(resolved: &Resolved, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Whether nothing but the declared default supplied this value.
+///
+/// Asked of the merge, not of the text. Comparing the rendered value against
+/// the rendered default agrees with the origin almost always and is wrong in
+/// the one case worth reporting: `log_level = "info"` written into
+/// `pitchfork.toml` on purpose, over a `~/.config` that says `debug`. That is
+/// an override the user needs to see, and it renders identically to the
+/// default it happens to equal.
+fn is_default(resolved: &Resolved, key: &str) -> bool {
+    resolved
+        .origin_key(key)
+        .is_none_or(|origin| origin.kind == SourceKind::DEFAULTS)
+}
+
+/// Where the winning value came from, named the way the user could act on
+/// it: `PITCHFORK_LOG`, `/path/to/pitchfork.toml#general.log_level`.
+fn origin_string(resolved: &Resolved, key: &str) -> Option<String> {
+    resolved
+        .origin_key(key)
+        .map(|origin| origin.describe().to_string())
+}
+
 fn json_entry(resolved: &Resolved, meta: &PropMeta) -> JsonSettingEntry {
     JsonSettingEntry {
         key: meta.key.to_string(),
@@ -150,6 +190,7 @@ fn json_entry(resolved: &Resolved, meta: &PropMeta) -> JsonSettingEntry {
         default: default_string(meta),
         r#type: Some(legacy_type(meta)),
         env_var: meta.envs.first().copied(),
+        origin: origin_string(resolved, meta.key),
     }
 }
 
@@ -210,9 +251,26 @@ impl GetCmd {
                 default: meta.and_then(default_string),
                 r#type: meta.map(legacy_type),
                 env_var: meta.and_then(|m| m.envs.first().copied()),
+                origin: origin_string(&resolved, key),
             });
         }
         println!("{value}");
+        Ok(())
+    }
+}
+
+impl ExplainCmd {
+    fn run(&self) -> Result<()> {
+        let key = &self.key;
+        // For the near-miss suggestion. `explain` returns None for a key the
+        // registry does not have and deliberately does not guess what was
+        // meant, which is this command's job and already written.
+        validate_setting_key(key)?;
+
+        let resolved = settings_resolved();
+        let explanation = usage_rs::config::explain(&resolved, key)
+            .ok_or_else(|| miette::miette!("unknown setting '{key}'"))?;
+        print!("{explanation}");
         Ok(())
     }
 }
@@ -291,10 +349,8 @@ fn show_all_settings(json: bool) -> Result<()> {
             .map(|(_, rest)| rest)
             .unwrap_or(meta.key);
         let current = current_value(&resolved, meta.key);
-        let default = default_string(meta).unwrap_or_default();
-        let is_default = current == default;
 
-        if is_default {
+        if is_default(&resolved, meta.key) {
             if current.is_empty() {
                 println!("# {field_name}  (default: empty)");
             } else {
@@ -456,5 +512,68 @@ async fn notify_supervisor_reload() {
         Err(_) => {
             debug!("supervisor not running, skipping config reload notification");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use usage_rs::config::{EnvLayer, Layers, resolve};
+
+    /// The environment is described rather than reached for, so these tests do
+    /// not touch the process (and need no mutex to run alongside each other).
+    fn resolved_with(env: &[(&str, &str)]) -> Resolved {
+        let layer = EnvLayer::new(
+            env.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<Vec<_>>(),
+        );
+        resolve(REGISTRY, Layers::new().then(&layer)).expect("resolves")
+    }
+
+    #[test]
+    fn an_explicit_value_equal_to_the_default_is_not_the_default() {
+        // The case that made `pitchfork settings` misreport a merge: the text
+        // is identical either way, and only the origin can tell them apart.
+        let default = resolved_with(&[]);
+        let explicit = resolved_with(&[("PITCHFORK_LOG", "info")]);
+
+        assert_eq!(current_value(&default, "general.log_level"), "info");
+        assert_eq!(current_value(&explicit, "general.log_level"), "info");
+
+        assert!(is_default(&default, "general.log_level"));
+        assert!(
+            !is_default(&explicit, "general.log_level"),
+            "PITCHFORK_LOG=info is an override, not an absence"
+        );
+    }
+
+    #[test]
+    fn an_entry_names_where_its_value_came_from() {
+        let resolved = resolved_with(&[("PITCHFORK_LOG", "debug")]);
+        assert_eq!(
+            origin_string(&resolved, "general.log_level").as_deref(),
+            Some("PITCHFORK_LOG"),
+            "named as the user set it, not as \"the environment\""
+        );
+        assert_eq!(
+            origin_string(&resolved, "general.interval").as_deref(),
+            Some("the default")
+        );
+    }
+
+    #[test]
+    fn explain_answers_for_every_setting_the_registry_declares() {
+        // `explain` returns None only for a key the registry does not have, so
+        // this also pins that every key `settings list` prints is explainable.
+        let resolved = resolved_with(&[]);
+        for meta in REGISTRY.props {
+            assert!(
+                usage_rs::config::explain(&resolved, meta.key).is_some(),
+                "no explanation for {}",
+                meta.key
+            );
+        }
+        assert!(usage_rs::config::explain(&resolved, "general.nonesuch").is_none());
     }
 }

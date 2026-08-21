@@ -16,15 +16,17 @@ Settings can be configured in multiple ways (in order of precedence):
 
 Subcommands:
 
-    list    List all available settings with types and defaults
-    get     Get the current value of a setting
-    set     Set a setting value in a config file
+    list     List all available settings with types and defaults
+    get      Get the current value of a setting
+    set      Set a setting value in a config file
+    explain  Show where a setting's value came from
 
 Examples:
 
-    pitchfork settings                        Show all current settings
-    pitchfork settings list                   List all available settings
-    pitchfork settings get general.log_level  Get a specific setting
+    pitchfork settings                            Show all current settings
+    pitchfork settings list                       List all available settings
+    pitchfork settings get general.log_level      Get a specific setting
+    pitchfork settings explain general.log_level  Show what set it
     pitchfork settings set general.log_level debug
     pitchfork settings set web.auto_start true --global
     pitchfork settings set supervisor.stop_timeout 10s --local
@@ -38,6 +40,7 @@ Output in JSON format
 
 ## Subcommands
 
+- [`pitchfork settings explain <KEY>`](/cli/settings/explain.md)
 - [`pitchfork settings get [--json] <KEY>`](/cli/settings/get.md)
 - [`pitchfork settings list [--group <GROUP>] [--json]`](/cli/settings/list.md)
 - [`pitchfork settings set [FLAGS] <KEY> <VALUE>`](/cli/settings/set.md)

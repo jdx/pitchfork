@@ -387,7 +387,7 @@ cmd schema help="Generate JSON Schema for pitchfork.toml configuration" hide=#tr
 }
 cmd settings help="View and modify pitchfork settings" effect=read args_conflicts_with_subcommands=#true {
     alias setting
-    long_help "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n\n    list    List all available settings with types and defaults\n    get     Get the current value of a setting\n    set     Set a setting value in a config file\n\nExamples:\n\n    pitchfork settings                        Show all current settings\n    pitchfork settings list                   List all available settings\n    pitchfork settings get general.log_level  Get a specific setting\n    pitchfork settings set general.log_level debug\n    pitchfork settings set web.auto_start true --global\n    pitchfork settings set supervisor.stop_timeout 10s --local\n    pitchfork settings set supervisor.stop_timeout 10s --project"
+    long_help "View and modify pitchfork settings\n\nSettings can be configured in multiple ways (in order of precedence):\n1. Environment variables (highest priority)\n2. Project-level pitchfork.toml or pitchfork.local.toml in [settings] section\n3. User-level ~/.config/pitchfork/config.toml in [settings] section\n4. System-level /etc/pitchfork/config.toml in [settings] section\n5. Built-in defaults (lowest priority)\n\nSubcommands:\n\n    list     List all available settings with types and defaults\n    get      Get the current value of a setting\n    set      Set a setting value in a config file\n    explain  Show where a setting's value came from\n\nExamples:\n\n    pitchfork settings                            Show all current settings\n    pitchfork settings list                       List all available settings\n    pitchfork settings get general.log_level      Get a specific setting\n    pitchfork settings explain general.log_level  Show what set it\n    pitchfork settings set general.log_level debug\n    pitchfork settings set web.auto_start true --global\n    pitchfork settings set supervisor.stop_timeout 10s --local\n    pitchfork settings set supervisor.stop_timeout 10s --project"
     flag --json help="Output in JSON format"
     cmd list help="List all available settings with types and defaults" effect=read {
         alias ls
@@ -406,6 +406,11 @@ cmd settings help="View and modify pitchfork settings" effect=read args_conflict
         flag --project help="Write to the project-level pitchfork.toml (default if no flag specified)"
         arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
         arg <VALUE> help="Value to set (type must match the setting: string, integer, boolean, or duration)"
+    }
+    cmd explain help="Show where a setting's value came from" effect=read {
+        alias why
+        long_help "Show where a setting's value came from\n\nNames the exact place that won — the variable, or the file and the key\ninside it — along with everything else that was considered and every other\nway the setting can be reached."
+        arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
     }
 }
 cmd sponsors help="Show the companies sponsoring pitchfork and the jdx.dev open source tools" effect=read {
