@@ -1131,15 +1131,23 @@ impl Settings {
         for warning in usage_rs::config::explain::warnings(&resolved) {
             warn!("{warning}");
         }
-        let settings = match Settings::read(&resolved) {
-            Ok(settings) => settings,
-            Err(errors) => {
-                for error in &errors.0 {
-                    warn!("{error}");
-                }
-                Settings::default()
-            }
-        };
+        // Lossy, because the alternative is worse than the problem: `read` is all or nothing,
+        // so one field the merge could not hand to its type used to cost every *other* setting
+        // too — `Settings::default()` throws away the environment and every config file over a
+        // single bad value. Here the offending field falls back to its own declared default and
+        // nothing else is touched. Warn and keep going is pitchfork's call to make: a
+        // supervisor that refuses to start because one duration is misspelled is a supervisor
+        // that took the whole machine's daemons down with it.
+        let (settings, errors) = Settings::read_lossy(&resolved);
+        for error in &errors.0 {
+            warn!("{error}");
+        }
+        // Every setting declares a default, so the only way this is `None` is a setting added
+        // without one — a hole in the declaration rather than anything a user did.
+        let settings = settings.unwrap_or_else(|| {
+            warn!("a setting has no value and no default; falling back to built-in defaults");
+            Settings::default()
+        });
         (settings, resolved)
     }
 
@@ -1715,6 +1723,56 @@ mod tests {
         assert_eq!(settings.supervisor.ready_check_interval, "500ms");
         assert_eq!(settings.supervisor.file_watch_debounce, "1s");
         assert_eq!(settings.supervisor.user, "");
+    }
+
+    #[test]
+    fn a_bad_value_costs_only_its_own_setting() {
+        // `Settings::read` is all or nothing, and the fallback for its failure used to be
+        // `Settings::default()` — one field the merge could not hand to its type demoting all
+        // sixty-eight settings and discarding the environment along with them.
+        let env = EnvLayer::new([("PITCHFORK_LOG".to_string(), "debug".to_string())]);
+        let mut resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&env)).unwrap();
+
+        // The one door into a resolution the merge does not check: a post-merge hook, which is
+        // what `sanitize_durations` is. A bool where an integer belongs is what a buggy one
+        // could write.
+        let registry = Settings::SETTINGS_REGISTRY;
+        let rate_limit = registry.lookup("ipc.rate_limit").unwrap().id;
+        resolved.coerced(rate_limit, Value::Bool(true), "a hook that got it wrong");
+
+        assert!(
+            Settings::read(&resolved).is_err(),
+            "the strict read still refuses it"
+        );
+
+        let (settings, errors) = Settings::read_lossy(&resolved);
+        let settings = settings.expect("every setting declares a default");
+        assert_eq!(
+            settings.ipc.rate_limit, 100,
+            "the bad field takes its declared default"
+        );
+        assert_eq!(
+            settings.general.log_level, "debug",
+            "and PITCHFORK_LOG is not collateral damage"
+        );
+        assert_eq!(errors.0.len(), 1, "{errors}");
+        assert_eq!(errors.0[0].key, "ipc.rate_limit");
+    }
+
+    #[test]
+    fn every_setting_declares_a_default() {
+        // What makes the `None` arm of the lossy read unreachable: a setting with no value and
+        // no default is a hole in this file, not something a user can cause. Adding one without
+        // a default should fail here rather than silently demote the whole struct at runtime.
+        let missing: Vec<&str> = Settings::SETTINGS_PROPS
+            .iter()
+            .filter(|meta| meta.default.is_none())
+            .map(|meta| meta.key)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these settings declare no default: {missing:?}"
+        );
     }
 
     #[test]
