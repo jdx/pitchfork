@@ -130,7 +130,7 @@ pub struct JsonSettingEntry {
     pub key: String,
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<&'static str>,
+    pub default: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]

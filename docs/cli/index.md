@@ -51,3 +51,7 @@
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
 - [`pitchfork tui [--namespace… <NAMESPACE>] [--project]`](/cli/tui.md)
 - [`pitchfork wait <ID>`](/cli/wait.md)
+
+## Configuration
+
+- [Settings](/cli/configuration.md)
