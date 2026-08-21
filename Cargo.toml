@@ -15,9 +15,7 @@ include = [
     "assets/**/*",
     "ui/dist/**/*",
     "/pitchfork-extras.usage.kdl",
-    "/settings.toml",
     "/build.rs",
-    "/build/**/*.rs",
 ]
 
 [[bin]]
@@ -35,7 +33,10 @@ proxy-tls = ["rcgen", "tokio-rustls", "rustls-pemfile", "x509-parser"]
 [dependencies]
 auto-launcher = "1"
 chrono = { version = "0.4", features = ["serde"] }
-usage_rs = { package = "usage-rs", version = "6", features = ["completions", "diagnostics"] }
+usage_rs = { package = "usage-rs", version = "6", features = ["completions", "diagnostics", "config"] }
+# Direct dependency so the "toml" feature (FileLayer's TOML reader) is enabled;
+# usage-rs's "config" feature re-exports this crate as usage_rs::config.
+usage-config = { version = "6", features = ["toml"] }
 clx = "3"
 comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"
@@ -121,14 +122,6 @@ nix = { version = "0.31", features = ["signal", "process", "user", "net", "ioctl
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
-
-[build-dependencies]
-toml = "1"
-quote = "1"
-proc-macro2 = "1"
-syn = "3"
-heck = "0.5"
-indexmap = "2"
 
 [dev-dependencies]
 tempfile = "3"
