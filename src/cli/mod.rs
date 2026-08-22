@@ -1,6 +1,6 @@
 use crate::Result;
 use miette::IntoDiagnostic as _;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use tokio::io::AsyncWriteExt as _;
 use usage_rs::Cli;
 
@@ -116,7 +116,22 @@ struct StartFallback {
     start: start::Start,
 }
 
+fn fallback_failure(argv: &[&OsStr], error: &usage_rs::Error<'_, '_>) -> (String, i32) {
+    (
+        usage_rs::render_failure(StartFallback::spec(), argv, error),
+        2,
+    )
+}
+
 pub async fn run() -> Result<()> {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    if argv.get(1).and_then(|arg| arg.to_str()) == Some("__complete_word__") {
+        if let Some(answer) = completion::app().completion_request(&argv[1..]).await {
+            print!("{answer}");
+        }
+        return Ok(());
+    }
+
     let args = Cli::parse();
     match args.command {
         Commands::Activate(activate) => activate.run().await,
@@ -171,11 +186,11 @@ pub async fn run() -> Result<()> {
                     stdout.flush().await.into_diagnostic()?;
                     Ok(())
                 }
-                Err(error) => Err(miette::miette!(usage_rs::render_failure(
-                    StartFallback::spec(),
-                    &argv,
-                    &error,
-                ))),
+                Err(error) => {
+                    let (rendered, status) = fallback_failure(&argv, &error);
+                    eprint!("{rendered}");
+                    std::process::exit(status);
+                }
             }
         }
     }
@@ -306,7 +321,8 @@ mod tests {
     fn fallback_invalid_start_usage_renders_pitchfork_start() {
         let argv = [OsStr::new("mydaemon"), OsStr::new("--not-a-start-flag")];
         let err = StartFallback::parse_from(&argv).unwrap_err();
-        let rendered = usage_rs::render_failure(StartFallback::spec(), &argv, &err);
+        let (rendered, status) = fallback_failure(&argv, &err);
+        assert_eq!(status, 2);
         assert!(
             rendered.contains("Usage: pitchfork start"),
             "expected usage to contain 'pitchfork start', got: {rendered}"
