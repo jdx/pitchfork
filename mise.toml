@@ -73,14 +73,13 @@ run = "aube install && exec aube run docs:build"
 
 [tasks."build:usage"]
 description = "Build the usage CLI matching the generated spec dialect"
-run = "cargo install --force --git https://github.com/jdx/usage --rev f265f771e914e3869848fad2fe2f226f63454355 --locked --root .mise/usage-cli-6 usage-cli"
+run = "cargo install --force --locked --root .mise/usage-cli-6 usage-cli --version 6.0.0"
 sources = ["Cargo.lock", "mise.toml"]
 outputs = [".mise/usage-cli-6/bin/usage"]
 
 [tasks.render]
 depends = ["build", "build:usage"]
-# Temporary until usage 6.x is released: render with the exact CLI revision that
-# understands the dialect emitted by the git-pinned usage-rs dependency.
+# Render with the released CLI matching the usage-rs major version.
 run = [
   "pitchfork usage > pitchfork.usage.kdl",
   "rm -rf docs/cli && mkdir -p docs/cli",
