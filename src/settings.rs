@@ -214,6 +214,20 @@ pub struct SettingsGeneral {
     /// the output compact and aligned with the spinner / status icons.
     #[usage(env = "PITCHFORK_STARTUP_LOG_TIMESTAMPS", default = false)]
     pub startup_log_timestamps: bool,
+
+    /// Enable git worktree / jj workspace auto-discovery
+    ///
+    /// When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy
+    /// slug routing and supervisor config discovery. Each worktree gets its own namespace.
+    ///
+    /// Set to `false` to disable all worktree/workspace discovery. The deprecated
+    /// `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration.
+    #[usage(
+        env = "PITCHFORK_WORKTREE",
+        deprecated_env("PITCHFORK_PROXY_WORKTREE"),
+        default = true
+    )]
+    pub worktree: bool,
 }
 
 /// The `ipc.*` (inter-process communication) settings.
@@ -598,30 +612,6 @@ pub struct SettingsProxy {
     /// Set to `false` to require exact hostname matches only.
     #[usage(env = "PITCHFORK_PROXY_WILDCARD", default = true)]
     pub wildcard: bool,
-
-    /// Enable git worktree / jj workspace auto-discovery for slug routing
-    ///
-    /// When enabled (default), pitchfork automatically detects git worktrees or jj
-    /// workspaces for registered slugs and routes subdomain prefixes to the
-    /// corresponding worktree / workspace.
-    ///
-    /// For example, with slug "myapp" pointing to /home/user/myapp (main branch),
-    /// a git worktree at /home/user/myapp-feature-a (branch feature-a) or a jj
-    /// workspace at /home/user/myapp-feature-a is automatically discovered.
-    /// Requests to feature-a.myapp.localhost are routed to the daemon running in
-    /// that directory.
-    ///
-    /// Each worktree / workspace gets its own namespace (the directory name), so
-    /// multiple copies can run the same daemon name without conflict.
-    ///
-    /// Branch / workspace names are sanitized for URL compatibility:
-    /// `feature/my-endpoint` becomes `feature-my-endpoint`, accessed as
-    /// `feature-my-endpoint.myapp.localhost`.
-    ///
-    /// Set to `false` to disable worktree/workspace discovery. Only the main
-    /// project directory will be used for slug routing.
-    #[usage(env = "PITCHFORK_PROXY_WORKTREE", default = true)]
-    pub worktree: bool,
 }
 
 /// The `supervisor.*` settings.
@@ -1005,6 +995,33 @@ pub struct SettingsWeb {
 /// from these fields; the CLI's emitted spec carries the `config` block
 /// through `#[usage(config = ...)]` on the root.
 #[derive(usage_rs::Config, Debug, Clone, PartialEq)]
+#[usage(
+    file(path = "/etc/pitchfork/config.toml", scope = "system", format = "toml"),
+    file(
+        path = "~/.config/pitchfork/config.toml",
+        scope = "global",
+        format = "toml"
+    ),
+    file(
+        path = ".config/pitchfork.toml",
+        findup,
+        scope = "project",
+        format = "toml"
+    ),
+    file(
+        path = ".config/pitchfork.local.toml",
+        findup,
+        scope = "project",
+        format = "toml"
+    ),
+    file(path = "pitchfork.toml", findup, scope = "project", format = "toml"),
+    file(
+        path = "pitchfork.local.toml",
+        findup,
+        scope = "project",
+        format = "toml"
+    )
+)]
 pub struct Settings {
     #[usage(flatten)]
     pub api: SettingsApi,
@@ -1506,6 +1523,8 @@ settings_partial! {
         shell: String,
         /// Show timestamps in startup log output
         startup_log_timestamps: bool,
+        /// Enable git worktree / jj workspace auto-discovery
+        worktree: bool,
     }
 }
 
@@ -1585,8 +1604,6 @@ settings_partial! {
         tls_key: String,
         /// Enable wildcard subdomain matching for proxy routes
         wildcard: bool,
-        /// Enable git worktree / jj workspace auto-discovery for slug routing
-        worktree: bool,
     }
 }
 
@@ -1796,6 +1813,31 @@ mod tests {
         assert_eq!(watch.deprecated_envs, &["PITCHFORK_WATCH_INTERVAL_MS"]);
         let log_level = registry.get(registry.lookup("general.log_level").unwrap().id);
         assert_eq!(log_level.envs, &["PITCHFORK_LOG"]);
+        let worktree = registry.get(registry.lookup("general.worktree").unwrap().id);
+        assert_eq!(worktree.envs, &["PITCHFORK_WORKTREE"]);
+        assert_eq!(worktree.deprecated_envs, &["PITCHFORK_PROXY_WORKTREE"]);
+        assert!(
+            registry.lookup("proxy.worktree").is_none(),
+            "the old grouped key must not survive the move"
+        );
+
+        let spec = Settings::spec_kdl();
+        let files = [
+            "file \"/etc/pitchfork/config.toml\" scope=\"system\" format=\"toml\"",
+            "file \"~/.config/pitchfork/config.toml\" scope=\"global\" format=\"toml\"",
+            "file \".config/pitchfork.toml\" findup=#true format=\"toml\"",
+            "file \".config/pitchfork.local.toml\" findup=#true format=\"toml\"",
+            "file \"pitchfork.toml\" findup=#true format=\"toml\"",
+            "file \"pitchfork.local.toml\" findup=#true format=\"toml\"",
+        ];
+        let positions: Vec<usize> = files
+            .iter()
+            .map(|file| spec.find(file).unwrap_or_else(|| panic!("missing {file}")))
+            .collect();
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "config files must be documented from lowest to highest precedence:\n{spec}"
+        );
     }
 
     #[test]
@@ -1849,10 +1891,14 @@ mod tests {
 
     #[test]
     fn test_deprecated_env_still_works_and_warns() {
-        let env = EnvLayer::new([("PITCHFORK_INTERVAL_SECS".to_string(), "30s".to_string())]);
+        let env = EnvLayer::new([
+            ("PITCHFORK_INTERVAL_SECS".to_string(), "30s".to_string()),
+            ("PITCHFORK_PROXY_WORKTREE".to_string(), "false".to_string()),
+        ]);
         let resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&env)).unwrap();
         let settings = Settings::read(&resolved).unwrap();
         assert_eq!(settings.general.interval, "30s");
+        assert!(!settings.general.worktree);
         let warnings = usage_rs::config::explain::warnings(&resolved);
         assert!(
             warnings
@@ -1860,15 +1906,24 @@ mod tests {
                 .any(|w| w.contains("PITCHFORK_INTERVAL_SECS is deprecated")),
             "{warnings:?}"
         );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("PITCHFORK_PROXY_WORKTREE is deprecated")),
+            "{warnings:?}"
+        );
 
         // The current name wins over the deprecated alias when both are set.
         let env = EnvLayer::new([
             ("PITCHFORK_INTERVAL_SECS".to_string(), "30s".to_string()),
             ("PITCHFORK_INTERVAL".to_string(), "7s".to_string()),
+            ("PITCHFORK_PROXY_WORKTREE".to_string(), "false".to_string()),
+            ("PITCHFORK_WORKTREE".to_string(), "true".to_string()),
         ]);
         let resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&env)).unwrap();
         let settings = Settings::read(&resolved).unwrap();
         assert_eq!(settings.general.interval, "7s");
+        assert!(settings.general.worktree);
     }
 
     #[test]

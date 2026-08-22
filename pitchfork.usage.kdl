@@ -528,6 +528,12 @@ cmd wait help="Wait for a daemon to stop, tailing the logs along the way" effect
 }
 
 config {
+    file "/etc/pitchfork/config.toml" scope="system" format="toml"
+    file "~/.config/pitchfork/config.toml" scope="global" format="toml"
+    file ".config/pitchfork.toml" findup=#true format="toml"
+    file ".config/pitchfork.local.toml" findup=#true format="toml"
+    file "pitchfork.toml" findup=#true format="toml"
+    file "pitchfork.local.toml" findup=#true format="toml"
     prop "api.auto_start" type="bool" default=#false help="Automatically start the standalone API server" long_help="Automatically start the standalone API server\n\nWhen true, pitchfork starts a standalone API server on api.bind_address +\napi.bind_port when the supervisor launches. The web UI does not need to\nbe enabled for this; you can run the API alone and serve the Vue SPA from\na separate static host (e.g. nginx, Vite dev server).\n\nDefault is false so the API is only available through the bundled web UI." {
         env "PITCHFORK_API_AUTO_START"
     }
@@ -567,6 +573,10 @@ config {
     }
     prop "general.startup_log_timestamps" type="bool" default=#false help="Show timestamps in startup log output" long_help="Show timestamps in startup log output\n\nWhen enabled, pitchfork prefixes each startup log line and result line\nwith a timestamp (e.g. `19:03:15`), making it easier to see how long\neach daemon took to start.\n\nWhen disabled (default), a dim bullet (`•`) is used instead to keep\nthe output compact and aligned with the spinner / status icons." {
         env "PITCHFORK_STARTUP_LOG_TIMESTAMPS"
+    }
+    prop "general.worktree" type="bool" default=#true help="Enable git worktree / jj workspace auto-discovery" long_help="Enable git worktree / jj workspace auto-discovery\n\nWhen enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy\nslug routing and supervisor config discovery. Each worktree gets its own namespace.\n\nSet to `false` to disable all worktree/workspace discovery. The deprecated\n`PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration." {
+        env "PITCHFORK_WORKTREE"
+        deprecated_env "PITCHFORK_PROXY_WORKTREE"
     }
     prop "ipc.connect_attempts" type="int" default=5 help="Number of connection retry attempts" long_help="Number of connection retry attempts\n\nHow many times to retry connecting to the supervisor before giving up.\nEach attempt uses exponential backoff between `connect_min_delay` and `connect_max_delay`." {
         env "PITCHFORK_IPC_CONNECT_ATTEMPTS"
@@ -648,9 +658,6 @@ config {
     }
     prop "proxy.wildcard" type="bool" default=#true help="Enable wildcard subdomain matching for proxy routes" long_help="Enable wildcard subdomain matching for proxy routes\n\nWhen enabled (default), requests for subdomains of a registered slug\nwill fall back to the parent slug's daemon.\n\nFor example, with slug \"myapp\":\n- `myapp.localhost` → exact match (always works)\n- `tenant.myapp.localhost` → wildcard fallback to \"myapp\"\n\nThis is useful for multi-tenant apps where each tenant gets a unique\nsubdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but\nall share the same backend server.\n\nSet to `false` to require exact hostname matches only." {
         env "PITCHFORK_PROXY_WILDCARD"
-    }
-    prop "proxy.worktree" type="bool" default=#true help="Enable git worktree / jj workspace auto-discovery for slug routing" long_help="Enable git worktree / jj workspace auto-discovery for slug routing\n\nWhen enabled (default), pitchfork automatically detects git worktrees or jj\nworkspaces for registered slugs and routes subdomain prefixes to the\ncorresponding worktree / workspace.\n\nFor example, with slug \"myapp\" pointing to /home/user/myapp (main branch),\na git worktree at /home/user/myapp-feature-a (branch feature-a) or a jj\nworkspace at /home/user/myapp-feature-a is automatically discovered.\nRequests to feature-a.myapp.localhost are routed to the daemon running in\nthat directory.\n\nEach worktree / workspace gets its own namespace (the directory name), so\nmultiple copies can run the same daemon name without conflict.\n\nBranch / workspace names are sanitized for URL compatibility:\n`feature/my-endpoint` becomes `feature-my-endpoint`, accessed as\n`feature-my-endpoint.myapp.localhost`.\n\nSet to `false` to disable worktree/workspace discovery. Only the main\nproject directory will be used for slug routing." {
-        env "PITCHFORK_PROXY_WORKTREE"
     }
     prop "supervisor.auto_start" type="bool" default=#true help="Automatically start the supervisor when a client command needs it" long_help="Automatically start the supervisor when a client command needs it\n\nWhen enabled (default), commands such as `pitchfork start`, `pitchfork list`,\nthe TUI, and shell activation start a background supervisor automatically when\none is not already running.\n\nDisable this when the supervisor is managed by systemd, launchd, or another\nservice manager:\n\n```toml\n[settings.supervisor]\nauto_start = false\n```\n\nWith auto-start disabled, client commands wait for the configured IPC\nconnection attempts and then fail with an actionable error instead of spawning\nan unmanaged supervisor. Explicit `pitchfork supervisor start` and\n`pitchfork supervisor run` commands are unaffected." {
         env "PITCHFORK_SUPERVISOR_AUTO_START"

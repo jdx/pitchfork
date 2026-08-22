@@ -4018,6 +4018,41 @@
         "default_list": [],
         "extensions": []
       },
+      "general.worktree": {
+        "default": true,
+        "default_note": null,
+        "data_type": "boolean",
+        "value_type": {
+          "kind": "base",
+          "of": "bool"
+        },
+        "env": "PITCHFORK_WORKTREE",
+        "envs": [
+          "PITCHFORK_WORKTREE"
+        ],
+        "deprecated_envs": [
+          "PITCHFORK_PROXY_WORKTREE"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Enable git worktree / jj workspace auto-discovery",
+        "long_help": "Enable git worktree / jj workspace auto-discovery\n\nWhen enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy\nslug routing and supervisor config discovery. Each worktree gets its own namespace.\n\nSet to `false` to disable all worktree/workspace discovery. The deprecated\n`PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "ipc.connect_attempts": {
         "default": 5,
         "default_note": null,
@@ -4866,38 +4901,6 @@
         "bindings": {},
         "help": "Enable wildcard subdomain matching for proxy routes",
         "long_help": "Enable wildcard subdomain matching for proxy routes\n\nWhen enabled (default), requests for subdomains of a registered slug\nwill fall back to the parent slug's daemon.\n\nFor example, with slug \"myapp\":\n- `myapp.localhost` → exact match (always works)\n- `tenant.myapp.localhost` → wildcard fallback to \"myapp\"\n\nThis is useful for multi-tenant apps where each tenant gets a unique\nsubdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but\nall share the same backend server.\n\nSet to `false` to require exact hostname matches only.",
-        "help_heading": null,
-        "choices": [],
-        "merge": "replace",
-        "scope": "any",
-        "deprecated": null,
-        "deprecated_warn_at": null,
-        "deprecated_remove_at": null,
-        "renamed_to": null,
-        "hide": false,
-        "since": null,
-        "parse": null,
-        "writes_to": null,
-        "examples": [],
-        "default_list": [],
-        "extensions": []
-      },
-      "proxy.worktree": {
-        "default": true,
-        "default_note": null,
-        "data_type": "boolean",
-        "value_type": {
-          "kind": "base",
-          "of": "bool"
-        },
-        "env": "PITCHFORK_PROXY_WORKTREE",
-        "envs": [
-          "PITCHFORK_PROXY_WORKTREE"
-        ],
-        "cli": [],
-        "bindings": {},
-        "help": "Enable git worktree / jj workspace auto-discovery for slug routing",
-        "long_help": "Enable git worktree / jj workspace auto-discovery for slug routing\n\nWhen enabled (default), pitchfork automatically detects git worktrees or jj\nworkspaces for registered slugs and routes subdomain prefixes to the\ncorresponding worktree / workspace.\n\nFor example, with slug \"myapp\" pointing to /home/user/myapp (main branch),\na git worktree at /home/user/myapp-feature-a (branch feature-a) or a jj\nworkspace at /home/user/myapp-feature-a is automatically discovered.\nRequests to feature-a.myapp.localhost are routed to the daemon running in\nthat directory.\n\nEach worktree / workspace gets its own namespace (the directory name), so\nmultiple copies can run the same daemon name without conflict.\n\nBranch / workspace names are sanitized for URL compatibility:\n`feature/my-endpoint` becomes `feature-my-endpoint`, accessed as\n`feature-my-endpoint.myapp.localhost`.\n\nSet to `false` to disable worktree/workspace discovery. Only the main\nproject directory will be used for slug routing.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
@@ -5783,7 +5786,44 @@
       }
     },
     "sources": {},
-    "files": []
+    "files": [
+      {
+        "path": "/etc/pitchfork/config.toml",
+        "findup": false,
+        "scope": "system",
+        "format": "toml"
+      },
+      {
+        "path": "~/.config/pitchfork/config.toml",
+        "findup": false,
+        "scope": "global",
+        "format": "toml"
+      },
+      {
+        "path": ".config/pitchfork.toml",
+        "findup": true,
+        "scope": "project",
+        "format": "toml"
+      },
+      {
+        "path": ".config/pitchfork.local.toml",
+        "findup": true,
+        "scope": "project",
+        "format": "toml"
+      },
+      {
+        "path": "pitchfork.toml",
+        "findup": true,
+        "scope": "project",
+        "format": "toml"
+      },
+      {
+        "path": "pitchfork.local.toml",
+        "findup": true,
+        "scope": "project",
+        "format": "toml"
+      }
+    ]
   },
   "version": "2.22.0",
   "usage": "",
