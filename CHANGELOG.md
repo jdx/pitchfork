@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.0](https://github.com/jdx/pitchfork/compare/v2.22.0...v2.23.0) - 2026-08-22
+
+### Added
+
+- improve worktree lifecycle isolation ([#746](https://github.com/jdx/pitchfork/pull/746))
+
+### Fixed
+
+- *(logs)* preserve insertion order in log batches ([#761](https://github.com/jdx/pitchfork/pull/761))
+- *(config)* gate worktree auto-discovery behind global setting ([#755](https://github.com/jdx/pitchfork/pull/755))
+- *(deps)* update rust crate mdns-sd to 0.21 ([#751](https://github.com/jdx/pitchfork/pull/751))
+- *(config)* pass project mise setting to supervisor ([#750](https://github.com/jdx/pitchfork/pull/750))
+
+### Other
+
+- *(deps)* update rust crate tera to v2.1.1 ([#748](https://github.com/jdx/pitchfork/pull/748))
+
 ## [2.22.0](https://github.com/jdx/pitchfork/compare/v2.21.0...v2.22.0) - 2026-08-18
 
 ### Added
