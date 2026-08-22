@@ -31,7 +31,7 @@ pub fn discover_worktrees(project_dir: &Path) -> Vec<WorktreeEntry> {
 
 fn discover_jj_workspaces(project_dir: &Path) -> Vec<WorktreeEntry> {
     let output = match Command::new("jj")
-        .args(["workspace", "list"])
+        .args(["--ignore-working-copy", "workspace", "list"])
         .current_dir(project_dir)
         .output()
     {
@@ -159,7 +159,7 @@ fn parse_jj_workspace_list(
 
 fn get_jj_workspace_root(project_dir: &Path, name: &str) -> Option<PathBuf> {
     let output = Command::new("jj")
-        .args(["workspace", "root", "--name", name])
+        .args(["--ignore-working-copy", "workspace", "root", "--name", name])
         .current_dir(project_dir)
         .output()
         .ok()?;
