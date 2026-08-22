@@ -14,6 +14,4 @@ Host process PID that owns the session.
 
 ### `--directory <DIRECTORY>`
 
-Project directory the session was entered with. Defaults to the
-current working directory and is canonicalized before lookup. Must
-match the directory used at enter time.
+Project directory the session was entered with. Defaults to the current working directory and is canonicalized before lookup. Must match the directory used at enter time.
