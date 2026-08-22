@@ -385,7 +385,7 @@ pub struct Logs {
     raw: bool,
 
     /// Output in JSON format
-    #[usage(long, conflicts_with = "raw", conflicts_with = "tail")]
+    #[usage(long, conflicts = "raw", conflicts = "tail")]
     json: bool,
 
     /// Filter logs by case-insensitive substring (can be repeated)

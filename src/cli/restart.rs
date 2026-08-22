@@ -27,31 +27,27 @@ Examples:
 )]
 pub struct Restart {
     /// ID of the daemon(s) to restart
-    #[usage(
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
-    )]
+    #[usage(conflicts = "local", conflicts = "global", conflicts = "all")]
     id: Vec<String>,
     /// Restart all daemons in the named group
     #[usage(
         long,
         value_name = "GROUP",
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "global",
+        conflicts = "all"
     )]
     group: Option<String>,
     /// Restart all running daemons
-    #[usage(long, short, conflicts_with = "local", conflicts_with = "global")]
+    #[usage(long, short, conflicts = "local", conflicts = "global")]
     all: bool,
     /// Restart all local daemons in pitchfork.toml
     #[usage(
         long,
         short = 'l',
         visible_alias = "all-local",
-        conflicts_with = "all",
-        conflicts_with = "global"
+        conflicts = "all",
+        conflicts = "global"
     )]
     local: bool,
     /// Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
@@ -59,8 +55,8 @@ pub struct Restart {
         long,
         short = 'g',
         visible_alias = "all-global",
-        conflicts_with = "local",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "all"
     )]
     global: bool,
     /// Delay in seconds before considering daemon ready (default: 3 seconds)

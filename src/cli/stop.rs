@@ -34,31 +34,27 @@ Examples:
 )]
 pub struct Stop {
     /// The name of the daemon(s) to stop
-    #[usage(
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
-    )]
+    #[usage(conflicts = "local", conflicts = "global", conflicts = "all")]
     id: Vec<String>,
     /// Stop all daemons in the named group
     #[usage(
         long,
         value_name = "GROUP",
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "global",
+        conflicts = "all"
     )]
     group: Option<String>,
     /// Stop all running daemons (in reverse dependency order)
-    #[usage(long, short, conflicts_with = "local", conflicts_with = "global")]
+    #[usage(long, short, conflicts = "local", conflicts = "global")]
     all: bool,
     /// Stop all local daemons in pitchfork.toml
     #[usage(
         long,
         short = 'l',
         visible_alias = "all-local",
-        conflicts_with = "all",
-        conflicts_with = "global"
+        conflicts = "all",
+        conflicts = "global"
     )]
     local: bool,
     /// Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
@@ -66,8 +62,8 @@ pub struct Stop {
         long,
         short = 'g',
         visible_alias = "all-global",
-        conflicts_with = "local",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "all"
     )]
     global: bool,
 }
