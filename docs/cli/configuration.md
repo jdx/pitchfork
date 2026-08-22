@@ -19,10 +19,7 @@ Read from, in ascending precedence — the last one that names a setting wins:
 
 Automatically start the standalone API server
 
-When true, pitchfork starts a standalone API server on api.bind_address +
-api.bind_port when the supervisor launches. The web UI does not need to
-be enabled for this; you can run the API alone and serve the Vue SPA from
-a separate static host (e.g. nginx, Vite dev server).
+When true, pitchfork starts a standalone API server on api.bind_address + api.bind_port when the supervisor launches. The web UI does not need to be enabled for this; you can run the API alone and serve the Vue SPA from a separate static host (e.g. nginx, Vite dev server).
 
 Default is false so the API is only available through the bundled web UI.
 
@@ -34,8 +31,7 @@ Default is false so the API is only available through the bundled web UI.
 
 IP address the API server binds to
 
-Use "0.0.0.0" to make the API reachable from other devices on your network.
-Keep "127.0.0.1" (default) to restrict it to localhost.
+Use "0.0.0.0" to make the API reachable from other devices on your network. Keep "127.0.0.1" (default) to restrict it to localhost.
 
 ## `api.bind_port`
 
@@ -45,8 +41,7 @@ Keep "127.0.0.1" (default) to restrict it to localhost.
 
 Port the standalone API server listens on
 
-Set to 0 (default) to disable the standalone API server.
-Set to any valid port number (e.g. 8081) to start the API on its own port.
+Set to 0 (default) to disable the standalone API server. Set to any valid port number (e.g. 8081) to start the API on its own port.
 
 ## `api.port_attempts`
 
@@ -63,17 +58,11 @@ Number of consecutive ports to try if api.bind_port is in use
 
 Authentication token for API access when bound to non-loopback addresses
 
-When the API server or web UI is bound to a non-loopback address (e.g.,
-"0.0.0.0"), this token is required on every API request via the
-X-Pitchfork-Token header.
+When the API server or web UI is bound to a non-loopback address (e.g., "0.0.0.0"), this token is required on every API request via the X-Pitchfork-Token header.
 
-If left empty and the bind address is non-loopback, a random 32-byte
-hex token is auto-generated on startup and printed to the supervisor log.
-This token is injected into the served index.html, so the bundled Vue
-SPA works without additional configuration.
+If left empty and the bind address is non-loopback, a random 32-byte hex token is auto-generated on startup and printed to the supervisor log. This token is injected into the served index.html, so the bundled Vue SPA works without additional configuration.
 
-For external API consumers (e.g., curl, mobile apps), set this to a
-fixed value or pass it via the PITCHFORK_API_TOKEN environment variable.
+For external API consumers (e.g., curl, mobile apps), set this to a fixed value or pass it via the PITCHFORK_API_TOKEN environment variable.
 
 ## `general.autostop_delay`
 
@@ -83,16 +72,11 @@ fixed value or pass it via the PITCHFORK_API_TOKEN environment variable.
 
 Delay before auto-stopping daemons when leaving a directory
 
-When using shell hooks with `auto = ["stop"]`, this controls how long pitchfork waits
-before stopping a daemon after you leave its directory.
+When using shell hooks with `auto = ["stop"]`, this controls how long pitchfork waits before stopping a daemon after you leave its directory.
 
 This delay prevents unnecessary stop/start cycles when briefly switching directories.
 
-**Examples:**
-- `"0s"` - Stop immediately (no delay)
-- `"30s"` - Wait 30 seconds
-- `"1m"` - Wait 1 minute (default)
-- `"5m"` - Wait 5 minutes
+**Examples:** - `"0s"` - Stop immediately (no delay) - `"30s"` - Wait 30 seconds - `"1m"` - Wait 1 minute (default) - `"5m"` - Wait 5 minutes
 
 Set to `"0s"` to disable the delay and stop daemons immediately.
 
@@ -104,17 +88,11 @@ Set to `"0s"` to disable the delay and stop daemons immediately.
 
 Supervisor background task refresh interval
 
-Controls how often the supervisor refreshes its internal state and checks for:
-- Daemon health status changes
-- Configuration file updates
-- Process state synchronization
+Controls how often the supervisor refreshes its internal state and checks for: - Daemon health status changes - Configuration file updates - Process state synchronization
 
 Lower values provide more responsive status updates but use more resources.
 
-**Recommended values:**
-- `"5s"` - For development/testing
-- `"10s"` - Default, balanced
-- `"30s"` - For production with many daemons
+**Recommended values:** - `"5s"` - For development/testing - `"10s"` - Default, balanced - `"30s"` - For production with many daemons
 
 ## `general.log_file_level`
 
@@ -124,11 +102,9 @@ Lower values provide more responsive status updates but use more resources.
 
 File log level (trace, debug, info, warn, error)
 
-Controls the verbosity of log output written to log files.
-Can be set independently from `log_level` to have more verbose file logs.
+Controls the verbosity of log output written to log files. Can be set independently from `log_level` to have more verbose file logs.
 
-For example, set console to `"info"` but file to `"debug"` to keep
-detailed logs for troubleshooting without cluttering the console.
+For example, set console to `"info"` but file to `"debug"` to keep detailed logs for troubleshooting without cluttering the console.
 
 ## `general.log_level`
 
@@ -140,12 +116,7 @@ Console log level (trace, debug, info, warn, error)
 
 Controls the verbosity of log output to the console.
 
-**Available levels:**
-- `"trace"` - Most verbose, includes all internal details
-- `"debug"` - Detailed information for debugging
-- `"info"` - Normal operation messages (default)
-- `"warn"` - Warnings and potential issues
-- `"error"` - Only errors
+**Available levels:** - `"trace"` - Most verbose, includes all internal details - `"debug"` - Detailed information for debugging - `"info"` - Normal operation messages (default) - `"warn"` - Warnings and potential issues - `"error"` - Only errors
 
 ## `general.mise`
 
@@ -155,16 +126,11 @@ Controls the verbosity of log output to the console.
 
 Wrap daemon commands with mise x -- globally
 
-When enabled, pitchfork wraps every daemon command with `mise x --` so that
-[mise](https://mise.jdx.dev) sets up the correct tool versions, PATH,
-and environment variables before the daemon runs.
+When enabled, pitchfork wraps every daemon command with `mise x --` so that [mise](https://mise.jdx.dev) sets up the correct tool versions, PATH, and environment variables before the daemon runs.
 
-This is especially useful when pitchfork is started as a login item or boot
-daemon, where the shell profile (`.zshrc`, `.bashrc`) is not sourced and
-tools installed via Homebrew or mise are not on PATH.
+This is especially useful when pitchfork is started as a login item or boot daemon, where the shell profile (`.zshrc`, `.bashrc`) is not sourced and tools installed via Homebrew or mise are not on PATH.
 
-Individual daemons can override this with `mise = true` or `mise = false`
-in their configuration.
+Individual daemons can override this with `mise = true` or `mise = false` in their configuration.
 
 ## `general.mise_bin`
 
@@ -173,11 +139,7 @@ in their configuration.
 
 Explicit path to the mise binary
 
-By default, pitchfork searches well-known locations for the mise binary:
-- `~/.local/bin/mise`
-- `~/.cargo/bin/mise`
-- `/usr/local/bin/mise`
-- `/opt/homebrew/bin/mise`
+By default, pitchfork searches well-known locations for the mise binary: - `~/.local/bin/mise` - `~/.cargo/bin/mise` - `/usr/local/bin/mise` - `/opt/homebrew/bin/mise`
 
 Set this to an absolute path if mise is installed elsewhere.
 
@@ -191,21 +153,13 @@ Shell command used to execute daemon run scripts
 
 Controls the shell used to execute daemon `run` commands.
 
-The value is split with `shell_words::split` into a program and arguments,
-then the daemon's `run` string is appended verbatim as the final argument
-(passed to the shell's command flag, e.g. `sh -c "<run>"`).
+The value is split with `shell_words::split` into a program and arguments, then the daemon's `run` string is appended verbatim as the final argument (passed to the shell's command flag, e.g. `sh -c "<run>"`).
 
-This means the `run` string is interpreted directly by the shell, so
-variable expansion (`$VAR`), globs (`*.txt`), pipes (`|`), and command
-chaining (`&&`) all work as expected.
+This means the `run` string is interpreted directly by the shell, so variable expansion (`$VAR`), globs (`*.txt`), pipes (`|`), and command chaining (`&&`) all work as expected.
 
-**Common configurations:**
-- `"sh -c"` — Default, POSIX shell
-- `"sh -o errexit -o pipefail -c"` — Exit on error, fail on pipe failure
-- `"bash -c"` — Use bash instead of sh
+**Common configurations:** - `"sh -c"` — Default, POSIX shell - `"sh -o errexit -o pipefail -c"` — Exit on error, fail on pipe failure - `"bash -c"` — Use bash instead of sh
 
-When `mise = true` is enabled for a daemon, the shell wraps inside
-`mise x --`, e.g. `mise x -- sh -c "<run>"`.
+When `mise = true` is enabled for a daemon, the shell wraps inside `mise x --`, e.g. `mise x -- sh -c "<run>"`.
 
 ## `general.startup_log_timestamps`
 
@@ -215,12 +169,9 @@ When `mise = true` is enabled for a daemon, the shell wraps inside
 
 Show timestamps in startup log output
 
-When enabled, pitchfork prefixes each startup log line and result line
-with a timestamp (e.g. `19:03:15`), making it easier to see how long
-each daemon took to start.
+When enabled, pitchfork prefixes each startup log line and result line with a timestamp (e.g. `19:03:15`), making it easier to see how long each daemon took to start.
 
-When disabled (default), a dim bullet (`•`) is used instead to keep
-the output compact and aligned with the spinner / status icons.
+When disabled (default), a dim bullet (`•`) is used instead to keep the output compact and aligned with the spinner / status icons.
 
 ## `general.worktree`
 
@@ -230,11 +181,9 @@ the output compact and aligned with the spinner / status icons.
 
 Enable git worktree / jj workspace auto-discovery
 
-When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy
-slug routing and supervisor config discovery. Each worktree gets its own namespace.
+When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy slug routing and supervisor config discovery. Each worktree gets its own namespace.
 
-Set to `false` to disable all worktree/workspace discovery. The deprecated
-`PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration.
+Set to `false` to disable all worktree/workspace discovery. The deprecated `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration.
 
 ## `ipc.connect_attempts`
 
@@ -244,8 +193,7 @@ Set to `false` to disable all worktree/workspace discovery. The deprecated
 
 Number of connection retry attempts
 
-How many times to retry connecting to the supervisor before giving up.
-Each attempt uses exponential backoff between `connect_min_delay` and `connect_max_delay`.
+How many times to retry connecting to the supervisor before giving up. Each attempt uses exponential backoff between `connect_min_delay` and `connect_max_delay`.
 
 ## `ipc.connect_max_delay`
 
@@ -255,8 +203,7 @@ Each attempt uses exponential backoff between `connect_min_delay` and `connect_m
 
 Maximum delay between connection retries
 
-The maximum delay between connection retry attempts.
-Exponential backoff will not exceed this value.
+The maximum delay between connection retry attempts. Exponential backoff will not exceed this value.
 
 ## `ipc.connect_min_delay`
 
@@ -266,8 +213,7 @@ Exponential backoff will not exceed this value.
 
 Minimum delay between connection retries
 
-The initial delay between connection retry attempts.
-The actual delay increases exponentially up to `connect_max_delay`.
+The initial delay between connection retry attempts. The actual delay increases exponentially up to `connect_max_delay`.
 
 ## `ipc.rate_limit`
 
@@ -277,11 +223,9 @@ The actual delay increases exponentially up to `connect_max_delay`.
 
 Maximum IPC requests per second per connection
 
-Rate limiting for IPC connections to prevent local DoS attacks.
-Uses a sliding window algorithm.
+Rate limiting for IPC connections to prevent local DoS attacks. Uses a sliding window algorithm.
 
-Most users won't need to change this. Increase if you have automated
-tools making many rapid requests to the supervisor.
+Most users won't need to change this. Increase if you have automated tools making many rapid requests to the supervisor.
 
 ## `ipc.rate_limit_window`
 
@@ -291,8 +235,7 @@ tools making many rapid requests to the supervisor.
 
 Rate limit sliding window duration
 
-The time window for rate limiting calculations.
-`rate_limit` requests are allowed within each window.
+The time window for rate limiting calculations. `rate_limit` requests are allowed within each window.
 
 ## `ipc.request_timeout`
 
@@ -304,8 +247,7 @@ Default timeout for IPC requests
 
 Maximum time to wait for a response from the supervisor for most operations.
 
-Note: Daemon start operations may use a longer timeout calculated from
-the daemon's `ready_delay` setting plus a buffer.
+Note: Daemon start operations may use a longer timeout calculated from the daemon's `ready_delay` setting plus a buffer.
 
 ## `logs.archive_hook.batch_size`
 
@@ -315,9 +257,7 @@ the daemon's `ready_delay` setting plus a buffer.
 
 Maximum log entries per archive hook invocation
 
-Log entries selected for pruning are passed to the archive hook in batches of
-this size. Smaller batches use less memory and are easier to retry, while larger
-batches reduce hook invocation overhead.
+Log entries selected for pruning are passed to the archive hook in batches of this size. Smaller batches use less memory and are easier to retry, while larger batches reduce hook invocation overhead.
 
 ## `logs.archive_hook.command`
 
@@ -326,22 +266,15 @@ batches reduce hook invocation overhead.
 
 Command to run before retention deletes old log entries
 
-When set, the given command is invoked before log entries are permanently
-pruned by retention. The command receives the entries about to be deleted as
-JSON Lines (JSONL) on stdin. Each line is an object with the fields:
+When set, the given command is invoked before log entries are permanently pruned by retention. The command receives the entries about to be deleted as JSON Lines (JSONL) on stdin. Each line is an object with the fields:
 
-- `id`: the SQLite row id
-- `daemon_id`: the qualified daemon id (e.g. `"myproject/api"`)
-- `timestamp`: the log timestamp in RFC 3339 format
-- `message`: the raw log message text
+- `id`: the SQLite row id - `daemon_id`: the qualified daemon id (e.g. `"myproject/api"`) - `timestamp`: the log timestamp in RFC 3339 format - `message`: the raw log message text
 
 The following environment variables are also available:
 
-- `PITCHFORK_DAEMON_ID`: the qualified daemon id
-- `PITCHFORK_ARCHIVE_REASON`: either `"age"` or `"count"`
+- `PITCHFORK_DAEMON_ID`: the qualified daemon id - `PITCHFORK_ARCHIVE_REASON`: either `"age"` or `"count"`
 
-If the command exits with a non-zero status, the pruning is skipped for that
-batch. This prevents data loss when the archive destination is unavailable.
+If the command exits with a non-zero status, the pruning is skipped for that batch. This prevents data loss when the archive destination is unavailable.
 
 **Examples:**
 
@@ -365,14 +298,11 @@ Count-based log retention (e.g. 10000)
 
 Maximum number of log entries to keep per daemon in the SQLite log store.
 
-When set, only the most recent N log entries are retained. Older entries are
-automatically pruned.
+When set, only the most recent N log entries are retained. Older entries are automatically pruned.
 
-When set to `0` (default), no count-based pruning is performed. You can combine
-this with `time_retention` to enforce both a time limit and a line count limit.
+When set to `0` (default), no count-based pruning is performed. You can combine this with `time_retention` to enforce both a time limit and a line count limit.
 
-Logs are pruned automatically by the supervisor during its interval watcher
-cycle (no more than once per hour). No manual rotation command is needed.
+Logs are pruned automatically by the supervisor during its interval watcher cycle (no more than once per hour). No manual rotation command is needed.
 
 ## `logs.log_format`
 
@@ -391,14 +321,11 @@ Time-based log retention duration (e.g. '7d', '30d')
 
 Maximum age of log entries to keep in the SQLite log store.
 
-When set, log entries older than this duration are automatically pruned.
-Examples: `"7d"` for 7 days, `"30d"` for 30 days, `"1h"` for 1 hour.
+When set, log entries older than this duration are automatically pruned. Examples: `"7d"` for 7 days, `"30d"` for 30 days, `"1h"` for 1 hour.
 
-When empty (default), no time-based pruning is performed. You can combine
-this with `line_retention` to enforce both a time limit and a line count limit.
+When empty (default), no time-based pruning is performed. You can combine this with `line_retention` to enforce both a time limit and a line count limit.
 
-Logs are pruned automatically by the supervisor during its interval watcher
-cycle (no more than once per hour). No manual rotation command is needed.
+Logs are pruned automatically by the supervisor during its interval watcher cycle (no more than once per hour). No manual rotation command is needed.
 
 ## `logs.timestamp`
 
@@ -408,12 +335,9 @@ cycle (no more than once per hour). No manual rotation command is needed.
 
 Show timestamps in log output
 
-When enabled (default), pitchfork prefixes each log line with a timestamp
-(e.g. `07-10 10:30:00`).
+When enabled (default), pitchfork prefixes each log line with a timestamp (e.g. `07-10 10:30:00`).
 
-When disabled, timestamps are omitted from `pitchfork logs` output. This is
-useful when piping logs to tools like `lnav` that expect raw JSON or when
-you want to process log output without the timestamp prefix.
+When disabled, timestamps are omitted from `pitchfork logs` output. This is useful when piping logs to tools like `lnav` that expect raw JSON or when you want to process log output without the timestamp prefix.
 
 Can be overridden per-invocation with `pitchfork logs --no-timestamp`.
 
@@ -425,22 +349,11 @@ Can be overridden per-invocation with `pitchfork logs --no-timestamp`.
 
 strftime format for log timestamps in `pitchfork logs` output
 
-Controls the date/time format used when displaying timestamps in `pitchfork logs`
-output. Uses chrono strftime syntax.
+Controls the date/time format used when displaying timestamps in `pitchfork logs` output. Uses chrono strftime syntax.
 
-Common format specifiers:
-- `%Y` — full year (2024)
-- `%m` — month (01-12)
-- `%d` — day (01-31)
-- `%H` — hour (00-23)
-- `%M` — minute (00-59)
-- `%S` — second (00-59)
+Common format specifiers: - `%Y` — full year (2024) - `%m` — month (01-12) - `%d` — day (01-31) - `%H` — hour (00-23) - `%M` — minute (00-59) - `%S` — second (00-59)
 
-Examples:
-- `%m-%d %H:%M:%S` — `07-10 10:30:00` (default)
-- `%Y-%m-%d %H:%M:%S` — `2024-07-10 10:30:00`
-- `%H:%M:%S` — `10:30:00` (time only)
-- `%Y/%m/%d %H:%M` — `2024/07/10 10:30`
+Examples: - `%m-%d %H:%M:%S` — `07-10 10:30:00` (default) - `%Y-%m-%d %H:%M:%S` — `2024-07-10 10:30:00` - `%H:%M:%S` — `10:30:00` (time only) - `%Y/%m/%d %H:%M` — `2024/07/10 10:30`
 
 Only affects the text display output, not `--json` or `--raw` modes.
 
@@ -452,13 +365,9 @@ Only affects the text display output, not `--json` or `--raw` modes.
 
 Automatically start daemons when accessed via proxy URL
 
-When enabled (default), visiting a proxy URL for a stopped daemon will
-automatically start that daemon. The browser receives a "Starting…" page
-that refreshes every 2 seconds until the daemon is ready, at which point
-the request is proxied normally.
+When enabled (default), visiting a proxy URL for a stopped daemon will automatically start that daemon. The browser receives a "Starting…" page that refreshes every 2 seconds until the daemon is ready, at which point the request is proxied normally.
 
-Set to `false` to disable auto-start and return a plain 502 error for
-stopped daemons (the previous behaviour).
+Set to `false` to disable auto-start and return a plain 502 error for stopped daemons (the previous behaviour).
 
 ## `proxy.auto_start_timeout`
 
@@ -468,17 +377,11 @@ stopped daemons (the previous behaviour).
 
 Maximum time to wait for an auto-started daemon to become ready
 
-When a daemon is auto-started via a proxy request, the proxy waits up to
-this duration for the **entire** auto-start operation to complete — including
-waiting for the daemon's readiness signal and detecting the bound port.
+When a daemon is auto-started via a proxy request, the proxy waits up to this duration for the **entire** auto-start operation to complete — including waiting for the daemon's readiness signal and detecting the bound port.
 
-If the daemon does not become ready and bind a port within this timeout,
-the browser receives an error page indicating the startup timed out.
+If the daemon does not become ready and bind a port within this timeout, the browser receives an error page indicating the startup timed out.
 
-**Examples:**
-- `"15s"` - Shorter timeout for fast-starting services
-- `"30s"` - Default, suitable for most daemons
-- `"60s"` - For daemons with slow initialisation (e.g. large Java apps)
+**Examples:** - `"15s"` - Shorter timeout for fast-starting services - `"30s"` - Default, suitable for most daemons - `"60s"` - For daemons with slow initialisation (e.g. large Java apps)
 
 ## `proxy.auto_trust`
 
@@ -488,17 +391,11 @@ the browser receives an error page indicating the startup timed out.
 
 Automatically install the proxy TLS certificate into the system trust store
 
-When enabled (default), pitchfork automatically installs the proxy's
-self-signed CA certificate into the system trust store during supervisor
-startup, so that browsers and tools trust HTTPS proxy URLs without
-certificate warnings.
+When enabled (default), pitchfork automatically installs the proxy's self-signed CA certificate into the system trust store during supervisor startup, so that browsers and tools trust HTTPS proxy URLs without certificate warnings.
 
-On macOS, this triggers a system authorization dialog (Touch ID or password).
-On Linux, this requires write access to the system CA directory (typically
-needs `sudo`).
+On macOS, this triggers a system authorization dialog (Touch ID or password). On Linux, this requires write access to the system CA directory (typically needs `sudo`).
 
-If auto-trust fails (e.g. due to permissions), it is silently skipped and
-a warning is logged. You can manually install the certificate with:
+If auto-trust fails (e.g. due to permissions), it is silently skipped and a warning is logged. You can manually install the certificate with:
   pitchfork proxy trust
 
 Set to `false` to disable auto-trust entirely.
@@ -511,11 +408,9 @@ Set to `false` to disable auto-trust entirely.
 
 Enable the reverse proxy server for daemons
 
-When enabled, pitchfork starts a reverse proxy that routes requests from
-`<slug>.<tld>:<port>` to the daemon's actual listening port.
+When enabled, pitchfork starts a reverse proxy that routes requests from `<slug>.<tld>:<port>` to the daemon's actual listening port.
 
-Only daemons with an explicit `slug` are routable through the proxy.
-No slug = not proxied.
+Only daemons with an explicit `slug` are routable through the proxy. No slug = not proxied.
 
 Example: `myapp.localhost:7777` -> `localhost:3000` (daemon with slug = "myapp")
 
@@ -529,15 +424,9 @@ Bind address for the reverse proxy server
 
 IP address the reverse proxy listens on.
 
-**Security Warning:** The default `127.0.0.1` only allows local connections.
-Setting this to `0.0.0.0` will expose the proxy on every network interface,
-including externally routable ones -- anyone on the same LAN can then reach
-your local daemons.
+**Security Warning:** The default `127.0.0.1` only allows local connections. Setting this to `0.0.0.0` will expose the proxy on every network interface, including externally routable ones -- anyone on the same LAN can then reach your local daemons.
 
-**Examples:**
-- `"127.0.0.1"` - Local only (default, recommended)
-- `"0.0.0.0"` - All interfaces (use with caution)
-- `"::1"` - IPv6 loopback
+**Examples:** - `"127.0.0.1"` - Local only (default, recommended) - `"0.0.0.0"` - All interfaces (use with caution) - `"::1"` - IPv6 loopback
 
 ## `proxy.https`
 
@@ -549,8 +438,7 @@ Enable HTTPS for the reverse proxy
 
 When enabled (default), the proxy serves HTTPS instead of HTTP.
 
-You must also configure `proxy.tls_cert` and `proxy.tls_key`, or pitchfork
-will auto-generate a self-signed certificate stored in the state directory.
+You must also configure `proxy.tls_cert` and `proxy.tls_key`, or pitchfork will auto-generate a self-signed certificate stored in the state directory.
 
 Set to `false` to use plain HTTP (e.g. for simple local development).
 
@@ -562,18 +450,11 @@ Set to `false` to use plain HTTP (e.g. for simple local development).
 
 Enable LAN mode for the reverse proxy
 
-When enabled, the proxy switches to the `.local` TLD and publishes slug
-hostnames via mDNS so that other devices on the same network can reach
-your daemons (e.g. `myapp.local` from a phone or another computer).
+When enabled, the proxy switches to the `.local` TLD and publishes slug hostnames via mDNS so that other devices on the same network can reach your daemons (e.g. `myapp.local` from a phone or another computer).
 
-LAN mode:
-- Forces `proxy.tld` to `local` (mDNS requirement)
-- Publishes each slug as an mDNS address record (`<slug>.local → <LAN-IP>`)
-- Binds the proxy to `0.0.0.0` instead of `127.0.0.1` (overridable via `proxy.host`)
-- Auto-detects your LAN IP and re-publishes mDNS records if it changes
+LAN mode: - Forces `proxy.tld` to `local` (mDNS requirement) - Publishes each slug as an mDNS address record (`<slug>.local → <LAN-IP>`) - Binds the proxy to `0.0.0.0` instead of `127.0.0.1` (overridable via `proxy.host`) - Auto-detects your LAN IP and re-publishes mDNS records if it changes
 
-Other devices must trust the pitchfork CA certificate to use HTTPS.
-Run `pitchfork proxy trust` on each device, or use `proxy.https = false`.
+Other devices must trust the pitchfork CA certificate to use HTTPS. Run `pitchfork proxy trust` on each device, or use `proxy.https = false`.
 
 ## `proxy.lan_ip`
 
@@ -582,8 +463,7 @@ Run `pitchfork proxy trust` on each device, or use `proxy.https = false`.
 
 Pin a specific LAN IP address instead of auto-detecting
 
-When set, skips auto-detection and uses this IP for mDNS publishing.
-Implies `proxy.lan = true` if a non-empty value is provided.
+When set, skips auto-detection and uses this IP for mDNS publishing. Implies `proxy.lan = true` if a non-empty value is provided.
 
 ## `proxy.port`
 
@@ -595,12 +475,9 @@ Port the reverse proxy server listens on
 
 The port pitchfork's reverse proxy binds to. Must be in the range 1-65535.
 
-Default is 443 (standard HTTPS port) since the proxy defaults to HTTPS.
-Users can override this to any port (e.g. 7777) to avoid requiring
-elevated privileges.
+Default is 443 (standard HTTPS port) since the proxy defaults to HTTPS. Users can override this to any port (e.g. 7777) to avoid requiring elevated privileges.
 
-Ports below 1024 require the supervisor to be started with elevated
-privileges (e.g. `sudo pitchfork supervisor start`).
+Ports below 1024 require the supervisor to be started with elevated privileges (e.g. `sudo pitchfork supervisor start`).
 
 ## `proxy.sync_hosts`
 
@@ -610,18 +487,13 @@ privileges (e.g. `sudo pitchfork supervisor start`).
 
 Automatically sync slug hostnames to /etc/hosts
 
-When enabled (default), pitchfork automatically adds entries to `/etc/hosts`
-for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers
-can resolve them.
+When enabled (default), pitchfork automatically adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them.
 
-This is needed because Safari does not auto-resolve `.localhost` subdomains,
-and custom TLDs (e.g. `.test`) always require DNS entries.
+This is needed because Safari does not auto-resolve `.localhost` subdomains, and custom TLDs (e.g. `.test`) always require DNS entries.
 
-Entries are managed in a marked block in `/etc/hosts` and cleaned up when
-the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.
+Entries are managed in a marked block in `/etc/hosts` and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.
 
-Set to `false` to disable automatic hosts file management. You will need to
-configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS).
+Set to `false` to disable automatic hosts file management. You will need to configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS).
 
 ## `proxy.tld`
 
@@ -636,8 +508,7 @@ The TLD appended to daemon hostnames in proxy URLs.
 With the default `localhost`, daemon URLs look like:
   `myapp.localhost:7777`  (for a daemon with slug = "myapp")
 
-For custom TLDs (e.g. `test`), you need wildcard DNS resolution.
-On macOS, you can use dnsmasq or add entries to `/etc/resolver/`.
+For custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you can use dnsmasq or add entries to `/etc/resolver/`.
 
 ## `proxy.tls_cert`
 
@@ -648,8 +519,7 @@ Path to TLS certificate file (PEM format) for HTTPS proxy
 
 Path to a PEM-encoded TLS certificate file used when `proxy.https = true`.
 
-If left empty and `proxy.https = true`, pitchfork will auto-generate a
-self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
+If left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
 
 ## `proxy.tls_key`
 
@@ -660,8 +530,7 @@ Path to TLS private key file (PEM format) for HTTPS proxy
 
 Path to a PEM-encoded private key file used when `proxy.https = true`.
 
-If left empty and `proxy.https = true`, pitchfork will auto-generate a
-self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
+If left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
 
 ## `proxy.wildcard`
 
@@ -671,16 +540,11 @@ self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
 
 Enable wildcard subdomain matching for proxy routes
 
-When enabled (default), requests for subdomains of a registered slug
-will fall back to the parent slug's daemon.
+When enabled (default), requests for subdomains of a registered slug will fall back to the parent slug's daemon.
 
-For example, with slug "myapp":
-- `myapp.localhost` → exact match (always works)
-- `tenant.myapp.localhost` → wildcard fallback to "myapp"
+For example, with slug "myapp": - `myapp.localhost` → exact match (always works) - `tenant.myapp.localhost` → wildcard fallback to "myapp"
 
-This is useful for multi-tenant apps where each tenant gets a unique
-subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but
-all share the same backend server.
+This is useful for multi-tenant apps where each tenant gets a unique subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but all share the same backend server.
 
 Set to `false` to require exact hostname matches only.
 
@@ -692,22 +556,16 @@ Set to `false` to require exact hostname matches only.
 
 Automatically start the supervisor when a client command needs it
 
-When enabled (default), commands such as `pitchfork start`, `pitchfork list`,
-the TUI, and shell activation start a background supervisor automatically when
-one is not already running.
+When enabled (default), commands such as `pitchfork start`, `pitchfork list`, the TUI, and shell activation start a background supervisor automatically when one is not already running.
 
-Disable this when the supervisor is managed by systemd, launchd, or another
-service manager:
+Disable this when the supervisor is managed by systemd, launchd, or another service manager:
 
 ```toml
 [settings.supervisor]
 auto_start = false
 ```
 
-With auto-start disabled, client commands wait for the configured IPC
-connection attempts and then fail with an actionable error instead of spawning
-an unmanaged supervisor. Explicit `pitchfork supervisor start` and
-`pitchfork supervisor run` commands are unaffected.
+With auto-start disabled, client commands wait for the configured IPC connection attempts and then fail with an actionable error instead of spawning an unmanaged supervisor. Explicit `pitchfork supervisor start` and `pitchfork supervisor run` commands are unaffected.
 
 ## `supervisor.cleanup_orphans`
 
@@ -717,24 +575,11 @@ an unmanaged supervisor. Explicit `pitchfork supervisor start` and
 
 Reconcile orphaned daemon processes when supervisor starts
 
-When enabled, the supervisor scans the state file on startup for daemon
-processes left behind by a previous supervisor instance that was killed
-unexpectedly (for example, with `kill -9`) and reconciles them according
-to `supervisor.orphan_policy` (re-adopt by default, or terminate).
+When enabled, the supervisor scans the state file on startup for daemon processes left behind by a previous supervisor instance that was killed unexpectedly (for example, with `kill -9`) and reconciles them according to `supervisor.orphan_policy` (re-adopt by default, or terminate).
 
-Before acting, the recorded process identity (PID plus kernel start
-time) is verified so that a PID recycled by the OS to an unrelated process
-is never adopted or killed — in that case only the stale state entry is
-cleared. When terminating, Linux and Windows also pin that identity with a
-pidfd or open process handle, so a recycled PID cannot be signaled. If the
-identity cannot be verified or pinned, reconciliation fails closed: the
-live process and its running state are retained rather than risk acting on
-the wrong process or allowing a duplicate instance to start.
+Before acting, the recorded process identity (PID plus kernel start time) is verified so that a PID recycled by the OS to an unrelated process is never adopted or killed — in that case only the stale state entry is cleared. When terminating, Linux and Windows also pin that identity with a pidfd or open process handle, so a recycled PID cannot be signaled. If the identity cannot be verified or pinned, reconciliation fails closed: the live process and its running state are retained rather than risk acting on the wrong process or allowing a duplicate instance to start.
 
-Disabling this leaves orphaned processes and their state entries
-completely untouched. This is a legacy escape hatch; prefer
-`orphan_policy = "adopt"` (the default), which keeps daemons running
-across a supervisor crash while resuming supervision.
+Disabling this leaves orphaned processes and their state entries completely untouched. This is a legacy escape hatch; prefer `orphan_policy = "adopt"` (the default), which keeps daemons running across a supervisor crash while resuming supervision.
 
 ## `supervisor.container`
 
@@ -744,12 +589,9 @@ across a supervisor crash while resuming supervision.
 
 Enable container/PID1 mode for running inside Docker containers
 
-When enabled, pitchfork operates as a proper PID 1 process inside a container:
-- Installs a SIGCHLD handler to reap all orphaned/zombie child processes
-- Routes SIGTERM/SIGINT through the graceful shutdown sequence
+When enabled, pitchfork operates as a proper PID 1 process inside a container: - Installs a SIGCHLD handler to reap all orphaned/zombie child processes - Routes SIGTERM/SIGINT through the graceful shutdown sequence
 
-This is essential when running pitchfork as the entrypoint of a Docker container,
-where PID 1 must reap zombie processes to prevent process table exhaustion.
+This is essential when running pitchfork as the entrypoint of a Docker container, where PID 1 must reap zombie processes to prevent process table exhaustion.
 
 Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`.
 
@@ -761,19 +603,11 @@ Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`
 
 Consecutive CPU-over-limit samples before killing a daemon
 
-When a daemon has `cpu_limit` configured, the supervisor checks CPU usage at
-each interval tick. To avoid killing daemons during transient spikes (e.g. JIT
-warm-up, burst responses), the process is only killed after this many
-**consecutive** samples exceed the limit. A single sample below the limit
-resets the counter.
+When a daemon has `cpu_limit` configured, the supervisor checks CPU usage at each interval tick. To avoid killing daemons during transient spikes (e.g. JIT warm-up, burst responses), the process is only killed after this many **consecutive** samples exceed the limit. A single sample below the limit resets the counter.
 
-**Examples:**
-- `1` - Kill immediately on first over-limit sample (no grace period)
-- `3` - Require 3 consecutive over-limit samples (default)
-- `5` - More tolerant of short bursts
+**Examples:** - `1` - Kill immediately on first over-limit sample (no grace period) - `3` - Require 3 consecutive over-limit samples (default) - `5` - More tolerant of short bursts
 
-With the default interval of `10s`, a threshold of `3` means a daemon must
-exceed its CPU limit for ~30 seconds before being killed.
+With the default interval of `10s`, a threshold of `3` means a daemon must exceed its CPU limit for ~30 seconds before being killed.
 
 ## `supervisor.cron_check_interval`
 
@@ -785,8 +619,7 @@ Interval for checking cron schedules
 
 How often to check if any cron-scheduled daemons should be triggered.
 
-The default of 10 seconds supports sub-minute cron schedules.
-Increase for lower resource usage if you don't need fine-grained scheduling.
+The default of 10 seconds supports sub-minute cron schedules. Increase for lower resource usage if you don't need fine-grained scheduling.
 
 ## `supervisor.file_watch_debounce`
 
@@ -796,12 +629,9 @@ Increase for lower resource usage if you don't need fine-grained scheduling.
 
 File watch debounce duration
 
-When using `watch` patterns to auto-restart daemons on file changes,
-this controls how long to wait after the last change before triggering
-a restart.
+When using `watch` patterns to auto-restart daemons on file changes, this controls how long to wait after the last change before triggering a restart.
 
-This prevents rapid restart cycles when many files change at once
-(e.g., during a build or git checkout).
+This prevents rapid restart cycles when many files change at once (e.g., during a build or git checkout).
 
 ## `supervisor.http_client_timeout`
 
@@ -823,8 +653,7 @@ Increase if your services take a while to respond during startup.
 
 Daemon log buffer flush interval
 
-How often daemon log output is flushed to disk.
-Lower values mean logs appear faster in the UI but may impact performance.
+How often daemon log output is flushed to disk. Lower values mean logs appear faster in the UI but may impact performance.
 
 ## `supervisor.orphan_policy`
 
@@ -834,10 +663,7 @@ Lower values mean logs appear faster in the UI but may impact performance.
 
 What to do with live orphaned daemons on supervisor startup: adopt or kill
 
-When the supervisor starts and finds daemons in the state file whose
-processes are still alive from a previous supervisor instance that died
-uncleanly, this policy decides what happens (after the process identity
-is verified via PID plus kernel start time):
+When the supervisor starts and finds daemons in the state file whose processes are still alive from a previous supervisor instance that died uncleanly, this policy decides what happens (after the process identity is verified via PID plus kernel start time):
 
 - `adopt` (default): keep the process running and resume supervision.
   The daemon keeps its state (status, ports, proxy routing) and is
@@ -850,13 +676,9 @@ is verified via PID plus kernel start time):
 - `kill`: terminate the orphaned process group so the new supervisor
   starts with a clean slate, matching pre-adoption behavior.
 
-Daemons whose recorded PID is dead, or whose PID now belongs to a
-different process, have their state reset under either policy. If the
-process identity cannot be verified, reconciliation fails closed and
-retains the running state without adopting or killing.
+Daemons whose recorded PID is dead, or whose PID now belongs to a different process, have their state reset under either policy. If the process identity cannot be verified, reconciliation fails closed and retains the running state without adopting or killing.
 
-The same policy applies when the interval watcher finds a running daemon
-that has lost its monitor at runtime.
+The same policy applies when the interval watcher finds a running daemon that has lost its monitor at runtime.
 
 This setting has no effect when `cleanup_orphans` is disabled.
 
@@ -868,15 +690,11 @@ This setting has no effect when `cleanup_orphans` is disabled.
 
 Maximum port increment attempts when auto_bump_port is enabled
 
-When `auto_bump_port = true` is set on a daemon, pitchfork will try incrementing
-all of the daemon's ports by the same offset to find a free range. This setting
-controls how many offsets are tried before giving up with an error.
+When `auto_bump_port = true` is set on a daemon, pitchfork will try incrementing all of the daemon's ports by the same offset to find a free range. This setting controls how many offsets are tried before giving up with an error.
 
-For example, with `port = [3000]` and `port_bump_attempts = 10`, pitchfork will
-try ports 3000, 3001, 3002, ... up to 3009 before reporting failure.
+For example, with `port = [3000]` and `port_bump_attempts = 10`, pitchfork will try ports 3000, 3001, 3002, ... up to 3009 before reporting failure.
 
-This is a global default; individual daemons can override it with
-`port_bump_attempts` in their daemon configuration.
+This is a global default; individual daemons can override it with `port_bump_attempts` in their daemon configuration.
 
 ## `supervisor.ready_check_interval`
 
@@ -886,10 +704,7 @@ This is a global default; individual daemons can override it with
 
 Interval between ready checks (HTTP, TCP, command)
 
-How often to poll when checking if a daemon is ready using:
-- `ready_http` - HTTP health endpoint
-- `ready_port` - TCP port listening
-- `ready_cmd` - Shell command exit code
+How often to poll when checking if a daemon is ready using: - `ready_http` - HTTP health endpoint - `ready_port` - TCP port listening - `ready_cmd` - Shell command exit code
 
 Lower values detect readiness faster but use more resources.
 
@@ -901,8 +716,7 @@ Lower values detect readiness faster but use more resources.
 
 Delay between stop and start during restart
 
-Brief pause after stopping a daemon before starting it again.
-Helps ensure resources (like ports) are fully released.
+Brief pause after stopping a daemon before starting it again. Helps ensure resources (like ports) are fully released.
 
 ## `supervisor.stop_timeout`
 
@@ -912,8 +726,7 @@ Helps ensure resources (like ports) are fully released.
 
 Maximum time to wait for daemon to stop gracefully
 
-When stopping a daemon, pitchfork sends SIGTERM and waits this long
-for the process to exit gracefully before sending SIGKILL.
+When stopping a daemon, pitchfork sends SIGTERM and waits this long for the process to exit gracefully before sending SIGKILL.
 
 Increase for daemons that need time to clean up (e.g., flush data).
 
@@ -926,12 +739,9 @@ Default user to run daemon processes as
 
 Default Unix user for daemon processes spawned by the supervisor.
 
-When set, all daemons run as this user unless an individual daemon sets
-`user = "..."`. The value may be a username (for example `"postgres"`) or
-a numeric UID (for example `"501"`).
+When set, all daemons run as this user unless an individual daemon sets `user = "..."`. The value may be a username (for example `"postgres"`) or a numeric UID (for example `"501"`).
 
-If unset and the supervisor is running as root via `sudo`, daemons default to
-the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
+If unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
 
 ## `supervisor.watch_interval`
 
@@ -943,13 +753,11 @@ File watcher config refresh interval
 
 How often the supervisor refreshes file watch configuration when using `watch` patterns.
 
-This controls how quickly newly started/stopped daemons with watch patterns are reflected
-in the active watcher set.
+This controls how quickly newly started/stopped daemons with watch patterns are reflected in the active watcher set.
 
 For polling watcher cadence, use `supervisor.watch_poll_interval`.
 
-Lower values react faster to configuration/runtime changes but use more CPU.
-The default `"10s"` is appropriate for most environments.
+Lower values react faster to configuration/runtime changes but use more CPU. The default `"10s"` is appropriate for most environments.
 
 ## `supervisor.watch_poll_interval`
 
@@ -961,12 +769,9 @@ Polling watcher filesystem scan interval
 
 How often polling-based file watchers scan for changes.
 
-This applies when daemon `watch_mode` is `poll`, or when `watch_mode = "auto"`
-falls back to polling because native watchers are unavailable.
+This applies when daemon `watch_mode` is `poll`, or when `watch_mode = "auto"` falls back to polling because native watchers are unavailable.
 
-Lower values detect changes faster but use more CPU and I/O.
-`"100ms"` is useful for highly interactive workflows;
-`"500ms"` is a practical default for remote/networked filesystems.
+Lower values detect changes faster but use more CPU and I/O. `"100ms"` is useful for highly interactive workflows; `"500ms"` is a practical default for remote/networked filesystems.
 
 ## `tui.message_duration`
 
@@ -976,8 +781,7 @@ Lower values detect changes faster but use more CPU and I/O.
 
 Status message display duration
 
-How long status messages (like "Daemon started") remain visible
-in the TUI before automatically clearing.
+How long status messages (like "Daemon started") remain visible in the TUI before automatically clearing.
 
 ## `tui.refresh_rate`
 
@@ -989,13 +793,9 @@ Daemon list refresh interval
 
 How often the TUI refreshes the daemon list and status information.
 
-Lower values provide more responsive updates but may increase CPU usage,
-especially with many daemons.
+Lower values provide more responsive updates but may increase CPU usage, especially with many daemons.
 
-**Recommended values:**
-- `"1s"` - More responsive
-- `"2s"` - Default, balanced
-- `"5s"` - Lower resource usage
+**Recommended values:** - `"1s"` - More responsive - `"2s"` - Default, balanced - `"5s"` - Lower resource usage
 
 ## `tui.stat_history`
 
@@ -1005,8 +805,7 @@ especially with many daemons.
 
 Number of stat samples to keep for graphs
 
-How many CPU/memory stat samples to keep for each daemon's graph.
-With the default refresh rate of 2s, 60 samples = ~2 minutes of history.
+How many CPU/memory stat samples to keep for each daemon's graph. With the default refresh rate of 2s, 60 samples = ~2 minutes of history.
 
 Increase for longer history in graphs, at the cost of more memory.
 
@@ -1018,11 +817,9 @@ Increase for longer history in graphs, at the cost of more memory.
 
 Event loop tick rate
 
-How often the TUI checks for keyboard input and other events.
-This affects input responsiveness.
+How often the TUI checks for keyboard input and other events. This affects input responsiveness.
 
-Most users won't need to change this. Lower values make the UI more
-responsive but use more CPU.
+Most users won't need to change this. Lower values make the UI more responsive but use more CPU.
 
 ## `web.auto_start`
 
@@ -1046,13 +843,9 @@ pitchfork supervisor start --web-port=3120
 
 URL path prefix for the web UI (e.g. "ps" serves at /ps/)
 
-Serves the web UI under a sub-path prefix, useful when running behind a reverse
-proxy that routes a path prefix to pitchfork.
+Serves the web UI under a sub-path prefix, useful when running behind a reverse proxy that routes a path prefix to pitchfork.
 
-**Examples:**
-- `""` - Serve at root `/` (default)
-- `"ps"` - Serve at `/ps/`
-- `"tools/pitchfork"` - Serve at `/tools/pitchfork/`
+**Examples:** - `""` - Serve at root `/` (default) - `"ps"` - Serve at `/ps/` - `"tools/pitchfork"` - Serve at `/tools/pitchfork/`
 
 Equivalent to the `--web-path` CLI flag. The CLI flag takes priority over this setting.
 
@@ -1066,13 +859,9 @@ Web server bind address
 
 IP address for the web UI to listen on.
 
-**Security Warning:** The default `127.0.0.1` only allows local connections.
-Setting this to `0.0.0.0` will expose the web UI to your network.
+**Security Warning:** The default `127.0.0.1` only allows local connections. Setting this to `0.0.0.0` will expose the web UI to your network.
 
-**Examples:**
-- `"127.0.0.1"` - Local only (default, recommended)
-- `"0.0.0.0"` - All interfaces (use with caution)
-- `"192.168.1.100"` - Specific interface
+**Examples:** - `"127.0.0.1"` - Local only (default, recommended) - `"0.0.0.0"` - All interfaces (use with caution) - `"192.168.1.100"` - Specific interface
 
 ## `web.bind_port`
 
@@ -1082,8 +871,7 @@ Setting this to `0.0.0.0` will expose the web UI to your network.
 
 Default web server port
 
-The port number for the web UI. If this port is in use, pitchfork will
-try subsequent ports up to `port_attempts` times.
+The port number for the web UI. If this port is in use, pitchfork will try subsequent ports up to `port_attempts` times.
 
 ## `web.log_lines`
 
@@ -1093,8 +881,7 @@ try subsequent ports up to `port_attempts` times.
 
 Initial number of log lines to display
 
-How many lines of logs to show initially when viewing daemon logs in the web UI.
-More lines means slower initial load but more history visible.
+How many lines of logs to show initially when viewing daemon logs in the web UI. More lines means slower initial load but more history visible.
 
 ## `web.port_attempts`
 
@@ -1104,11 +891,9 @@ More lines means slower initial load but more history visible.
 
 Number of ports to try if default is in use
 
-If the default port is occupied, pitchfork will try this many consecutive
-ports before giving up.
+If the default port is occupied, pitchfork will try this many consecutive ports before giving up.
 
-For example, with `bind_port = 3120` and `port_attempts = 10`,
-it will try ports 3120, 3121, 3122, ... up to 3129.
+For example, with `bind_port = 3120` and `port_attempts = 10`, it will try ports 3120, 3121, 3122, ... up to 3129.
 
 ## `web.sse_poll_interval`
 
@@ -1118,5 +903,4 @@ it will try ports 3120, 3121, 3122, ... up to 3129.
 
 Server-Sent Events poll interval for log streaming
 
-How often the web UI checks for new log lines when streaming logs.
-Lower values provide more real-time updates but use more resources.
+How often the web UI checks for new log lines when streaming logs. Lower values provide more real-time updates but use more resources.
