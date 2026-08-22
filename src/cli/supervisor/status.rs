@@ -4,11 +4,11 @@ use crate::ipc::client::IpcClient;
 use crate::procs::PROCS;
 
 /// Gets the status of the pitchfork daemon
-#[derive(Debug, clap::Args)]
-#[clap()]
+#[derive(Debug, usage_rs::Args)]
+#[usage()]
 pub struct Status {
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 

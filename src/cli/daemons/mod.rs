@@ -136,24 +136,22 @@ pub(crate) async fn resolve_config_path(
 }
 
 /// List configured daemons from all merged config files.
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "daemon",
-    verbatim_doc_comment,
-    args_conflicts_with_subcommands = true
-)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment, args_conflicts_with_subcommands = true)]
 pub struct Daemons {
-    #[clap(subcommand)]
+    #[usage(subcommand)]
     command: Option<DaemonsCommand>,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum DaemonsCommand {
+    #[usage(alias = "a")]
     Add(Box<Add>),
+    #[usage(alias = "rm")]
     Remove(Remove),
 }
 

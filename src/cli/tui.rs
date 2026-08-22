@@ -2,8 +2,8 @@ use crate::Result;
 use crate::daemon_list::NamespaceFilter;
 
 /// Launch the interactive TUI dashboard
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Launch the interactive TUI dashboard
@@ -23,7 +23,7 @@ Example:
 )]
 pub struct Tui {
     /// Only show daemons in this namespace (repeatable for OR logic)
-    #[clap(long)]
+    #[usage(long)]
     namespace: Vec<String>,
 
     /// Only show daemons in the current project's namespace
@@ -31,7 +31,7 @@ pub struct Tui {
     /// The namespace is resolved from the current directory the same way
     /// short daemon IDs are: the nearest config file's namespace, falling
     /// back to 'global' when no config file is found.
-    #[clap(long)]
+    #[usage(long)]
     project: bool,
 }
 

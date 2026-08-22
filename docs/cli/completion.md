@@ -6,7 +6,7 @@
 
 Generates shell completion scripts
 
-Creates tab-completion scripts for your shell. Requires the 'usage' CLI tool.
+Creates self-contained tab-completion scripts for your shell.
 
 Supported shells: bash, zsh, fish
 
@@ -26,3 +26,9 @@ Installation:
 ### `<SHELL>`
 
 Shell to generate completions for (bash, zsh, fish)
+
+**Choices:**
+
+- `bash`
+- `zsh`
+- `fish`

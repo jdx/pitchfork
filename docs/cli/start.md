@@ -38,11 +38,11 @@ ID of the daemon(s) in pitchfork.toml to start
 
 Start all daemons in the named group
 
-### `-l --local`
+### `-l --local --all-local`
 
 Start all local daemons in pitchfork.toml
 
-### `-g --global`
+### `-g --global --all-global`
 
 Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
 
@@ -76,7 +76,7 @@ Shell command to poll for readiness (exit code 0 = ready)
 
 ### `--expected-port… <EXPECTED_PORT>`
 
-Ports the daemon is expected to bind to (can be specified multiple times)
+Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
 
 ### `--bump [BUMP]`
 

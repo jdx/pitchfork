@@ -5,7 +5,7 @@ license = "MIT"
 version = "2.22.0"
 edition = "2024"
 resolver = "3"
-rust-version = "1.88"
+rust-version = "1.91"
 homepage = "https://pitchfork.jdx.dev"
 repository = "https://github.com/jdx/pitchfork"
 documentation = "https://pitchfork.jdx.dev"
@@ -35,8 +35,7 @@ proxy-tls = ["rcgen", "tokio-rustls", "rustls-pemfile", "x509-parser"]
 [dependencies]
 auto-launcher = "1"
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive", "env"] }
-clap_usage = "5"
+usage_rs = { package = "usage-rs", version = "6", features = ["completions", "diagnostics"] }
 clx = "3"
 comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"

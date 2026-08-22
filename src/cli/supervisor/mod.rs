@@ -21,14 +21,14 @@ pub enum KillOrStopOutcome {
 }
 
 /// Start, stop, and check the status of the pitchfork supervisor daemon
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "sup", verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct Supervisor {
-    #[clap(subcommand)]
+    #[usage(subcommand)]
     command: Commands,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     Run(run::Run),
     Start(start::Start),

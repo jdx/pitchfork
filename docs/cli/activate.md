@@ -27,3 +27,9 @@ Add to your shell config:
 ### `<SHELL>`
 
 Shell to activate (bash, zsh, fish)
+
+**Choices:**
+
+- `bash`
+- `zsh`
+- `fish`

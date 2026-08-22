@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use comfy_table::{Cell, Color, ContentArrangement, Table};
 
 /// Project session management for IDE and workspace integrations.
-#[derive(Debug, clap::Args)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct Project {
-    #[clap(subcommand)]
+    #[usage(subcommand)]
     command: ProjectCommands,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum ProjectCommands {
     Enter(Enter),
     Leave(Leave),
@@ -33,33 +33,33 @@ enum ProjectCommands {
 /// On Windows, automatic revocation when the host process exits is not
 /// available (Git Bash PIDs are invisible to the process table); sessions
 /// must be ended with an explicit `project leave`.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, usage_rs::Args)]
 pub struct Enter {
     /// Host process PID that owns the session. Required.
-    #[clap(long)]
+    #[usage(long)]
     pid: u32,
     /// Project directory to associate with the session. Defaults to the
     /// current working directory and is canonicalized before tracking.
-    #[clap(long)]
+    #[usage(long)]
     directory: Option<PathBuf>,
 }
 
 /// Leave a project session and evaluate its directory for autostop.
-#[derive(Debug, clap::Args)]
+#[derive(Debug, usage_rs::Args)]
 pub struct Leave {
     /// Host process PID that owns the session.
-    #[clap(long)]
+    #[usage(long)]
     pid: u32,
     /// Project directory the session was entered with. Defaults to the
     /// current working directory and is canonicalized before lookup. Must
     /// match the directory used at enter time.
-    #[clap(long)]
+    #[usage(long)]
     directory: Option<PathBuf>,
 }
 
 /// List tracked project sessions.
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 List tracked project sessions
@@ -74,7 +74,7 @@ Example:
 )]
 pub struct List {
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 

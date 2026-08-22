@@ -3,9 +3,8 @@ use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::PitchforkToml;
 
 /// Prevent a daemon from restarting
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "d",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Prevent a daemon from restarting

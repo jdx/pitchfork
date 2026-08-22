@@ -28,4 +28,6 @@ Only show daemons in this namespace (repeatable for OR logic)
 
 Only show daemons in the current project's namespace
 
-The namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.
+The namespace is resolved from the current directory the same way
+short daemon IDs are: the nearest config file's namespace, falling
+back to 'global' when no config file is found.

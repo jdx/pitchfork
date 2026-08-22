@@ -32,8 +32,8 @@ use std::sync::Arc;
 /// - pitchfork_stop   - Stop a named daemon
 /// - pitchfork_restart - Restart a named daemon
 /// - pitchfork_logs   - Return recent log output for a daemon
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     after_long_help = AFTER_LONG_HELP,
     long_about = "\

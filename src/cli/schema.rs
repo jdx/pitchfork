@@ -3,8 +3,7 @@ use crate::pitchfork_toml::PitchforkToml;
 use schemars::schema_for;
 
 /// Generate JSON Schema for pitchfork.toml configuration
-#[derive(Debug, clap::Args)]
-#[clap(hide = true)]
+#[derive(Debug, usage_rs::Args)]
 pub struct Schema;
 
 impl Schema {

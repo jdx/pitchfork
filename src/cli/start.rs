@@ -33,22 +33,21 @@ Examples:
                                   Wait for TCP port to be listening";
 
 /// Starts a daemon from a pitchfork.toml file
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "s",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = LONG_ABOUT
 )]
 pub struct Start {
     /// ID of the daemon(s) in pitchfork.toml to start
-    #[clap(
+    #[usage(
         conflicts_with = "local",
         conflicts_with = "global",
         conflicts_with = "all"
     )]
     id: Vec<String>,
     /// Start all daemons in the named group
-    #[clap(
+    #[usage(
         long,
         value_name = "GROUP",
         conflicts_with = "local",
@@ -57,7 +56,7 @@ pub struct Start {
     )]
     group: Option<String>,
     /// Start all local daemons in pitchfork.toml
-    #[clap(
+    #[usage(
         long,
         short = 'l',
         visible_alias = "all-local",
@@ -66,7 +65,7 @@ pub struct Start {
     )]
     local: bool,
     /// Start all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
-    #[clap(
+    #[usage(
         long,
         short = 'g',
         visible_alias = "all-global",
@@ -75,36 +74,36 @@ pub struct Start {
     )]
     global: bool,
     /// Start all daemons (both local and global)
-    #[clap(long, short = 'a', conflicts_with = "local", conflicts_with = "global")]
+    #[usage(long, short = 'a', conflicts_with = "local", conflicts_with = "global")]
     all: bool,
-    #[clap(long, hide = true)]
+    #[usage(long, hide = true)]
     shell_pid: Option<u32>,
     /// Stop the daemon if it is already running
-    #[clap(short, long)]
+    #[usage(short, long)]
     force: bool,
     /// Delay in seconds before considering daemon ready (default: 3 seconds)
-    #[clap(long)]
+    #[usage(long)]
     delay: Option<u64>,
     /// Wait until output matches this regex pattern before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     output: Option<String>,
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     http: Option<String>,
     /// Wait until TCP port is listening before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     port: Option<u16>,
     /// Shell command to poll for readiness (exit code 0 = ready)
-    #[clap(long)]
+    #[usage(long)]
     cmd: Option<String>,
-    /// Ports the daemon is expected to bind to (can be specified multiple times)
-    #[clap(long, value_delimiter = ',')]
+    /// Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
+    #[usage(long, delimiter = ',')]
     expected_port: Vec<u16>,
     /// Automatically find an available port if the expected port is in use
-    #[clap(long, num_args = 0..=1, value_name = "[BUMP]")]
+    #[usage(long, value_name = "BUMP")]
     bump: Option<Option<u32>>,
     /// Suppress startup log output
-    #[clap(short, long)]
+    #[usage(short, long)]
     quiet: bool,
 }
 

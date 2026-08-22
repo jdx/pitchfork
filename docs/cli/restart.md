@@ -34,11 +34,11 @@ Restart all daemons in the named group
 
 Restart all running daemons
 
-### `-l --local`
+### `-l --local --all-local`
 
 Restart all local daemons in pitchfork.toml
 
-### `-g --global`
+### `-g --global --all-global`
 
 Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
 

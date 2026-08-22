@@ -44,10 +44,10 @@ Stop all daemons in the named group
 
 Stop all running daemons (in reverse dependency order)
 
-### `-l --local`
+### `-l --local --all-local`
 
 Stop all local daemons in pitchfork.toml
 
-### `-g --global`
+### `-g --global --all-global`
 
 Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
