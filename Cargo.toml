@@ -35,7 +35,7 @@ proxy-tls = ["rcgen", "tokio-rustls", "rustls-pemfile", "x509-parser"]
 [dependencies]
 auto-launcher = "1"
 chrono = { version = "0.4", features = ["serde"] }
-usage_rs = { package = "usage-rs", version = "6", features = ["completions", "diagnostics"] }
+usage_rs = { package = "usage-rs", git = "https://github.com/jdx/usage", rev = "600c2287b7cd23a4841ad789a7dcb6dd7d8dd31a", features = ["completions", "diagnostics"] }
 clx = "3"
 comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"
