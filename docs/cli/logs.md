@@ -49,7 +49,7 @@ Show last N lines of logs
 
 Only applies when --since/--until is not used. Without this option, all logs are shown.
 
-### `-t --tail`
+### `-t -f --tail --follow`
 
 Show logs in real-time
 

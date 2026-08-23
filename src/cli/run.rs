@@ -7,9 +7,8 @@ use crate::{Result, env};
 use miette::bail;
 
 /// Runs a one-off daemon
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "r",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Runs a one-off daemon
@@ -38,37 +37,37 @@ pub struct Run {
     /// Name of the daemon to run
     id: String,
     /// Command and arguments to run (after --)
-    #[clap(last = true)]
+    #[usage(double_dash = "required")]
     run: Vec<String>,
     /// Stop the daemon if it is already running
-    #[clap(short, long)]
+    #[usage(short, long)]
     force: bool,
     /// Number of times to retry on error exit
-    #[clap(long, default_value = "0")]
+    #[usage(long, default = "0")]
     retry: u32,
     /// Delay in seconds before considering daemon ready (default: 3 seconds)
-    #[clap(short, long)]
+    #[usage(short, long)]
     delay: Option<u64>,
     /// Wait until output matches this regex pattern before considering daemon ready
-    #[clap(short, long)]
+    #[usage(short, long)]
     output: Option<String>,
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     http: Option<String>,
     /// Wait until TCP port is listening before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     port: Option<u16>,
     /// Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)
-    #[clap(long = "expected-port", value_delimiter = ',')]
+    #[usage(long = "expected-port", delimiter = ',')]
     expected_port: Vec<u16>,
     /// Automatically find an available port if the expected port is in use
-    #[clap(long, num_args = 0..=1, value_name = "[BUMP]")]
+    #[usage(long, value_name = "BUMP")]
     bump: Option<Option<u32>>,
     /// Shell command to poll for readiness (exit code 0 = ready)
-    #[clap(long)]
+    #[usage(long)]
     cmd: Option<String>,
     /// Suppress startup log output
-    #[clap(short, long)]
+    #[usage(short, long)]
     quiet: bool,
 }
 

@@ -5,9 +5,8 @@ use crate::pitchfork_toml::PitchforkToml;
 use std::sync::Arc;
 
 /// Sends a stop signal to a daemon
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "kill",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Sends a stop signal to a daemon
@@ -35,40 +34,36 @@ Examples:
 )]
 pub struct Stop {
     /// The name of the daemon(s) to stop
-    #[clap(
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
-    )]
+    #[usage(conflicts = "local", conflicts = "global", conflicts = "all")]
     id: Vec<String>,
     /// Stop all daemons in the named group
-    #[clap(
+    #[usage(
         long,
         value_name = "GROUP",
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "global",
+        conflicts = "all"
     )]
     group: Option<String>,
     /// Stop all running daemons (in reverse dependency order)
-    #[clap(long, short, conflicts_with = "local", conflicts_with = "global")]
+    #[usage(long, short, conflicts = "local", conflicts = "global")]
     all: bool,
     /// Stop all local daemons in pitchfork.toml
-    #[clap(
+    #[usage(
         long,
         short = 'l',
         visible_alias = "all-local",
-        conflicts_with = "all",
-        conflicts_with = "global"
+        conflicts = "all",
+        conflicts = "global"
     )]
     local: bool,
     /// Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
-    #[clap(
+    #[usage(
         long,
         short = 'g',
         visible_alias = "all-global",
-        conflicts_with = "local",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "all"
     )]
     global: bool,
 }

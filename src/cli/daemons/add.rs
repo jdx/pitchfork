@@ -11,9 +11,8 @@ use indexmap::IndexMap;
 use miette::{IntoDiagnostic, bail};
 
 /// Add a new daemon to pitchfork.toml
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "a",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Add a new daemon to pitchfork.toml
@@ -50,88 +49,88 @@ pub struct Add {
     /// ID of the daemon to add (e.g., "api" or "namespace/api")
     pub id: String,
     /// Command to run (can also use positional args)
-    #[clap(long)]
+    #[usage(long)]
     run: Option<String>,
     /// Arguments to pass to the daemon (alternative to --run)
-    #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
+    #[usage(double_dash = "automatic")]
     args: Vec<String>,
     /// Number of retry attempts on failure (use \"true\" for infinite)
-    #[clap(long)]
+    #[usage(long)]
     retry: Option<String>,
     /// Glob patterns to watch for changes (can be specified multiple times)
-    #[clap(long = "watch")]
+    #[usage(long = "watch")]
     watch: Vec<String>,
     /// Working directory for the daemon
-    #[clap(long)]
+    #[usage(long)]
     dir: Option<String>,
     /// Environment variables in KEY=value format (can be specified multiple times)
-    #[clap(long = "env")]
+    #[usage(long = "env")]
     env: Vec<String>,
     /// Delay in seconds before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     ready_delay: Option<u64>,
     /// Regex pattern to match in output for readiness
-    #[clap(long)]
+    #[usage(long)]
     ready_output: Option<String>,
     /// HTTP endpoint URL to poll for readiness
-    #[clap(long)]
+    #[usage(long)]
     ready_http: Option<String>,
     /// TCP port to check for readiness (a number or Tera template)
-    #[clap(long)]
+    #[usage(long)]
     ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness
-    #[clap(long)]
+    #[usage(long)]
     ready_cmd: Option<String>,
     /// Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
-    #[clap(long = "expected-port", value_delimiter = ',')]
+    #[usage(long = "expected-port", delimiter = ',')]
     expected_port: Vec<u16>,
     /// Automatically find an available port if the expected port is in use
-    #[clap(long, num_args = 0..=1, value_name = "[BUMP]")]
+    #[usage(long, value_name = "BUMP")]
     bump: Option<Option<u32>>,
     /// Daemon dependencies that must start first (can be specified multiple times)
-    #[clap(long = "depends")]
+    #[usage(long = "depends")]
     depends: Vec<String>,
     /// Start this daemon automatically on system boot
-    #[clap(long)]
+    #[usage(long)]
     boot_start: bool,
     /// Autostart the daemon when entering the directory
-    #[clap(long)]
+    #[usage(long)]
     autostart: bool,
     /// Autostop the daemon when leaving the directory
-    #[clap(long)]
+    #[usage(long)]
     autostop: bool,
     /// Command to run when daemon becomes ready
-    #[clap(long)]
+    #[usage(long)]
     on_ready: Option<String>,
     /// Command to run when daemon fails
-    #[clap(long)]
+    #[usage(long)]
     on_fail: Option<String>,
     /// Command to run before each retry attempt
-    #[clap(long)]
+    #[usage(long)]
     on_retry: Option<String>,
     /// Command to run when the daemon is explicitly stopped by pitchfork
-    #[clap(long)]
+    #[usage(long)]
     on_stop: Option<String>,
     /// Command to run on any daemon termination (clean exit, crash, or stop)
-    #[clap(long)]
+    #[usage(long)]
     on_exit: Option<String>,
     /// Cron schedule expression (6 fields: second minute hour day month weekday)
-    #[clap(long)]
+    #[usage(long)]
     cron_schedule: Option<String>,
     /// Cron retrigger behavior: finish, always, success, fail
-    #[clap(long)]
+    #[usage(long)]
     cron_retrigger: Option<String>,
     /// Trigger cron immediately on first check (default: deferred until next scheduled time)
-    #[clap(long)]
+    #[usage(long)]
     cron_immediate: bool,
     /// Write to pitchfork.local.toml instead of pitchfork.toml
-    #[clap(long)]
+    #[usage(long)]
     local: bool,
     /// Write to pitchfork.toml explicitly (default if no flag specified)
-    #[clap(long)]
+    #[usage(long)]
     project: bool,
     /// Write to the user-level global config (~/.config/pitchfork/config.toml)
-    #[clap(long)]
+    #[usage(long)]
     global: bool,
 }
 

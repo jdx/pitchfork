@@ -1,9 +1,8 @@
 use crate::Result;
 use crate::boot_manager::BootManager;
-use clap::Parser;
 
-#[derive(Debug, Parser)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     about = "Enable or disable boot start",
     long_about = "\
 Enable or disable boot start
@@ -41,14 +40,14 @@ Examples:
     pitchfork boot status           Check boot start status"
 )]
 pub struct Boot {
-    #[clap(subcommand)]
+    #[usage(subcommand)]
     command: BootCommands,
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum BootCommands {
     /// Enable boot start for pitchfork supervisor
-    #[clap(long_about = "\
+    #[usage(long_help = "\
 Enable boot start for pitchfork supervisor
 
 Registers pitchfork to start automatically when the system boots.
@@ -68,27 +67,27 @@ under a specific user's home directory, configure `settings.supervisor.user`
 in your pitchfork configuration.")]
     Enable(BootEnable),
     /// Disable boot start for pitchfork supervisor
-    #[clap(long_about = "\
+    #[usage(long_help = "\
 Disable boot start for pitchfork supervisor
 
 Removes the boot start registration. Pitchfork will no longer start
 automatically on system boot.")]
     Disable(BootDisable),
     /// Check boot start status
-    #[clap(long_about = "\
+    #[usage(long_help = "\
 Check boot start status
 
 Reports whether pitchfork is configured to start on system boot.")]
     Status(BootStatus),
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, usage_rs::Args)]
 pub struct BootEnable {}
 
-#[derive(Debug, Parser)]
+#[derive(Debug, usage_rs::Args)]
 pub struct BootDisable {}
 
-#[derive(Debug, Parser)]
+#[derive(Debug, usage_rs::Args)]
 pub struct BootStatus {}
 
 impl Boot {

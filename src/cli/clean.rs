@@ -26,9 +26,8 @@ where
 }
 
 /// Removes stopped/failed daemons from `pitchfork list`
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "c",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Removes stopped/failed daemons from `pitchfork list`
@@ -49,13 +48,13 @@ Examples:
 )]
 pub struct Clean {
     /// Only clean daemon registrations in these namespaces
-    #[clap(value_name = "NAMESPACE")]
+    #[usage(name = "NAMESPACE")]
     namespaces: Vec<String>,
     /// Only clean these daemons (repeatable; bare names use the current namespace)
-    #[clap(long = "daemon", value_name = "ID")]
+    #[usage(long = "daemon", value_name = "ID")]
     daemons: Vec<String>,
     /// Only clean registrations whose working directories no longer exist
-    #[clap(long)]
+    #[usage(long)]
     prune: bool,
 }
 

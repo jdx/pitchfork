@@ -312,9 +312,8 @@ pub fn colored_id_label(id: &str, colors_enabled: bool) -> String {
 }
 
 /// Displays logs for daemon(s)
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "l",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Displays logs for daemon(s)
@@ -346,18 +345,18 @@ pub struct Logs {
     id: Vec<String>,
 
     /// Delete logs
-    #[clap(short, long)]
+    #[usage(short, long, effect = "destructive")]
     clear: bool,
 
     /// Show last N lines of logs
     ///
     /// Only applies when --since/--until is not used.
     /// Without this option, all logs are shown.
-    #[clap(short)]
+    #[usage(short)]
     n: Option<usize>,
 
     /// Show logs in real-time
-    #[clap(short = 't', short_alias = 'f', long, visible_alias = "follow")]
+    #[usage(short = 't', short = 'f', long, visible_alias = "follow")]
     tail: bool,
 
     /// Show logs from this time
@@ -366,7 +365,7 @@ pub struct Logs {
     /// - Full datetime: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM"
     /// - Time only: "HH:MM:SS" or "HH:MM" (uses today's date)
     /// - Relative time: "5min", "2h", "1d" (e.g., last 5 minutes)
-    #[clap(short = 's', long)]
+    #[usage(short = 's', long)]
     since: Option<String>,
 
     /// Show logs until this time
@@ -374,33 +373,33 @@ pub struct Logs {
     /// Supports multiple formats:
     /// - Full datetime: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM"
     /// - Time only: "HH:MM:SS" or "HH:MM" (uses today's date)
-    #[clap(short = 'u', long)]
+    #[usage(short = 'u', long)]
     until: Option<String>,
 
     /// Disable pager even in interactive terminal
-    #[clap(long)]
+    #[usage(long)]
     no_pager: bool,
 
     /// Output raw log lines without color or formatting
-    #[clap(long)]
+    #[usage(long)]
     raw: bool,
 
     /// Output in JSON format
-    #[clap(long, conflicts_with = "raw", conflicts_with = "tail")]
+    #[usage(long, conflicts = "raw", conflicts = "tail")]
     json: bool,
 
     /// Filter logs by case-insensitive substring (can be repeated)
     ///
     /// Multiple --grep options are combined with OR.
-    #[clap(long)]
+    #[usage(long)]
     grep: Vec<String>,
 
     /// Filter logs by regular expression
-    #[clap(long)]
+    #[usage(long)]
     regex: Option<String>,
 
     /// Make --grep matching case-sensitive
-    #[clap(long)]
+    #[usage(long)]
     case_sensitive: bool,
 
     /// Filter by minimum log level (error, warn, info, debug, trace)
@@ -408,14 +407,14 @@ pub struct Logs {
     /// Shows entries at or above the given severity.
     /// For example, `--level warn` shows warn and error.
     /// Only effective for daemons with log_format json or logfmt.
-    #[clap(long)]
+    #[usage(long)]
     level: Option<String>,
 
     /// Filter by structured field value (KEY=VALUE, can be repeated)
     ///
     /// Extracts the value from fields_json using json_extract($.KEY).
     /// Multiple --field options are combined with AND.
-    #[clap(long, value_name = "KEY=VALUE")]
+    #[usage(long, value_name = "KEY=VALUE")]
     field: Vec<String>,
 
     /// Filter log entries with a jq expression
@@ -423,11 +422,11 @@ pub struct Logs {
     /// Each log entry is serialized as a JSON object with fields:
     /// timestamp, daemon_id, message, level, msg, logger, fields.
     /// Entries for which the expression produces a truthy value are shown.
-    #[clap(long, value_name = "EXPR")]
+    #[usage(long, value_name = "EXPR")]
     jq: Option<String>,
 
     /// Omit timestamps from log output
-    #[clap(long)]
+    #[usage(long)]
     no_timestamp: bool,
 }
 

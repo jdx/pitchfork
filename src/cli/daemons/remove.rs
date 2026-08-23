@@ -5,19 +5,19 @@ use crate::pitchfork_toml::{PitchforkToml, namespace_from_path};
 use miette::IntoDiagnostic;
 
 /// Remove a daemon from a pitchfork config file
-#[derive(Debug, clap::Args)]
-#[clap(visible_alias = "rm", verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct Remove {
     /// The ID of the daemon to remove (e.g., "api" or "namespace/api")
     id: String,
     /// Remove from pitchfork.local.toml instead of pitchfork.toml
-    #[clap(long)]
+    #[usage(long)]
     local: bool,
     /// Remove from pitchfork.toml explicitly (default if no flag specified)
-    #[clap(long)]
+    #[usage(long)]
     project: bool,
     /// Remove from the user-level global config (~/.config/pitchfork/config.toml)
-    #[clap(long)]
+    #[usage(long)]
     global: bool,
 }
 

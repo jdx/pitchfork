@@ -38,4 +38,4 @@ Daemon name within the project (defaults to slug name)
 
 ### `--namespace <NAMESPACE>`
 
-Namespace to associate with the slug. If not provided, derived from the project directory
+Namespace to associate with the slug. If not provided, derived from the project directory.

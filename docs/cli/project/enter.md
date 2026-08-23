@@ -14,8 +14,8 @@ On Windows, automatic revocation when the host process exits is not available (G
 
 ### `--pid <PID>`
 
-Host process PID that owns the session. Required
+Host process PID that owns the session. Required.
 
 ### `--directory <DIRECTORY>`
 
-Project directory to associate with the session. Defaults to the current working directory and is canonicalized before tracking
+Project directory to associate with the session. Defaults to the current working directory and is canonicalized before tracking.

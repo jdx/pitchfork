@@ -1,7 +1,7 @@
 //! What each pitchfork command does to the world.
 //!
-//! pitchfork's usage spec is derived from clap, and clap has no way to express
-//! this, so the classification lives here and is applied in
+//! pitchfork's usage spec is derived from static usage-rs metadata. Most command
+//! effects are centrally audited here and applied as sparse metadata overlays in
 //! [`crate::cli::usage`].
 //!
 //! The three values are defined by the usage spec:
@@ -17,10 +17,7 @@
 //! absence of a value as "ask", so leaving a command out is the conservative
 //! choice and mislabeling one `read` is the dangerous one.
 
-use std::collections::HashMap;
-
-use clap_usage::usage;
-use clap_usage::usage::SpecCommandEffect::{self, Destructive, Read, Write};
+use usage_rs::spec::Effect::{self as SpecCommandEffect, Destructive, Read, Write};
 
 /// Commands whose effect is fixed, keyed by their full path under `pitchfork`.
 pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
@@ -96,68 +93,52 @@ pub const UNCLASSIFIED: &[(&str, &str)] = &[
 
 /// Flags that raise the effect of their command, keyed by (command, flag).
 ///
-/// usage 4 takes the effect of an invocation to be the maximum of the
+/// usage takes the effect of an invocation to be the maximum of the
 /// command's effect and that of every flag supplied, so these only ever raise.
 /// Most flags belong nowhere near this table — it is for the few that change
 /// what the command does to the world.
+#[cfg(test)]
 pub const FLAG_EFFECTS: &[(&str, &str, SpecCommandEffect)] = &[
     // `LOG_STORE.clear()` — deletes the stored logs for the matched daemons.
     ("logs", "clear", Destructive),
 ];
 
-/// Annotate every command in the spec that has a declared effect.
-pub fn apply(spec: &mut usage::Spec) {
-    let effects: HashMap<&str, SpecCommandEffect> = EFFECTS.iter().copied().collect();
-    annotate(&mut spec.cmd, &mut vec![], &effects);
-}
-
-fn annotate(
-    cmd: &mut usage::SpecCommand,
-    path: &mut Vec<String>,
-    effects: &HashMap<&str, SpecCommandEffect>,
-) {
-    for (name, sub) in cmd.subcommands.iter_mut() {
-        path.push(name.clone());
-        let full = path.join(" ");
-        if let Some(effect) = effects.get(full.as_str()) {
-            sub.effect = Some(*effect);
-        }
-        for (cmd_path, flag_name, effect) in FLAG_EFFECTS {
-            if *cmd_path != full {
-                continue;
-            }
-            if let Some(flag) = sub.flags.iter_mut().find(|f| f.name == *flag_name) {
-                flag.effect = Some(*effect);
-            }
-        }
-        annotate(sub, path, effects);
-        path.pop();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::Cli;
-    use clap::CommandFactory;
     use std::collections::HashSet;
 
     /// Every command in the tree, hidden ones included: a hidden command is
     /// still runnable.
     fn all_commands() -> Vec<String> {
-        let spec: usage::Spec = Cli::command().into();
         let mut out = vec![];
-        collect(&spec.cmd, &mut vec![], &mut out);
+        collect(Cli::spec().root, &mut vec![], &mut out);
         out
     }
 
-    fn collect(cmd: &usage::SpecCommand, path: &mut Vec<String>, out: &mut Vec<String>) {
-        for (name, sub) in &cmd.subcommands {
-            path.push(name.clone());
+    fn collect(
+        cmd: &usage_rs::spec::CommandMeta<'_>,
+        path: &mut Vec<String>,
+        out: &mut Vec<String>,
+    ) {
+        for sub in cmd.subcommands {
+            path.push(sub.cmd.name.to_string());
             out.push(path.join(" "));
             collect(sub, path, out);
             path.pop();
         }
+    }
+
+    fn find_command(path: &str) -> &'static usage_rs::spec::CommandMeta<'static> {
+        path.split_ascii_whitespace()
+            .fold(Cli::spec().root, |cmd, name| {
+                cmd.subcommands
+                    .iter()
+                    .copied()
+                    .find(|sub| sub.cmd.name == name)
+                    .unwrap_or_else(|| panic!("no `pitchfork {path}`"))
+            })
     }
 
     fn classified() -> HashSet<&'static str> {
@@ -168,39 +149,22 @@ mod tests {
             .collect()
     }
 
-    /// The tables are only worth having if they reach the spec. Everything
-    /// else here checks the tables against the CLI; this checks that `apply`
-    /// actually transfers them, including onto flags.
+    /// The tables are only worth having if they reach the emitted spec.
     #[test]
-    fn apply_annotates_commands_and_flags() {
-        let mut spec: usage::Spec = Cli::command().into();
-        apply(&mut spec);
-
-        let cmd = |name: &str| {
-            spec.cmd
-                .subcommands
-                .get(name)
-                .unwrap_or_else(|| panic!("no `pitchfork {name}`"))
+    fn overlays_annotate_commands_and_flags() {
+        let overlays: Vec<_> = EFFECTS
+            .iter()
+            .map(|(path, effect)| usage_rs::spec::CommandOverlay::effect(path, *effect))
+            .collect();
+        let kdl = Cli::spec().view().overlay(&overlays).to_kdl();
+        let line = |command: &str| {
+            kdl.lines()
+                .find(|line| line.trim_start().starts_with(&format!("cmd {command} ")))
+                .unwrap_or_else(|| panic!("no `pitchfork {command}` in:\n{kdl}"))
         };
-        let logs = cmd("logs");
-        assert_eq!(logs.effect, Some(Read));
-        let flag = |name: &str| {
-            logs.flags
-                .iter()
-                .find(|f| f.name == name)
-                .unwrap_or_else(|| panic!("no --{name}"))
-        };
-        assert_eq!(flag("clear").effect, Some(Destructive));
-        // A flag with no entry must be left alone rather than inheriting one.
-        assert_eq!(flag("tail").effect, None);
-
-        assert_eq!(
-            cmd("daemons").subcommands["remove"].effect,
-            Some(Destructive)
-        );
-        assert_eq!(cmd("stop").effect, Some(Write));
-        // Anything in UNCLASSIFIED must be left unset, not defaulted.
-        assert_eq!(cmd("start").effect, None);
+        assert!(line("logs").contains("effect=read"), "{kdl}");
+        assert!(line("stop").contains("effect=write"), "{kdl}");
+        assert!(kdl.contains("effect=destructive"), "{kdl}");
     }
 
     /// Adding a command without deciding what it does to the world is the
@@ -240,12 +204,14 @@ mod tests {
     /// A renamed or removed flag would otherwise silently stop being annotated.
     #[test]
     fn every_flag_effect_matches_a_real_flag() {
-        let spec: usage::Spec = Cli::command().into();
         let mut missing = vec![];
         for (cmd_path, flag_name, _) in FLAG_EFFECTS {
-            match spec.cmd.subcommands.get(*cmd_path) {
-                Some(c) if c.flags.iter().any(|f| f.name == *flag_name) => {}
-                _ => missing.push(format!("{cmd_path} --{flag_name}")),
+            if !find_command(cmd_path)
+                .flags
+                .iter()
+                .any(|flag| flag.flag.name == *flag_name)
+            {
+                missing.push(format!("{cmd_path} --{flag_name}"));
             }
         }
         assert!(

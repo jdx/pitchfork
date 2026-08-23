@@ -1,11 +1,17 @@
 use crate::{Result, env};
-use miette::bail;
+
+#[derive(Clone, Copy, Debug, usage_rs::ValueEnum)]
+enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+}
 
 /// Activate pitchfork in your shell session
 ///
 /// Necessary for autostart/stop when entering/exiting projects with pitchfork.toml files
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Activate pitchfork in your shell session
@@ -28,15 +34,15 @@ Add to your shell config:
 )]
 pub struct Activate {
     /// Shell to activate (bash, zsh, fish)
-    #[clap()]
-    shell: String,
+    #[usage(value_enum)]
+    shell: Shell,
 }
 
 impl Activate {
     pub async fn run(&self) -> Result<()> {
         let pitchfork = env::PITCHFORK_BIN.to_string_lossy().to_string();
-        let s = match self.shell.as_str() {
-            "bash" => format!(
+        let s = match self.shell {
+            Shell::Bash => format!(
                 r#"
 __pitchfork() {{
     {pitchfork} cd --shell-pid $$
@@ -49,7 +55,7 @@ __pitchfork
                 include_str!("../../assets/bash_zsh_support/chpwd/function.sh"),
                 include_str!("../../assets/bash_zsh_support/chpwd/load.sh")
             ),
-            "zsh" => format!(
+            Shell::Zsh => format!(
                 r#"
 __pitchfork() {{
     {pitchfork} cd --shell-pid $$
@@ -58,7 +64,7 @@ chpwd_functions+=(__pitchfork)
 __pitchfork
 "#
             ),
-            "fish" => format!(
+            Shell::Fish => format!(
                 r#"
 function __pitchfork --on-variable PWD
     {pitchfork} cd --shell-pid "$fish_pid"
@@ -66,7 +72,6 @@ end
 __pitchfork
 "#,
             ),
-            shell => bail!("unsupported shell: {shell}. Supported shells: bash, zsh, fish"),
         };
         println!("{}", s.trim());
         Ok(())

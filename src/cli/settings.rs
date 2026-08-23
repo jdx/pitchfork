@@ -3,15 +3,13 @@ use crate::cli::daemons::resolve_config_path;
 use crate::cli::json_output::{JsonSettingEntry, print_json};
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::{SETTINGS_META, SettingsPartial, settings};
-use clap::Parser;
 use miette::{IntoDiagnostic, bail};
 
 const LOG_LEVEL_VALUES: &[&str] = &["trace", "debug", "info", "warn", "error"];
 
 /// View and modify pitchfork settings
-#[derive(Debug, Parser)]
-#[clap(
-    visible_alias = "setting",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     args_conflicts_with_subcommands = true,
     long_about = "\
@@ -41,18 +39,18 @@ Examples:
     pitchfork settings set supervisor.stop_timeout 10s --project"
 )]
 pub struct Settings {
-    #[clap(subcommand)]
+    #[usage(subcommand)]
     command: Option<Commands>,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, usage_rs::Subcommands)]
 enum Commands {
     /// List all available settings with types and defaults
-    #[clap(visible_alias = "ls")]
+    #[usage(alias = "ls")]
     List(ListCmd),
     /// Get the current value of a setting
     Get(GetCmd),
@@ -61,46 +59,46 @@ enum Commands {
 }
 
 /// List all available settings with types and defaults
-#[derive(Debug, Parser)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct ListCmd {
     /// Only show settings in a specific group (e.g., "general", "web", "supervisor")
-    #[clap(long)]
+    #[usage(long)]
     group: Option<String>,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 
 /// Get the current value of a setting
-#[derive(Debug, Parser)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct GetCmd {
     /// Setting key in dot notation (e.g., general.log_level, web.auto_start)
     key: String,
 
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 
 /// Set a setting value in a config file
-#[derive(Debug, Parser)]
-#[clap(verbatim_doc_comment)]
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
 pub struct SetCmd {
     /// Setting key in dot notation (e.g., general.log_level, web.auto_start)
     key: String,
     /// Value to set (type must match the setting: string, integer, boolean, or duration)
     value: String,
     /// Write to the user-level global config (~/.config/pitchfork/config.toml)
-    #[clap(long)]
+    #[usage(long)]
     global: bool,
     /// Write to the project-level pitchfork.local.toml (overrides pitchfork.toml)
-    #[clap(long)]
+    #[usage(long)]
     local: bool,
     /// Write to the project-level pitchfork.toml (default if no flag specified)
-    #[clap(long)]
+    #[usage(long)]
     project: bool,
 }
 

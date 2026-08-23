@@ -6,11 +6,11 @@ use crate::settings::settings;
 use crate::supervisor;
 
 /// Starts the internal pitchfork daemon in the background
-#[derive(Debug, clap::Args)]
-#[clap()]
+#[derive(Debug, usage_rs::Args)]
+#[usage()]
 pub struct Start {
     /// kill existing daemon
-    #[clap(short, long)]
+    #[usage(short, long)]
     force: bool,
 }
 

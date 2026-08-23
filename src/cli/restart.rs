@@ -6,8 +6,8 @@ use crate::pitchfork_toml::PitchforkToml;
 use std::sync::Arc;
 
 /// Restarts a daemon (stops then starts it)
-#[derive(Debug, clap::Args)]
-#[clap(
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Restarts a daemon (stops then starts it)
@@ -27,59 +27,55 @@ Examples:
 )]
 pub struct Restart {
     /// ID of the daemon(s) to restart
-    #[clap(
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
-    )]
+    #[usage(conflicts = "local", conflicts = "global", conflicts = "all")]
     id: Vec<String>,
     /// Restart all daemons in the named group
-    #[clap(
+    #[usage(
         long,
         value_name = "GROUP",
-        conflicts_with = "local",
-        conflicts_with = "global",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "global",
+        conflicts = "all"
     )]
     group: Option<String>,
     /// Restart all running daemons
-    #[clap(long, short, conflicts_with = "local", conflicts_with = "global")]
+    #[usage(long, short, conflicts = "local", conflicts = "global")]
     all: bool,
     /// Restart all local daemons in pitchfork.toml
-    #[clap(
+    #[usage(
         long,
         short = 'l',
         visible_alias = "all-local",
-        conflicts_with = "all",
-        conflicts_with = "global"
+        conflicts = "all",
+        conflicts = "global"
     )]
     local: bool,
     /// Restart all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml
-    #[clap(
+    #[usage(
         long,
         short = 'g',
         visible_alias = "all-global",
-        conflicts_with = "local",
-        conflicts_with = "all"
+        conflicts = "local",
+        conflicts = "all"
     )]
     global: bool,
     /// Delay in seconds before considering daemon ready (default: 3 seconds)
-    #[clap(long)]
+    #[usage(long)]
     delay: Option<u64>,
     /// Wait until output matches this regex pattern before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     output: Option<String>,
     /// Wait until HTTP endpoint returns 2xx status before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     http: Option<String>,
     /// Wait until TCP port is listening before considering daemon ready
-    #[clap(long)]
+    #[usage(long)]
     port: Option<u16>,
     /// Shell command to poll for readiness (exit code 0 = ready)
-    #[clap(long)]
+    #[usage(long)]
     cmd: Option<String>,
     /// Suppress startup log output
-    #[clap(short, long)]
+    #[usage(short, long)]
     quiet: bool,
 }
 

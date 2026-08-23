@@ -9,9 +9,8 @@ use tokio::time;
 /// Wait for a daemon to stop, tailing the logs along the way
 ///
 /// Exits with the same status code as the daemon
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "w",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Wait for a daemon to stop, tailing the logs along the way

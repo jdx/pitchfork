@@ -8,9 +8,8 @@ use crate::settings::settings;
 use crate::state_file::StateFile;
 
 /// Display the status of a daemon
-#[derive(Debug, clap::Args)]
-#[clap(
-    visible_alias = "stat",
+#[derive(Debug, usage_rs::Args)]
+#[usage(
     verbatim_doc_comment,
     long_about = "\
 Display the status of a daemon
@@ -32,7 +31,7 @@ pub struct Status {
     /// Name of the daemon to check
     pub id: String,
     /// Output in JSON format
-    #[clap(long)]
+    #[usage(long)]
     json: bool,
 }
 
