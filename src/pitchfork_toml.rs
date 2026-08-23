@@ -2108,23 +2108,35 @@ dir = "~/projects/web"
         assert!(parsed.slugs.contains_key("api"));
     }
 
-    #[test]
-    fn test_proxy_worktree_alias_is_canonicalized_on_rewrite() {
+    #[tokio::test]
+    async fn test_proxy_worktree_alias_is_canonicalized_on_rewrite() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("pitchfork.toml");
-        std::fs::write(&path, "[settings.proxy]\nworktree = false\n").unwrap();
+        tokio::fs::write(&path, "[settings.proxy]\nworktree = false\n")
+            .await
+            .unwrap();
 
-        let pt = PitchforkToml::read(&path).unwrap();
+        let read_path = path.clone();
+        let pt = tokio::task::spawn_blocking(move || PitchforkToml::read(&read_path))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(pt.settings.general.worktree, Some(false));
         assert_eq!(pt.settings.proxy.worktree, None);
-        pt.write().unwrap();
+        tokio::task::spawn_blocking(move || pt.write())
+            .await
+            .unwrap()
+            .unwrap();
 
-        let raw = std::fs::read_to_string(&path).unwrap();
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(raw.contains("[settings.general]"), "{raw}");
         assert!(raw.contains("worktree = false"), "{raw}");
         assert!(!raw.contains("[settings.proxy]"), "{raw}");
 
-        let parsed = PitchforkToml::read(&path).unwrap();
+        let parsed = tokio::task::spawn_blocking(move || PitchforkToml::read(&path))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.settings.general.worktree, Some(false));
     }
 
