@@ -1185,8 +1185,11 @@ impl PitchforkToml {
     ///
     /// This is useful for validating user-edited content before saving it.
     pub fn parse_str(content: &str, path: &Path) -> Result<Self> {
-        let raw_config: PitchforkTomlRaw = toml::from_str(content)
+        let mut raw_config: PitchforkTomlRaw = toml::from_str(content)
             .map_err(|e| ConfigParseError::from_toml_error(path, content.to_string(), e))?;
+        if let Some(settings) = &mut raw_config.settings {
+            settings.canonicalize_aliases();
+        }
 
         let explicit = directory_namespace_override(path, Some(content))?;
         let namespace = namespace_from_path_with_override(path, explicit.as_deref())?;
@@ -2103,6 +2106,26 @@ dir = "~/projects/web"
         let parsed = PitchforkToml::read(&path).unwrap();
         assert_eq!(parsed.settings.web.auto_start, Some(true));
         assert!(parsed.slugs.contains_key("api"));
+    }
+
+    #[test]
+    fn test_proxy_worktree_alias_is_canonicalized_on_rewrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        std::fs::write(&path, "[settings.proxy]\nworktree = false\n").unwrap();
+
+        let pt = PitchforkToml::read(&path).unwrap();
+        assert_eq!(pt.settings.general.worktree, Some(false));
+        assert_eq!(pt.settings.proxy.worktree, None);
+        pt.write().unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("[settings.general]"), "{raw}");
+        assert!(raw.contains("worktree = false"), "{raw}");
+        assert!(!raw.contains("[settings.proxy]"), "{raw}");
+
+        let parsed = PitchforkToml::read(&path).unwrap();
+        assert_eq!(parsed.settings.general.worktree, Some(false));
     }
 
     #[test]

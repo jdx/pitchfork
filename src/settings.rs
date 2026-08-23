@@ -1605,6 +1605,8 @@ settings_partial! {
         tls_key: String,
         /// Enable wildcard subdomain matching for proxy routes
         wildcard: bool,
+        /// Compatibility alias for general.worktree
+        worktree: bool,
     }
 }
 
@@ -1706,6 +1708,18 @@ impl_has_any_set!(
     SettingsTuiPartial,
     SettingsWebPartial,
 );
+
+impl SettingsPartial {
+    /// Move supported legacy keys to their canonical locations before a
+    /// read-modify-write cycle serializes this partial again.
+    pub(crate) fn canonicalize_aliases(&mut self) {
+        if self.general.worktree.is_none() {
+            self.general.worktree = self.proxy.worktree.take();
+        } else {
+            self.proxy.worktree = None;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1840,6 +1854,38 @@ mod tests {
             positions.windows(2).all(|pair| pair[0] < pair[1]),
             "config files must be documented from lowest to highest precedence:\n{spec}"
         );
+    }
+
+    #[test]
+    fn every_registry_key_round_trips_through_the_partial() {
+        // A setting added to the derive structs but missed in `settings_partial!`
+        // makes `pitchfork settings set` report success and write nothing.
+        for meta in Settings::SETTINGS_PROPS {
+            let value = match meta.ty.inner() {
+                Ty::Bool => toml::Value::Boolean(true),
+                Ty::Int | Ty::Uint => toml::Value::Integer(1),
+                _ => toml::Value::String("x".to_string()),
+            };
+            let parts: Vec<&str> = meta.key.split('.').collect();
+            let mut table = toml::Table::new();
+            let mut cursor = &mut table;
+            for part in &parts[..parts.len() - 1] {
+                cursor = cursor
+                    .entry(part.to_string())
+                    .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                    .as_table_mut()
+                    .unwrap();
+            }
+            cursor.insert(parts[parts.len() - 1].to_string(), value);
+
+            let partial: SettingsPartial = table.clone().try_into().unwrap();
+            let back = toml::Table::try_from(&partial).unwrap();
+            assert_eq!(
+                back, table,
+                "{} is declared in the registry but not mirrored in SettingsPartial",
+                meta.key
+            );
+        }
     }
 
     #[test]
@@ -2155,11 +2201,14 @@ user = "postgres"
     #[test]
     fn test_broken_file_is_skipped_rather_than_fatal() {
         let tree = Tree::new("broken");
-        tree.write("pitchfork.toml", "[invalid toml [[");
+        let broken = tree.write("pitchfork.toml", "[invalid toml [[");
         // The broken file is skipped with a warning, so the resolution still
         // happens and produces the defaults.
         let layers = Settings::file_layers_from(&tree.0);
-        assert!(layers.is_empty());
+        assert!(
+            layers.iter().all(|layer| !layer.paths().contains(&broken)),
+            "the broken project file must not become a settings layer"
+        );
     }
 
     #[test]

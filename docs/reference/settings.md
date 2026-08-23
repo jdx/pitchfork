@@ -72,7 +72,7 @@ export PITCHFORK_AUTOSTOP_DELAY=5m
 
 The full settings reference — every setting with its type, default,
 environment variable, and documentation — is generated from the CLI's usage
-spec (settings are declared with `#[derive(usage::Config)]` in
+spec (settings are declared with `#[derive(usage_rs::Config)]` in
 `src/settings.rs`, and `mise run render` regenerates the page):
 
 **[Configuration reference →](/cli/configuration)**
