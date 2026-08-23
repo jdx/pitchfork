@@ -136,6 +136,11 @@ jobs:
         run: |
           aube install
           aube run build
+      # release-plz updates the PR before the next step can regenerate docs.
+      # Warm the render dependencies so the follow-up push supersedes that
+      # intermediate PR revision before its CI run reaches the render check.
+      - name: Warm render dependencies
+        run: mise run build
       - name: Run release-plz
         id: release-plz
         uses: release-plz/action@2eb1d8bcb770b4c48ccfaad919734b38b51958c9 # v0.5.131
@@ -156,7 +161,7 @@ jobs:
           echo "Updating release PR on branch: $PR_BRANCH"
           git fetch origin "$PR_BRANCH"
           git checkout "$PR_BRANCH"
-          mise run render ::: lint-fix
+          mise run render
           git add -A
           if git diff --cached --quiet; then
             echo "No changes to commit"
