@@ -37,6 +37,8 @@ const latestVersion = versionMatch?.[1] ?? "0.0.0";
 export default defineConfig({
   title: "pitchfork",
   description: "A devilishly good process manager for developers",
+  // Dark-only site: forces the dark theme and hides the appearance toggle
+  appearance: "force-dark",
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [

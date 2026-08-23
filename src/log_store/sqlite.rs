@@ -964,11 +964,13 @@ impl SqliteLogStore {
 
 impl LogStore for SqliteLogStore {
     fn append(&self, daemon_id: &DaemonId, message: &str) -> Result<()> {
-        let ts = Local::now().timestamp_millis();
         let id = daemon_id.qualified();
         let msg = message.to_string();
 
         let conn = self.conn.lock().unwrap();
+        // Sample while holding the lock so timestamp order matches insertion
+        // order under concurrent writers.
+        let ts = Local::now().timestamp_millis();
         let _ = conn
             .execute(
                 "INSERT INTO log_entries (daemon_id, timestamp, message) VALUES (?1, ?2, ?3)",
@@ -982,22 +984,31 @@ impl LogStore for SqliteLogStore {
         if messages.is_empty() {
             return Ok(());
         }
-        let base_ts = Local::now().timestamp_millis();
         let id = daemon_id.qualified();
 
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().into_diagnostic()?;
+        // IMMEDIATE acquires the write lock at BEGIN, and we sample only after
+        // that, so timestamp order matches commit order even across processes
+        // (sink subprocesses and the supervisor each hold their own
+        // SqliteLogStore instance on the same database).
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .into_diagnostic()?;
+        let base_ts = Local::now().timestamp_millis();
         {
             let mut stmt = tx
                 .prepare(
                     "INSERT INTO log_entries (daemon_id, timestamp, message) VALUES (?1, ?2, ?3)",
                 )
                 .into_diagnostic()?;
-            for (idx, msg) in messages.iter().enumerate() {
-                // Slightly stagger timestamps within a batch so ordering by
-                // (timestamp, id) preserves insertion order without paying for
-                // a separate per-row clock read.
-                let ts = base_ts + idx as i64;
+            for msg in messages.iter() {
+                // Use the same timestamp for the whole batch: `id` is
+                // AUTOINCREMENT (insertion order), and queries order by
+                // (timestamp, id), so equal timestamps still sort by
+                // insertion order. Staggering by `idx` instead overlaps with
+                // the timestamps of a later batch flushed within this batch's
+                // fabricated span, interleaving the two batches.
+                let ts = base_ts;
                 stmt.execute(params![id, ts, msg]).into_diagnostic()?;
             }
         }
@@ -1006,10 +1017,12 @@ impl LogStore for SqliteLogStore {
     }
 
     fn append_structured(&self, daemon_id: &DaemonId, parsed: &ParsedLog) -> Result<()> {
-        let ts = Local::now().timestamp_millis();
         let id = daemon_id.qualified();
 
         let conn = self.conn.lock().unwrap();
+        // Sample while holding the lock so timestamp order matches insertion
+        // order under concurrent writers.
+        let ts = Local::now().timestamp_millis();
         let _ = conn
             .execute(
                 "INSERT INTO log_entries (daemon_id, timestamp, message, level, msg, logger, fields_json) \
@@ -1024,11 +1037,17 @@ impl LogStore for SqliteLogStore {
         if entries.is_empty() {
             return Ok(());
         }
-        let base_ts = Local::now().timestamp_millis();
         let id = daemon_id.qualified();
 
         let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().into_diagnostic()?;
+        // IMMEDIATE acquires the write lock at BEGIN, and we sample only after
+        // that, so timestamp order matches commit order even across processes
+        // (sink subprocesses and the supervisor each hold their own
+        // SqliteLogStore instance on the same database).
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .into_diagnostic()?;
+        let base_ts = Local::now().timestamp_millis();
         {
             let mut stmt = tx
                 .prepare(
@@ -1036,8 +1055,12 @@ impl LogStore for SqliteLogStore {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 )
                 .into_diagnostic()?;
-            for (idx, entry) in entries.iter().enumerate() {
-                let ts = base_ts + idx as i64;
+            for entry in entries.iter() {
+                // Same timestamp for the whole batch; queries order by
+                // (timestamp, id) and `id` is AUTOINCREMENT, so insertion
+                // order is preserved without the cross-batch overlap that
+                // staggered timestamps (`base_ts + idx`) caused.
+                let ts = base_ts;
                 stmt.execute(params![
                     id,
                     ts,
@@ -1490,6 +1513,80 @@ mod tests {
                 found,
                 BATCHES * PER_BATCH,
                 "writer {writer} lost entries: got {found}"
+            );
+        }
+    }
+
+    /// Regression for the "burst of log lines comes back out of order" bug:
+    /// rows within one batch must share a single timestamp instead of being
+    /// staggered by index. Staggered timestamps (`base_ts + idx`) overlap with
+    /// the timestamps of the next batch flushed moments later, interleaving the
+    /// two batches under `ORDER BY timestamp, id`.
+    #[test]
+    fn batch_rows_share_single_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs.db");
+        let store = SqliteLogStore::open(&path).unwrap();
+        let id = DaemonId::try_new("test", "burst").unwrap();
+
+        let entries: Vec<ParsedLog> = (0..50)
+            .map(|i| crate::log_parse::parse(&format!("line-{i}"), "text"))
+            .collect();
+        store.append_structured_batch(&id, &entries).unwrap();
+
+        let conn = store.conn.lock().unwrap();
+        let timestamps: Vec<i64> = {
+            let mut stmt = conn
+                .prepare("SELECT timestamp FROM log_entries ORDER BY id")
+                .unwrap();
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(timestamps.len(), 50);
+        let distinct: std::collections::HashSet<i64> = timestamps.into_iter().collect();
+        assert_eq!(
+            distinct.len(),
+            1,
+            "all rows in a batch must share one timestamp so (timestamp, id) ordering matches insertion order"
+        );
+    }
+
+    /// End-to-end regression for the reported repro (`run = "exec seq 500"`):
+    /// several batches flushed back-to-back must still read back in insertion
+    /// order. With staggered per-row timestamps the later batch's fabricated
+    /// span overlaps the earlier one and interleaves the output.
+    #[test]
+    fn burst_batches_preserve_insertion_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs.db");
+        let store = SqliteLogStore::open(&path).unwrap();
+        let id = DaemonId::try_new("test", "burst").unwrap();
+
+        // 3 batches of 300 rows, appended as fast as possible — the staggered
+        // spans (300ms each) are far wider than the inter-batch gap, so the
+        // old code always overlapped and interleaved these.
+        const BATCHES: usize = 3;
+        const PER_BATCH: usize = 300;
+        for batch in 0..BATCHES {
+            let entries: Vec<ParsedLog> = (0..PER_BATCH)
+                .map(|i| crate::log_parse::parse(&format!("{}", batch * PER_BATCH + i), "text"))
+                .collect();
+            store.append_structured_batch(&id, &entries).unwrap();
+        }
+
+        let entries = store
+            .query(&LogQuery {
+                daemon_ids: vec![id.qualified()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(entries.len(), BATCHES * PER_BATCH);
+        for (n, entry) in entries.iter().enumerate() {
+            assert_eq!(
+                entry.message,
+                n.to_string(),
+                "log line {n} read back out of order (got '{}')",
+                entry.message
             );
         }
     }
