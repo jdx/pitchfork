@@ -176,6 +176,7 @@ When disabled (default), a dim bullet (`•`) is used instead to keep the output
 ## `general.worktree`
 
 - **type**: `bool`
+- **aliases**: `proxy.worktree`
 - **default**: `true`
 - **set with**: `PITCHFORK_WORKTREE`, `PITCHFORK_PROXY_WORKTREE` (deprecated)
 

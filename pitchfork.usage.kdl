@@ -1176,6 +1176,7 @@ config {
     prop "general.worktree" type="bool" default=#true help="Enable git worktree / jj workspace auto-discovery" long_help="Enable git worktree / jj workspace auto-discovery\n\nWhen enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy slug routing and supervisor config discovery. Each worktree gets its own namespace.\n\nSet to `false` to disable all worktree/workspace discovery. The deprecated `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration." {
         env "PITCHFORK_WORKTREE"
         deprecated_env "PITCHFORK_PROXY_WORKTREE"
+        alias "proxy.worktree"
     }
     prop "ipc.connect_attempts" type="int" default=5 help="Number of connection retry attempts" long_help="Number of connection retry attempts\n\nHow many times to retry connecting to the supervisor before giving up. Each attempt uses exponential backoff between `connect_min_delay` and `connect_max_delay`." {
         env "PITCHFORK_IPC_CONNECT_ATTEMPTS"

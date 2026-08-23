@@ -225,6 +225,7 @@ pub struct SettingsGeneral {
     #[usage(
         env = "PITCHFORK_WORKTREE",
         deprecated_env("PITCHFORK_PROXY_WORKTREE"),
+        alias("proxy.worktree"),
         default = true
     )]
     pub worktree: bool,
@@ -1816,9 +1817,10 @@ mod tests {
         let worktree = registry.get(registry.lookup("general.worktree").unwrap().id);
         assert_eq!(worktree.envs, &["PITCHFORK_WORKTREE"]);
         assert_eq!(worktree.deprecated_envs, &["PITCHFORK_PROXY_WORKTREE"]);
-        assert!(
-            registry.lookup("proxy.worktree").is_none(),
-            "the old grouped key must not survive the move"
+        assert_eq!(worktree.aliases, &["proxy.worktree"]);
+        assert_eq!(
+            registry.lookup("proxy.worktree").unwrap().id,
+            registry.lookup("general.worktree").unwrap().id,
         );
 
         let spec = Settings::spec_kdl();
@@ -2059,6 +2061,26 @@ user = "postgres"
         assert_eq!(settings.general.interval, "10s");
         assert_eq!(settings.ipc.connect_attempts, 5);
         assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
+    }
+
+    #[test]
+    fn test_proxy_worktree_config_alias_still_works() {
+        let tree = Tree::new("proxy_worktree_alias");
+        let path = tree.write("pitchfork.toml", "[settings.proxy]\nworktree = false\n");
+        let layer = FileLayer::at(&path, FileScope::Project).under("settings");
+        let resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&layer)).unwrap();
+        let settings = Settings::read(&resolved).unwrap();
+
+        assert!(!settings.general.worktree);
+        assert_eq!(
+            resolved.get(
+                Settings::SETTINGS_REGISTRY
+                    .lookup("general.worktree")
+                    .unwrap()
+                    .id
+            ),
+            Some(&Value::Bool(false)),
+        );
     }
 
     #[test]

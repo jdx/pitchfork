@@ -4017,6 +4017,9 @@
         "extensions": []
       },
       "general.worktree": {
+        "aliases": [
+          "proxy.worktree"
+        ],
         "default": true,
         "default_note": null,
         "data_type": "boolean",
