@@ -68,10 +68,11 @@ export PITCHFORK_WEB_AUTO_START=true
 export PITCHFORK_AUTOSTOP_DELAY=5m
 ```
 
-<script setup>
-import SettingsTable from '../components/SettingsTable.vue'
-</script>
-
 ## All Settings
 
-<SettingsTable />
+The full settings reference — every setting with its type, default,
+environment variable, and documentation — is generated from the CLI's usage
+spec (settings are declared with `#[derive(usage_rs::Config)]` in
+`src/settings.rs`, and `mise run render` regenerates the page):
+
+**[Configuration reference →](/cli/configuration)**

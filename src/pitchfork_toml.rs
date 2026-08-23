@@ -1030,9 +1030,8 @@ impl PitchforkToml {
         // `[namespaces]`. Discovery spawns a `git`/`jj` subprocess (<1ms) and
         // the per-worktree config reads are cached by `CONFIG_CACHE`, so no
         // extra caching layer is needed here.
-        //
-        // Controlled by the `general.worktree` setting (default on); when
-        // disabled, no discovery runs and no `git`/`jj` subprocess is spawned.
+        // Controlled by the global setting so disabling worktrees affects both config
+        // discovery and proxy slug routing.
         if crate::settings::settings().general.worktree
             && let Some(project_root) = find_project_root(start_dir)
         {
@@ -1186,8 +1185,11 @@ impl PitchforkToml {
     ///
     /// This is useful for validating user-edited content before saving it.
     pub fn parse_str(content: &str, path: &Path) -> Result<Self> {
-        let raw_config: PitchforkTomlRaw = toml::from_str(content)
+        let mut raw_config: PitchforkTomlRaw = toml::from_str(content)
             .map_err(|e| ConfigParseError::from_toml_error(path, content.to_string(), e))?;
+        if let Some(settings) = &mut raw_config.settings {
+            settings.canonicalize_aliases();
+        }
 
         let explicit = directory_namespace_override(path, Some(content))?;
         let namespace = namespace_from_path_with_override(path, explicit.as_deref())?;
@@ -2104,6 +2106,38 @@ dir = "~/projects/web"
         let parsed = PitchforkToml::read(&path).unwrap();
         assert_eq!(parsed.settings.web.auto_start, Some(true));
         assert!(parsed.slugs.contains_key("api"));
+    }
+
+    #[tokio::test]
+    async fn test_proxy_worktree_alias_is_canonicalized_on_rewrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pitchfork.toml");
+        tokio::fs::write(&path, "[settings.proxy]\nworktree = false\n")
+            .await
+            .unwrap();
+
+        let read_path = path.clone();
+        let pt = tokio::task::spawn_blocking(move || PitchforkToml::read(&read_path))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pt.settings.general.worktree, Some(false));
+        assert_eq!(pt.settings.proxy.worktree, None);
+        tokio::task::spawn_blocking(move || pt.write())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let raw = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(raw.contains("[settings.general]"), "{raw}");
+        assert!(raw.contains("worktree = false"), "{raw}");
+        assert!(!raw.contains("[settings.proxy]"), "{raw}");
+
+        let parsed = tokio::task::spawn_blocking(move || PitchforkToml::read(&path))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.settings.general.worktree, Some(false));
     }
 
     #[test]

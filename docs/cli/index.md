@@ -40,6 +40,7 @@
 - [`pitchfork settings list [--group <GROUP>] [--json]`](/cli/settings/list.md)
 - [`pitchfork settings get [--json] <KEY>`](/cli/settings/get.md)
 - [`pitchfork settings set [FLAGS] <KEY> <VALUE>`](/cli/settings/set.md)
+- [`pitchfork settings explain <KEY>`](/cli/settings/explain.md)
 - [`pitchfork sponsors`](/cli/sponsors.md)
 - [`pitchfork start [FLAGS] [ID]…`](/cli/start.md)
 - [`pitchfork status [--json] <ID>`](/cli/status.md)
@@ -51,3 +52,7 @@
 - [`pitchfork supervisor stop`](/cli/supervisor/stop.md)
 - [`pitchfork tui [--namespace… <NAMESPACE>] [--project]`](/cli/tui.md)
 - [`pitchfork wait <ID>`](/cli/wait.md)
+
+## Configuration
+
+- [Settings](/cli/configuration.md)

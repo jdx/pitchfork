@@ -130,11 +130,17 @@ pub struct JsonSettingEntry {
     pub key: String,
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<&'static str>,
+    pub default: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_var: Option<&'static str>,
+    /// Where the winning value came from, named so a script can act on it:
+    /// `PITCHFORK_LOG`, `/path/to/pitchfork.toml#general.log_level`, `the
+    /// default`. Absent only for a setting nothing set and that has no
+    /// default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 
 pub fn print_json<T: Serialize>(value: &T) -> crate::Result<()> {

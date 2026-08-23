@@ -79,11 +79,11 @@ Configs merge in order (later overrides earlier):
 
 | Source | Pipeline | Outputs |
 |--------|----------|---------|
-| `settings.toml` | `build/generate_settings.rs` (compile-time) | `Settings` struct + merge/meta Rust code; also `docs/settings.data.ts` → `SettingsTable.vue` → `docs/reference/settings.md` |
+| `src/settings.rs` (`#[derive(usage_rs::Config)]`) | derive generates the settings registry + spec `config` block; `mise run render` renders it | `docs/cli/configuration.md` (settings reference), config block in `pitchfork.usage.kdl` |
 | Rust clap + schemars | `mise run render`: `pitchfork usage` → `usage` tool; `pitchfork schema` | `docs/cli/*.md` + `docs/cli/commands.json` (CLI reference); `docs/public/schema.json` (JSON Schema for editor autocomplete) |
 
 **Update rules:**
-- Changing user settings (`src/settings.rs`) → update `settings.toml` (sole source of truth for codegen)
+- Changing user settings → edit the `#[derive(usage_rs::Config)]` structs in `src/settings.rs` (sole source of truth), then run `mise run render`
 - Changing CLI flags/args/help text (clap) or config struct (schemars) → run `mise run render` (running `mise run ci-dev` includes itself, recommended) to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
 
 **These files are generated and should not be manually edited:**
@@ -92,8 +92,8 @@ Configs merge in order (later overrides earlier):
 - `docs/public/schema.json`
 - `pitchfork.usage.kdl`
 
-**Partially generated** (hand-authored prose + auto-populated component):
-- `docs/reference/settings.md` — only the `<SettingsTable />` section is auto-generated from `settings.toml`; the surrounding prose may be edited by hand.
+**Partially generated:**
+- `docs/reference/settings.md` — hand-authored prose; the full per-setting reference is the generated `docs/cli/configuration.md` it links to.
 
 ## Code Patterns
 

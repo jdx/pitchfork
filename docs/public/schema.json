@@ -725,6 +725,7 @@
       ]
     },
     "SettingsApiPartial": {
+      "description": "Partial mirror of [`SettingsApi`].",
       "type": "object",
       "properties": {
         "auto_start": {
@@ -767,6 +768,7 @@
       }
     },
     "SettingsGeneralPartial": {
+      "description": "Partial mirror of [`SettingsGeneral`].",
       "type": "object",
       "properties": {
         "autostop_delay": {
@@ -835,6 +837,7 @@
       }
     },
     "SettingsIpcPartial": {
+      "description": "Partial mirror of [`SettingsIpc`].",
       "type": "object",
       "properties": {
         "connect_attempts": {
@@ -884,6 +887,7 @@
       }
     },
     "SettingsLogsArchiveHookPartial": {
+      "description": "Partial mirror of [`SettingsLogsArchiveHook`].",
       "type": "object",
       "properties": {
         "batch_size": {
@@ -904,6 +908,7 @@
       }
     },
     "SettingsLogsPartial": {
+      "description": "Partial mirror of [`SettingsLogs`].",
       "type": "object",
       "properties": {
         "archive_hook": {
@@ -948,6 +953,7 @@
       }
     },
     "SettingsPartial": {
+      "description": "Partial mirror of [`Settings`], for `[settings]` tables in\npitchfork.toml files.",
       "type": "object",
       "properties": {
         "api": {
@@ -977,6 +983,7 @@
       }
     },
     "SettingsProxyPartial": {
+      "description": "Partial mirror of [`SettingsProxy`].",
       "type": "object",
       "properties": {
         "auto_start": {
@@ -1077,10 +1084,18 @@
             "boolean",
             "null"
           ]
+        },
+        "worktree": {
+          "description": "Compatibility alias for general.worktree",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },
     "SettingsSupervisorPartial": {
+      "description": "Partial mirror of [`SettingsSupervisor`].",
       "type": "object",
       "properties": {
         "auto_start": {
@@ -1200,6 +1215,7 @@
       }
     },
     "SettingsTuiPartial": {
+      "description": "Partial mirror of [`SettingsTui`].",
       "type": "object",
       "properties": {
         "message_duration": {
@@ -1234,6 +1250,7 @@
       }
     },
     "SettingsWebPartial": {
+      "description": "Partial mirror of [`SettingsWeb`].",
       "type": "object",
       "properties": {
         "auto_start": {

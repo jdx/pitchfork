@@ -2779,7 +2779,6 @@ dependencies = [
  "fuzzy-matcher",
  "glob",
  "globset",
- "heck",
  "http-body-util",
  "humanbyte",
  "humantime",
@@ -2803,8 +2802,6 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "once_cell",
- "proc-macro2",
- "quote",
  "ratatui",
  "rcgen",
  "regex",
@@ -2821,7 +2818,6 @@ dependencies = [
  "serde_json",
  "shell-words",
  "strum",
- "syn 3.0.3",
  "sysinfo",
  "tempfile",
  "tera",
@@ -2832,6 +2828,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tower-http 0.7.0",
+ "usage-config",
  "usage-rs",
  "uuid",
  "vte 0.15.0",
@@ -4496,6 +4493,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24b9737d4a78f9407c5cd035cedd6fee9ceb0b99e3287237cb2c86b66eea9cab"
 
 [[package]]
+name = "usage-config"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19652758abef384d0f4bb7aab26c5fa86238b000b4e049d69e657d3e4cd59d93"
+dependencies = [
+ "toml",
+]
+
+[[package]]
 name = "usage-derive"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4513,6 +4519,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28a7fe976bd4d6e61e94a5bb1303373a7b335d775de3cab053d825f674285300"
 dependencies = [
  "usage-argv",
+ "usage-config",
  "usage-derive",
  "usage-test",
 ]
