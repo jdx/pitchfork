@@ -99,15 +99,3 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
           profile: serious
-
-  publish-release:
-    needs: [upload-assets]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Publish release
-        run: |
-          echo "Publishing release ${INPUTS_TAG}..."
-          gh release edit "${INPUTS_TAG}" --repo "${{ github.repository }}" --draft=false
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUTS_TAG: ${{ inputs.tag }}
