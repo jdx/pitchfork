@@ -41,17 +41,17 @@ Examples:
 ## Flags
 - **`--run <RUN>`** — Command to run (can also use positional args)
 - **`--retry <RETRY>`** — Number of retry attempts on failure (use \"true\" for infinite)
-- **`--watch… <WATCH>`** — Glob patterns to watch for changes (can be specified multiple times)
+- **`--watch <WATCH>`** — Glob patterns to watch for changes (can be specified multiple times)
 - **`--dir <DIR>`** — Working directory for the daemon
-- **`--env… <ENV>`** — Environment variables in KEY=value format (can be specified multiple times)
+- **`--env <ENV>`** — Environment variables in KEY=value format (can be specified multiple times)
 - **`--ready-delay <READY_DELAY>`** — Delay in seconds before considering daemon ready
 - **`--ready-output <READY_OUTPUT>`** — Regex pattern to match in output for readiness
 - **`--ready-http <READY_HTTP>`** — HTTP endpoint URL to poll for readiness
 - **`--ready-port <READY_PORT>`** — TCP port to check for readiness (a number or Tera template)
 - **`--ready-cmd <READY_CMD>`** — Shell command to poll for readiness
-- **`--expected-port… <EXPECTED_PORT>`** — Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
+- **`--expected-port <EXPECTED_PORT>`** — Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
 - **`--bump [BUMP]`** — Automatically find an available port if the expected port is in use
-- **`--depends… <DEPENDS>`** — Daemon dependencies that must start first (can be specified multiple times)
+- **`--depends <DEPENDS>`** — Daemon dependencies that must start first (can be specified multiple times)
 - **`--boot-start`** — Start this daemon automatically on system boot
 - **`--autostart`** — Autostart the daemon when entering the directory
 - **`--autostop`** — Autostop the daemon when leaving the directory

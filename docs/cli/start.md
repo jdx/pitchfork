@@ -44,7 +44,7 @@ Examples:
 - **`--http <HTTP>`** — Wait until HTTP endpoint returns 2xx status before considering daemon ready
 - **`--port <PORT>`** — Wait until TCP port is listening before considering daemon ready
 - **`--cmd <CMD>`** — Shell command to poll for readiness (exit code 0 = ready)
-- **`--expected-port… <EXPECTED_PORT>`** — Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
+- **`--expected-port <EXPECTED_PORT>`** — Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
 - **`--bump [BUMP]`** — Automatically find an available port if the expected port is in use
 - **`-q --quiet`** — Suppress startup log output
 - **`-h --help`** — Print help

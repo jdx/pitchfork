@@ -51,7 +51,7 @@ Examples:
 - **`--no-pager`** — Disable pager even in interactive terminal
 - **`--raw`** — Output raw log lines without color or formatting
 - **`--json`** — Output in JSON format
-- **`--grep… <GREP>`** — Filter logs by case-insensitive substring (can be repeated)
+- **`--grep <GREP>`** — Filter logs by case-insensitive substring (can be repeated)
 
   Multiple --grep options are combined with OR.
 - **`--regex <REGEX>`** — Filter logs by regular expression
@@ -59,7 +59,7 @@ Examples:
 - **`--level <LEVEL>`** — Filter by minimum log level (error, warn, info, debug, trace)
 
   Shows entries at or above the given severity. For example, `--level warn` shows warn and error. Only effective for daemons with log_format json or logfmt.
-- **`--field… <KEY=VALUE>`** — Filter by structured field value (KEY=VALUE, can be repeated)
+- **`--field <KEY=VALUE>`** — Filter by structured field value (KEY=VALUE, can be repeated)
 
   Extracts the value from fields_json using json_extract($.KEY). Multiple --field options are combined with AND.
 - **`--jq <EXPR>`** — Filter log entries with a jq expression
