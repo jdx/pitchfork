@@ -115,7 +115,7 @@ jobs:
     name: Publish release
     needs: [release-plz-release, upload-assets, enhance-release]
     if: >-
-      ${{ always() && needs.upload-assets.result == 'success' && needs.enhance-release.result == 'success' && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
+      ${{ !cancelled() && (needs.release-plz-release.result == 'success' || (needs.release-plz-release.result == 'skipped' && inputs.tag != '')) && needs.upload-assets.result == 'success' && needs.enhance-release.result == 'success' && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
