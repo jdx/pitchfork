@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to finish releasing (e.g. v2.7.0). Skips release-plz, runs upload-assets + enhance-release."
+        description: "Existing tag to finish releasing (e.g. v2.7.0). Skips release-plz, uploads assets, enhances notes, and publishes."
         required: true
         type: string
 
@@ -71,9 +71,9 @@ jobs:
 
   enhance-release:
     name: Enhance release notes
-    needs: [release-plz-release, upload-assets]
+    needs: release-plz-release
     if: >-
-      ${{ always() && needs.upload-assets.result == 'success' && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
+      ${{ always() && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -110,6 +110,22 @@ jobs:
           EOF
           } > /tmp/release-notes.md
           gh release edit "$TAG" --notes-file /tmp/release-notes.md
+
+  publish-release:
+    name: Publish release
+    needs: [release-plz-release, upload-assets, enhance-release]
+    if: >-
+      ${{ !cancelled() && (needs.release-plz-release.result == 'success' || (needs.release-plz-release.result == 'skipped' && inputs.tag != '')) && needs.upload-assets.result == 'success' && needs.enhance-release.result == 'success' && (inputs.tag != '' || needs.release-plz-release.outputs.tag != '') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false
 
   release-plz-pr:
     name: Release PR
