@@ -7,6 +7,8 @@ unknown_flags error
 external_subcommand #true
 arg_required_else_help #true
 subcommand_required #true
+flag "-h --help" help="Print help" action=help builtin=#true
+flag "-V --version" help="Print version" action=version builtin=#true
 cmd activate help="Activate pitchfork in your shell session" effect=read {
     long_help #"""
 Activate pitchfork in your shell session
@@ -27,6 +29,7 @@ Add to your shell config:
     fish (~/.config/fish/config.fish):
       pitchfork activate fish | source
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <SHELL> help="Shell to activate (bash, zsh, fish)" {
         choices {
             choice bash
@@ -36,6 +39,7 @@ Add to your shell config:
     }
 }
 cmd api-schema help="Generate JSON documentation for the web API endpoints" hide=#true effect=read {
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd boot help="Enable or disable boot start" effect=read subcommand_required=#true {
     long_help #"""
@@ -73,6 +77,7 @@ Examples:
     pitchfork boot disable          Don't start pitchfork on boot
     pitchfork boot status           Check boot start status
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     cmd enable help="Enable boot start for pitchfork supervisor" effect=write {
         long_help #"""
 Enable boot start for pitchfork supervisor
@@ -93,6 +98,7 @@ If you want the supervisor to run as root but keep state files and IPC sockets
 under a specific user's home directory, configure `settings.supervisor.user`
 in your pitchfork configuration.
 """#
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd disable help="Disable boot start for pitchfork supervisor" effect=write {
         long_help #"""
@@ -101,6 +107,7 @@ Disable boot start for pitchfork supervisor
 Removes the boot start registration. Pitchfork will no longer start
 automatically on system boot.
 """#
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd status help="Check boot start status" effect=read {
         long_help #"""
@@ -108,12 +115,14 @@ Check boot start status
 
 Reports whether pitchfork is configured to start on system boot.
 """#
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
 }
 cmd cd hide=#true effect=read {
     flag --shell-pid required=#true {
         arg <SHELL_PID>
     }
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd clean help="Removes stopped/failed daemons from `pitchfork list`" effect=write {
     alias c
@@ -138,11 +147,13 @@ Examples:
         arg <ID>
     }
     flag --prune help="Only clean registrations whose working directories no longer exist"
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg "[NAMESPACE]..." help="Only clean daemon registrations in these namespaces"
 }
 cmd daemons help="List configured daemons from all merged config files." effect=read args_conflicts_with_subcommands=#true {
     alias daemon
     flag --json help="Output in JSON format"
+    flag "-h --help" help="Print help" action=help builtin=#true
     cmd add help="Add a new daemon to pitchfork.toml" effect=write {
         alias a
         long_help #"""
@@ -243,6 +254,7 @@ Examples:
         flag --local help="Write to pitchfork.local.toml instead of pitchfork.toml"
         flag --project help="Write to pitchfork.toml explicitly (default if no flag specified)"
         flag --global help="Write to the user-level global config (~/.config/pitchfork/config.toml)"
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <ID> help="ID of the daemon to add (e.g., \"api\" or \"namespace/api\")"
         arg "[ARGS]..." help="Arguments to pass to the daemon (alternative to --run)" double_dash=automatic
     }
@@ -251,6 +263,7 @@ Examples:
         flag --local help="Remove from pitchfork.local.toml instead of pitchfork.toml"
         flag --project help="Remove from pitchfork.toml explicitly (default if no flag specified)"
         flag --global help="Remove from the user-level global config (~/.config/pitchfork/config.toml)"
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <ID> help="The ID of the daemon to remove (e.g., \"api\" or \"namespace/api\")"
     }
 }
@@ -273,6 +286,7 @@ Installation:
     fish:
       pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <SHELL> help="Shell to generate completions for (bash, zsh, fish)" {
         choices {
             choice bash
@@ -296,6 +310,7 @@ Examples:
     pitchfork d api                 Alias for 'disable'
     pitchfork list                  Shows 'disabled' status in output
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <ID> help="Name of the daemon to disable"
 }
 cmd enable help="Allow a daemon to start" effect=write {
@@ -312,6 +327,7 @@ Examples:
     pitchfork enable api            Enable a disabled daemon
     pitchfork e api                 Alias for 'enable'
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <ID> help="Name of the daemon to enable"
 }
 cmd list help="List all daemons" effect=read {
@@ -376,6 +392,7 @@ Only show daemons in the current project's namespace
 The namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.
 """#
     }
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd log-sink help="Reads a daemon's output on stdin and writes it to the log store" hide=#true effect=write {
     long_help #"""
@@ -426,6 +443,7 @@ Without `--output-filter` or `--output-regex` every line qualifies, which is wha
     flag --output-debounce-ms help="Shortest gap between reported lines, in milliseconds" default="1000" {
         arg <OUTPUT_DEBOUNCE_MS>
     }
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd logs help="Displays logs for daemon(s)" effect=read {
     alias l
@@ -522,6 +540,7 @@ Each log entry is serialized as a JSON object with fields: timestamp, daemon_id,
         arg <EXPR>
     }
     flag --no-timestamp help="Omit timestamps from log output"
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg "[ID]..." help="Show only logs for the specified daemon(s)"
 }
 cmd mcp help="Runs a Model Context Protocol (MCP) server over stdin/stdout" {
@@ -580,6 +599,7 @@ Examples:
 - pitchfork_logs    - Return recent log output for daemon(s)
 
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd proxy help="Manage the pitchfork reverse proxy" effect=read subcommand_required=#true {
     long_help #"""
@@ -605,6 +625,7 @@ Subcommands:
     remove    Remove a slug mapping from the global config
     status    Show all registered slugs and their current state
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     cmd trust help="Install the proxy's self-signed TLS certificate into the system trust store" effect=write {
         long_help #"""
 Install the proxy's self-signed TLS certificate into the system trust store
@@ -635,6 +656,7 @@ sudo pitchfork proxy trust    # Linux only
         flag --cert help="Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)" {
             arg <CERT>
         }
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd untrust help="Remove the proxy's TLS certificate from the system trust store" effect=write {
         long_help #"""
@@ -657,6 +679,7 @@ sudo pitchfork proxy untrust    # Linux only
         flag --cert help="Path to the certificate file (defaults to pitchfork's auto-generated cert)" {
             arg <CERT>
         }
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd status help="Show all registered slugs and their current state" effect=read {
         long_help #"""
@@ -666,6 +689,7 @@ Displays the proxy configuration and lists all slugs from the global config
 with their project directory, daemon name, and current status (running/stopped, port).
 """#
         flag --json help="Output in JSON format"
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd add help="Add a slug mapping to the global config" effect=write {
         long_help #"""
@@ -694,6 +718,7 @@ pitchfork proxy add api --dir /home/user/my-api --daemon server
         flag --namespace help="Namespace to associate with the slug. If not provided, derived from the project directory." {
             arg <NAMESPACE>
         }
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <SLUG> help="The slug name (used in proxy URLs, e.g. api → api.localhost)"
     }
     cmd remove help="Remove a slug mapping from the global config" effect=destructive {
@@ -707,10 +732,12 @@ Example:
 pitchfork proxy remove api
 ```
 """#
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <SLUG> help="The slug name to remove"
     }
 }
 cmd project help="Project session management for IDE and workspace integrations." effect=read subcommand_required=#true {
+    flag "-h --help" help="Print help" action=help builtin=#true
     cmd enter help="Enter (or replace) a project session tied to a host process." effect=write {
         long_help #"""
 Enter (or replace) a project session tied to a host process.
@@ -725,6 +752,7 @@ On Windows, automatic revocation when the host process exits is not available (G
         flag --directory help="Project directory to associate with the session. Defaults to the current working directory and is canonicalized before tracking." {
             arg <DIRECTORY>
         }
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd leave help="Leave a project session and evaluate its directory for autostop." effect=write {
         flag --pid help="Host process PID that owns the session." required=#true {
@@ -733,6 +761,7 @@ On Windows, automatic revocation when the host process exits is not available (G
         flag --directory help="Project directory the session was entered with. Defaults to the current working directory and is canonicalized before lookup. Must match the directory used at enter time." {
             arg <DIRECTORY>
         }
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd list help="List tracked project sessions." effect=read {
         long_help #"""
@@ -747,6 +776,7 @@ Example:
     pitchfork project list --json
 """#
         flag --json help="Output in JSON format"
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
 }
 cmd restart help="Restarts a daemon (stops then starts it)" {
@@ -795,6 +825,7 @@ Examples:
         arg <CMD>
     }
     flag "-q --quiet" help="Suppress startup log output"
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg "[ID]..." help="ID of the daemon(s) to restart" {
         conflicts --local --global --all
     }
@@ -850,10 +881,12 @@ Examples:
         arg <CMD>
     }
     flag "-q --quiet" help="Suppress startup log output"
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <ID> help="Name of the daemon to run"
     arg "[RUN]..." help="Command and arguments to run (after --)" double_dash=required
 }
 cmd schema help="Generate JSON Schema for pitchfork.toml configuration" hide=#true effect=read {
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd settings help="View and modify pitchfork settings" effect=read args_conflicts_with_subcommands=#true {
     alias setting
@@ -886,21 +919,25 @@ Examples:
     pitchfork settings set supervisor.stop_timeout 10s --project
 """#
     flag --json help="Output in JSON format"
+    flag "-h --help" help="Print help" action=help builtin=#true
     cmd list help="List all available settings with types and defaults" effect=read {
         alias ls
         flag --group help="Only show settings in a specific group (e.g., \"general\", \"web\", \"supervisor\")" {
             arg <GROUP>
         }
         flag --json help="Output in JSON format"
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd get help="Get the current value of a setting" effect=read {
         flag --json help="Output in JSON format"
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
     }
     cmd set help="Set a setting value in a config file" effect=write {
         flag --global help="Write to the user-level global config (~/.config/pitchfork/config.toml)"
         flag --local help="Write to the project-level pitchfork.local.toml (overrides pitchfork.toml)"
         flag --project help="Write to the project-level pitchfork.toml (default if no flag specified)"
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
         arg <VALUE> help="Value to set (type must match the setting: string, integer, boolean, or duration)"
     }
@@ -913,10 +950,12 @@ Names the exact place that won — the variable, or the file and the key
 inside it — along with everything else that was considered and every other
 way the setting can be reached.
 """#
+        flag "-h --help" help="Print help" action=help builtin=#true
         arg <KEY> help="Setting key in dot notation (e.g., general.log_level, web.auto_start)"
     }
 }
 cmd sponsors help="Show the companies sponsoring pitchfork and the jdx.dev open source tools" effect=read {
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd start help="Starts a daemon from a pitchfork.toml file" {
     alias s
@@ -982,6 +1021,7 @@ Examples:
         arg "[BUMP]" var_min=0 var_max=1 required=#false
     }
     flag "-q --quiet" help="Suppress startup log output"
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg "[ID]..." help="ID of the daemon(s) in pitchfork.toml to start" {
         conflicts --local --global --all
     }
@@ -1005,6 +1045,7 @@ Output:
     Status: running
 """#
     flag --json help="Output in JSON format"
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <ID> help="Name of the daemon to check"
 }
 cmd stop help="Sends a stop signal to a daemon" effect=write {
@@ -1046,12 +1087,14 @@ Examples:
     flag "-g --global --all-global" help="Stop all global daemons in ~/.config/pitchfork/config.toml and /etc/pitchfork/config.toml" {
         conflicts --local --all
     }
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg "[ID]..." help="The name of the daemon(s) to stop" {
         conflicts --local --global --all
     }
 }
 cmd supervisor help="Start, stop, and check the status of the pitchfork supervisor daemon" effect=read subcommand_required=#true {
     alias sup
+    flag "-h --help" help="Print help" action=help builtin=#true
     cmd run help="Runs the internal pitchfork daemon in the foreground" {
         flag "-f --force" help="kill existing daemon"
         flag --boot help="run as boot start (auto-start boot_start daemons)"
@@ -1062,14 +1105,18 @@ cmd supervisor help="Start, stop, and check the status of the pitchfork supervis
         flag --web-path help="Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)" env=PITCHFORK_WEB_PATH {
             arg <WEB_PATH>
         }
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd start help="Starts the internal pitchfork daemon in the background" {
         flag "-f --force" help="kill existing daemon"
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd status help="Gets the status of the pitchfork daemon" effect=read {
         flag --json help="Output in JSON format"
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd stop help="Stops the internal pitchfork daemon running in the background" effect=write {
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
 }
 cmd tui help="Launch the interactive TUI dashboard" {
@@ -1099,6 +1146,7 @@ Only show daemons in the current project's namespace
 The namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.
 """#
     }
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd usage help="Generates a usage spec for the CLI" hide=#true effect=read {
     long_help #"""
@@ -1106,6 +1154,7 @@ Generates a usage spec for the CLI
 
 https://usage.jdx.dev
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
 }
 cmd wait help="Wait for a daemon to stop, tailing the logs along the way" effect=read {
     alias w
@@ -1123,6 +1172,7 @@ Examples:
     pitchfork w api                 Alias for 'wait'
     pitchfork wait api && echo done Run command after daemon stops
 """#
+    flag "-h --help" help="Print help" action=help builtin=#true
     arg <ID> help="The name of the daemon to wait for"
 }
 

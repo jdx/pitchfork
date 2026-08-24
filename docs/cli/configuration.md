@@ -13,9 +13,9 @@ Read from, in ascending precedence — the last one that names a setting wins:
 
 ## `api.auto_start`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_API_AUTO_START`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_API_AUTO_START`
 
 Automatically start the standalone API server
 
@@ -25,9 +25,9 @@ Default is false so the API is only available through the bundled web UI.
 
 ## `api.bind_address`
 
-- **type**: `string`
-- **default**: `127.0.0.1`
-- **set with**: `PITCHFORK_API_BIND_ADDRESS`
+- **Type:** `string`
+- **Default:** `127.0.0.1`
+- **Set with:** `PITCHFORK_API_BIND_ADDRESS`
 
 IP address the API server binds to
 
@@ -35,9 +35,9 @@ Use "0.0.0.0" to make the API reachable from other devices on your network. Keep
 
 ## `api.bind_port`
 
-- **type**: `int`
-- **default**: `0`
-- **set with**: `PITCHFORK_API_BIND_PORT`
+- **Type:** `int`
+- **Default:** `0`
+- **Set with:** `PITCHFORK_API_BIND_PORT`
 
 Port the standalone API server listens on
 
@@ -45,16 +45,16 @@ Set to 0 (default) to disable the standalone API server. Set to any valid port n
 
 ## `api.port_attempts`
 
-- **type**: `int`
-- **default**: `10`
-- **set with**: `PITCHFORK_API_PORT_ATTEMPTS`
+- **Type:** `int`
+- **Default:** `10`
+- **Set with:** `PITCHFORK_API_PORT_ATTEMPTS`
 
 Number of consecutive ports to try if api.bind_port is in use
 
 ## `api.token`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_API_TOKEN`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_API_TOKEN`
 
 Authentication token for API access when bound to non-loopback addresses
 
@@ -66,9 +66,9 @@ For external API consumers (e.g., curl, mobile apps), set this to a fixed value 
 
 ## `general.autostop_delay`
 
-- **type**: `duration`
-- **default**: `1m`
-- **set with**: `PITCHFORK_AUTOSTOP_DELAY`
+- **Type:** `duration`
+- **Default:** `1m`
+- **Set with:** `PITCHFORK_AUTOSTOP_DELAY`
 
 Delay before auto-stopping daemons when leaving a directory
 
@@ -82,9 +82,9 @@ Set to `"0s"` to disable the delay and stop daemons immediately.
 
 ## `general.interval`
 
-- **type**: `duration`
-- **default**: `10s`
-- **set with**: `PITCHFORK_INTERVAL`, `PITCHFORK_INTERVAL_SECS` (deprecated)
+- **Type:** `duration`
+- **Default:** `10s`
+- **Set with:** `PITCHFORK_INTERVAL`, `PITCHFORK_INTERVAL_SECS` (deprecated)
 
 Supervisor background task refresh interval
 
@@ -96,9 +96,9 @@ Lower values provide more responsive status updates but use more resources.
 
 ## `general.log_file_level`
 
-- **type**: `string`
-- **default**: `info`
-- **set with**: `PITCHFORK_LOG_FILE_LEVEL`
+- **Type:** `string`
+- **Default:** `info`
+- **Set with:** `PITCHFORK_LOG_FILE_LEVEL`
 
 File log level (trace, debug, info, warn, error)
 
@@ -108,9 +108,9 @@ For example, set console to `"info"` but file to `"debug"` to keep detailed logs
 
 ## `general.log_level`
 
-- **type**: `string`
-- **default**: `info`
-- **set with**: `PITCHFORK_LOG`
+- **Type:** `string`
+- **Default:** `info`
+- **Set with:** `PITCHFORK_LOG`
 
 Console log level (trace, debug, info, warn, error)
 
@@ -120,9 +120,9 @@ Controls the verbosity of log output to the console.
 
 ## `general.mise`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_MISE`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_MISE`
 
 Wrap daemon commands with mise x -- globally
 
@@ -134,8 +134,8 @@ Individual daemons can override this with `mise = true` or `mise = false` in the
 
 ## `general.mise_bin`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_MISE_BIN`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_MISE_BIN`
 
 Explicit path to the mise binary
 
@@ -145,9 +145,9 @@ Set this to an absolute path if mise is installed elsewhere.
 
 ## `general.shell`
 
-- **type**: `string`
-- **default**: `sh -c`
-- **set with**: `PITCHFORK_SHELL`
+- **Type:** `string`
+- **Default:** `sh -c`
+- **Set with:** `PITCHFORK_SHELL`
 
 Shell command used to execute daemon run scripts
 
@@ -163,9 +163,9 @@ When `mise = true` is enabled for a daemon, the shell wraps inside `mise x --`, 
 
 ## `general.startup_log_timestamps`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_STARTUP_LOG_TIMESTAMPS`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_STARTUP_LOG_TIMESTAMPS`
 
 Show timestamps in startup log output
 
@@ -175,10 +175,10 @@ When disabled (default), a dim bullet (`•`) is used instead to keep the output
 
 ## `general.worktree`
 
-- **type**: `bool`
-- **aliases**: `proxy.worktree`
-- **default**: `true`
-- **set with**: `PITCHFORK_WORKTREE`, `PITCHFORK_PROXY_WORKTREE` (deprecated)
+- **Type:** `bool`
+- **Aliases:** `proxy.worktree`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_WORKTREE`, `PITCHFORK_PROXY_WORKTREE` (deprecated)
 
 Enable git worktree / jj workspace auto-discovery
 
@@ -188,9 +188,9 @@ Set to `false` to disable all worktree/workspace discovery. The deprecated `PITC
 
 ## `ipc.connect_attempts`
 
-- **type**: `int`
-- **default**: `5`
-- **set with**: `PITCHFORK_IPC_CONNECT_ATTEMPTS`
+- **Type:** `int`
+- **Default:** `5`
+- **Set with:** `PITCHFORK_IPC_CONNECT_ATTEMPTS`
 
 Number of connection retry attempts
 
@@ -198,9 +198,9 @@ How many times to retry connecting to the supervisor before giving up. Each atte
 
 ## `ipc.connect_max_delay`
 
-- **type**: `duration`
-- **default**: `1s`
-- **set with**: `PITCHFORK_IPC_CONNECT_MAX_DELAY`
+- **Type:** `duration`
+- **Default:** `1s`
+- **Set with:** `PITCHFORK_IPC_CONNECT_MAX_DELAY`
 
 Maximum delay between connection retries
 
@@ -208,9 +208,9 @@ The maximum delay between connection retry attempts. Exponential backoff will no
 
 ## `ipc.connect_min_delay`
 
-- **type**: `duration`
-- **default**: `100ms`
-- **set with**: `PITCHFORK_IPC_CONNECT_MIN_DELAY`
+- **Type:** `duration`
+- **Default:** `100ms`
+- **Set with:** `PITCHFORK_IPC_CONNECT_MIN_DELAY`
 
 Minimum delay between connection retries
 
@@ -218,9 +218,9 @@ The initial delay between connection retry attempts. The actual delay increases 
 
 ## `ipc.rate_limit`
 
-- **type**: `int`
-- **default**: `100`
-- **set with**: `PITCHFORK_IPC_RATE_LIMIT`
+- **Type:** `int`
+- **Default:** `100`
+- **Set with:** `PITCHFORK_IPC_RATE_LIMIT`
 
 Maximum IPC requests per second per connection
 
@@ -230,9 +230,9 @@ Most users won't need to change this. Increase if you have automated tools makin
 
 ## `ipc.rate_limit_window`
 
-- **type**: `duration`
-- **default**: `1s`
-- **set with**: `PITCHFORK_IPC_RATE_LIMIT_WINDOW`
+- **Type:** `duration`
+- **Default:** `1s`
+- **Set with:** `PITCHFORK_IPC_RATE_LIMIT_WINDOW`
 
 Rate limit sliding window duration
 
@@ -240,9 +240,9 @@ The time window for rate limiting calculations. `rate_limit` requests are allowe
 
 ## `ipc.request_timeout`
 
-- **type**: `duration`
-- **default**: `5s`
-- **set with**: `PITCHFORK_IPC_REQUEST_TIMEOUT`
+- **Type:** `duration`
+- **Default:** `5s`
+- **Set with:** `PITCHFORK_IPC_REQUEST_TIMEOUT`
 
 Default timeout for IPC requests
 
@@ -252,9 +252,9 @@ Note: Daemon start operations may use a longer timeout calculated from the daemo
 
 ## `logs.archive_hook.batch_size`
 
-- **type**: `int`
-- **default**: `1000`
-- **set with**: `PITCHFORK_LOG_ARCHIVE_HOOK_BATCH_SIZE`
+- **Type:** `int`
+- **Default:** `1000`
+- **Set with:** `PITCHFORK_LOG_ARCHIVE_HOOK_BATCH_SIZE`
 
 Maximum log entries per archive hook invocation
 
@@ -262,8 +262,8 @@ Log entries selected for pruning are passed to the archive hook in batches of th
 
 ## `logs.archive_hook.command`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_LOG_ARCHIVE_HOOK_COMMAND`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_LOG_ARCHIVE_HOOK_COMMAND`
 
 Command to run before retention deletes old log entries
 
@@ -291,9 +291,9 @@ command = "aws s3 cp - s3://my-bucket/pitchfork-logs/"
 
 ## `logs.line_retention`
 
-- **type**: `int`
-- **default**: `0`
-- **set with**: `PITCHFORK_LOG_LINE_RETENTION`
+- **Type:** `int`
+- **Default:** `0`
+- **Set with:** `PITCHFORK_LOG_LINE_RETENTION`
 
 Count-based log retention (e.g. 10000)
 
@@ -307,16 +307,16 @@ Logs are pruned automatically by the supervisor during its interval watcher cycl
 
 ## `logs.log_format`
 
-- **type**: `string`
-- **default**: `text`
-- **set with**: `PITCHFORK_LOG_FORMAT`
+- **Type:** `string`
+- **Default:** `text`
+- **Set with:** `PITCHFORK_LOG_FORMAT`
 
 Default log format for daemons (json | logfmt | text)
 
 ## `logs.time_retention`
 
-- **type**: `duration`
-- **set with**: `PITCHFORK_LOG_TIME_RETENTION`
+- **Type:** `duration`
+- **Set with:** `PITCHFORK_LOG_TIME_RETENTION`
 
 Time-based log retention duration (e.g. '7d', '30d')
 
@@ -330,9 +330,9 @@ Logs are pruned automatically by the supervisor during its interval watcher cycl
 
 ## `logs.timestamp`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_LOG_TIMESTAMP`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_LOG_TIMESTAMP`
 
 Show timestamps in log output
 
@@ -344,9 +344,9 @@ Can be overridden per-invocation with `pitchfork logs --no-timestamp`.
 
 ## `logs.timestamp_format`
 
-- **type**: `string`
-- **default**: `%m-%d %H:%M:%S`
-- **set with**: `PITCHFORK_LOG_TIMESTAMP_FORMAT`
+- **Type:** `string`
+- **Default:** `%m-%d %H:%M:%S`
+- **Set with:** `PITCHFORK_LOG_TIMESTAMP_FORMAT`
 
 strftime format for log timestamps in `pitchfork logs` output
 
@@ -360,9 +360,9 @@ Only affects the text display output, not `--json` or `--raw` modes.
 
 ## `proxy.auto_start`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_PROXY_AUTO_START`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_PROXY_AUTO_START`
 
 Automatically start daemons when accessed via proxy URL
 
@@ -372,9 +372,9 @@ Set to `false` to disable auto-start and return a plain 502 error for stopped da
 
 ## `proxy.auto_start_timeout`
 
-- **type**: `duration`
-- **default**: `30s`
-- **set with**: `PITCHFORK_PROXY_AUTO_START_TIMEOUT`
+- **Type:** `duration`
+- **Default:** `30s`
+- **Set with:** `PITCHFORK_PROXY_AUTO_START_TIMEOUT`
 
 Maximum time to wait for an auto-started daemon to become ready
 
@@ -386,9 +386,9 @@ If the daemon does not become ready and bind a port within this timeout, the bro
 
 ## `proxy.auto_trust`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_PROXY_AUTO_TRUST`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_PROXY_AUTO_TRUST`
 
 Automatically install the proxy TLS certificate into the system trust store
 
@@ -403,9 +403,9 @@ Set to `false` to disable auto-trust entirely.
 
 ## `proxy.enable`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_PROXY_ENABLE`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_PROXY_ENABLE`
 
 Enable the reverse proxy server for daemons
 
@@ -417,9 +417,9 @@ Example: `myapp.localhost:7777` -> `localhost:3000` (daemon with slug = "myapp")
 
 ## `proxy.host`
 
-- **type**: `string`
-- **default**: `127.0.0.1`
-- **set with**: `PITCHFORK_PROXY_HOST`
+- **Type:** `string`
+- **Default:** `127.0.0.1`
+- **Set with:** `PITCHFORK_PROXY_HOST`
 
 Bind address for the reverse proxy server
 
@@ -431,9 +431,9 @@ IP address the reverse proxy listens on.
 
 ## `proxy.https`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_PROXY_HTTPS`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_PROXY_HTTPS`
 
 Enable HTTPS for the reverse proxy
 
@@ -445,9 +445,9 @@ Set to `false` to use plain HTTP (e.g. for simple local development).
 
 ## `proxy.lan`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_PROXY_LAN`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_PROXY_LAN`
 
 Enable LAN mode for the reverse proxy
 
@@ -459,8 +459,8 @@ Other devices must trust the pitchfork CA certificate to use HTTPS. Run `pitchfo
 
 ## `proxy.lan_ip`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_PROXY_LAN_IP`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_PROXY_LAN_IP`
 
 Pin a specific LAN IP address instead of auto-detecting
 
@@ -468,9 +468,9 @@ When set, skips auto-detection and uses this IP for mDNS publishing. Implies `pr
 
 ## `proxy.port`
 
-- **type**: `int`
-- **default**: `443`
-- **set with**: `PITCHFORK_PROXY_PORT`
+- **Type:** `int`
+- **Default:** `443`
+- **Set with:** `PITCHFORK_PROXY_PORT`
 
 Port the reverse proxy server listens on
 
@@ -482,9 +482,9 @@ Ports below 1024 require the supervisor to be started with elevated privileges (
 
 ## `proxy.sync_hosts`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_PROXY_SYNC_HOSTS`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_PROXY_SYNC_HOSTS`
 
 Automatically sync slug hostnames to /etc/hosts
 
@@ -498,9 +498,9 @@ Set to `false` to disable automatic hosts file management. You will need to conf
 
 ## `proxy.tld`
 
-- **type**: `string`
-- **default**: `localhost`
-- **set with**: `PITCHFORK_PROXY_TLD`
+- **Type:** `string`
+- **Default:** `localhost`
+- **Set with:** `PITCHFORK_PROXY_TLD`
 
 Top-level domain used for proxy URLs
 
@@ -513,8 +513,8 @@ For custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you c
 
 ## `proxy.tls_cert`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_PROXY_TLS_CERT`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_PROXY_TLS_CERT`
 
 Path to TLS certificate file (PEM format) for HTTPS proxy
 
@@ -524,8 +524,8 @@ If left empty and `proxy.https = true`, pitchfork will auto-generate a self-sign
 
 ## `proxy.tls_key`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_PROXY_TLS_KEY`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_PROXY_TLS_KEY`
 
 Path to TLS private key file (PEM format) for HTTPS proxy
 
@@ -535,9 +535,9 @@ If left empty and `proxy.https = true`, pitchfork will auto-generate a self-sign
 
 ## `proxy.wildcard`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_PROXY_WILDCARD`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_PROXY_WILDCARD`
 
 Enable wildcard subdomain matching for proxy routes
 
@@ -551,9 +551,9 @@ Set to `false` to require exact hostname matches only.
 
 ## `supervisor.auto_start`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_SUPERVISOR_AUTO_START`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_SUPERVISOR_AUTO_START`
 
 Automatically start the supervisor when a client command needs it
 
@@ -570,9 +570,9 @@ With auto-start disabled, client commands wait for the configured IPC connection
 
 ## `supervisor.cleanup_orphans`
 
-- **type**: `bool`
-- **default**: `true`
-- **set with**: `PITCHFORK_CLEANUP_ORPHANS`
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_CLEANUP_ORPHANS`
 
 Reconcile orphaned daemon processes when supervisor starts
 
@@ -584,9 +584,9 @@ Disabling this leaves orphaned processes and their state entries completely unto
 
 ## `supervisor.container`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_CONTAINER`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_CONTAINER`
 
 Enable container/PID1 mode for running inside Docker containers
 
@@ -598,9 +598,9 @@ Can also be enabled via the `--container` CLI flag on `pitchfork supervisor run`
 
 ## `supervisor.cpu_violation_threshold`
 
-- **type**: `int`
-- **default**: `3`
-- **set with**: `PITCHFORK_CPU_VIOLATION_THRESHOLD`
+- **Type:** `int`
+- **Default:** `3`
+- **Set with:** `PITCHFORK_CPU_VIOLATION_THRESHOLD`
 
 Consecutive CPU-over-limit samples before killing a daemon
 
@@ -612,9 +612,9 @@ With the default interval of `10s`, a threshold of `3` means a daemon must excee
 
 ## `supervisor.cron_check_interval`
 
-- **type**: `duration`
-- **default**: `10s`
-- **set with**: `PITCHFORK_CRON_CHECK_INTERVAL`
+- **Type:** `duration`
+- **Default:** `10s`
+- **Set with:** `PITCHFORK_CRON_CHECK_INTERVAL`
 
 Interval for checking cron schedules
 
@@ -624,9 +624,9 @@ The default of 10 seconds supports sub-minute cron schedules. Increase for lower
 
 ## `supervisor.file_watch_debounce`
 
-- **type**: `duration`
-- **default**: `1s`
-- **set with**: `PITCHFORK_FILE_WATCH_DEBOUNCE`
+- **Type:** `duration`
+- **Default:** `1s`
+- **Set with:** `PITCHFORK_FILE_WATCH_DEBOUNCE`
 
 File watch debounce duration
 
@@ -636,9 +636,9 @@ This prevents rapid restart cycles when many files change at once (e.g., during 
 
 ## `supervisor.http_client_timeout`
 
-- **type**: `duration`
-- **default**: `5s`
-- **set with**: `PITCHFORK_HTTP_CLIENT_TIMEOUT`
+- **Type:** `duration`
+- **Default:** `5s`
+- **Set with:** `PITCHFORK_HTTP_CLIENT_TIMEOUT`
 
 Timeout for HTTP ready checks
 
@@ -648,9 +648,9 @@ Increase if your services take a while to respond during startup.
 
 ## `supervisor.log_flush_interval`
 
-- **type**: `duration`
-- **default**: `500ms`
-- **set with**: `PITCHFORK_LOG_FLUSH_INTERVAL`
+- **Type:** `duration`
+- **Default:** `500ms`
+- **Set with:** `PITCHFORK_LOG_FLUSH_INTERVAL`
 
 Daemon log buffer flush interval
 
@@ -658,9 +658,9 @@ How often daemon log output is flushed to disk. Lower values mean logs appear fa
 
 ## `supervisor.orphan_policy`
 
-- **type**: `string`
-- **default**: `adopt`
-- **set with**: `PITCHFORK_ORPHAN_POLICY`
+- **Type:** `string`
+- **Default:** `adopt`
+- **Set with:** `PITCHFORK_ORPHAN_POLICY`
 
 What to do with live orphaned daemons on supervisor startup: adopt or kill
 
@@ -685,9 +685,9 @@ This setting has no effect when `cleanup_orphans` is disabled.
 
 ## `supervisor.port_bump_attempts`
 
-- **type**: `int`
-- **default**: `10`
-- **set with**: `PITCHFORK_PORT_BUMP_ATTEMPTS`
+- **Type:** `int`
+- **Default:** `10`
+- **Set with:** `PITCHFORK_PORT_BUMP_ATTEMPTS`
 
 Maximum port increment attempts when auto_bump_port is enabled
 
@@ -699,9 +699,9 @@ This is a global default; individual daemons can override it with `port_bump_att
 
 ## `supervisor.ready_check_interval`
 
-- **type**: `duration`
-- **default**: `500ms`
-- **set with**: `PITCHFORK_READY_CHECK_INTERVAL`
+- **Type:** `duration`
+- **Default:** `500ms`
+- **Set with:** `PITCHFORK_READY_CHECK_INTERVAL`
 
 Interval between ready checks (HTTP, TCP, command)
 
@@ -711,9 +711,9 @@ Lower values detect readiness faster but use more resources.
 
 ## `supervisor.restart_delay`
 
-- **type**: `duration`
-- **default**: `100ms`
-- **set with**: `PITCHFORK_RESTART_DELAY`
+- **Type:** `duration`
+- **Default:** `100ms`
+- **Set with:** `PITCHFORK_RESTART_DELAY`
 
 Delay between stop and start during restart
 
@@ -721,9 +721,9 @@ Brief pause after stopping a daemon before starting it again. Helps ensure resou
 
 ## `supervisor.stop_timeout`
 
-- **type**: `duration`
-- **default**: `5s`
-- **set with**: `PITCHFORK_STOP_TIMEOUT`
+- **Type:** `duration`
+- **Default:** `5s`
+- **Set with:** `PITCHFORK_STOP_TIMEOUT`
 
 Maximum time to wait for daemon to stop gracefully
 
@@ -733,8 +733,8 @@ Increase for daemons that need time to clean up (e.g., flush data).
 
 ## `supervisor.user`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_USER`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_USER`
 
 Default user to run daemon processes as
 
@@ -746,9 +746,9 @@ If unset and the supervisor is running as root via `sudo`, daemons default to th
 
 ## `supervisor.watch_interval`
 
-- **type**: `duration`
-- **default**: `10s`
-- **set with**: `PITCHFORK_WATCH_INTERVAL`, `PITCHFORK_WATCH_INTERVAL_MS` (deprecated)
+- **Type:** `duration`
+- **Default:** `10s`
+- **Set with:** `PITCHFORK_WATCH_INTERVAL`, `PITCHFORK_WATCH_INTERVAL_MS` (deprecated)
 
 File watcher config refresh interval
 
@@ -762,9 +762,9 @@ Lower values react faster to configuration/runtime changes but use more CPU. The
 
 ## `supervisor.watch_poll_interval`
 
-- **type**: `duration`
-- **default**: `500ms`
-- **set with**: `PITCHFORK_WATCH_POLL_INTERVAL`
+- **Type:** `duration`
+- **Default:** `500ms`
+- **Set with:** `PITCHFORK_WATCH_POLL_INTERVAL`
 
 Polling watcher filesystem scan interval
 
@@ -776,9 +776,9 @@ Lower values detect changes faster but use more CPU and I/O. `"100ms"` is useful
 
 ## `tui.message_duration`
 
-- **type**: `duration`
-- **default**: `3s`
-- **set with**: `PITCHFORK_TUI_MESSAGE_DURATION`
+- **Type:** `duration`
+- **Default:** `3s`
+- **Set with:** `PITCHFORK_TUI_MESSAGE_DURATION`
 
 Status message display duration
 
@@ -786,9 +786,9 @@ How long status messages (like "Daemon started") remain visible in the TUI befor
 
 ## `tui.refresh_rate`
 
-- **type**: `duration`
-- **default**: `2s`
-- **set with**: `PITCHFORK_TUI_REFRESH_RATE`
+- **Type:** `duration`
+- **Default:** `2s`
+- **Set with:** `PITCHFORK_TUI_REFRESH_RATE`
 
 Daemon list refresh interval
 
@@ -800,9 +800,9 @@ Lower values provide more responsive updates but may increase CPU usage, especia
 
 ## `tui.stat_history`
 
-- **type**: `int`
-- **default**: `60`
-- **set with**: `PITCHFORK_TUI_STAT_HISTORY`
+- **Type:** `int`
+- **Default:** `60`
+- **Set with:** `PITCHFORK_TUI_STAT_HISTORY`
 
 Number of stat samples to keep for graphs
 
@@ -812,9 +812,9 @@ Increase for longer history in graphs, at the cost of more memory.
 
 ## `tui.tick_rate`
 
-- **type**: `duration`
-- **default**: `100ms`
-- **set with**: `PITCHFORK_TUI_TICK_RATE`
+- **Type:** `duration`
+- **Default:** `100ms`
+- **Set with:** `PITCHFORK_TUI_TICK_RATE`
 
 Event loop tick rate
 
@@ -824,9 +824,9 @@ Most users won't need to change this. Lower values make the UI more responsive b
 
 ## `web.auto_start`
 
-- **type**: `bool`
-- **default**: `false`
-- **set with**: `PITCHFORK_WEB_AUTO_START`
+- **Type:** `bool`
+- **Default:** `false`
+- **Set with:** `PITCHFORK_WEB_AUTO_START`
 
 Automatically start web UI when supervisor starts
 
@@ -839,8 +839,8 @@ pitchfork supervisor start --web-port=3120
 
 ## `web.base_path`
 
-- **type**: `string`
-- **set with**: `PITCHFORK_WEB_PATH`
+- **Type:** `string`
+- **Set with:** `PITCHFORK_WEB_PATH`
 
 URL path prefix for the web UI (e.g. "ps" serves at /ps/)
 
@@ -852,9 +852,9 @@ Equivalent to the `--web-path` CLI flag. The CLI flag takes priority over this s
 
 ## `web.bind_address`
 
-- **type**: `string`
-- **default**: `127.0.0.1`
-- **set with**: `PITCHFORK_WEB_BIND_ADDRESS`
+- **Type:** `string`
+- **Default:** `127.0.0.1`
+- **Set with:** `PITCHFORK_WEB_BIND_ADDRESS`
 
 Web server bind address
 
@@ -866,9 +866,9 @@ IP address for the web UI to listen on.
 
 ## `web.bind_port`
 
-- **type**: `int`
-- **default**: `3120`
-- **set with**: `PITCHFORK_WEB_BIND_PORT`
+- **Type:** `int`
+- **Default:** `3120`
+- **Set with:** `PITCHFORK_WEB_BIND_PORT`
 
 Default web server port
 
@@ -876,9 +876,9 @@ The port number for the web UI. If this port is in use, pitchfork will try subse
 
 ## `web.log_lines`
 
-- **type**: `int`
-- **default**: `100`
-- **set with**: `PITCHFORK_WEB_LOG_LINES`
+- **Type:** `int`
+- **Default:** `100`
+- **Set with:** `PITCHFORK_WEB_LOG_LINES`
 
 Initial number of log lines to display
 
@@ -886,9 +886,9 @@ How many lines of logs to show initially when viewing daemon logs in the web UI.
 
 ## `web.port_attempts`
 
-- **type**: `int`
-- **default**: `10`
-- **set with**: `PITCHFORK_WEB_PORT_ATTEMPTS`
+- **Type:** `int`
+- **Default:** `10`
+- **Set with:** `PITCHFORK_WEB_PORT_ATTEMPTS`
 
 Number of ports to try if default is in use
 
@@ -898,9 +898,9 @@ For example, with `bind_port = 3120` and `port_attempts = 10`, it will try ports
 
 ## `web.sse_poll_interval`
 
-- **type**: `duration`
-- **default**: `500ms`
-- **set with**: `PITCHFORK_WEB_SSE_POLL_INTERVAL`
+- **Type:** `duration`
+- **Default:** `500ms`
+- **Set with:** `PITCHFORK_WEB_SSE_POLL_INTERVAL`
 
 Server-Sent Events poll interval for log streaming
 
