@@ -36,12 +36,12 @@ Output:
 ## Flags
 - **`--hide-header`** — Hide the table header row
 - **`--json`** — Output in JSON format
-- **`--status… <STATUS>`** — Filter daemons by status (repeatable for OR logic)
+- **`--status <STATUS>`** — Filter daemons by status (repeatable for OR logic)
 
   Values: running, stopped, waiting, stopping, failed, errored, available, disabled
 
   **Choices:** `running`, `stopped`, `waiting`, `stopping`, `failed`, `errored`, `available`, `disabled`
-- **`--namespace… <NAMESPACE>`** — Only show daemons in this namespace (repeatable for OR logic)
+- **`--namespace <NAMESPACE>`** — Only show daemons in this namespace (repeatable for OR logic)
 - **`--project`** — Only show daemons in the current project's namespace
 
   The namespace is resolved from the current directory the same way short daemon IDs are: the nearest config file's namespace, falling back to 'global' when no config file is found.

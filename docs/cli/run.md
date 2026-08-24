@@ -39,7 +39,7 @@ Examples:
 - **`-o --output <OUTPUT>`** — Wait until output matches this regex pattern before considering daemon ready
 - **`--http <HTTP>`** — Wait until HTTP endpoint returns 2xx status before considering daemon ready
 - **`--port <PORT>`** — Wait until TCP port is listening before considering daemon ready
-- **`--expected-port… <EXPECTED_PORT>`** — Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)
+- **`--expected-port <EXPECTED_PORT>`** — Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)
 - **`--bump [BUMP]`** — Automatically find an available port if the expected port is in use
 - **`--cmd <CMD>`** — Shell command to poll for readiness (exit code 0 = ready)
 - **`-q --quiet`** — Suppress startup log output
