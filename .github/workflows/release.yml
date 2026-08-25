@@ -42,6 +42,8 @@ jobs:
           persist-credentials: false
       - name: Install mise
         uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          cache: false
       - name: Build UI assets
         working-directory: ui
         run: |
@@ -66,9 +68,6 @@ jobs:
         uses: taiki-e/setup-cross-toolchain-action@12b7ad4acfa95a1476779d6c06699b96ec1691f8 # v1.42.0
         with:
           target: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: rust-${{ matrix.target }}
       - name: Upload binary (macOS signed)
         if: startsWith(matrix.os, 'macos')
         uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1
