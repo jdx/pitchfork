@@ -10,7 +10,7 @@ impl Sponsors {
             r#"pitchfork and the jdx.dev open source tools are sponsored by:
 
   entire.io - https://entire.io
-  37signals - https://37signals.com
+  Omacom Foundation - https://omarchy.org/patrons/
 
 View all sponsors: https://jdx.dev/sponsors.html"#
         );
