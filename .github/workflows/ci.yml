@@ -35,7 +35,7 @@ jobs:
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
       - run: mise run build:ui
-      - run: mbx build build
+      - run: mbx build
       - run: mise run lint
       - run: mise run render
       - name: assert render produces no diff
@@ -46,7 +46,7 @@ jobs:
             git diff HEAD
             exit 1
           fi
-      - run: mbx build nextest run
+      - run: mbx nextest run
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pitchfork-debug
@@ -105,7 +105,7 @@ jobs:
           aube install
           aube run build
       - name: Run Rust tests
-        run: mbx build nextest run --all-features
+        run: mbx nextest run --all-features
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pitchfork-windows
