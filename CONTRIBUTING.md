@@ -15,7 +15,7 @@ cargo build
 cargo nextest run
 git submodule update --init --recursive
 mise run test:bats
-cargo clippy --manifest-path Cargo.toml --quiet
+cargo clippy --manifest-path Cargo.toml --quiet -- -D warnings
 ```
 
 If Cargo succeeds where mbx fails, or mbx introduces a papercut, please start a

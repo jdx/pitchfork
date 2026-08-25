@@ -4,7 +4,7 @@ import "package://github.com/jdx/hk/releases/download/v1.44.3/hk@1.44.3#/Builtin
 local linters = new Mapping<String, Step> {
     ["cargo_fmt"] = Builtins.cargo_fmt
     ["cargo_clippy"] = (Builtins.cargo_clippy) {
-        check = "mbx clippy --manifest-path {{workspace_indicator}} --quiet"
+        check = "mbx clippy --manifest-path {{workspace_indicator}} --quiet -- -D warnings"
     }
     ["pkl"] {
         glob = "*.pkl"
