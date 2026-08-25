@@ -105,6 +105,7 @@ jobs:
           aube install
           aube run build
       - name: Run Rust tests
+        shell: bash
         run: |
           mbx build --all-features
           mbx nextest run --all-features
