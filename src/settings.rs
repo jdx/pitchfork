@@ -996,6 +996,8 @@ pub struct SettingsWeb {
 /// from these fields; the CLI's emitted spec carries the `config` block
 /// through `#[usage(config = ...)]` on the root.
 #[derive(usage_rs::Config, Debug, Clone, PartialEq)]
+// `file(...)` is intentionally repeatable in usage's configuration DSL.
+#[allow(clippy::duplicated_attributes)]
 #[usage(
     file(path = "/etc/pitchfork/config.toml", scope = "system", format = "toml"),
     file(
