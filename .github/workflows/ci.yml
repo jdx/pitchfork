@@ -34,6 +34,8 @@ jobs:
           cache: false
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
       - run: mise run build:ui
       - run: mbx build
       - run: mise run lint
