@@ -13,6 +13,8 @@ check:
 ```sh
 cargo build
 cargo nextest run
+git submodule update --init --recursive
+mise run test:bats
 cargo clippy --manifest-path Cargo.toml --quiet
 ```
 
