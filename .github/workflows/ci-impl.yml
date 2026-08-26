@@ -39,6 +39,7 @@ jobs:
       - uses: ./.github/actions/mbx
         with:
           backend: ${{ inputs.mbx-backend }}
+          mirror-github-cache: "true"
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
@@ -105,6 +106,7 @@ jobs:
       - uses: ./.github/actions/mbx
         with:
           backend: ${{ inputs.mbx-backend }}
+          mirror-github-cache: "true"
       - name: Build UI assets
         working-directory: ui
         run: |
