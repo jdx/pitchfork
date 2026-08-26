@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.0](https://github.com/jdx/pitchfork/compare/v2.22.0...v2.23.0) - 2026-08-26
+
+### Added
+
+- improve worktree lifecycle isolation ([#746](https://github.com/jdx/pitchfork/pull/746))
+
+### Fixed
+
+- allow repeatable usage file attributes ([#774](https://github.com/jdx/pitchfork/pull/774))
+- *(logs)* preserve insertion order in log batches ([#761](https://github.com/jdx/pitchfork/pull/761))
+- *(config)* gate worktree auto-discovery behind global setting ([#755](https://github.com/jdx/pitchfork/pull/755))
+- *(deps)* update rust crate mdns-sd to 0.21 ([#751](https://github.com/jdx/pitchfork/pull/751))
+- *(config)* pass project mise setting to supervisor ([#750](https://github.com/jdx/pitchfork/pull/750))
+
+### Other
+
+- *(sponsors)* replace 37signals with omacom foundation ([#773](https://github.com/jdx/pitchfork/pull/773))
+- *(deps)* update rust crate demand to v2.1.0 ([#772](https://github.com/jdx/pitchfork/pull/772))
+- *(deps)* bump usage to 6.4.0 ([#766](https://github.com/jdx/pitchfork/pull/766))
+- *(deps)* lock file maintenance ([#764](https://github.com/jdx/pitchfork/pull/764))
+- *(settings)* resolve settings with usage-config ([#756](https://github.com/jdx/pitchfork/pull/756))
+- *(cli)* replace clap with usage-rs ([#754](https://github.com/jdx/pitchfork/pull/754))
+- *(deps)* update rust crate tera to v2.1.1 ([#748](https://github.com/jdx/pitchfork/pull/748))
+
 ## [2.22.0](https://github.com/jdx/pitchfork/compare/v2.21.0...v2.22.0) - 2026-08-18
 
 ### Added
