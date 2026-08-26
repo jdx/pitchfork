@@ -2,6 +2,13 @@ name: ci implementation
 
 on:
   workflow_call:
+    inputs:
+      trusted:
+        required: true
+        type: boolean
+      mbx-backend:
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,9 +20,14 @@ env:
 
 jobs:
   build:
-    runs-on: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login != 'jdx') && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
     timeout-minutes: 10
     steps:
+      - name: Assert OIDC is unavailable to untrusted CI
+        if: ${{ !inputs.trusted }}
+        run: |
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
@@ -25,6 +37,8 @@ jobs:
           cache: false
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.mbx-backend }}
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
@@ -53,7 +67,7 @@ jobs:
       fail-fast: false
       matrix:
         tranche: [0, 1]
-    runs-on: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login != 'jdx') && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,6 +103,8 @@ jobs:
         with:
           cache: false
       - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.mbx-backend }}
       - name: Build UI assets
         working-directory: ui
         run: |
