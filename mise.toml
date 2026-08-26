@@ -4,7 +4,7 @@ _.path = ["target/debug", "test/bats/bin"]
 [tasks.test]
 depends = ["build:ui"]
 run = [
-  "cargo nextest run",
+  "mbx nextest run",
   "git submodule update --init --recursive",
   "mise run test:bats",
 ]
@@ -50,7 +50,7 @@ run = "hk fix --all"
 
 [tasks.build]
 depends = ["build:ui"]
-run = ["cargo build"]
+run = ["mbx build"]
 
 [tasks."test:web-ui"]
 depends = ["build"]
@@ -93,6 +93,7 @@ run = [
 ]
 
 [tools]
+"github:jdx/mr-boxington" = "latest"
 usage = "6.4.0"
 # Pinned rather than "latest" because tak is the measuring instrument: an
 # upgrade that changes how it samples would land in the series as a step change
