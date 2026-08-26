@@ -1,0 +1,208 @@
+name: ci implementation
+
+on:
+  workflow_call:
+    inputs:
+      trusted:
+        required: true
+        type: boolean
+      mbx-backend:
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  MISE_EXPERIMENTAL: true
+
+jobs:
+  build:
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    timeout-minutes: 10
+    steps:
+      - name: Assert OIDC is unavailable to untrusted CI
+        if: ${{ !inputs.trusted }}
+        run: |
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          cache: false
+      - run: rm -rf .cargo
+      - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.mbx-backend }}
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+      - run: mise run build:ui
+      - run: mbx build
+      - run: mise run lint
+      - run: mise run render
+      - name: assert render produces no diff
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::'mise run render' produced changes. Run it locally and commit."
+            git status
+            git diff HEAD
+            exit 1
+          fi
+      - run: mbx nextest run
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pitchfork-debug
+          path: target/debug/pitchfork
+
+  ci-bats:
+    needs: build
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tranche: [0, 1]
+    runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pitchfork-debug
+          path: target/debug
+      - run: chmod +x target/debug/pitchfork
+      - run: sudo apt-get update && sudo apt-get install -y parallel
+      - run: mise run test:bats
+        env:
+          TRANCHE: ${{ matrix.tranche }}
+          TRANCHE_COUNT: 2
+
+  # Windows coverage lives in this workflow (rather than a separate one) so the
+  # `final` aggregator below can gate on it — a job's `needs:` cannot reference
+  # jobs in another workflow file.
+  rust-tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+        with:
+          cache: false
+      - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.mbx-backend }}
+      - name: Build UI assets
+        working-directory: ui
+        run: |
+          aube install
+          aube run build
+      - name: Run Rust tests
+        shell: bash
+        run: |
+          mbx build --all-features
+          mbx nextest run --all-features
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pitchfork-windows
+          path: target/debug/pitchfork.exe
+          if-no-files-found: error
+
+  bats-tests:
+    needs: rust-tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: pitchfork-windows
+          path: target/debug
+      - name: Install sqlite3
+        shell: pwsh
+        run: choco install sqlite -y --no-progress
+      - name: Create UI placeholder
+        shell: bash
+        run: mkdir -p ui/dist && echo '<html><body>placeholder</body></html>' > ui/dist/index.html
+      - name: Run bats e2e tests (shard ${{ matrix.shard }})
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARD_COUNT: 4
+          # Windows runners have slow, highly variable process/bash startup, which
+          # makes the timing-sensitive e2e assertions (ready-delay windows, elapsed
+          # bounds) flaky. Retry each failed test a couple of times so transient
+          # timing slips don't red the build; genuine failures still fail 3x.
+          # Consumed by _common_setup, which sets bats' BATS_TEST_RETRIES from it
+          # (bats resets BATS_TEST_RETRIES to 0 per file, so the env var alone
+          # would be ignored).
+          PITCHFORK_TEST_RETRIES: 2
+        run: |
+          export PATH="$PWD/target/debug:$PATH"
+          tests=$(ls -1 test/*.bats | sort | awk -v t="$SHARD" -v n="$SHARD_COUNT" 'NR % n == t')
+          echo "Running shard $SHARD: $tests"
+          test/bats/bin/bats $tests
+
+  # Aggregator that required-status-checks can target. If any upstream job
+  # failed, was cancelled, or was skipped, this step exits non-zero so the PR is
+  # blocked. Lets the branch-protection rule depend on one name instead of N.
+  final:
+    needs:
+      - build
+      - ci-bats
+      - rust-tests
+      - bats-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    # Run on success or upstream failure but skip when the workflow is cancelled
+    # — `always()` would override `cancel-in-progress` and waste a runner.
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Gate on upstream job results
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          failed = False
+          for name, data in sorted(needs.items()):
+              result = data.get("result", "unknown")
+              if result == "success":
+                  print(f"::notice::{name}: {result}")
+              else:
+                  print(f"::error::{name}: {result}")
+                  failed = True
+
+          if failed:
+              print("One or more upstream jobs did not complete successfully.")
+              sys.exit(1)
+
+          print("All CI jobs completed successfully.")
+          PY
