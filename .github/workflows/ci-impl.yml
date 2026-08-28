@@ -21,7 +21,7 @@ env:
 jobs:
   build:
     runs-on: ${{ !inputs.trusted && 'ubuntu-latest' || 'namespace-profile-endev-linux-amd64' }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Assert OIDC is unavailable to untrusted CI
         if: ${{ !inputs.trusted }}
