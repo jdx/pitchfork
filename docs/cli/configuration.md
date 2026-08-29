@@ -143,6 +143,16 @@ By default, pitchfork searches well-known locations for the mise binary: - `~/.l
 
 Set this to an absolute path if mise is installed elsewhere.
 
+## `general.ready_delay`
+
+- **Type:** `duration`
+- **Default:** `3s`
+- **Set with:** `PITCHFORK_READY_DELAY`
+
+Default readiness delay in seconds when a daemon has no ready check configured
+
+When a daemon has no other readiness check (output, HTTP, port, command), pitchfork waits this long before considering it ready. Daemons can override this with their own `ready_delay` setting.
+
 ## `general.shell`
 
 - **Type:** `string`

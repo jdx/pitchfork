@@ -115,19 +115,21 @@ pub async fn build_run_options(
     // long-lived and may have been started from a different directory. Use this
     // daemon's defining config path rather than the invoking client's CWD because
     // batch operations can include daemons from other registered namespaces.
-    if run_opts.mise.is_none() {
+    if run_opts.mise.is_none() || run_opts.ready_delay.is_none() {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
-        let project_mise = tokio::task::spawn_blocking(move || {
+        let project_settings = tokio::task::spawn_blocking(move || {
             crate::settings::Settings::load_from_dir(&project_dir)
-                .general
-                .mise
         })
         .await
         .map_err(|e| format!("Failed to load project settings: {e}"))?;
-        run_opts.mise = Some(project_mise);
+        if run_opts.mise.is_none() {
+            run_opts.mise = Some(project_settings.general.mise);
+        }
+        if run_opts.ready_delay.is_none() {
+            run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
+        }
     }
     run_opts.wait_ready = true;
-    run_opts.ready_delay = run_opts.ready_delay.or(Some(3));
 
     if let Some(opts) = overrides {
         run_opts.shell_pid = opts.shell_pid;
@@ -843,6 +845,25 @@ impl IpcClient {
         let quiet = opts.quiet;
 
         tokio::spawn(async move {
+            // Only consult the global setting when no explicit --delay was given,
+            // mirroring build_run_options above.
+            let default_delay = if delay.is_some() {
+                None
+            } else {
+                Some(
+                    match crate::settings::settings().general_ready_delay_secs() {
+                        Ok(delay) => delay,
+                        Err(e) => {
+                            return SpawnTaskResult {
+                                id,
+                                job: None,
+                                run_result: Err(miette::miette!("{e}")),
+                            };
+                        }
+                    },
+                )
+            };
+
             let run_opts = RunOptions {
                 id: id.clone(),
                 cmd,
@@ -850,7 +871,7 @@ impl IpcClient {
                 shell_pid,
                 dir: crate::config_types::Dir(dir),
                 retry,
-                ready_delay: delay.or(Some(3)),
+                ready_delay: delay.or(default_delay),
                 ready_output: output.map(ReadyOutput::new),
                 ready_http: http,
                 ready_port: port.map(ReadyPort::new),
@@ -1058,6 +1079,17 @@ impl IpcClient {
         dir: PathBuf,
         opts: StartOptions,
     ) -> Result<RunResult> {
+        // Only consult the global setting when no explicit --delay was given.
+        let default_delay = if opts.delay.is_some() {
+            None
+        } else {
+            Some(
+                crate::settings::settings()
+                    .general_ready_delay_secs()
+                    .map_err(|e| miette::miette!("{e}"))?,
+            )
+        };
+
         self.run(RunOptions {
             id,
             cmd,
@@ -1065,7 +1097,7 @@ impl IpcClient {
             force: opts.force,
             dir: crate::config_types::Dir(dir),
             retry: opts.retry.unwrap_or_default(),
-            ready_delay: opts.delay.or(Some(3)),
+            ready_delay: opts.delay.or(default_delay),
             ready_output: opts.output.map(ReadyOutput::new),
             ready_http: merge_ready_http_override(None, opts.http),
             ready_port: opts.port.map(ReadyPort::new),
@@ -1281,6 +1313,160 @@ mod tests {
         let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
 
         assert_eq!(run_opts.mise, daemon_config.mise);
+    }
+
+    #[tokio::test]
+    async fn build_run_options_falls_back_to_global_ready_delay() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
+
+        assert_eq!(
+            run_opts.ready_delay,
+            Some(crate::settings::settings().general_ready_delay().as_secs())
+        );
+    }
+
+    #[tokio::test]
+    async fn build_run_options_preserves_daemon_ready_delay_override() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ready_delay: Some(5),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
+
+        assert_eq!(run_opts.ready_delay, Some(5));
+    }
+
+    #[tokio::test]
+    async fn build_run_options_resolves_ready_delay_from_daemon_project() {
+        const CHILD_SENTINEL: &str = "project-ready-delay-sanitized-child-ran";
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ipc::batch::tests::build_run_options_resolves_ready_delay_in_sanitized_child",
+                "--nocapture",
+            ])
+            .env(
+                "PITCHFORK_TEST_PROJECT_READY_DELAY_MODE",
+                "ready-delay-project",
+            )
+            .env_remove("PITCHFORK_READY_DELAY")
+            .output()
+            .await
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "sanitized child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(CHILD_SENTINEL),
+            "sanitized child test did not run:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn build_run_options_resolves_ready_delay_in_sanitized_child() {
+        let Ok(_mode) = std::env::var("PITCHFORK_TEST_PROJECT_READY_DELAY_MODE") else {
+            return;
+        };
+        eprintln!("project-ready-delay-sanitized-child-ran");
+
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        tokio::fs::write(&config_path, "[settings.general]\nready_delay = \"7s\"\n")
+            .await
+            .unwrap();
+
+        let id = DaemonId::try_new("other-project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            path: Some(config_path),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
+
+        assert_eq!(run_opts.ready_delay, Some(7));
+    }
+
+    #[tokio::test]
+    async fn build_run_options_rejects_subsecond_ready_delay() {
+        const CHILD_SENTINEL: &str = "subsecond-ready-delay-child-ran";
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ipc::batch::tests::build_run_options_rejects_subsecond_ready_delay_in_child",
+                "--nocapture",
+            ])
+            .env(
+                "PITCHFORK_TEST_PROJECT_READY_DELAY_MODE",
+                "subsecond-ready-delay-project",
+            )
+            .env_remove("PITCHFORK_READY_DELAY")
+            .output()
+            .await
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "sanitized child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(CHILD_SENTINEL),
+            "sanitized child test did not run:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    async fn build_run_options_rejects_subsecond_ready_delay_in_child() {
+        let Ok(mode) = std::env::var("PITCHFORK_TEST_PROJECT_READY_DELAY_MODE") else {
+            return;
+        };
+        if mode != "subsecond-ready-delay-project" {
+            return;
+        }
+        eprintln!("subsecond-ready-delay-child-ran");
+
+        let project = tempfile::tempdir().unwrap();
+        let config_path = project.path().join("pitchfork.toml");
+        tokio::fs::write(
+            &config_path,
+            "[settings.general]\nready_delay = \"500ms\"\n",
+        )
+        .await
+        .unwrap();
+
+        let id = DaemonId::try_new("other-project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            path: Some(config_path),
+            ..PitchforkTomlDaemon::default()
+        };
+
+        let err = build_run_options(&id, &daemon_config, None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("whole number of seconds"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
