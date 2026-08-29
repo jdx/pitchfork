@@ -216,7 +216,7 @@ auto = ["start", "stop"]  # Both auto-start and auto-stop
 
 ### `ready_delay`
 
-Seconds to wait before considering the daemon ready. When started via `pitchfork start` or `pitchfork run`, defaults to `3` seconds if no other ready check is configured.
+Seconds to wait before considering the daemon ready. When started via `pitchfork start` or `pitchfork run`, defaults to `3` seconds if no other ready check is configured. The default can be changed globally via `[settings.general] ready_delay` (or the `PITCHFORK_READY_DELAY` environment variable); a daemon-level `ready_delay` always takes precedence.
 
 ```toml
 [daemons.api]

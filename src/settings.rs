@@ -215,6 +215,14 @@ pub struct SettingsGeneral {
     #[usage(env = "PITCHFORK_STARTUP_LOG_TIMESTAMPS", default = false)]
     pub startup_log_timestamps: bool,
 
+    /// Default readiness delay in seconds when a daemon has no ready check configured
+    ///
+    /// When a daemon has no other readiness check (output, HTTP, port, command),
+    /// pitchfork waits this long before considering it ready. Daemons can
+    /// override this with their own `ready_delay` setting.
+    #[usage(env = "PITCHFORK_READY_DELAY", default = "3s", ty = "duration")]
+    pub ready_delay: String,
+
     /// Enable git worktree / jj workspace auto-discovery
     ///
     /// When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy
@@ -1077,6 +1085,7 @@ macro_rules! duration_getters {
 duration_getters! {
     general_autostop_delay => general.autostop_delay, "1m";
     general_interval => general.interval, "10s";
+    general_ready_delay => general.ready_delay, "3s";
     ipc_connect_max_delay => ipc.connect_max_delay, "1s";
     ipc_connect_min_delay => ipc.connect_min_delay, "100ms";
     ipc_rate_limit_window => ipc.rate_limit_window, "1s";
@@ -1526,6 +1535,8 @@ settings_partial! {
         shell: String,
         /// Show timestamps in startup log output
         startup_log_timestamps: bool,
+        /// Default readiness delay in seconds when a daemon has no ready check configured
+        ready_delay: String,
         /// Enable git worktree / jj workspace auto-discovery
         worktree: bool,
     }
@@ -1736,6 +1747,7 @@ mod tests {
         assert_eq!(settings.general.autostop_delay, "1m");
         assert_eq!(settings.general.interval, "10s");
         assert_eq!(settings.general.log_level, "info");
+        assert_eq!(settings.general.ready_delay, "3s");
 
         // Test IPC settings
         assert_eq!(settings.ipc.connect_attempts, 5);
@@ -1817,7 +1829,7 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 68, "{keys:?}");
+        assert_eq!(keys.len(), 69, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"logs.archive_hook.command"));
         assert!(keys.contains(&"supervisor.watch_interval"));
@@ -2010,6 +2022,7 @@ mod tests {
 
         assert_eq!(settings.general_autostop_delay(), Duration::from_secs(60));
         assert_eq!(settings.general_interval(), Duration::from_secs(10));
+        assert_eq!(settings.general_ready_delay(), Duration::from_secs(3));
         assert_eq!(settings.ipc_connect_min_delay(), Duration::from_millis(100));
         assert_eq!(settings.ipc_connect_max_delay(), Duration::from_secs(1));
         assert_eq!(settings.ipc_request_timeout(), Duration::from_secs(5));

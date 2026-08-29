@@ -813,6 +813,13 @@
             "null"
           ]
         },
+        "ready_delay": {
+          "description": "Default readiness delay in seconds when a daemon has no ready check configured",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "shell": {
           "description": "Shell command used to execute daemon run scripts",
           "type": [

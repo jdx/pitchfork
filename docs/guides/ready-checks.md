@@ -23,6 +23,17 @@ run = "node server.js"
 ready_delay = 5  # Wait 5 seconds (CLI default: 3)
 ```
 
+The default delay when no ready check is configured can be changed globally in
+`[settings.general]` (or via the `PITCHFORK_READY_DELAY` environment variable):
+
+```toml
+[settings.general]
+ready_delay = "5s"
+```
+
+Individual daemons always override the global default with their own
+`ready_delay` setting.
+
 **Best for:** Simple services where a time delay is sufficient.
 
 ## Output Check

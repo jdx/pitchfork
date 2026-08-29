@@ -376,7 +376,10 @@ impl IpcClient {
                         .map(|d| d.as_secs())
                         .unwrap_or(0),
                 )
-                .max(opts.ready_delay.unwrap_or(3));
+                .max(
+                    opts.ready_delay
+                        .unwrap_or(crate::settings::settings().general_ready_delay().as_secs()),
+                );
             Duration::from_secs(max_deadline + 60)
         };
         let rsp = self
