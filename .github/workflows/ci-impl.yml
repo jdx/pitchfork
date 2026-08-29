@@ -6,9 +6,6 @@ on:
       trusted:
         required: true
         type: boolean
-      mbx-backend:
-        required: true
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,9 +34,6 @@ jobs:
           cache: false
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
-        with:
-          backend: ${{ inputs.mbx-backend }}
-          mirror-github-cache: "true"
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
@@ -104,9 +98,6 @@ jobs:
         with:
           cache: false
       - uses: ./.github/actions/mbx
-        with:
-          backend: ${{ inputs.mbx-backend }}
-          mirror-github-cache: "true"
       - name: Build UI assets
         working-directory: ui
         run: |
