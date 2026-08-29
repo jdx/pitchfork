@@ -1108,6 +1108,24 @@ duration_getters! {
 }
 
 impl Settings {
+    /// Resolve `general.ready_delay` as whole seconds.
+    ///
+    /// The ready-check pipeline (RunOptions/IPC/supervisor) models the delay
+    /// in whole seconds. Reject subsecond values that would otherwise be
+    /// silently truncated to a zero delay by `as_secs()`.
+    pub fn general_ready_delay_secs(&self) -> Result<u64, String> {
+        let delay = self.general_ready_delay();
+        if delay.subsec_nanos() != 0 {
+            return Err(format!(
+                "settings.general.ready_delay must be a whole number of seconds, got \"{}\"",
+                self.general.ready_delay
+            ));
+        }
+        Ok(delay.as_secs())
+    }
+}
+
+impl Settings {
     /// Load settings from pitchfork.toml files, then overlay environment variables.
     /// Settings are loaded from all pitchfork.toml files in precedence order:
     /// 1. System-level: /etc/pitchfork/config.toml
@@ -2056,6 +2074,35 @@ mod tests {
             settings.supervisor_http_client_timeout(),
             Duration::from_secs(5)
         );
+    }
+
+    #[test]
+    fn test_general_ready_delay_secs() {
+        let mut settings = Settings::default();
+
+        // Default "3s" resolves to whole seconds.
+        assert_eq!(settings.general_ready_delay_secs(), Ok(3));
+
+        // Subsecond values are rejected, not silently truncated by as_secs().
+        settings.general.ready_delay = "500ms".to_string();
+        let err = settings.general_ready_delay_secs().unwrap_err();
+        assert!(err.contains("500ms"), "unexpected error: {err}");
+        assert!(
+            err.contains("whole number of seconds"),
+            "unexpected error: {err}"
+        );
+
+        settings.general.ready_delay = "1.5s".to_string();
+        let err = settings.general_ready_delay_secs().unwrap_err();
+        assert!(err.contains("1.5s"), "unexpected error: {err}");
+
+        // Empty string falls back to the schema default "3s".
+        settings.general.ready_delay = String::new();
+        assert_eq!(settings.general_ready_delay_secs(), Ok(3));
+
+        // Whole-second values resolve as seconds.
+        settings.general.ready_delay = "90s".to_string();
+        assert_eq!(settings.general_ready_delay_secs(), Ok(90));
     }
 
     /// A directory tree, cleaned up when the test ends.

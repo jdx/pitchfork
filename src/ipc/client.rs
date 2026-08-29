@@ -328,6 +328,16 @@ impl IpcClient {
     /// Run a single daemon with the given options (low-level operation)
     pub async fn run(&self, opts: RunOptions) -> Result<RunResult> {
         let start_time = chrono::Local::now();
+        // Resolve the effective ready delay before computing the timeout. The
+        // global setting is only consulted when no per-run delay is given, and
+        // subsecond values are rejected there rather than silently truncated
+        // by `as_secs()` into a zero delay.
+        let ready_delay = match opts.ready_delay {
+            Some(secs) => secs,
+            None => crate::settings::settings()
+                .general_ready_delay_secs()
+                .map_err(|e| miette::miette!("{e}"))?,
+        };
         // If any configured readiness check is unbounded (no timeout), the
         // supervisor may wait indefinitely. Use a generous cap so the client
         // does not disconnect prematurely — e.g. when a bounded ready_cmd
@@ -376,10 +386,7 @@ impl IpcClient {
                         .map(|d| d.as_secs())
                         .unwrap_or(0),
                 )
-                .max(
-                    opts.ready_delay
-                        .unwrap_or(crate::settings::settings().general_ready_delay().as_secs()),
-                );
+                .max(ready_delay);
             Duration::from_secs(max_deadline + 60)
         };
         let rsp = self
