@@ -75,6 +75,7 @@ impl Supervisor {
     /// for a daemon that is still becoming ready.
     async fn run_health_checks(&self, id: DaemonId) {
         let mut last_pid: Option<u32> = None;
+        let mut last_start_time: Option<u64> = None;
         let mut consecutive_failures: u32 = 0;
         let mut http_client: Option<reqwest::Client> = None;
         loop {
@@ -98,10 +99,13 @@ impl Supervisor {
                 return;
             };
             // A restarted daemon (crashed and retried, or restarted by the
-            // user) gets a fresh failure budget.
-            if daemon.pid != last_pid {
+            // user) gets a fresh failure budget. PID alone is not enough to
+            // detect a restart: the OS may reuse the same PID for a new
+            // process, so the start time disambiguates process generations.
+            if process_identity_changed(last_pid, last_start_time, daemon.pid, daemon.start_time) {
                 consecutive_failures = 0;
                 last_pid = daemon.pid;
+                last_start_time = daemon.start_time;
             }
             let retries =
                 effective_retries(&daemon.health_cmd, &daemon.health_http, &daemon.health_port);
@@ -218,6 +222,18 @@ impl Supervisor {
             error!("failed to kill daemon {id} (pid {pid}) {reason}: {e}");
         }
     }
+}
+
+/// Whether a daemon's process identity changed since the last probe, meaning
+/// the failure budget must reset. A PID alone can be reused by the OS after a
+/// restart, so the start time disambiguates process generations.
+fn process_identity_changed(
+    last_pid: Option<u32>,
+    last_start_time: Option<u64>,
+    current_pid: Option<u32>,
+    current_start_time: Option<u64>,
+) -> bool {
+    last_pid != current_pid || last_start_time != current_start_time
 }
 
 /// Build the shared HTTP client used for daemon health probes.
@@ -552,6 +568,33 @@ mod tests {
             }),
             override_
         );
+    }
+
+    #[test]
+    fn process_identity_changed_resets_on_reused_pid() {
+        // Same PID, different start time: a new process generation.
+        assert!(process_identity_changed(
+            Some(42),
+            Some(100),
+            Some(42),
+            Some(200)
+        ));
+        // Same PID, same start time: the same process.
+        assert!(!process_identity_changed(
+            Some(42),
+            Some(100),
+            Some(42),
+            Some(100)
+        ));
+        // Different PID: a new process regardless of start time.
+        assert!(process_identity_changed(
+            Some(42),
+            Some(100),
+            Some(43),
+            Some(100)
+        ));
+        // First probe (no last identity yet): always a fresh budget.
+        assert!(process_identity_changed(None, None, Some(42), Some(100)));
     }
 
     #[tokio::test]

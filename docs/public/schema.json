@@ -430,7 +430,7 @@
           ]
         },
         "health_port": {
-          "description": "TCP port to probe for health (connection success = healthy).\nAccepts a port number, a Tera template string that renders to one, or an\nobject with optional per-check `interval` and `retries`.",
+          "description": "TCP port to probe for health (connection success = healthy).\nAccepts a port number, a Tera template string that renders to one, or an\nobject with optional per-check `interval`, `retries`, and `timeout`.",
           "anyOf": [
             {
               "$ref": "#/$defs/HealthPort"

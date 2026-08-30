@@ -1835,7 +1835,7 @@ pub struct PitchforkTomlDaemon {
     pub health_http: Option<HealthHttp>,
     /// TCP port to probe for health (connection success = healthy).
     /// Accepts a port number, a Tera template string that renders to one, or an
-    /// object with optional per-check `interval` and `retries`.
+    /// object with optional per-check `interval`, `retries`, and `timeout`.
     pub health_port: Option<HealthPort>,
     /// Port configuration: expected ports and auto-bump settings
     pub port: Option<PortConfig>,
