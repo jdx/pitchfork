@@ -718,6 +718,41 @@ pub struct SettingsSupervisor {
     #[usage(env = "PITCHFORK_FILE_WATCH_DEBOUNCE", default = "1s", ty = "duration")]
     pub file_watch_debounce: String,
 
+    /// Default time between health probes
+    ///
+    /// When a daemon has `health_cmd`, `health_http` or `health_port`
+    /// configured but does not set its own `interval`, the supervisor probes
+    /// it this often.
+    #[usage(
+        env = "PITCHFORK_HEALTH_CHECK_INTERVAL",
+        default = "10s",
+        ty = "duration"
+    )]
+    pub health_check_interval: String,
+
+    /// Default consecutive health-check failures before killing a daemon
+    ///
+    /// When a daemon's `health_cmd`, `health_http` or `health_port` fails this
+    /// many times in a row, the daemon is killed as a crash so the retry logic
+    /// restarts it. Individual daemons can override this with `retries` in
+    /// their health check configuration.
+    #[usage(env = "PITCHFORK_HEALTH_CHECK_RETRIES", default = 3)]
+    pub health_check_retries: i64,
+
+    /// Default per-probe timeout for `health_cmd`
+    ///
+    /// Maximum time to wait for a `health_cmd` shell command to finish before
+    /// counting the probe as failed and cancelling it.
+    #[usage(env = "PITCHFORK_HEALTH_CMD_TIMEOUT", default = "10s", ty = "duration")]
+    pub health_cmd_timeout: String,
+
+    /// Default per-request timeout for `health_http`
+    ///
+    /// Maximum time to wait for a response from a `health_http` endpoint before
+    /// counting the probe as failed.
+    #[usage(env = "PITCHFORK_HEALTH_HTTP_TIMEOUT", default = "5s", ty = "duration")]
+    pub health_http_timeout: String,
+
     /// Timeout for HTTP ready checks
     ///
     /// Maximum time to wait for a response when checking `ready_http` endpoints.
@@ -1085,6 +1120,9 @@ duration_getters! {
     proxy_auto_start_timeout => proxy.auto_start_timeout, "30s";
     supervisor_cron_check_interval => supervisor.cron_check_interval, "10s";
     supervisor_file_watch_debounce => supervisor.file_watch_debounce, "1s";
+    supervisor_health_check_interval => supervisor.health_check_interval, "10s";
+    supervisor_health_cmd_timeout => supervisor.health_cmd_timeout, "10s";
+    supervisor_health_http_timeout => supervisor.health_http_timeout, "5s";
     supervisor_http_client_timeout => supervisor.http_client_timeout, "5s";
     supervisor_log_flush_interval => supervisor.log_flush_interval, "500ms";
     supervisor_ready_check_interval => supervisor.ready_check_interval, "500ms";
@@ -1627,6 +1665,14 @@ settings_partial! {
         cron_check_interval: String,
         /// File watch debounce duration
         file_watch_debounce: String,
+        /// Default time between health probes
+        health_check_interval: String,
+        /// Default consecutive health-check failures before killing a daemon
+        health_check_retries: i64,
+        /// Default per-probe timeout for health_cmd
+        health_cmd_timeout: String,
+        /// Default per-request timeout for health_http
+        health_http_timeout: String,
         /// Timeout for HTTP ready checks
         http_client_timeout: String,
         /// Daemon log buffer flush interval
@@ -1817,9 +1863,10 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 68, "{keys:?}");
+        assert_eq!(keys.len(), 72, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"logs.archive_hook.command"));
+        assert!(keys.contains(&"supervisor.health_check_interval"));
         assert!(keys.contains(&"supervisor.watch_interval"));
 
         let registry = Settings::SETTINGS_REGISTRY;

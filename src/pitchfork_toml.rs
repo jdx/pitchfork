@@ -15,9 +15,9 @@ use std::time::SystemTime;
 
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
-    CpuLimit, CronRetrigger, Dir, MemoryLimit, OnOutputHook, PitchforkTomlAuto, PitchforkTomlCron,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
-    StopConfig, StopSignal, WatchMode,
+    CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, OnOutputHook,
+    PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd,
+    ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -180,6 +180,12 @@ struct PitchforkTomlDaemonRaw {
     pub ready_port: Option<ReadyPort>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<ReadyCmd>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub health_cmd: Option<HealthCmd>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub health_http: Option<HealthHttp>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub health_port: Option<HealthPort>,
     /// New port configuration (preferred)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port: Option<PortConfig>,
@@ -1283,6 +1289,9 @@ impl PitchforkToml {
                 ready_http: raw_daemon.ready_http,
                 ready_port: raw_daemon.ready_port,
                 ready_cmd: raw_daemon.ready_cmd,
+                health_cmd: raw_daemon.health_cmd,
+                health_http: raw_daemon.health_http,
+                health_port: raw_daemon.health_port,
                 port,
                 boot_start: raw_daemon.boot_start,
                 depends,
@@ -1434,6 +1443,9 @@ impl PitchforkToml {
                     ready_http: daemon.ready_http.clone(),
                     ready_port: daemon.ready_port.clone(),
                     ready_cmd: daemon.ready_cmd.clone(),
+                    health_cmd: daemon.health_cmd.clone(),
+                    health_http: daemon.health_http.clone(),
+                    health_port: daemon.health_port.clone(),
                     port: port.cloned(),
                     // Deprecated fields: written for backward compatibility with older pitchfork versions
                     expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
@@ -1817,6 +1829,14 @@ pub struct PitchforkTomlDaemon {
     pub ready_port: Option<ReadyPort>,
     /// Shell command to poll for readiness (exit code 0 = ready)
     pub ready_cmd: Option<ReadyCmd>,
+    /// Shell command to poll for health (exit code 0 = healthy)
+    pub health_cmd: Option<HealthCmd>,
+    /// HTTP endpoint URL to poll for health
+    pub health_http: Option<HealthHttp>,
+    /// TCP port to probe for health (connection success = healthy).
+    /// Accepts a port number, a Tera template string that renders to one, or an
+    /// object with optional per-check `interval` and `retries`.
+    pub health_port: Option<HealthPort>,
     /// Port configuration: expected ports and auto-bump settings
     pub port: Option<PortConfig>,
     /// Whether to start this daemon automatically on system boot
@@ -1938,6 +1958,9 @@ impl PitchforkTomlDaemon {
             ready_http: self.ready_http.clone(),
             ready_port: self.ready_port.clone(),
             ready_cmd: self.ready_cmd.clone(),
+            health_cmd: self.health_cmd.clone(),
+            health_http: self.health_http.clone(),
+            health_port: self.health_port.clone(),
             port: self.port.clone(),
             wait_ready: false,
             depends: self.depends.clone(),

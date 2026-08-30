@@ -88,9 +88,9 @@ pub(crate) fn get_or_compile_regex(pattern: &str) -> Option<Regex> {
 /// process to exit or the cancel signal. Dropping the handle without cancelling
 /// leaves the task running, but the child is started with `kill_on_drop(true)`
 /// so it will still be terminated when the task ends.
-struct CmdProbe {
-    cancel_tx: tokio::sync::oneshot::Sender<()>,
-    result_rx: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
+pub(crate) struct CmdProbe {
+    pub(crate) cancel_tx: tokio::sync::oneshot::Sender<()>,
+    pub(crate) result_rx: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
 }
 
 /// Spawn a readiness command probe and return a handle that can be used to wait
@@ -124,7 +124,7 @@ fn apply_runtime_env(
     }
 }
 
-fn spawn_cmd_probe(
+pub(crate) fn spawn_cmd_probe(
     id: &DaemonId,
     cmd: &str,
     dir: &std::path::Path,
@@ -157,7 +157,7 @@ fn spawn_cmd_probe(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            warn!("daemon {id}: failed to spawn readiness command probe: {e}");
+            warn!("daemon {id}: failed to spawn command probe: {e}");
             // Return a probe whose result channel is already closed. The caller will
             // treat this the same as a probe that exited non-zero and respawn after
             // the ready_check_interval, preserving the existing retry behaviour.

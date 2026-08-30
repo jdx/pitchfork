@@ -12,6 +12,7 @@
 
 mod adopt;
 mod autostop;
+mod health;
 mod hooks;
 mod ipc_handlers;
 mod lifecycle;

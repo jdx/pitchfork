@@ -2,9 +2,9 @@ use crate::Result;
 use crate::cli::daemons::resolve_config_path;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::{
-    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
-    namespace_from_path,
+    CronRetrigger, HealthCmd, HealthHttp, HealthPort, PitchforkToml, PitchforkTomlAuto,
+    PitchforkTomlCron, PitchforkTomlDaemon, PitchforkTomlHooks, PortBump, PortConfig, ReadyCmd,
+    ReadyHttp, ReadyOutput, ReadyPort, Retry, namespace_from_path,
 };
 use crate::settings::settings;
 use indexmap::IndexMap;
@@ -81,6 +81,15 @@ pub struct Add {
     /// Shell command to poll for readiness
     #[usage(long)]
     ready_cmd: Option<String>,
+    /// Shell command to poll for health (exit code 0 = healthy)
+    #[usage(long)]
+    health_cmd: Option<String>,
+    /// HTTP endpoint URL to poll for health
+    #[usage(long)]
+    health_http: Option<String>,
+    /// TCP port to probe for health (connection success = healthy)
+    #[usage(long)]
+    health_port: Option<u16>,
     /// Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
     #[usage(long = "expected-port", delimiter = ',')]
     expected_port: Vec<u16>,
@@ -254,6 +263,9 @@ impl Add {
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),
                 ready_port: self.ready_port.clone(),
                 ready_cmd: self.ready_cmd.clone().map(ReadyCmd::new),
+                health_cmd: self.health_cmd.clone().map(HealthCmd::new),
+                health_http: self.health_http.clone().map(HealthHttp::new),
+                health_port: self.health_port.map(HealthPort::new),
                 port: {
                     let expect = self.expected_port.clone();
                     let bump = match self.bump {

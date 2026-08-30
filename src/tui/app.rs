@@ -6,8 +6,9 @@ use crate::ipc::client::IpcClient;
 use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{
-    CronRetrigger, PitchforkToml, PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlDaemon,
-    ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, namespace_from_path,
+    CronRetrigger, HealthCmd, HealthHttp, HealthPort, PitchforkToml, PitchforkTomlAuto,
+    PitchforkTomlCron, PitchforkTomlDaemon, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry,
+    namespace_from_path,
 };
 use crate::procs::{PROCS, ProcessStats};
 use crate::settings::settings;
@@ -355,6 +356,12 @@ pub struct EditorState {
     preserved_ready_http_timeout: Option<std::time::Duration>,
     /// Preserved ready_output timeout (no form UI yet)
     preserved_ready_output_timeout: Option<std::time::Duration>,
+    /// Preserved health_cmd parameters (only `run` has form UI)
+    preserved_health_cmd: Option<HealthCmd>,
+    /// Preserved health_http parameters (only `url` has form UI)
+    preserved_health_http: Option<HealthHttp>,
+    /// Preserved health_port parameters (only the port has form UI)
+    preserved_health_port: Option<HealthPort>,
 }
 
 impl EditorState {
@@ -374,6 +381,9 @@ impl EditorState {
             preserved_ready_http_status: None,
             preserved_ready_http_timeout: None,
             preserved_ready_output_timeout: None,
+            preserved_health_cmd: None,
+            preserved_health_http: None,
+            preserved_health_port: None,
         }
     }
 
@@ -398,6 +408,9 @@ impl EditorState {
                 .and_then(|h| (!h.status.is_empty()).then(|| h.status.clone())),
             preserved_ready_http_timeout: config.ready_http.as_ref().and_then(|h| h.timeout),
             preserved_ready_output_timeout: config.ready_output.as_ref().and_then(|o| o.timeout),
+            preserved_health_cmd: config.health_cmd.clone(),
+            preserved_health_http: config.health_http.clone(),
+            preserved_health_port: config.health_port.clone(),
         }
     }
 
@@ -449,6 +462,21 @@ impl EditorState {
                 "ready_port",
                 "Ready Port",
                 "TCP port to check for readiness (1-65535).",
+            ),
+            FormField::optional_text(
+                "health_cmd",
+                "Health Command",
+                "Shell command that must exit 0 for the daemon to stay healthy.",
+            ),
+            FormField::optional_text(
+                "health_http",
+                "Health HTTP URL",
+                "HTTP URL to poll for health (expects 2xx).",
+            ),
+            FormField::optional_port(
+                "health_port",
+                "Health Port",
+                "TCP port that must accept connections for the daemon to stay healthy (1-65535).",
             ),
             FormField::optional_bool(
                 "boot_start",
@@ -514,6 +542,26 @@ impl EditorState {
                 }
                 "ready_port" => {
                     field.value = FormFieldValue::OptionalPort(config.ready_port.clone())
+                }
+                "health_cmd" => {
+                    field.value = FormFieldValue::OptionalText(
+                        config.health_cmd.as_ref().map(|c| c.run.clone()),
+                    )
+                }
+                "health_http" => {
+                    field.value = FormFieldValue::OptionalText(
+                        config.health_http.as_ref().map(|h| h.url.clone()),
+                    )
+                }
+                "health_port" => {
+                    field.value =
+                        FormFieldValue::OptionalPort(config.health_port.as_ref().map(|hp| {
+                            ReadyPort {
+                                port: hp.port,
+                                template: hp.template.clone(),
+                                timeout: None,
+                            }
+                        }))
                 }
                 "boot_start" => field.value = FormFieldValue::OptionalBoolean(config.boot_start),
                 "depends" => {
@@ -596,6 +644,28 @@ impl EditorState {
                     })
                 }
                 ("ready_port", FormFieldValue::OptionalPort(p)) => config.ready_port = p.clone(),
+                ("health_cmd", FormFieldValue::OptionalText(s)) => {
+                    config.health_cmd = s.clone().map(|run| {
+                        let mut cmd = self.preserved_health_cmd.clone().unwrap_or_default();
+                        cmd.run = run;
+                        cmd
+                    })
+                }
+                ("health_http", FormFieldValue::OptionalText(s)) => {
+                    config.health_http = s.clone().map(|url| {
+                        let mut http = self.preserved_health_http.clone().unwrap_or_default();
+                        http.url = url;
+                        http
+                    })
+                }
+                ("health_port", FormFieldValue::OptionalPort(p)) => {
+                    config.health_port = p.clone().map(|port_value| {
+                        let mut hp = self.preserved_health_port.clone().unwrap_or_default();
+                        hp.port = port_value.port;
+                        hp.template = port_value.template;
+                        hp
+                    })
+                }
                 ("boot_start", FormFieldValue::OptionalBoolean(b)) => config.boot_start = *b,
                 ("depends", FormFieldValue::StringList(v)) => {
                     config.depends = v.iter().filter_map(|s| DaemonId::parse(s).ok()).collect()
@@ -804,6 +874,12 @@ impl EditorState {
                     valid = false;
                 }
                 ("ready_http", FormFieldValue::OptionalText(Some(url)))
+                    if !(url.starts_with("http://") || url.starts_with("https://")) =>
+                {
+                    field.error = Some("Must start with http:// or https://".to_string());
+                    valid = false;
+                }
+                ("health_http", FormFieldValue::OptionalText(Some(url)))
                     if !(url.starts_with("http://") || url.starts_with("https://")) =>
                 {
                     field.error = Some("Must start with http:// or https://".to_string());

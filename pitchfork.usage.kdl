@@ -217,6 +217,15 @@ Examples:
         flag --ready-cmd help="Shell command to poll for readiness" {
             arg <READY_CMD>
         }
+        flag --health-cmd help="Shell command to poll for health (exit code 0 = healthy)" {
+            arg <HEALTH_CMD>
+        }
+        flag --health-http help="HTTP endpoint URL to poll for health" {
+            arg <HEALTH_HTTP>
+        }
+        flag --health-port help="TCP port to probe for health (connection success = healthy)" {
+            arg <HEALTH_PORT>
+        }
         flag --expected-port help="Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)" var=#true delimiter=, {
             arg <EXPECTED_PORT>
         }
@@ -824,6 +833,15 @@ Examples:
     flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
         arg <CMD>
     }
+    flag --health-cmd help="Shell command to poll for health (exit code 0 = healthy)" {
+        arg <HEALTH_CMD>
+    }
+    flag --health-http help="HTTP endpoint URL to poll for health" {
+        arg <HEALTH_HTTP>
+    }
+    flag --health-port help="TCP port to probe for health (connection success = healthy)" {
+        arg <HEALTH_PORT>
+    }
     flag "-q --quiet" help="Suppress startup log output"
     flag "-h --help" help="Print help" action=help builtin=#true
     arg "[ID]..." help="ID of the daemon(s) to restart" {
@@ -879,6 +897,15 @@ Examples:
     }
     flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
         arg <CMD>
+    }
+    flag --health-cmd help="Shell command to poll for health (exit code 0 = healthy)" {
+        arg <HEALTH_CMD>
+    }
+    flag --health-http help="HTTP endpoint URL to poll for health" {
+        arg <HEALTH_HTTP>
+    }
+    flag --health-port help="TCP port to probe for health (connection success = healthy)" {
+        arg <HEALTH_PORT>
     }
     flag "-q --quiet" help="Suppress startup log output"
     flag "-h --help" help="Print help" action=help builtin=#true
@@ -1013,6 +1040,15 @@ Examples:
     }
     flag --cmd help="Shell command to poll for readiness (exit code 0 = ready)" {
         arg <CMD>
+    }
+    flag --health-cmd help="Shell command to poll for health (exit code 0 = healthy)" {
+        arg <HEALTH_CMD>
+    }
+    flag --health-http help="HTTP endpoint URL to poll for health" {
+        arg <HEALTH_HTTP>
+    }
+    flag --health-port help="TCP port to probe for health (connection success = healthy)" {
+        arg <HEALTH_PORT>
     }
     flag --expected-port help="Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)" var=#true delimiter=, {
         arg <EXPECTED_PORT>
@@ -1326,6 +1362,18 @@ config {
     }
     prop "supervisor.file_watch_debounce" type="duration" default="1s" help="File watch debounce duration" long_help="File watch debounce duration\n\nWhen using `watch` patterns to auto-restart daemons on file changes, this controls how long to wait after the last change before triggering a restart.\n\nThis prevents rapid restart cycles when many files change at once (e.g., during a build or git checkout)." {
         env "PITCHFORK_FILE_WATCH_DEBOUNCE"
+    }
+    prop "supervisor.health_check_interval" type="duration" default="10s" help="Default time between health probes" long_help="Default time between health probes\n\nWhen a daemon has `health_cmd`, `health_http` or `health_port` configured but does not set its own `interval`, the supervisor probes it this often." {
+        env "PITCHFORK_HEALTH_CHECK_INTERVAL"
+    }
+    prop "supervisor.health_check_retries" type="int" default=3 help="Default consecutive health-check failures before killing a daemon" long_help="Default consecutive health-check failures before killing a daemon\n\nWhen a daemon's `health_cmd`, `health_http` or `health_port` fails this many times in a row, the daemon is killed as a crash so the retry logic restarts it. Individual daemons can override this with `retries` in their health check configuration." {
+        env "PITCHFORK_HEALTH_CHECK_RETRIES"
+    }
+    prop "supervisor.health_cmd_timeout" type="duration" default="10s" help="Default per-probe timeout for `health_cmd`" long_help="Default per-probe timeout for `health_cmd`\n\nMaximum time to wait for a `health_cmd` shell command to finish before counting the probe as failed and cancelling it." {
+        env "PITCHFORK_HEALTH_CMD_TIMEOUT"
+    }
+    prop "supervisor.health_http_timeout" type="duration" default="5s" help="Default per-request timeout for `health_http`" long_help="Default per-request timeout for `health_http`\n\nMaximum time to wait for a response from a `health_http` endpoint before counting the probe as failed." {
+        env "PITCHFORK_HEALTH_HTTP_TIMEOUT"
     }
     prop "supervisor.http_client_timeout" type="duration" default="5s" help="Timeout for HTTP ready checks" long_help="Timeout for HTTP ready checks\n\nMaximum time to wait for a response when checking `ready_http` endpoints.\n\nIncrease if your services take a while to respond during startup." {
         env "PITCHFORK_HTTP_CLIENT_TIMEOUT"

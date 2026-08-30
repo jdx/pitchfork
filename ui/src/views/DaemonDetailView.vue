@@ -201,6 +201,18 @@ async function onToggle() {
           <div class="info-label">Ready Cmd</div>
           <div class="info-value">{{ daemon.ready_cmd }}</div>
         </div>
+        <div class="info-card" v-if="daemon.health_cmd">
+          <div class="info-label">Health Cmd</div>
+          <div class="info-value">{{ daemon.health_cmd }}</div>
+        </div>
+        <div class="info-card" v-if="daemon.health_http_url">
+          <div class="info-label">Health HTTP</div>
+          <div class="info-value">{{ daemon.health_http_url }}</div>
+        </div>
+        <div class="info-card" v-if="daemon.health_port">
+          <div class="info-label">Health Port</div>
+          <div class="info-value">{{ daemon.health_port }}</div>
+        </div>
         <div class="info-card" v-if="daemon.port_config">
           <div class="info-label">Port Config</div>
           <div class="info-value">{{ daemon.port_config }}</div>

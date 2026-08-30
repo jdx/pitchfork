@@ -418,6 +418,318 @@ ready_http = { url = "http://localhost:8080/health", timeout = "not-a-duration" 
     assert!(err.contains("invalid timeout"), "unexpected error: {err}");
 }
 
+/// Test daemon with health checks
+#[test]
+fn test_daemon_with_health_checks() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_cmd = "openssl s_client -connect localhost:8443 -brief </dev/null"
+health_http = "http://localhost:8080/health"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "health_daemon").unwrap();
+
+    assert_eq!(
+        daemon.health_cmd.as_ref().unwrap().run,
+        "openssl s_client -connect localhost:8443 -brief </dev/null"
+    );
+    assert!(daemon.health_cmd.as_ref().unwrap().interval.is_none());
+    assert_eq!(
+        daemon.health_http.as_ref().unwrap().url,
+        "http://localhost:8080/health"
+    );
+    assert!(daemon.health_http.as_ref().unwrap().status.is_empty());
+
+    Ok(())
+}
+
+/// Test daemon with health port (literal shorthand form)
+#[test]
+fn test_daemon_with_health_port() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_port = 8443
+
+[daemons.health_template]
+run = "echo 'server running'"
+health_port = "{{ daemons.redis.port }}"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "health_daemon").unwrap();
+
+    let hp = daemon.health_port.as_ref().unwrap();
+    assert_eq!(hp.port, Some(8443));
+    assert!(hp.template.is_none());
+    assert!(hp.interval.is_none());
+    assert!(hp.retries.is_none());
+
+    let template_daemon = get_daemon_by_name(&pt, "health_template").unwrap();
+    let hp = template_daemon.health_port.as_ref().unwrap();
+    assert!(hp.port.is_none());
+    assert_eq!(hp.template, Some("{{ daemons.redis.port }}".to_string()));
+
+    Ok(())
+}
+
+/// Test daemon with structured health port config with all fields
+#[test]
+fn test_daemon_with_health_port_object() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_port = { port = 8443, interval = "10s", retries = 3 }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "health_daemon").unwrap();
+
+    let hp = daemon.health_port.as_ref().unwrap();
+    assert_eq!(hp.port, Some(8443));
+    assert!(hp.template.is_none());
+    assert_eq!(hp.interval, Some(Duration::from_secs(10)));
+    assert_eq!(hp.retries, Some(3));
+
+    Ok(())
+}
+
+/// Test daemon with a serialization roundtrip of health port config
+#[test]
+fn test_daemon_health_port_write_roundtrip() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_port = { port = 8443, interval = "10s", retries = 3 }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "health_daemon").unwrap();
+    let expected = daemon.health_port.clone();
+
+    pt.write()?;
+    let reloaded = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&reloaded, "health_daemon").unwrap();
+    assert_eq!(daemon.health_port, expected);
+
+    Ok(())
+}
+
+/// Test invalid health port is rejected
+#[test]
+fn test_daemon_with_invalid_health_port() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_port = 70000
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(
+        err.contains("health_port out of range (1-65535)"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Test invalid health port interval is rejected
+#[test]
+fn test_daemon_with_invalid_health_port_interval() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_port = { port = 8443, interval = "not-a-duration" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
+}
+
+/// Test health port retries=0 is rejected
+#[test]
+fn test_daemon_with_zero_health_port_retries() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_port = { port = 8443, retries = 0 }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(
+        err.contains("health_port retries must be >= 1"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Test daemon with structured health check configs
+#[test]
+fn test_daemon_with_health_check_objects() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_cmd = { run = "curl -f http://localhost:8080/health", interval = "10s", timeout = "5s", retries = 3 }
+health_http = { url = "http://localhost:8080/health", status = [200, 401], interval = "15s", timeout = "5s", retries = 4 }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "health_daemon").unwrap();
+
+    let health_cmd = daemon.health_cmd.as_ref().unwrap();
+    assert_eq!(health_cmd.run, "curl -f http://localhost:8080/health");
+    assert_eq!(health_cmd.interval, Some(Duration::from_secs(10)));
+    assert_eq!(health_cmd.timeout, Some(Duration::from_secs(5)));
+    assert_eq!(health_cmd.retries, Some(3));
+
+    let health_http = daemon.health_http.as_ref().unwrap();
+    assert_eq!(health_http.url, "http://localhost:8080/health");
+    assert_eq!(health_http.status, vec![200, 401]);
+    assert_eq!(health_http.interval, Some(Duration::from_secs(15)));
+    assert_eq!(health_http.timeout, Some(Duration::from_secs(5)));
+    assert_eq!(health_http.retries, Some(4));
+
+    Ok(())
+}
+
+/// Test daemon with a serialization roundtrip of health check configs
+#[test]
+fn test_daemon_health_check_write_roundtrip() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_cmd = { run = "curl -f http://localhost:8080/health", interval = "10s", retries = 3 }
+health_http = { url = "http://localhost:8080/health", status = [200], timeout = "5s" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "health_daemon").unwrap();
+    let expected_cmd = daemon.health_cmd.clone();
+    let expected_http = daemon.health_http.clone();
+
+    pt.write()?;
+    let reloaded = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&reloaded, "health_daemon").unwrap();
+    assert_eq!(daemon.health_cmd, expected_cmd);
+    assert_eq!(daemon.health_http, expected_http);
+
+    Ok(())
+}
+
+/// Test invalid health check HTTP status is rejected
+#[test]
+fn test_daemon_with_invalid_health_http_status() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_http = { url = "http://localhost:8080/health", status = [99] }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(
+        err.contains("health_http status must be between 100 and 599"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Test invalid health check timeout is rejected
+#[test]
+fn test_daemon_with_invalid_health_cmd_timeout() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_cmd = { run = "curl -f http://localhost:8080/health", timeout = "not-a-duration" }
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+    let err = format!("{err:?}");
+    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
+}
+
+/// Test health check retries=0 is rejected
+#[test]
+fn test_daemon_with_zero_health_check_retries() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    for config in [
+        r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_cmd = { run = "curl -f http://localhost:8080/health", retries = 0 }
+"#,
+        r#"
+[daemons.health_daemon]
+run = "echo 'server running'"
+health_http = { url = "http://localhost:8080/health", retries = 0 }
+"#,
+    ] {
+        fs::write(&toml_path, config).unwrap();
+        let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
+        let err = format!("{err:?}");
+        assert!(
+            err.contains("retries must be >= 1"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
 /// Test daemon with structured port ready check including a timeout
 #[test]
 fn test_daemon_with_ready_port_timeout() -> Result<()> {

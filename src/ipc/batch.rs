@@ -9,8 +9,8 @@ use crate::daemon_id::DaemonId;
 use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
-    PitchforkToml, PitchforkTomlDaemon, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort,
-    is_dot_config_pitchfork, is_global_config,
+    HealthCmd, HealthHttp, HealthPort, PitchforkToml, PitchforkTomlDaemon, ReadyCmd, ReadyHttp,
+    ReadyOutput, ReadyPort, is_dot_config_pitchfork, is_global_config,
 };
 use chrono::{DateTime, Local};
 use indexmap::IndexMap;
@@ -85,6 +85,12 @@ pub struct StartOptions {
     pub port: Option<u16>,
     /// Override ready command
     pub cmd: Option<String>,
+    /// Override health check command
+    pub health_cmd: Option<String>,
+    /// Override health check HTTP endpoint
+    pub health_http: Option<String>,
+    /// Override health check TCP port
+    pub health_port: Option<u16>,
     /// Ports the daemon is expected to bind to (None = not specified, use config)
     pub expected_port: Option<Vec<u16>>,
     /// Port auto-bump configuration (None = use config, Some = override)
@@ -146,6 +152,11 @@ pub async fn build_run_options(
             run_opts.ready_port.clone()
         };
         run_opts.ready_cmd = merge_ready_cmd_override(run_opts.ready_cmd, opts.cmd.clone());
+        run_opts.health_cmd =
+            merge_health_cmd_override(run_opts.health_cmd, opts.health_cmd.clone());
+        run_opts.health_http =
+            merge_health_http_override(run_opts.health_http, opts.health_http.clone());
+        run_opts.health_port = merge_health_port_override(run_opts.health_port, opts.health_port);
         if let Some(ref expected) = opts.expected_port {
             run_opts.port.get_or_insert_with(Default::default).expect = expected.clone();
         }
@@ -216,6 +227,49 @@ fn merge_ready_cmd_override(
         }
         (None, Some(cmd)) => Some(ReadyCmd::new(cmd)),
         (ready_cmd, None) => ready_cmd,
+    }
+}
+
+fn merge_health_cmd_override(
+    configured: Option<HealthCmd>,
+    override_cmd: Option<String>,
+) -> Option<HealthCmd> {
+    match (configured, override_cmd) {
+        (Some(mut health_cmd), Some(cmd)) => {
+            health_cmd.run = cmd;
+            Some(health_cmd)
+        }
+        (None, Some(cmd)) => Some(HealthCmd::new(cmd)),
+        (health_cmd, None) => health_cmd,
+    }
+}
+
+fn merge_health_http_override(
+    configured: Option<HealthHttp>,
+    override_url: Option<String>,
+) -> Option<HealthHttp> {
+    match (configured, override_url) {
+        (Some(mut health_http), Some(url)) => {
+            health_http.url = url;
+            Some(health_http)
+        }
+        (None, Some(url)) => Some(HealthHttp::new(url)),
+        (health_http, None) => health_http,
+    }
+}
+
+fn merge_health_port_override(
+    configured: Option<HealthPort>,
+    override_port: Option<u16>,
+) -> Option<HealthPort> {
+    match (configured, override_port) {
+        (Some(mut health_port), Some(port)) => {
+            health_port.port = Some(port);
+            health_port.template = None;
+            Some(health_port)
+        }
+        (None, Some(port)) => Some(HealthPort::new(port)),
+        (health_port, None) => health_port,
     }
 }
 
@@ -667,6 +721,9 @@ impl IpcClient {
                             adhoc_daemon.dir.clone().unwrap_or_default(),
                             adhoc_daemon.env.clone(),
                             adhoc_daemon.ready_http.clone(),
+                            adhoc_daemon.health_cmd.clone(),
+                            adhoc_daemon.health_http.clone(),
+                            adhoc_daemon.health_port.clone(),
                             is_explicit,
                             &opts,
                         );
@@ -827,6 +884,9 @@ impl IpcClient {
         dir: PathBuf,
         env: Option<IndexMap<String, String>>,
         ready_http: Option<ReadyHttp>,
+        health_cmd: Option<HealthCmd>,
+        health_http: Option<HealthHttp>,
+        health_port: Option<HealthPort>,
         is_explicitly_requested: bool,
         opts: &StartOptions,
     ) -> tokio::task::JoinHandle<SpawnTaskResult> {
@@ -836,6 +896,9 @@ impl IpcClient {
         let http = merge_ready_http_override(ready_http, opts.http.clone());
         let port = opts.port;
         let ready_cmd = opts.cmd.clone().map(ReadyCmd::new);
+        let health_cmd = merge_health_cmd_override(health_cmd, opts.health_cmd.clone());
+        let health_http = merge_health_http_override(health_http, opts.health_http.clone());
+        let health_port = merge_health_port_override(health_port, opts.health_port);
         let expected_port = opts.expected_port.clone();
         let auto_bump_port = opts.auto_bump_port;
         let retry = opts.retry.unwrap_or_default();
@@ -855,6 +918,9 @@ impl IpcClient {
                 ready_http: http,
                 ready_port: port.map(ReadyPort::new),
                 ready_cmd,
+                health_cmd,
+                health_http,
+                health_port,
                 port: crate::config_types::PortConfig::from_parts(
                     expected_port.unwrap_or_default(),
                     auto_bump_port.unwrap_or_default(),
@@ -1070,6 +1136,9 @@ impl IpcClient {
             ready_http: merge_ready_http_override(None, opts.http),
             ready_port: opts.port.map(ReadyPort::new),
             ready_cmd: opts.cmd.clone().map(ReadyCmd::new),
+            health_cmd: opts.health_cmd.clone().map(HealthCmd::new),
+            health_http: opts.health_http.clone().map(HealthHttp::new),
+            health_port: opts.health_port.map(HealthPort::new),
             port: crate::config_types::PortConfig::from_parts(
                 opts.expected_port.unwrap_or_default(),
                 opts.auto_bump_port.unwrap_or_default(),

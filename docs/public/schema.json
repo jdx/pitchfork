@@ -112,6 +112,134 @@
         "daemons"
       ]
     },
+    "HealthCmd": {
+      "description": "Command health check: a shell command string, or { run, interval, timeout, retries } object with periodic probing",
+      "oneOf": [
+        {
+          "description": "Shell command that returns exit code 0 when healthy",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "interval": {
+              "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s).",
+              "type": "string"
+            },
+            "retries": {
+              "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3).",
+              "type": "integer",
+              "minimum": 1
+            },
+            "run": {
+              "description": "Shell command that returns exit code 0 when healthy",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Per-probe timeout (e.g. '10s', '5m'). Omit to use the `supervisor.health_cmd_timeout` setting (default 10s).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "run"
+          ]
+        }
+      ]
+    },
+    "HealthHttp": {
+      "description": "HTTP health check: a URL string accepting any 2xx response, or { url, status, interval, timeout, retries } object with periodic probing",
+      "oneOf": [
+        {
+          "description": "HTTP URL to poll for health; any 2xx response is healthy",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "interval": {
+              "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s).",
+              "type": "string"
+            },
+            "retries": {
+              "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3).",
+              "type": "integer",
+              "minimum": 1
+            },
+            "status": {
+              "description": "Exact HTTP status codes that indicate health. Omit to accept any 2xx response.",
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "maximum": 599,
+                "minimum": 100
+              }
+            },
+            "timeout": {
+              "description": "Per-request timeout (e.g. '5s', '30s'). Omit to use the `supervisor.health_http_timeout` setting (default 5s).",
+              "type": "string"
+            },
+            "url": {
+              "description": "HTTP URL to poll for health",
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      ]
+    },
+    "HealthPort": {
+      "description": "TCP port health check: a port number, a template string rendering to one, or a { port, interval, retries } object with periodic probing",
+      "oneOf": [
+        {
+          "description": "TCP port number to probe for health",
+          "type": "integer",
+          "maximum": 65535,
+          "minimum": 1
+        },
+        {
+          "description": "Tera template that renders to a port number",
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "interval": {
+              "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s).",
+              "type": "string"
+            },
+            "port": {
+              "description": "TCP port number to probe for health",
+              "type": "integer",
+              "maximum": 65535,
+              "minimum": 1
+            },
+            "retries": {
+              "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3).",
+              "type": "integer",
+              "minimum": 1
+            },
+            "template": {
+              "description": "Tera template that renders to a port number",
+              "type": "string"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "port"
+              ]
+            },
+            {
+              "required": [
+                "template"
+              ]
+            }
+          ]
+        }
+      ]
+    },
     "MemoryLimit": {
       "description": "A byte size, as either a human-readable string (e.g. \"1.5 KiB\") or a number of bytes",
       "type": [
@@ -274,6 +402,39 @@
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "health_cmd": {
+          "description": "Shell command to poll for health (exit code 0 = healthy)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthCmd"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health_http": {
+          "description": "HTTP endpoint URL to poll for health",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthHttp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health_port": {
+          "description": "TCP port to probe for health (connection success = healthy).\nAccepts a port number, a Tera template string that renders to one, or an\nobject with optional per-check `interval` and `retries`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthPort"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "hooks": {
           "description": "Lifecycle hooks (on_ready, on_fail, on_retry)",
@@ -1136,6 +1297,35 @@
         },
         "file_watch_debounce": {
           "description": "File watch debounce duration",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health_check_interval": {
+          "description": "Default time between health probes",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health_check_retries": {
+          "description": "Default consecutive health-check failures before killing a daemon",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "health_cmd_timeout": {
+          "description": "Default per-probe timeout for health_cmd",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "health_http_timeout": {
+          "description": "Default per-request timeout for health_http",
           "type": [
             "string",
             "null"

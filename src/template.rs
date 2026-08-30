@@ -1,7 +1,8 @@
 //! Tera template rendering for pitchfork.toml configuration fields.
 //!
-//! Allows `run`, `env` values, `hooks.*`, and the readiness fields (`ready_cmd`,
-//! `ready_http`, `ready_port`, `ready_output`) to use Tera templates like
+//! Allows `run`, `env` values, `hooks.*`, the readiness fields (`ready_cmd`,
+//! `ready_http`, `ready_port`, `ready_output`), and the health check fields
+//! (`health_cmd`, `health_http`, `health_port`) to use Tera templates like
 //! `{{ daemons.redis.ports[0] }}` to reference computed values from other daemons.
 //!
 //! Templates are resolved level-by-level along the dependency order: each level
@@ -349,6 +350,42 @@ pub fn render_daemon_templates(
         config.ready_cmd = Some(crate::pitchfork_toml::ReadyCmd {
             run: renderer.render(&cmd.run)?,
             timeout: cmd.timeout,
+        });
+    }
+
+    if let Some(ref hc) = config.health_cmd {
+        config.health_cmd = Some(crate::pitchfork_toml::HealthCmd {
+            run: renderer.render(&hc.run)?,
+            interval: hc.interval,
+            timeout: hc.timeout,
+            retries: hc.retries,
+        });
+    }
+
+    if let Some(ref http) = config.health_http {
+        let mut http = http.clone();
+        http.url = renderer.render(&http.url)?;
+        config.health_http = Some(http);
+    }
+
+    if let Some(ref health_port) = config.health_port
+        && let Some(ref template) = health_port.template
+    {
+        let rendered = renderer.render(template)?;
+        let port = rendered
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| p > 0)
+            .ok_or_else(|| RenderError::InvalidPort {
+                template: template.clone(),
+                rendered: rendered.clone(),
+            })?;
+        config.health_port = Some(crate::config_types::HealthPort {
+            port: Some(port),
+            template: None,
+            interval: health_port.interval,
+            retries: health_port.retries,
         });
     }
 
@@ -764,6 +801,42 @@ mod tests {
     }
 
     #[test]
+    fn test_render_daemon_templates_health_fields() {
+        use crate::config_types::{HealthCmd, HealthHttp};
+        use std::time::Duration;
+
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            health_cmd: Some(HealthCmd {
+                run: "redis-cli -p {{ daemons.redis.port }} ping".to_string(),
+                interval: Some(Duration::from_secs(10)),
+                timeout: None,
+                retries: Some(3),
+            }),
+            health_http: Some(HealthHttp {
+                url: "http://localhost:{{ daemons.redis.port }}/health".to_string(),
+                status: vec![200],
+                interval: None,
+                timeout: Some(Duration::from_secs(5)),
+                retries: None,
+            }),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+
+        let hc = config.health_cmd.unwrap();
+        assert_eq!(hc.run, "redis-cli -p 6379 ping");
+        assert_eq!(hc.interval, Some(Duration::from_secs(10)));
+        assert_eq!(hc.retries, Some(3));
+        let hh = config.health_http.unwrap();
+        assert_eq!(hh.url, "http://localhost:6379/health");
+        assert_eq!(hh.status, vec![200]);
+        assert_eq!(hh.timeout, Some(Duration::from_secs(5)));
+    }
+
+    #[test]
     fn test_render_daemon_templates_ready_port_invalid() {
         use crate::config_types::ReadyPort;
 
@@ -791,6 +864,61 @@ mod tests {
 
         render_daemon_templates(&mut config, &mut ctx, None).unwrap();
         assert_eq!(config.ready_port, Some(ReadyPort::new(8080)));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_health_port() {
+        use crate::config_types::HealthPort;
+        use std::time::Duration;
+
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            health_port: Some(HealthPort {
+                port: None,
+                template: Some("{{ daemons.redis.port }}".to_string()),
+                interval: Some(Duration::from_secs(10)),
+                retries: Some(3),
+            }),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        let hp = config.health_port.unwrap();
+        assert_eq!(hp.port, Some(6379));
+        assert!(hp.template.is_none());
+        assert_eq!(hp.interval, Some(Duration::from_secs(10)));
+        assert_eq!(hp.retries, Some(3));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_health_port_invalid() {
+        use crate::config_types::HealthPort;
+
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            health_port: Some(HealthPort::from_template("{{ name }}")),
+            ..Default::default()
+        };
+
+        let err = render_daemon_templates(&mut config, &mut ctx, None).unwrap_err();
+        assert!(matches!(err, RenderError::InvalidPort { .. }));
+    }
+
+    #[test]
+    fn test_render_daemon_templates_health_port_literal_untouched() {
+        use crate::config_types::HealthPort;
+
+        let mut ctx = make_context_with_daemon("redis", vec![6379]);
+        let mut config = PitchforkTomlDaemon {
+            run: "echo".to_string(),
+            health_port: Some(HealthPort::new(8080)),
+            ..Default::default()
+        };
+
+        render_daemon_templates(&mut config, &mut ctx, None).unwrap();
+        assert_eq!(config.health_port, Some(HealthPort::new(8080)));
     }
 
     #[test]

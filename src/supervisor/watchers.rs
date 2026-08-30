@@ -164,6 +164,9 @@ impl Supervisor {
             // Track consecutive CPU-over-limit samples per daemon.
             // Kept outside the state file because it is ephemeral runtime data.
             let mut cpu_violation_counts: HashMap<DaemonId, u32> = HashMap::new();
+            // Live per-daemon health-check tasks, spawned lazily once a daemon
+            // is running with a health check configured.
+            let mut health_tasks: HashMap<DaemonId, tokio::task::JoinHandle<()>> = HashMap::new();
             // Run log retention check no more than once per hour.
             let mut last_retention_check = tokio::time::Instant::now() - Duration::from_secs(3600);
             loop {
@@ -180,6 +183,8 @@ impl Supervisor {
                 {
                     error!("failed to check resource limits: {err}");
                 }
+                // Spawn/prune per-daemon health-check tasks.
+                SUPERVISOR.manage_health_tasks(&mut health_tasks).await;
                 // Apply log retention policy if configured.
                 if last_retention_check.elapsed() >= Duration::from_secs(3600) {
                     match SUPERVISOR.apply_log_retention().await {
@@ -466,37 +471,8 @@ impl Supervisor {
     /// to observe a non-zero exit and set the status to `Errored`. This allows
     /// the retry checker to restart the daemon if `retry` is configured.
     async fn stop_for_resource_violation(&self, id: &DaemonId, pid: u32) {
-        info!("killing daemon {id} (pid {pid}) due to resource limit violation");
-        let daemon = self.get_daemon(id).await;
-        // Never signal a process group that provably isn't the daemon's: a
-        // recycled PID would mean measuring one process tree and killing another.
-        let recorded_start_time = daemon.as_ref().and_then(|d| d.start_time);
-        if !super::signalling_pid_is_authorized(recorded_start_time, PROCS.start_time(pid)) {
-            warn!(
-                "pid {pid} recorded for daemon {id} belongs to another process now; not killing it for a resource violation"
-            );
-            // Leaving the record running would have the resource watcher
-            // measure the stranger's usage on every tick and try to kill it
-            // again each time. The daemon died unobserved, so record that —
-            // the same terminal state orphan reconciliation would reach, and
-            // one that keeps the daemon eligible for retry.
-            self.finalize_if_pid(
-                id,
-                pid,
-                DaemonStatus::Errored(-1),
-                super::ExitObservation::Unobserved,
-            )
+        self.kill_daemon_as_crash(id, pid, "due to resource limit violation")
             .await;
-            return;
-        }
-        let stop_cfg = daemon.and_then(|d| d.stop_signal).unwrap_or_default();
-        let stop_signal: i32 = stop_cfg.signal.into();
-        if let Err(e) = PROCS
-            .kill_process_group_async(pid, stop_signal, stop_cfg.timeout)
-            .await
-        {
-            error!("failed to kill daemon {id} (pid {pid}) after resource violation: {e}");
-        }
     }
 
     /// Start the cron watcher for scheduled daemon execution

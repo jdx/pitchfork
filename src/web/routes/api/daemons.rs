@@ -34,6 +34,9 @@ pub struct ApiDaemonEntry {
     ready_http_url: Option<String>,
     ready_port: Option<u16>,
     ready_cmd: Option<String>,
+    health_cmd: Option<String>,
+    health_http_url: Option<String>,
+    health_port: Option<u16>,
     port_config: Option<String>,
     depends: Vec<String>,
     env: Option<Vec<String>>,
@@ -165,6 +168,9 @@ fn entry_to_api(
         ready_http_url: d.ready_http.as_ref().map(|r| r.url.clone()),
         ready_port: d.ready_port.as_ref().and_then(|p| p.as_port()),
         ready_cmd: d.ready_cmd.as_ref().map(|r| r.run.clone()),
+        health_cmd: d.health_cmd.as_ref().map(|c| c.run.clone()),
+        health_http_url: d.health_http.as_ref().map(|h| h.url.clone()),
+        health_port: d.health_port.as_ref().and_then(|p| p.as_port()),
         port_config: d.port.as_ref().map(|p| {
             if p.bump.0 == 0 {
                 p.expect

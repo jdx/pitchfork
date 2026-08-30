@@ -42,5 +42,8 @@ Examples:
 - **`--expected-port <EXPECTED_PORT>`** — Port(s) the daemon is expected to bind to (can be specified multiple times or comma-separated)
 - **`--bump [BUMP]`** — Automatically find an available port if the expected port is in use
 - **`--cmd <CMD>`** — Shell command to poll for readiness (exit code 0 = ready)
+- **`--health-cmd <HEALTH_CMD>`** — Shell command to poll for health (exit code 0 = healthy)
+- **`--health-http <HEALTH_HTTP>`** — HTTP endpoint URL to poll for health
+- **`--health-port <HEALTH_PORT>`** — TCP port to probe for health (connection success = healthy)
 - **`-q --quiet`** — Suppress startup log output
 - **`-h --help`** — Print help
