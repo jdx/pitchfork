@@ -134,6 +134,16 @@ fn parse_timeout(raw: &Option<String>) -> std::result::Result<Option<std::time::
         .transpose()
 }
 
+/// Parse a humantime duration for an `interval` field. Same as `parse_timeout`
+/// but reports the correct field name in the error.
+fn parse_interval(
+    raw: &Option<String>,
+) -> std::result::Result<Option<std::time::Duration>, String> {
+    raw.as_ref()
+        .map(|s| humantime::parse_duration(s).map_err(|e| format!("invalid interval: {e}")))
+        .transpose()
+}
+
 /// Format a `Duration` as a humantime string, or `None` when unset.
 fn format_timeout(timeout: Option<std::time::Duration>) -> Option<String> {
     timeout.map(|d| humantime::format_duration(d).to_string())
@@ -903,7 +913,7 @@ impl<'de> Deserialize<'de> for HealthPort {
                         "health_port retries must be >= 1: {retries}"
                     )));
                 }
-                let interval = parse_timeout(&raw.interval).map_err(serde::de::Error::custom)?;
+                let interval = parse_interval(&raw.interval).map_err(serde::de::Error::custom)?;
                 Ok(HealthPort {
                     port: raw.port,
                     template: raw.template,
@@ -2306,7 +2316,7 @@ health_port = { port = 8443, interval = "not-a-duration" }
         )
         .unwrap_err();
         assert!(
-            err.to_string().contains("invalid timeout"),
+            err.to_string().contains("invalid interval"),
             "unexpected error: {err}"
         );
     }

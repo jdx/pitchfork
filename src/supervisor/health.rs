@@ -213,16 +213,12 @@ impl Supervisor {
 
 /// Build the shared HTTP client used for daemon health probes.
 ///
-/// Mirrors the readiness-check client in lifecycle.rs: the total timeout comes
-/// from the `supervisor.http_client_timeout` setting, with the per-probe
-/// timeout layered on top by the caller so a hung request cannot outlive the
-/// configured budget.
+/// No total timeout is set here: `health_http_probe` bounds each request with
+/// `effective_http_timeout`, so a per-daemon `health_http.timeout` larger than
+/// `supervisor.http_client_timeout` is honored rather than silently capped by
+/// a shared client timeout.
 pub(crate) fn supervisor_http_client() -> reqwest::Client {
-    let timeout = settings().supervisor_http_client_timeout();
-    reqwest::Client::builder()
-        .timeout(timeout)
-        .build()
-        .unwrap_or_default()
+    reqwest::Client::builder().build().unwrap_or_default()
 }
 
 /// Effective probe interval: the first health check that sets one, else the

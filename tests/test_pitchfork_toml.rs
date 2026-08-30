@@ -574,7 +574,7 @@ health_port = { port = 8443, interval = "not-a-duration" }
 
     let err = pitchfork_toml::PitchforkToml::read(&toml_path).unwrap_err();
     let err = format!("{err:?}");
-    assert!(err.contains("invalid timeout"), "unexpected error: {err}");
+    assert!(err.contains("invalid interval"), "unexpected error: {err}");
 }
 
 /// Test health port retries=0 is rejected

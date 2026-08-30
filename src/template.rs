@@ -378,6 +378,7 @@ pub fn render_daemon_templates(
             .ok()
             .filter(|&p| p > 0)
             .ok_or_else(|| RenderError::InvalidPort {
+                field: "health_port",
                 template: template.clone(),
                 rendered: rendered.clone(),
             })?;
@@ -413,6 +414,7 @@ pub fn render_daemon_templates(
             .ok()
             .filter(|&p| p > 0)
             .ok_or_else(|| RenderError::InvalidPort {
+                field: "ready_port",
                 template: template.clone(),
                 rendered: rendered.clone(),
             })?;
@@ -502,9 +504,13 @@ pub enum RenderError {
         source: tera::Error,
     },
     #[error(
-        "ready_port template {template:?} rendered to {rendered:?}, expected a port number (1-65535)"
+        "{field} template {template:?} rendered to {rendered:?}, expected a port number (1-65535)"
     )]
-    InvalidPort { template: String, rendered: String },
+    InvalidPort {
+        field: &'static str,
+        template: String,
+        rendered: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
