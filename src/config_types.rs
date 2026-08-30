@@ -514,7 +514,7 @@ impl StringOrStruct for HealthCmd {
         {
             return Err(format!("health_cmd retries must be >= 1: {retries}"));
         }
-        let interval = parse_timeout(&raw.interval)?;
+        let interval = parse_interval(&raw.interval)?;
         let timeout = parse_timeout(&raw.timeout)?;
         Ok(Self {
             run: raw.run,
@@ -663,7 +663,7 @@ impl StringOrStruct for HealthHttp {
         {
             return Err(format!("health_http retries must be >= 1: {retries}"));
         }
-        let interval = parse_timeout(&raw.interval)?;
+        let interval = parse_interval(&raw.interval)?;
         let timeout = parse_timeout(&raw.timeout)?;
         Ok(Self {
             url: raw.url,
@@ -2213,6 +2213,34 @@ health_http = { url = "http://localhost:3000/health", timeout = "not-a-duration"
         .unwrap_err();
         assert!(
             err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_invalid_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", interval = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_invalid_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", interval = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
             "unexpected error: {err}"
         );
     }
