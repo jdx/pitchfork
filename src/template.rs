@@ -387,6 +387,7 @@ pub fn render_daemon_templates(
             template: None,
             interval: health_port.interval,
             retries: health_port.retries,
+            timeout: health_port.timeout,
         });
     }
 
@@ -885,6 +886,7 @@ mod tests {
                 template: Some("{{ daemons.redis.port }}".to_string()),
                 interval: Some(Duration::from_secs(10)),
                 retries: Some(3),
+                timeout: Some(Duration::from_secs(5)),
             }),
             ..Default::default()
         };
@@ -895,6 +897,7 @@ mod tests {
         assert!(hp.template.is_none());
         assert_eq!(hp.interval, Some(Duration::from_secs(10)));
         assert_eq!(hp.retries, Some(3));
+        assert_eq!(hp.timeout, Some(Duration::from_secs(5)));
     }
 
     #[test]

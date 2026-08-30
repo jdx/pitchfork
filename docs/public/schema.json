@@ -190,7 +190,7 @@
       ]
     },
     "HealthPort": {
-      "description": "TCP port health check: a port number, a template string rendering to one, or a { port, interval, retries } object with periodic probing",
+      "description": "TCP port health check: a port number, a template string rendering to one, or a { port, interval, retries, timeout } object with periodic probing",
       "oneOf": [
         {
           "description": "TCP port number to probe for health",
@@ -222,6 +222,10 @@
             },
             "template": {
               "description": "Tera template that renders to a port number",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Per-connect timeout (e.g. '5s', '30s'). Omit to use the `supervisor.health_port_timeout` setting (default 5s).",
               "type": "string"
             }
           },

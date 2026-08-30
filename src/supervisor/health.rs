@@ -126,8 +126,9 @@ impl Supervisor {
             }
             // A port that is None (unrendered template) skips the probe and
             // does not count as a failure.
-            if let Some(port) = daemon.health_port.as_ref().and_then(|p| p.as_port())
-                && !health_port_probe(&id, port).await
+            if let Some(health_port) = daemon.health_port.as_ref()
+                && let Some(port) = health_port.as_port()
+                && !health_port_probe(&id, port, effective_port_timeout(health_port)).await
             {
                 failed_kinds.push("port");
             }
@@ -256,8 +257,9 @@ fn effective_http_timeout(http: &HealthHttp) -> Duration {
 }
 
 /// Effective per-connect timeout for a TCP port health check.
-fn effective_port_timeout() -> Duration {
-    settings().supervisor_health_port_timeout()
+fn effective_port_timeout(port: &HealthPort) -> Duration {
+    port.timeout
+        .unwrap_or_else(|| settings().supervisor_health_port_timeout())
 }
 
 /// Effective failure threshold. With multiple probe kinds configured, the
@@ -336,10 +338,9 @@ async fn health_http_probe(id: &DaemonId, http: &HealthHttp, client: &reqwest::C
 
 /// Run one TCP port health probe. Healthy = a connection to 127.0.0.1:<port>
 /// succeeds; connection refused/reset counts as failed. The connect is bounded
-/// by `supervisor.health_port_timeout` so a saturated accept backlog cannot
-/// stall the probe loop indefinitely.
-async fn health_port_probe(id: &DaemonId, port: u16) -> bool {
-    let timeout = effective_port_timeout();
+/// by the per-daemon `health_port.timeout` (or `supervisor.health_port_timeout`)
+/// so a saturated accept backlog cannot stall the probe loop indefinitely.
+async fn health_port_probe(id: &DaemonId, port: u16, timeout: Duration) -> bool {
     match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(("127.0.0.1", port))).await {
         Ok(Ok(_)) => true,
         Ok(Err(e)) => {
@@ -397,6 +398,7 @@ mod tests {
             template: None,
             interval,
             retries,
+            timeout: None,
         })
     }
 
@@ -533,16 +535,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn effective_port_timeout_defaults_and_overrides() {
+        assert_eq!(
+            effective_port_timeout(&HealthPort::new(8443)),
+            settings().supervisor_health_port_timeout()
+        );
+        let override_ = Duration::from_secs(9);
+        assert_eq!(
+            effective_port_timeout(&HealthPort {
+                port: Some(8443),
+                template: None,
+                interval: None,
+                retries: None,
+                timeout: Some(override_),
+            }),
+            override_
+        );
+    }
+
     #[tokio::test]
     async fn health_port_probe_connects_to_listening_port() {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();
         let port = listener.local_addr().unwrap().port();
-        assert!(health_port_probe(&DaemonId::new("ns", "x"), port).await);
+        assert!(health_port_probe(&DaemonId::new("ns", "x"), port, Duration::from_secs(5)).await);
 
         // A closed port must count as failed.
         drop(listener);
-        assert!(!health_port_probe(&DaemonId::new("ns", "x"), port).await);
+        assert!(!health_port_probe(&DaemonId::new("ns", "x"), port, Duration::from_secs(5)).await);
     }
 }

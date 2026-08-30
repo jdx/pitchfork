@@ -494,7 +494,7 @@ fn test_daemon_with_health_port_object() -> Result<()> {
     let toml_content = r#"
 [daemons.health_daemon]
 run = "echo 'server running'"
-health_port = { port = 8443, interval = "10s", retries = 3 }
+health_port = { port = 8443, interval = "10s", retries = 3, timeout = "5s" }
 "#;
 
     fs::write(&toml_path, toml_content).unwrap();
@@ -507,6 +507,7 @@ health_port = { port = 8443, interval = "10s", retries = 3 }
     assert!(hp.template.is_none());
     assert_eq!(hp.interval, Some(Duration::from_secs(10)));
     assert_eq!(hp.retries, Some(3));
+    assert_eq!(hp.timeout, Some(Duration::from_secs(5)));
 
     Ok(())
 }
@@ -520,7 +521,7 @@ fn test_daemon_health_port_write_roundtrip() -> Result<()> {
     let toml_content = r#"
 [daemons.health_daemon]
 run = "echo 'server running'"
-health_port = { port = 8443, interval = "10s", retries = 3 }
+health_port = { port = 8443, interval = "10s", retries = 3, timeout = "5s" }
 "#;
 
     fs::write(&toml_path, toml_content).unwrap();

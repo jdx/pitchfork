@@ -752,9 +752,9 @@ impl JsonSchema for HealthHttp {
 
 /// TCP port health check configuration.
 /// TOML forms:
-///   health_port = 8443                             # literal port
-///   health_port = "{{ daemons.redis.port }}"       # template
-///   health_port = { port = 8443, interval = "10s", retries = 3 }
+///   health_port = 8443                                  # literal port
+///   health_port = "{{ daemons.redis.port }}"            # template
+///   health_port = { port = 8443, interval = "10s", retries = 3, timeout = "5s" }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HealthPort {
     /// TCP port number to probe for health. `None` when the port is
@@ -767,6 +767,8 @@ pub struct HealthPort {
     pub interval: Option<std::time::Duration>,
     /// Consecutive failed probes before the daemon is killed. None = the `supervisor.health_check_retries` setting (default 3).
     pub retries: Option<u32>,
+    /// Per-connect timeout. None = the `supervisor.health_port_timeout` setting (default 5s).
+    pub timeout: Option<std::time::Duration>,
 }
 
 impl HealthPort {
@@ -776,6 +778,7 @@ impl HealthPort {
             template: None,
             interval: None,
             retries: None,
+            timeout: None,
         }
     }
 
@@ -785,6 +788,7 @@ impl HealthPort {
             template: Some(template.into()),
             interval: None,
             retries: None,
+            timeout: None,
         }
     }
 
@@ -842,11 +846,13 @@ pub struct HealthPortRaw {
     interval: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retries: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
 }
 
 impl Serialize for HealthPort {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        if self.interval.is_none() && self.retries.is_none() {
+        if self.interval.is_none() && self.retries.is_none() && self.timeout.is_none() {
             if let Some(port) = self.port {
                 return s.serialize_u16(port);
             }
@@ -860,6 +866,7 @@ impl Serialize for HealthPort {
             template: self.template.clone(),
             interval: format_timeout(self.interval),
             retries: self.retries,
+            timeout: format_timeout(self.timeout),
         }
         .serialize(s)
     }
@@ -874,7 +881,7 @@ impl<'de> Deserialize<'de> for HealthPort {
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(
-                    "a port number, a template string, or an object with 'port'/'template' and optional 'interval'/'retries'",
+                    "a port number, a template string, or an object with 'port'/'template' and optional 'interval'/'retries'/'timeout'",
                 )
             }
 
@@ -922,11 +929,13 @@ impl<'de> Deserialize<'de> for HealthPort {
                     )));
                 }
                 let interval = parse_interval(&raw.interval).map_err(serde::de::Error::custom)?;
+                let timeout = parse_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
                 Ok(HealthPort {
                     port: raw.port,
                     template: raw.template,
                     interval,
                     retries: raw.retries,
+                    timeout,
                 })
             }
         }
@@ -942,7 +951,7 @@ impl JsonSchema for HealthPort {
 
     fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         schemars::json_schema!({
-            "description": "TCP port health check: a port number, a template string rendering to one, or a { port, interval, retries } object with periodic probing",
+            "description": "TCP port health check: a port number, a template string rendering to one, or a { port, interval, retries, timeout } object with periodic probing",
             "oneOf": [
                 { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to probe for health" },
                 { "type": "string", "description": "Tera template that renders to a port number" },
@@ -952,7 +961,8 @@ impl JsonSchema for HealthPort {
                         "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to probe for health" },
                         "template": { "type": "string", "description": "Tera template that renders to a port number" },
                         "interval": { "type": "string", "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s)." },
-                        "retries": { "type": "integer", "minimum": 1, "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3)." }
+                        "retries": { "type": "integer", "minimum": 1, "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3)." },
+                        "timeout": { "type": "string", "description": "Per-connect timeout (e.g. '5s', '30s'). Omit to use the `supervisor.health_port_timeout` setting (default 5s)." }
                     },
                     "oneOf": [
                         { "required": ["port"] },
@@ -2423,6 +2433,7 @@ health_port = { port = 8443, retries = 0 }
                 template: None,
                 interval: Some(Duration::from_secs(10)),
                 retries: Some(3),
+                timeout: Some(Duration::from_secs(5)),
             }),
         };
         let serialized = toml::to_string(&daemon).unwrap();

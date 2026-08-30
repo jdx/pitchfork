@@ -200,7 +200,7 @@ health_port = 5432
 
 [daemons.cache]
 run = "./cache-server"
-health_port = { port = 6379, interval = "10s", retries = 3 }
+health_port = { port = 6379, interval = "10s", retries = 3, timeout = "5s" }
 ```
 
 The command form treats exit code 0 as healthy; the HTTP form accepts any 2xx
@@ -211,8 +211,8 @@ failed). When a daemon omits a field, it falls back to the
 `supervisor.health_http_timeout`, `supervisor.health_port_timeout`, and
 `supervisor.health_check_retries` settings, which default to `interval` 10s,
 `timeout` 10s for `health_cmd`, 5s for `health_http` and `health_port`, and
-`retries` 3. `health_port` has no per-daemon `timeout` field; its connect
-timeout comes only from `supervisor.health_port_timeout`.
+`retries` 3. `health_port` also accepts a per-daemon `timeout` field, falling
+back to `supervisor.health_port_timeout` when omitted.
 
 ::: tip
 The health check starts as soon as the daemon is running, so the
