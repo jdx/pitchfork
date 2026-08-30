@@ -179,6 +179,14 @@ impl Supervisor {
     pub(crate) async fn kill_daemon_as_crash(&self, id: &DaemonId, pid: u32, reason: &str) {
         info!("killing daemon {id} (pid {pid}) {reason}");
         let daemon = self.get_daemon(id).await;
+        // A probe can complete long after the daemon it watched stopped or
+        // restarted, by which point `pid` may have been recycled. If the daemon
+        // no longer records this pid, there is nothing of ours left to kill —
+        // and signalling the recycled pid could hit an unrelated process group.
+        if daemon.as_ref().and_then(|d| d.pid) != Some(pid) {
+            warn!("daemon {id} no longer owns pid {pid}; not killing it {reason}");
+            return;
+        }
         // Never signal a process group that provably isn't the daemon's: a
         // recycled PID would mean killing an unrelated process tree.
         let recorded_start_time = daemon.as_ref().and_then(|d| d.start_time);
@@ -247,6 +255,11 @@ fn effective_http_timeout(http: &HealthHttp) -> Duration {
         .unwrap_or_else(|| settings().supervisor_health_http_timeout())
 }
 
+/// Effective per-connect timeout for a TCP port health check.
+fn effective_port_timeout() -> Duration {
+    settings().supervisor_health_port_timeout()
+}
+
 /// Effective failure threshold. With multiple probe kinds configured, the
 /// strictest budget wins so any kind can trigger the kill within its own
 /// retries; with one kind, its value (or the default) applies.
@@ -263,7 +276,12 @@ fn effective_retries(
     .into_iter()
     .flatten()
     .min()
-    .unwrap_or_else(|| settings().supervisor.health_check_retries.max(1) as u32)
+    .unwrap_or_else(|| {
+        settings()
+            .supervisor
+            .health_check_retries
+            .clamp(1, u32::MAX as i64) as u32
+    })
 }
 
 /// Run one command health probe. Healthy = exit code 0; spawn failures, io
@@ -317,13 +335,19 @@ async fn health_http_probe(id: &DaemonId, http: &HealthHttp, client: &reqwest::C
 }
 
 /// Run one TCP port health probe. Healthy = a connection to 127.0.0.1:<port>
-/// succeeds; connection refused/reset counts as failed. The connect is to
-/// loopback, so it either succeeds or fails immediately — no timeout needed.
+/// succeeds; connection refused/reset counts as failed. The connect is bounded
+/// by `supervisor.health_port_timeout` so a saturated accept backlog cannot
+/// stall the probe loop indefinitely.
 async fn health_port_probe(id: &DaemonId, port: u16) -> bool {
-    match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
-        Ok(_) => true,
-        Err(e) => {
+    let timeout = effective_port_timeout();
+    match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(("127.0.0.1", port))).await {
+        Ok(Ok(_)) => true,
+        Ok(Err(e)) => {
             debug!("daemon {id} health check (port) connect to {port} failed: {e}");
+            false
+        }
+        Err(_) => {
+            debug!("daemon {id} health check (port) connect to {port} timed out after {timeout:?}");
             false
         }
     }

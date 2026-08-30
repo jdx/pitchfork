@@ -6336,6 +6336,38 @@
         "default_list": [],
         "extensions": []
       },
+      "supervisor.health_port_timeout": {
+        "default": "5s",
+        "default_note": null,
+        "data_type": "null",
+        "value_type": {
+          "kind": "base",
+          "of": "duration"
+        },
+        "env": "PITCHFORK_HEALTH_PORT_TIMEOUT",
+        "envs": [
+          "PITCHFORK_HEALTH_PORT_TIMEOUT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Default per-connect timeout for `health_port`",
+        "long_help": "Default per-connect timeout for `health_port`\n\nMaximum time to wait for a TCP connection to a `health_port` to establish before counting the probe as failed.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "supervisor.http_client_timeout": {
         "default": "5s",
         "default_note": null,

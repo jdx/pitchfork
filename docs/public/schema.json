@@ -1331,6 +1331,13 @@
             "null"
           ]
         },
+        "health_port_timeout": {
+          "description": "Default per-connect timeout for health_port",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "http_client_timeout": {
           "description": "Timeout for HTTP ready checks",
           "type": [

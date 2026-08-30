@@ -674,6 +674,16 @@ Default per-request timeout for `health_http`
 
 Maximum time to wait for a response from a `health_http` endpoint before counting the probe as failed.
 
+## `supervisor.health_port_timeout`
+
+- **Type:** `duration`
+- **Default:** `5s`
+- **Set with:** `PITCHFORK_HEALTH_PORT_TIMEOUT`
+
+Default per-connect timeout for `health_port`
+
+Maximum time to wait for a TCP connection to a `health_port` to establish before counting the probe as failed.
+
 ## `supervisor.http_client_timeout`
 
 - **Type:** `duration`

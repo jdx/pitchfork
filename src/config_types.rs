@@ -140,7 +140,15 @@ fn parse_interval(
     raw: &Option<String>,
 ) -> std::result::Result<Option<std::time::Duration>, String> {
     raw.as_ref()
-        .map(|s| humantime::parse_duration(s).map_err(|e| format!("invalid interval: {e}")))
+        .map(|s| {
+            let duration =
+                humantime::parse_duration(s).map_err(|e| format!("invalid interval: {e}"))?;
+            if duration.is_zero() {
+                Err("invalid interval: must be greater than 0".to_string())
+            } else {
+                Ok(duration)
+            }
+        })
         .transpose()
 }
 
@@ -2236,6 +2244,48 @@ health_cmd = { run = "pg_isready", interval = "not-a-duration" }
         let err = toml::from_str::<TestDaemon>(
             r#"
 health_http = { url = "http://localhost:3000/health", interval = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_zero_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", interval = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_zero_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", interval = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_zero_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 8443, interval = "0s" }
 "#,
         )
         .unwrap_err();

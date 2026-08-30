@@ -1375,6 +1375,9 @@ config {
     prop "supervisor.health_http_timeout" type="duration" default="5s" help="Default per-request timeout for `health_http`" long_help="Default per-request timeout for `health_http`\n\nMaximum time to wait for a response from a `health_http` endpoint before counting the probe as failed." {
         env "PITCHFORK_HEALTH_HTTP_TIMEOUT"
     }
+    prop "supervisor.health_port_timeout" type="duration" default="5s" help="Default per-connect timeout for `health_port`" long_help="Default per-connect timeout for `health_port`\n\nMaximum time to wait for a TCP connection to a `health_port` to establish before counting the probe as failed." {
+        env "PITCHFORK_HEALTH_PORT_TIMEOUT"
+    }
     prop "supervisor.http_client_timeout" type="duration" default="5s" help="Timeout for HTTP ready checks" long_help="Timeout for HTTP ready checks\n\nMaximum time to wait for a response when checking `ready_http` endpoints.\n\nIncrease if your services take a while to respond during startup." {
         env "PITCHFORK_HTTP_CLIENT_TIMEOUT"
     }

@@ -753,6 +753,13 @@ pub struct SettingsSupervisor {
     #[usage(env = "PITCHFORK_HEALTH_HTTP_TIMEOUT", default = "5s", ty = "duration")]
     pub health_http_timeout: String,
 
+    /// Default per-connect timeout for `health_port`
+    ///
+    /// Maximum time to wait for a TCP connection to a `health_port` to
+    /// establish before counting the probe as failed.
+    #[usage(env = "PITCHFORK_HEALTH_PORT_TIMEOUT", default = "5s", ty = "duration")]
+    pub health_port_timeout: String,
+
     /// Timeout for HTTP ready checks
     ///
     /// Maximum time to wait for a response when checking `ready_http` endpoints.
@@ -1123,6 +1130,7 @@ duration_getters! {
     supervisor_health_check_interval => supervisor.health_check_interval, "10s";
     supervisor_health_cmd_timeout => supervisor.health_cmd_timeout, "10s";
     supervisor_health_http_timeout => supervisor.health_http_timeout, "5s";
+    supervisor_health_port_timeout => supervisor.health_port_timeout, "5s";
     supervisor_http_client_timeout => supervisor.http_client_timeout, "5s";
     supervisor_log_flush_interval => supervisor.log_flush_interval, "500ms";
     supervisor_ready_check_interval => supervisor.ready_check_interval, "500ms";
@@ -1673,6 +1681,8 @@ settings_partial! {
         health_cmd_timeout: String,
         /// Default per-request timeout for health_http
         health_http_timeout: String,
+        /// Default per-connect timeout for health_port
+        health_port_timeout: String,
         /// Timeout for HTTP ready checks
         http_client_timeout: String,
         /// Daemon log buffer flush interval
@@ -1863,7 +1873,7 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 72, "{keys:?}");
+        assert_eq!(keys.len(), 73, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"logs.archive_hook.command"));
         assert!(keys.contains(&"supervisor.health_check_interval"));

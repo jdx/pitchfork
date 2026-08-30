@@ -206,13 +206,13 @@ health_port = { port = 6379, interval = "10s", retries = 3 }
 The command form treats exit code 0 as healthy; the HTTP form accepts any 2xx
 status, or exactly the `status` codes you list; the port form considers a TCP
 connection to `127.0.0.1:<port>` a success (connection refused/reset counts as
-failed). `health_port` has no `timeout` — a loopback connect either succeeds
-or fails immediately. When a daemon omits a field, it falls back to the
+failed). When a daemon omits a field, it falls back to the
 `supervisor.health_check_interval`, `supervisor.health_cmd_timeout`,
-`supervisor.health_http_timeout`, and `supervisor.health_check_retries`
-settings, which default to `interval` 10s, `timeout` 10s for `health_cmd` and
-5s for `health_http`, and `retries` 3. `health_port` uses the same
-`interval`/`retries` defaults but has no timeout setting.
+`supervisor.health_http_timeout`, `supervisor.health_port_timeout`, and
+`supervisor.health_check_retries` settings, which default to `interval` 10s,
+`timeout` 10s for `health_cmd`, 5s for `health_http` and `health_port`, and
+`retries` 3. `health_port` has no per-daemon `timeout` field; its connect
+timeout comes only from `supervisor.health_port_timeout`.
 
 ::: tip
 The health check starts as soon as the daemon is running, so the
