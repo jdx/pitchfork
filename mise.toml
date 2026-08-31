@@ -113,15 +113,20 @@ rust = "stable"
 # macOS where there is no usable cachegrind.
 # `depends` on build:ui because the release binary embeds ui/dist via
 # RustEmbed, and cargo will not compile without it.
-[tasks.perf]
+[tasks."perf:build"]
 depends = ["build:ui"]
+env = { MBX_DISABLE = "1" }
+run = "cargo build --release"
+
+[tasks.perf]
+depends = ["perf:build"]
 dir = "{{config_root}}"
-run = ["MBX_DISABLE=1 cargo build --release", "tak run"]
+run = "tak run"
 
 # Same measurement, appended to refs/notes/tak for this commit. Run by the
 # `perf` workflow on every push to main; the notes are the history. Safe to run
 # locally — nothing leaves the machine until `tak push`.
 [tasks."perf:record"]
-depends = ["build:ui"]
+depends = ["perf:build"]
 dir = "{{config_root}}"
-run = ["MBX_DISABLE=1 cargo build --release", "tak run --record"]
+run = "tak run --record"
