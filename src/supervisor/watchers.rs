@@ -271,7 +271,8 @@ impl Supervisor {
                     mem_limit,
                 );
                 cpu_violation_counts.remove(&daemon.id);
-                self.stop_for_resource_violation(&daemon.id, pid).await;
+                self.stop_for_resource_violation(&daemon.id, pid, daemon.start_time)
+                    .await;
                 continue; // Don't check CPU if we're already killing
             }
 
@@ -290,7 +291,8 @@ impl Supervisor {
                             daemon.id, pid, count, stats.cpu_percent, cpu_limit.0,
                         );
                         cpu_violation_counts.remove(&daemon.id);
-                        self.stop_for_resource_violation(&daemon.id, pid).await;
+                        self.stop_for_resource_violation(&daemon.id, pid, daemon.start_time)
+                            .await;
                     } else {
                         debug!(
                             "daemon {} (pid {}) CPU {:.1}% > {}% ({}/{} consecutive violations)",
@@ -470,9 +472,24 @@ impl Supervisor {
     /// Instead, it kills the process group directly, which causes the monitor task
     /// to observe a non-zero exit and set the status to `Errored`. This allows
     /// the retry checker to restart the daemon if `retry` is configured.
-    async fn stop_for_resource_violation(&self, id: &DaemonId, pid: u32) {
-        self.kill_daemon_as_crash(id, pid, "due to resource limit violation")
-            .await;
+    ///
+    /// `expected_start_time` is the identity captured from the same daemon
+    /// snapshot the violation was observed in: enforcement refuses if the
+    /// daemon restarted in the meantime (see
+    /// [`Supervisor::kill_daemon_as_crash`]).
+    async fn stop_for_resource_violation(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        expected_start_time: Option<u64>,
+    ) {
+        self.kill_daemon_as_crash(
+            id,
+            pid,
+            expected_start_time,
+            "due to resource limit violation",
+        )
+        .await;
     }
 
     /// Start the cron watcher for scheduled daemon execution

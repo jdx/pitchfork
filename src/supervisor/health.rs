@@ -150,7 +150,11 @@ impl Supervisor {
                 let reason = format!(
                     "due to health check failure ({consecutive_failures} consecutive failures)"
                 );
-                self.kill_daemon_as_crash(&id, pid, &reason).await;
+                // The identity captured when these probes ran, not a fresh
+                // read: enforcement must refuse if the daemon restarted (and
+                // possibly reused the PID) while the probes were in flight.
+                self.kill_daemon_as_crash(&id, pid, daemon.start_time, &reason)
+                    .await;
                 return;
             }
         }
@@ -178,24 +182,54 @@ impl Supervisor {
     /// like a crash and letting the retry checker restart the daemon when
     /// configured. Shared by resource-limit and health-check enforcement.
     ///
+    /// `expected_start_time` is the process identity captured when the failing
+    /// probe (or the resource-limit observation) ran, not a fresh read: the
+    /// kill is refused if the recorded daemon has since moved to a new process
+    /// generation, because a restarted daemon that reuses the PID must not be
+    /// killed for its predecessor's failures. The signal itself is issued via
+    /// [`PROCS::kill_process_group_if_start_time_matches_async`], which binds
+    /// the start-time check and the kill into one atomic operation.
+    ///
     /// `reason` names the enforcement in log lines (e.g. "due to resource
     /// limit violation" or "due to health check failure (2 consecutive
     /// failures)").
-    pub(crate) async fn kill_daemon_as_crash(&self, id: &DaemonId, pid: u32, reason: &str) {
+    pub(crate) async fn kill_daemon_as_crash(
+        &self,
+        id: &DaemonId,
+        pid: u32,
+        expected_start_time: Option<u64>,
+        reason: &str,
+    ) {
         info!("killing daemon {id} (pid {pid}) {reason}");
-        let daemon = self.get_daemon(id).await;
         // A probe can complete long after the daemon it watched stopped or
         // restarted, by which point `pid` may have been recycled. If the daemon
         // no longer records this pid, there is nothing of ours left to kill —
         // and signalling the recycled pid could hit an unrelated process group.
-        if daemon.as_ref().and_then(|d| d.pid) != Some(pid) {
-            warn!("daemon {id} no longer owns pid {pid}; not killing it {reason}");
+        let daemon = match self.get_daemon(id).await {
+            Some(daemon) if daemon.pid == Some(pid) => daemon,
+            _ => {
+                warn!("daemon {id} no longer owns pid {pid}; not killing it {reason}");
+                return;
+            }
+        };
+        // The recorded daemon must still be the same process generation the
+        // failing probes observed. A daemon that crashed and was retried while
+        // the probes were in flight may reuse the PID, and killing it would
+        // take down the healthy new generation. Do not finalize — the new
+        // generation is alive and the health loop re-observes it with a fresh
+        // failure budget.
+        if !recorded_identity_matches(&daemon, pid, expected_start_time) {
+            warn!(
+                "daemon {id} restarted since the failing check (recorded start_time {:?}, expected {:?}); not killing it {reason}",
+                daemon.start_time, expected_start_time
+            );
             return;
         }
         // Never signal a process group that provably isn't the daemon's: a
-        // recycled PID would mean killing an unrelated process tree.
-        let recorded_start_time = daemon.as_ref().and_then(|d| d.start_time);
-        if !signalling_pid_is_authorized(recorded_start_time, PROCS.start_time(pid)) {
+        // recycled PID would mean killing an unrelated process tree. The
+        // recorded start time equals `expected_start_time` here, so this
+        // compares the expected generation against the live process.
+        if !signalling_pid_is_authorized(expected_start_time, PROCS.start_time(pid)) {
             warn!(
                 "pid {pid} recorded for daemon {id} belongs to another process now; not killing it {reason}"
             );
@@ -213,15 +247,45 @@ impl Supervisor {
             .await;
             return;
         }
-        let stop_cfg = daemon.and_then(|d| d.stop_signal).unwrap_or_default();
+        // Fail closed when no start time was ever recorded: the kill cannot be
+        // bound to a process generation, so refuse rather than risk signalling
+        // a recycled PID.
+        let Some(expected_start_time) = expected_start_time else {
+            warn!(
+                "daemon {id} has no recorded start time; cannot securely kill pid {pid} {reason}"
+            );
+            return;
+        };
+        let stop_cfg = daemon.stop_signal.unwrap_or_default();
         let stop_signal: i32 = stop_cfg.signal.into();
-        if let Err(e) = PROCS
-            .kill_process_group_async(pid, stop_signal, stop_cfg.timeout)
+        match PROCS
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                expected_start_time,
+                stop_signal,
+                stop_cfg.timeout,
+            )
             .await
         {
-            error!("failed to kill daemon {id} (pid {pid}) {reason}: {e}");
+            Ok(true) => {}
+            Ok(false) => {
+                warn!(
+                    "could not securely kill daemon {id} (pid {pid}) {reason}; retaining running state"
+                );
+            }
+            Err(err) => {
+                error!("failed to kill daemon {id} (pid {pid}) {reason}: {err}");
+            }
         }
     }
+}
+
+/// Whether the recorded daemon still matches the process identity captured
+/// when the probes ran. Enforcement must not proceed otherwise: a restarted
+/// daemon that reuses the PID would otherwise be killed for its
+/// predecessor's failures.
+fn recorded_identity_matches(daemon: &Daemon, pid: u32, expected_start_time: Option<u64>) -> bool {
+    daemon.pid == Some(pid) && daemon.start_time == expected_start_time
 }
 
 /// Whether a daemon's process identity changed since the last probe, meaning
@@ -595,6 +659,56 @@ mod tests {
         ));
         // First probe (no last identity yet): always a fresh budget.
         assert!(process_identity_changed(None, None, Some(42), Some(100)));
+    }
+
+    fn daemon_with(pid: Option<u32>, start_time: Option<u64>) -> Daemon {
+        Daemon {
+            id: DaemonId::new("ns", "x"),
+            pid,
+            start_time,
+            ..Daemon::default()
+        }
+    }
+
+    #[test]
+    fn recorded_identity_matches_on_same_generation() {
+        assert!(recorded_identity_matches(
+            &daemon_with(Some(42), Some(100)),
+            42,
+            Some(100)
+        ));
+    }
+
+    #[test]
+    fn recorded_identity_mismatches_on_different_pid() {
+        assert!(!recorded_identity_matches(
+            &daemon_with(Some(42), Some(100)),
+            43,
+            Some(100)
+        ));
+    }
+
+    #[test]
+    fn recorded_identity_mismatches_on_reused_pid_with_new_start_time() {
+        // Same PID, different start time: the OS recycled the PID for a new
+        // process generation. Killing it would take down the restarted
+        // daemon for its predecessor's failures.
+        assert!(!recorded_identity_matches(
+            &daemon_with(Some(42), Some(200)),
+            42,
+            Some(100)
+        ));
+    }
+
+    #[test]
+    fn recorded_identity_mismatches_when_record_lacks_start_time() {
+        // Expected identity captured at probe time is None while the record
+        // has one: nothing to bind the kill to, so fail closed.
+        assert!(!recorded_identity_matches(
+            &daemon_with(Some(42), Some(100)),
+            42,
+            None
+        ));
     }
 
     #[tokio::test]
