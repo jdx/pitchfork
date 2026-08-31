@@ -215,6 +215,14 @@ pub struct SettingsGeneral {
     #[usage(env = "PITCHFORK_STARTUP_LOG_TIMESTAMPS", default = false)]
     pub startup_log_timestamps: bool,
 
+    /// Default readiness delay in seconds when a daemon has no ready check configured
+    ///
+    /// When a daemon has no other readiness check (output, HTTP, port, command),
+    /// pitchfork waits this long before considering it ready. Daemons can
+    /// override this with their own `ready_delay` setting.
+    #[usage(env = "PITCHFORK_READY_DELAY", default = "3s", ty = "duration")]
+    pub ready_delay: String,
+
     /// Enable git worktree / jj workspace auto-discovery
     ///
     /// When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy
@@ -1119,6 +1127,7 @@ macro_rules! duration_getters {
 duration_getters! {
     general_autostop_delay => general.autostop_delay, "1m";
     general_interval => general.interval, "10s";
+    general_ready_delay => general.ready_delay, "3s";
     ipc_connect_max_delay => ipc.connect_max_delay, "1s";
     ipc_connect_min_delay => ipc.connect_min_delay, "100ms";
     ipc_rate_limit_window => ipc.rate_limit_window, "1s";
@@ -1142,6 +1151,24 @@ duration_getters! {
     tui_refresh_rate => tui.refresh_rate, "2s";
     tui_tick_rate => tui.tick_rate, "100ms";
     web_sse_poll_interval => web.sse_poll_interval, "500ms";
+}
+
+impl Settings {
+    /// Resolve `general.ready_delay` as whole seconds.
+    ///
+    /// The ready-check pipeline (RunOptions/IPC/supervisor) models the delay
+    /// in whole seconds. Reject subsecond values that would otherwise be
+    /// silently truncated to a zero delay by `as_secs()`.
+    pub fn general_ready_delay_secs(&self) -> Result<u64, String> {
+        let delay = self.general_ready_delay();
+        if delay.subsec_nanos() != 0 {
+            return Err(format!(
+                "settings.general.ready_delay must be a whole number of seconds, got \"{}\"",
+                self.general.ready_delay
+            ));
+        }
+        Ok(delay.as_secs())
+    }
 }
 
 impl Settings {
@@ -1572,6 +1599,8 @@ settings_partial! {
         shell: String,
         /// Show timestamps in startup log output
         startup_log_timestamps: bool,
+        /// Default readiness delay in seconds when a daemon has no ready check configured
+        ready_delay: String,
         /// Enable git worktree / jj workspace auto-discovery
         worktree: bool,
     }
@@ -1792,6 +1821,7 @@ mod tests {
         assert_eq!(settings.general.autostop_delay, "1m");
         assert_eq!(settings.general.interval, "10s");
         assert_eq!(settings.general.log_level, "info");
+        assert_eq!(settings.general.ready_delay, "3s");
 
         // Test IPC settings
         assert_eq!(settings.ipc.connect_attempts, 5);
@@ -1873,7 +1903,7 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 73, "{keys:?}");
+        assert_eq!(keys.len(), 74, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"logs.archive_hook.command"));
         assert!(keys.contains(&"supervisor.health_check_interval"));
@@ -2067,6 +2097,7 @@ mod tests {
 
         assert_eq!(settings.general_autostop_delay(), Duration::from_secs(60));
         assert_eq!(settings.general_interval(), Duration::from_secs(10));
+        assert_eq!(settings.general_ready_delay(), Duration::from_secs(3));
         assert_eq!(settings.ipc_connect_min_delay(), Duration::from_millis(100));
         assert_eq!(settings.ipc_connect_max_delay(), Duration::from_secs(1));
         assert_eq!(settings.ipc_request_timeout(), Duration::from_secs(5));
@@ -2100,6 +2131,35 @@ mod tests {
             settings.supervisor_http_client_timeout(),
             Duration::from_secs(5)
         );
+    }
+
+    #[test]
+    fn test_general_ready_delay_secs() {
+        let mut settings = Settings::default();
+
+        // Default "3s" resolves to whole seconds.
+        assert_eq!(settings.general_ready_delay_secs(), Ok(3));
+
+        // Subsecond values are rejected, not silently truncated by as_secs().
+        settings.general.ready_delay = "500ms".to_string();
+        let err = settings.general_ready_delay_secs().unwrap_err();
+        assert!(err.contains("500ms"), "unexpected error: {err}");
+        assert!(
+            err.contains("whole number of seconds"),
+            "unexpected error: {err}"
+        );
+
+        settings.general.ready_delay = "1.5s".to_string();
+        let err = settings.general_ready_delay_secs().unwrap_err();
+        assert!(err.contains("1.5s"), "unexpected error: {err}");
+
+        // Empty string falls back to the schema default "3s".
+        settings.general.ready_delay = String::new();
+        assert_eq!(settings.general_ready_delay_secs(), Ok(3));
+
+        // Whole-second values resolve as seconds.
+        settings.general.ready_delay = "90s".to_string();
+        assert_eq!(settings.general_ready_delay_secs(), Ok(90));
     }
 
     /// A directory tree, cleaned up when the test ends.

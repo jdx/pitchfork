@@ -5050,6 +5050,38 @@
         "default_list": [],
         "extensions": []
       },
+      "general.ready_delay": {
+        "default": "3s",
+        "default_note": null,
+        "data_type": "null",
+        "value_type": {
+          "kind": "base",
+          "of": "duration"
+        },
+        "env": "PITCHFORK_READY_DELAY",
+        "envs": [
+          "PITCHFORK_READY_DELAY"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Default readiness delay in seconds when a daemon has no ready check configured",
+        "long_help": "Default readiness delay in seconds when a daemon has no ready check configured\n\nWhen a daemon has no other readiness check (output, HTTP, port, command), pitchfork waits this long before considering it ready. Daemons can override this with their own `ready_delay` setting.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "general.shell": {
         "default": "sh -c",
         "default_note": null,

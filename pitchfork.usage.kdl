@@ -1259,6 +1259,9 @@ config {
     prop "general.startup_log_timestamps" type="bool" default=#false help="Show timestamps in startup log output" long_help="Show timestamps in startup log output\n\nWhen enabled, pitchfork prefixes each startup log line and result line with a timestamp (e.g. `19:03:15`), making it easier to see how long each daemon took to start.\n\nWhen disabled (default), a dim bullet (`•`) is used instead to keep the output compact and aligned with the spinner / status icons." {
         env "PITCHFORK_STARTUP_LOG_TIMESTAMPS"
     }
+    prop "general.ready_delay" type="duration" default="3s" help="Default readiness delay in seconds when a daemon has no ready check configured" long_help="Default readiness delay in seconds when a daemon has no ready check configured\n\nWhen a daemon has no other readiness check (output, HTTP, port, command), pitchfork waits this long before considering it ready. Daemons can override this with their own `ready_delay` setting." {
+        env "PITCHFORK_READY_DELAY"
+    }
     prop "general.worktree" type="bool" default=#true help="Enable git worktree / jj workspace auto-discovery" long_help="Enable git worktree / jj workspace auto-discovery\n\nWhen enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy slug routing and supervisor config discovery. Each worktree gets its own namespace.\n\nSet to `false` to disable all worktree/workspace discovery. The deprecated `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration." {
         env "PITCHFORK_WORKTREE"
         deprecated_env "PITCHFORK_PROXY_WORKTREE"
