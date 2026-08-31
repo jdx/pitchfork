@@ -93,7 +93,7 @@ run = [
 ]
 
 [tools]
-"github:jdx/mr-boxington" = "latest"
+mr-boxington = "1.3.0"
 usage = "6.4.0"
 # Pinned rather than "latest" because tak is the measuring instrument: an
 # upgrade that changes how it samples would land in the series as a step change
@@ -107,6 +107,10 @@ node = "24"
 pkl = "latest"
 "cargo:cargo-nextest" = "latest"
 rust = "stable"
+
+[wrappers.cargo]
+command = "mbx"
+env = { MBX_CARGO_SHIM_MODE = "1" }
 
 # Instruction-counted benchmarks (see tak.toml). Needs valgrind for the counts;
 # without it tak reports wall clock only and says so, so this still works on
