@@ -39,6 +39,8 @@ run = "./start.sh --http-port $PORT0 --grpc-port $PORT1"
 port = [8080, 8443]
 ```
 
+Lifecycle hooks receive the same variables (see [hook environment variables](lifecycle-hooks.md#environment-variables)).
+
 ### Auto Port Bumping
 
 When a port is occupied, enable `bump` to automatically find the next available port:

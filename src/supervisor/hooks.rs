@@ -79,6 +79,26 @@ fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
     }
 }
 
+/// Inject port env vars (`PORT` / `PORT0..N`) resolved for the daemon,
+/// using the same naming as the daemon's own spawn environment
+/// (`apply_runtime_env` in lifecycle.rs).
+async fn inject_port_env(command: &mut tokio::process::Command, daemon_id: &DaemonId) {
+    let resolved_ports = {
+        let state_file = SUPERVISOR.state_file.lock().await;
+        state_file
+            .daemons
+            .get(daemon_id)
+            .map(|d| d.resolved_port.clone())
+            .unwrap_or_default()
+    };
+    if let Some(port) = resolved_ports.first() {
+        command.env("PORT", port.to_string());
+        for (index, port) in resolved_ports.iter().enumerate() {
+            command.env(format!("PORT{index}"), port.to_string());
+        }
+    }
+}
+
 /// Fire a hook command as a fire-and-forget tokio task.
 ///
 /// Reads the hook command from fresh config rooted at the daemon's directory,
@@ -146,6 +166,7 @@ pub(crate) async fn fire_hook(
             .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
             .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
+        inject_port_env(&mut command, &daemon_id).await;
 
         for (key, value) in &extra_env {
             command.env(key, value);
@@ -226,6 +247,7 @@ pub(crate) async fn fire_output_hook(
             .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string())
             .env("PITCHFORK_MATCHED_LINE", &matched_line);
+        inject_port_env(&mut command, &daemon_id).await;
 
         match command.status().await {
             Ok(status) => {

@@ -123,6 +123,8 @@ All hooks receive these environment variables:
 | `PITCHFORK_EXIT_CODE` | Exit code of the process (`on_fail`, `on_stop`, `on_exit`). On Unix, processes terminated by a signal (e.g. SIGTERM) have no POSIX exit code; in that case this is set to `-1`. |
 | `PITCHFORK_EXIT_REASON` | Why the daemon stopped. Typically `"stop"` (intentional stop by pitchfork) or `"fail"` (non-zero exit); `"exit"` indicates an unexpected clean exit (process quit on its own with code 0). Available in `on_stop` and `on_exit`. |
 | `PITCHFORK_MATCHED_LINE` | The raw output line that triggered the hook (`on_output` only) |
+| `PORT` | The daemon's first resolved port (same as `PORT0`); omitted when the daemon has no `port` config |
+| `PORT0..N` | One variable per resolved port (`PORT0`, `PORT1`, ...), matching what the daemon process itself receives |
 
 Any custom `env` variables from the daemon config are also passed to hooks.
 
