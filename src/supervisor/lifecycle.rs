@@ -53,6 +53,13 @@ fn resolve_configured_ready_port(
     }
 }
 
+fn active_port_from_ready_port(ready_port: u16, resolved_ports: &[u16]) -> Option<u16> {
+    resolved_ports
+        .first()
+        .copied()
+        .filter(|&primary_port| primary_port == ready_port)
+}
+
 #[cfg(unix)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RunIdentity {
@@ -236,6 +243,15 @@ fn any_ready_check_remaining(
         || ready_port.is_some_and(|p| p.timeout.is_none() || !port_exhausted)
         || ready_http.is_some_and(|h| h.timeout.is_none() || !http_exhausted)
         || ready_cmd.is_some_and(|c| c.timeout.is_none() || !cmd_exhausted)
+}
+
+fn delay_readiness_succeeded(
+    ready_notified: bool,
+    has_other_ready_check: bool,
+    process_exited: bool,
+    process_running: bool,
+) -> bool {
+    !ready_notified && !has_other_ready_check && !process_exited && process_running
 }
 
 /// How long a failed start waits for the daemon's output to become queryable
@@ -799,12 +815,11 @@ impl Supervisor {
         // daemon (which wastes ~7.5 s of listeners::get_all() calls per port-less daemon).
         let has_port_config = opts.port.as_ref().is_some_and(|p| !p.expect.is_empty())
             || (settings().proxy.enable && is_daemon_slug_target(id));
-        // The first expected port, if configured. When the ready_port check
-        // succeeds on this exact port we can set active_port directly instead
+        // When the ready_port check succeeds on the first resolved port we can
+        // set active_port directly instead
         // of spawning detect_and_store_active_port (which relies on
         // listeners::get_all() + process-tree traversal and is unreliable on
         // Windows where Git Bash PID mapping can break descendant lookups).
-        let expected_port: Option<u16> = opts.port.as_ref().and_then(|p| p.expect.first().copied());
         let daemon_pid = pid;
 
         // Prepare output readers before spawning the monitoring task.
@@ -1396,20 +1411,23 @@ impl Supervisor {
                                         active_port_spawned = true;
                                         // ready_port check just TCP-connected to this
                                         // port, so it is definitely listening. If it
-                                        // matches the configured expected port, write
+                                        // matches the first resolved port, write
                                         // active_port directly instead of spawning
                                         // detect_and_store_active_port, which sleeps
                                         // 500 ms then relies on listeners::get_all()
                                         // + process-tree traversal — unreliable on
                                         // Windows where Git Bash PID mapping can
                                         // break descendant lookups.
-                                        if expected_port == Some(port) {
+                                        if let Some(active_port) = active_port_from_ready_port(
+                                            port,
+                                            &readiness_resolved_ports,
+                                        ) {
                                             let mut state_file =
                                                 SUPERVISOR.state_file.lock().await;
                                             if let Some(d) = state_file.daemons.get(&id)
                                                 && d.pid == Some(daemon_pid)
                                             {
-                                                state_file.set_active_port(&id, port);
+                                                state_file.set_active_port(&id, active_port);
                                             }
                                         } else {
                                             detect_and_store_active_port(
@@ -1518,28 +1536,46 @@ impl Supervisor {
                             std::future::pending::<()>().await;
                         }
                     } => {
-                        if !ready_notified && ready_pattern.is_none() && ready_http.is_none() && ready_port.is_none() && ready_cmd.is_none() {
-                            // Check if the process already exited or is exiting before
-                            // declaring it ready. On Windows, sleep(0) fires before
-                            // child.wait() detects the exit, causing pitchfork start to
-                            // return success for a daemon that already failed.
-                            if exit_status.is_some() {
+                        let has_other_ready_check = ready_pattern.is_some()
+                            || ready_http.is_some()
+                            || ready_port.is_some()
+                            || ready_cmd.is_some();
+                        let delay_is_only_readiness = !ready_notified && !has_other_ready_check;
+                        let process_exited = exit_status.is_some();
+                        let process_running = if delay_is_only_readiness && !process_exited {
+                            // Force-refresh sysinfo for this PID before checking.
+                            // On Windows, the cached process list may be stale.
+                            PROCS.refresh_pids(&[daemon_pid]);
+                            PROCS.is_running(daemon_pid)
+                        } else {
+                            false
+                        };
+
+                        if delay_readiness_succeeded(
+                            ready_notified,
+                            has_other_ready_check,
+                            process_exited,
+                            process_running,
+                        ) {
+                            info!("daemon {id} ready: delay elapsed");
+                            ready_notified = true;
+                            if let Some(tx) = ready_tx.take() {
+                                let _ = tx.send(Ok(()));
+                            }
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
+                            if !active_port_spawned && has_port_config {
+                                active_port_spawned = true;
+                                detect_and_store_active_port(id.clone(), daemon_pid);
+                            }
+                        } else if delay_is_only_readiness {
+                            if process_exited {
                                 debug!("daemon {id} exited during ready_delay, not marking as ready");
                             } else {
-                                // Force-refresh sysinfo for this PID before checking.
-                                // On Windows, the cached process list may be stale.
-                                PROCS.refresh_pids(&[daemon_pid]);
-                                if !PROCS.is_running(daemon_pid) {
-                                    debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
-                                } else {
-                                    info!("daemon {id} ready: delay elapsed");
-                                    ready_notified = true;
-                                    if let Some(tx) = ready_tx.take() {
-                                        let _ = tx.send(Ok(()));
-                                    }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
-                                }
+                                debug!("daemon {id} pid {daemon_pid} not running during ready_delay, deferring to exit handler");
                             }
+                        }
+
+                        if delay_is_only_readiness {
                             // Clear all deadlines — no other checks are configured
                             // when delay fires as readiness, but clear defensively.
                             output_deadline = None;
@@ -1550,10 +1586,6 @@ impl Supervisor {
                         }
                         // Disable timer after it fires
                         delay_timer = None;
-                        if !active_port_spawned && has_port_config {
-                            active_port_spawned = true;
-                            detect_and_store_active_port(id.clone(), daemon_pid);
-                        }
                     }
                     _ = log_flush_interval.tick() => {
                         let _ = flush_logs(&mut log_buffer);
@@ -2284,20 +2316,66 @@ async fn detect_port_conflict(port: u16) -> Option<(u32, String)> {
     Some(identify_port_owner(port).await)
 }
 
-/// Spawn a background task that detects the first port the daemon process is listening on
+#[derive(Debug, PartialEq, Eq)]
+enum ActivePortSelection {
+    NoCandidates,
+    Selected(u16),
+    Ambiguous(Vec<u16>),
+}
+
+fn discovery_preferred_port(daemon: &crate::daemon::Daemon) -> Option<u16> {
+    daemon
+        .resolved_port
+        .first()
+        .copied()
+        .or_else(|| {
+            daemon
+                .port
+                .as_ref()
+                .and_then(|port| port.expect.first().copied())
+        })
+        .filter(|&port| port > 0)
+}
+
+fn select_active_port(
+    listeners: impl IntoIterator<Item = listeners::Listener>,
+    descendant_pids: &std::collections::HashSet<u32>,
+    preferred_port: Option<u16>,
+) -> ActivePortSelection {
+    let process_ports: std::collections::BTreeSet<u16> = listeners
+        .into_iter()
+        .filter(|listener| {
+            listener.protocol == listeners::Protocol::TCP
+                && listener.state == listeners::SocketState::Listen
+                && descendant_pids.contains(&listener.process.pid)
+        })
+        .map(|listener| listener.socket.port())
+        .filter(|&port| port > 0)
+        .collect();
+
+    if let Some(port) = preferred_port
+        && process_ports.contains(&port)
+    {
+        return ActivePortSelection::Selected(port);
+    }
+
+    match process_ports.len() {
+        0 => ActivePortSelection::NoCandidates,
+        1 => ActivePortSelection::Selected(*process_ports.first().unwrap()),
+        _ => ActivePortSelection::Ambiguous(process_ports.into_iter().collect()),
+    }
+}
+
+/// Spawn a background task that detects the daemon process's active listening port
 /// and stores it in the state file as `active_port`.
 ///
 /// This is called once when the daemon becomes ready. The port is cleared when the daemon stops.
 ///
 /// Port selection strategy:
-/// 1. If the daemon has `expected_port` configured, prefer the first port from that list
-///    (it is the port the operator explicitly designated as the primary service port).
-/// 2. Otherwise, take the first port the process is actually listening on (in the order
-///    returned by the OS), which is typically the port bound earliest.
-///
-/// Using `min()` (lowest port number) was previously used here but is incorrect: many
-/// applications listen on multiple ports (e.g. HTTP + metrics) and the lowest-numbered
-/// port is not necessarily the primary service port.
+/// 1. Consider only TCP listening sockets owned by the daemon or its descendants.
+/// 2. Prefer the first resolved port, falling back to the first expected port for
+///    legacy state without resolved ports.
+/// 3. Select a sole distinct candidate; leave `active_port` unset when ambiguous.
 fn detect_and_store_active_port(id: DaemonId, pid: u32) {
     tokio::spawn(async move {
         // Retry with exponential backoff so that slow-starting daemons (JVM,
@@ -2306,25 +2384,21 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
         for delay_ms in [500u64, 1000, 2000, 4000] {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
-            // Read daemon state atomically: check if still alive and get expected_port
+            // Read daemon state atomically: check if still alive and get the preferred port
             // in a single lock acquisition to avoid TOCTOU and unnecessary lock overhead.
-            let expected_port: Option<u16> = {
+            let preferred_port: Option<u16> = {
                 let state_file = SUPERVISOR.state_file.lock().await;
                 match state_file.daemons.get(&id) {
                     Some(d) if d.pid.is_none() => {
                         debug!("daemon {id}: aborting active_port detection — process exited");
                         return;
                     }
-                    Some(d) => d
-                        .port
-                        .as_ref()
-                        .and_then(|p| p.expect.first().copied())
-                        .filter(|&p| p > 0),
+                    Some(d) => discovery_preferred_port(d),
                     None => None,
                 }
             };
 
-            let active_port = tokio::task::spawn_blocking(move || {
+            let selection = tokio::task::spawn_blocking(move || {
                 let listeners = listeners::get_all().ok()?;
 
                 // Refresh process tree so all_children sees current descendants.
@@ -2336,66 +2410,166 @@ fn detect_and_store_active_port(id: DaemonId, pid: u32) {
                     .chain(std::iter::once(pid))
                     .collect();
 
-                let process_ports: Vec<u16> = listeners
-                    .into_iter()
-                    .filter(|listener| descendant_pids.contains(&listener.process.pid))
-                    .map(|listener| listener.socket.port())
-                    .filter(|&port| port > 0)
-                    .collect();
-
-                if process_ports.is_empty() {
-                    return None;
-                }
-
-                // Prefer the configured expected_port if the process is actually
-                // listening on it; otherwise fall back to the first port found.
-                if let Some(ep) = expected_port
-                    && process_ports.contains(&ep)
-                {
-                    return Some(ep);
-                }
-
-                // No expected_port match — return the first port in the list.
-                // The list order reflects the order the OS reports listeners,
-                // which is generally the order they were bound (earliest first).
-                // Do NOT sort: the lowest-numbered port is not necessarily the
-                // primary service port (e.g. HTTP vs metrics).
-                process_ports.into_iter().next()
+                Some(select_active_port(
+                    listeners,
+                    &descendant_pids,
+                    preferred_port,
+                ))
             })
             .await
             .ok()
-            .flatten();
+            .flatten()
+            .unwrap_or(ActivePortSelection::NoCandidates);
 
-            if let Some(port) = active_port {
-                debug!("daemon {id} active_port detected: {port}");
-                let mut state_file = SUPERVISOR.state_file.lock().await;
-                if let Some(d) = state_file.daemons.get(&id) {
-                    // Guard against PID reuse: if the original process exited and the OS
-                    // assigned the same PID to an unrelated process that happens to bind
-                    // a port, we must not route proxy traffic to that unrelated service.
-                    if d.pid == Some(pid) {
-                        state_file.set_active_port(&id, port);
-                    } else {
-                        debug!(
-                            "daemon {id}: skipping active_port write — PID mismatch \
-                             (expected {pid}, current {:?})",
-                            d.pid
-                        );
-                        return;
-                    }
+            let port = match selection {
+                ActivePortSelection::Selected(port) => port,
+                ActivePortSelection::Ambiguous(ports) => {
+                    debug!(
+                        "daemon {id}: ambiguous active_port candidates {ports:?} for pid {pid} \
+                         and its descendants; leaving active_port unset (will retry)"
+                    );
+                    continue;
                 }
-                return;
-            }
+                ActivePortSelection::NoCandidates => {
+                    debug!(
+                        "daemon {id}: no active port detected for pid {pid} or its descendants \
+                         (will retry)"
+                    );
+                    continue;
+                }
+            };
 
-            debug!(
-                "daemon {id}: no active port detected for pid {pid} or its descendants (will retry)"
-            );
+            debug!("daemon {id} active_port detected: {port}");
+            let mut state_file = SUPERVISOR.state_file.lock().await;
+            if let Some(d) = state_file.daemons.get(&id) {
+                // Guard against PID reuse: if the original process exited and the OS
+                // assigned the same PID to an unrelated process that happens to bind
+                // a port, we must not route proxy traffic to that unrelated service.
+                if d.pid == Some(pid) {
+                    state_file.set_active_port(&id, port);
+                } else {
+                    debug!(
+                        "daemon {id}: skipping active_port write — PID mismatch \
+                         (expected {pid}, current {:?})",
+                        d.pid
+                    );
+                }
+            }
+            return;
         }
 
         debug!(
             "daemon {id}: active port detection exhausted all retries for pid {pid} and its descendants"
         );
     });
+}
+
+#[cfg(test)]
+mod active_port_tests {
+    use super::*;
+    use crate::config_types::PortConfig;
+    use listeners::{Listener, Process, Protocol, SocketState};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn listener(pid: u32, port: u16, protocol: Protocol, state: SocketState) -> Listener {
+        Listener {
+            process: Process {
+                pid,
+                name: "test".to_string(),
+                path: "/test".to_string(),
+            },
+            socket: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
+            protocol,
+            state,
+        }
+    }
+
+    #[test]
+    fn active_port_candidates_exclude_outbound_tcp_and_udp_sockets() {
+        let daemon_pid = 100;
+        let child_pid = 101;
+        let descendant_pids = [daemon_pid, child_pid].into_iter().collect();
+        let listeners = vec![
+            listener(child_pid, 3004, Protocol::TCP, SocketState::Listen),
+            listener(daemon_pid, 47082, Protocol::TCP, SocketState::Established),
+            listener(daemon_pid, 5353, Protocol::UDP, SocketState::Unknown),
+            listener(999, 9000, Protocol::TCP, SocketState::Listen),
+        ];
+
+        assert_eq!(
+            select_active_port(listeners, &descendant_pids, None),
+            ActivePortSelection::Selected(3004)
+        );
+    }
+
+    #[test]
+    fn bumped_cmd_readiness_prefers_resolved_primary_port() {
+        let daemon = crate::daemon::Daemon {
+            resolved_port: vec![3004],
+            port: Some(PortConfig {
+                expect: vec![3000],
+                ..PortConfig::default()
+            }),
+            ..crate::daemon::Daemon::default()
+        };
+        let descendant_pids = [100].into_iter().collect();
+        let listeners = vec![
+            listener(100, 9000, Protocol::TCP, SocketState::Listen),
+            listener(100, 3004, Protocol::TCP, SocketState::Listen),
+        ];
+
+        assert_eq!(discovery_preferred_port(&daemon), Some(3004));
+        assert_eq!(
+            select_active_port(
+                listeners,
+                &descendant_pids,
+                discovery_preferred_port(&daemon),
+            ),
+            ActivePortSelection::Selected(3004)
+        );
+    }
+
+    #[test]
+    fn legacy_state_uses_expected_primary_port_for_discovery() {
+        let daemon = crate::daemon::Daemon {
+            port: Some(PortConfig {
+                expect: vec![3000],
+                ..PortConfig::default()
+            }),
+            ..crate::daemon::Daemon::default()
+        };
+
+        assert_eq!(discovery_preferred_port(&daemon), Some(3000));
+    }
+
+    #[test]
+    fn ambiguous_candidates_leave_active_port_unset() {
+        let descendant_pids = [100].into_iter().collect();
+        let listeners = vec![
+            listener(100, 9000, Protocol::TCP, SocketState::Listen),
+            listener(100, 3000, Protocol::TCP, SocketState::Listen),
+        ];
+
+        assert_eq!(
+            select_active_port(listeners, &descendant_pids, None),
+            ActivePortSelection::Ambiguous(vec![3000, 9000])
+        );
+    }
+
+    #[test]
+    fn bumped_ready_port_sets_only_the_resolved_primary_without_scanning() {
+        assert_eq!(active_port_from_ready_port(3004, &[3004]), Some(3004));
+        assert_eq!(active_port_from_ready_port(4003, &[3003, 4003]), None);
+    }
+
+    #[test]
+    fn delay_readiness_requires_delay_only_and_a_running_process() {
+        assert!(delay_readiness_succeeded(false, false, false, true));
+        assert!(!delay_readiness_succeeded(false, true, false, true));
+        assert!(!delay_readiness_succeeded(false, false, true, false));
+        assert!(!delay_readiness_succeeded(false, false, false, false));
+        assert!(!delay_readiness_succeeded(true, false, false, true));
+    }
 }
 
 /// Check whether a daemon (by its qualified ID) is the target of any registered
