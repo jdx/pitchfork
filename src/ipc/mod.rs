@@ -162,6 +162,10 @@ pub enum IpcResponse {
     },
     DaemonFailedWithCode {
         exit_code: Option<i32>,
+        /// Ports resolved by the failed attempt, so in-process retry hooks
+        /// observe the attempt's actual (post-bump) ports.
+        #[serde(default)]
+        resolved_ports: Vec<u16>,
     },
     /// Process was not running but had a PID record (unexpected exit)
     DaemonWasNotRunning,

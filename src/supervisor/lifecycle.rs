@@ -309,7 +309,10 @@ impl Supervisor {
                     IpcResponse::DaemonReady { daemon } => {
                         return Ok(IpcResponse::DaemonReady { daemon });
                     }
-                    IpcResponse::DaemonFailedWithCode { exit_code } => {
+                    IpcResponse::DaemonFailedWithCode {
+                        exit_code,
+                        resolved_ports,
+                    } => {
                         if attempt < opts.retry.count() {
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
@@ -324,6 +327,7 @@ impl Supervisor {
                                 opts.dir.0.clone(),
                                 attempt + 1,
                                 opts.env.clone(),
+                                resolved_ports,
                                 vec![],
                             )
                             .await;
@@ -331,7 +335,10 @@ impl Supervisor {
                             continue;
                         } else {
                             info!("daemon {id} failed after {max_attempts} attempts");
-                            return Ok(IpcResponse::DaemonFailedWithCode { exit_code });
+                            return Ok(IpcResponse::DaemonFailedWithCode {
+                                exit_code,
+                                resolved_ports,
+                            });
                         }
                     }
                     other => return Ok(other),
@@ -727,6 +734,13 @@ impl Supervisor {
         {
             pipe.supervise(id.clone(), monitor_token, child);
         }
+        // The attempt's actual resolved ports, captured before the upsert
+        // moves them into state. Hooks, readiness probes, and the failure
+        // response must reflect this attempt: the state merge keeps the
+        // existing resolved_port when an update is empty, so a no-port
+        // attempt would otherwise inherit a previous run's stale ports
+        // through the upserted record.
+        let attempt_resolved_ports = resolved_ports.clone();
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -742,7 +756,7 @@ impl Supervisor {
                             expected_ports,
                             opts.port.as_ref().map(|p| p.bump).unwrap_or_default(),
                         );
-                        o.resolved_port = resolved_ports;
+                        o.resolved_port = Some(resolved_ports);
                     })
                     .build(),
             )
@@ -770,8 +784,13 @@ impl Supervisor {
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
         let hook_daemon_env = opts.env.clone();
+        // Ports of THIS attempt, snapshotted before the monitor starts: a retry
+        // or restart may replace state.resolved_port before a hook task runs.
+        // Sourced from the attempt's local value, not the upserted record —
+        // the state merge inherits stale ports for a no-port attempt.
+        let hook_resolved_ports = attempt_resolved_ports.clone();
         let readiness_daemon_env = opts.env.clone();
-        let readiness_resolved_ports = daemon.resolved_port.clone();
+        let readiness_resolved_ports = attempt_resolved_ports.clone();
         let on_output_hook = opts.on_output_hook.clone();
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
@@ -1177,7 +1196,7 @@ impl Supervisor {
                             if let Some(tx) = ready_tx.take() {
                                 let _ = tx.send(Ok(()));
                             }
-                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                            fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                             stop_cmd_probe_state(&mut cmd_probe);
                             http_deadline = None;
                             cmd_deadline = None;
@@ -1211,7 +1230,7 @@ impl Supervisor {
                                 let elapsed = on_output_last_fired.map(|t| now.duration_since(t));
                                 if elapsed.is_none_or(|e| e >= on_output_debounce) {
                                     on_output_last_fired = Some(now);
-                                    hooks::fire_output_hook(id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook.run.clone(), line_clean.clone()).await;
+                                    hooks::fire_output_hook(id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), hook.run.clone(), line_clean.clone()).await;
                                 }
                             }
                         }
@@ -1297,7 +1316,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                     http_check_interval = None;
                                     http_deadline = None;
                                     stop_cmd_probe_state(&mut cmd_probe);
@@ -1365,7 +1384,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                     // Stop checking once ready
                                     port_check_interval = None;
                                     port_deadline = None;
@@ -1443,7 +1462,7 @@ impl Supervisor {
                                 if let Some(tx) = ready_tx.take() {
                                     let _ = tx.send(Ok(()));
                                 }
-                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                 cmd_respawn_delay = None;
                                 cmd_deadline = None;
                                 http_deadline = None;
@@ -1518,7 +1537,7 @@ impl Supervisor {
                                     if let Some(tx) = ready_tx.take() {
                                         let _ = tx.send(Ok(()));
                                     }
-                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), vec![]).await;
+                                    fire_hook(HookType::OnReady, id.clone(), daemon_dir.clone(), hook_retry_count, hook_daemon_env.clone(), hook_resolved_ports.clone(), vec![]).await;
                                 }
                             }
                             // Clear all deadlines — no other checks are configured
@@ -1747,6 +1766,7 @@ impl Supervisor {
                     daemon_dir.clone(),
                     hook_retry_count,
                     hook_daemon_env.clone(),
+                    hook_resolved_ports.clone(),
                     hook_extra_env.clone(),
                 )
                 .await;
@@ -1776,7 +1796,10 @@ impl Supervisor {
                     if using_sink && last_attempt {
                         super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
                     }
-                    Ok(IpcResponse::DaemonFailedWithCode { exit_code })
+                    Ok(IpcResponse::DaemonFailedWithCode {
+                        exit_code,
+                        resolved_ports: attempt_resolved_ports,
+                    })
                 }
                 Err(_) => {
                     error!("readiness channel closed unexpectedly for daemon {id}");
