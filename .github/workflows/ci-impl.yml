@@ -34,10 +34,13 @@ jobs:
           cache: false
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.trusted && 'server' || 'github' }}
+          mirror-github-cache: "true"
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
-      - run: mbx build
+      - run: cargo build
       - run: mise run lint
       - run: mise run render
       - name: assert render produces no diff
@@ -48,7 +51,7 @@ jobs:
             git diff HEAD
             exit 1
           fi
-      - run: mbx nextest run
+      - run: cargo nextest run
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pitchfork-debug
@@ -98,6 +101,9 @@ jobs:
         with:
           cache: false
       - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.trusted && 'server' || 'github' }}
+          mirror-github-cache: "true"
       - name: Build UI assets
         working-directory: ui
         run: |
@@ -106,8 +112,8 @@ jobs:
       - name: Run Rust tests
         shell: bash
         run: |
-          mbx build --all-features
-          mbx nextest run --all-features
+          cargo build --all-features
+          cargo nextest run --all-features
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pitchfork-windows
