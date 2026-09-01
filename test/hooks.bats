@@ -588,10 +588,10 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# PORT / PORTN env vars in hooks
+# PITCHFORK_PORT / PITCHFORK_PORTN env vars in hooks
 # ---------------------------------------------------------------------------
 
-@test "on_ready hook receives PORT and PORT0 from resolved ports" {
+@test "on_ready hook receives PITCHFORK_PORT and PITCHFORK_PORT0 from resolved ports" {
   local marker="$TEST_TEMP_DIR/hook_port_env"
 
   create_pitchfork_toml <<EOF
@@ -600,7 +600,7 @@ run = "sleep 60"
 port = 18191
 
 [daemons.porthy.hooks]
-on_ready = "echo \$PORT > $marker"
+on_ready = "echo \$PITCHFORK_PORT > $marker"
 EOF
 
   pitchfork supervisor start
@@ -614,7 +614,7 @@ EOF
   pitchfork stop porthy
 }
 
-@test "hooks receive PORT0 and PORT1 for multi-port daemons" {
+@test "hooks receive PITCHFORK_PORT0 and PITCHFORK_PORT1 for multi-port daemons" {
   local marker0="$TEST_TEMP_DIR/hook_port0"
   local marker1="$TEST_TEMP_DIR/hook_port1"
 
@@ -624,7 +624,7 @@ run = "sleep 60"
 port = [18191, 18192]
 
 [daemons.multiport.hooks]
-on_ready = "echo \$PORT0 > $marker0; echo \$PORT1 > $marker1"
+on_ready = "echo \$PITCHFORK_PORT0 > $marker0; echo \$PITCHFORK_PORT1 > $marker1"
 EOF
 
   pitchfork supervisor start
@@ -641,7 +641,7 @@ EOF
   pitchfork stop multiport
 }
 
-@test "on_stop hook receives PORT after daemon stops" {
+@test "on_stop hook receives PITCHFORK_PORT after daemon stops" {
   local marker="$TEST_TEMP_DIR/hook_stop_port"
 
   create_pitchfork_toml <<EOF
@@ -650,7 +650,7 @@ run = "sleep 60"
 port = 18191
 
 [daemons.porthalt.hooks]
-on_stop = "echo \$PORT > $marker"
+on_stop = "echo \$PITCHFORK_PORT > $marker"
 EOF
 
   pitchfork supervisor start

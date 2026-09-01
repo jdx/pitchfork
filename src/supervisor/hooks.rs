@@ -79,9 +79,10 @@ fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
     }
 }
 
-/// Inject port env vars (`PORT` / `PORT0..N`) resolved for the daemon,
-/// using the same naming as the daemon's own spawn environment
-/// (`apply_runtime_env` in lifecycle.rs).
+/// Inject port env vars (`PITCHFORK_PORT` / `PITCHFORK_PORT0..N`) resolved
+/// for the daemon, mirroring the daemon's own spawn environment (`PORT` /
+/// `PORT0..N`, see `apply_runtime_env` in lifecycle.rs) but namespaced to
+/// match the other hook env vars.
 async fn inject_port_env(command: &mut tokio::process::Command, daemon_id: &DaemonId) {
     let resolved_ports = {
         let state_file = SUPERVISOR.state_file.lock().await;
@@ -92,9 +93,9 @@ async fn inject_port_env(command: &mut tokio::process::Command, daemon_id: &Daem
             .unwrap_or_default()
     };
     if let Some(port) = resolved_ports.first() {
-        command.env("PORT", port.to_string());
+        command.env("PITCHFORK_PORT", port.to_string());
         for (index, port) in resolved_ports.iter().enumerate() {
-            command.env(format!("PORT{index}"), port.to_string());
+            command.env(format!("PITCHFORK_PORT{index}"), port.to_string());
         }
     }
 }
