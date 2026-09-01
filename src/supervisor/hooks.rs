@@ -79,19 +79,11 @@ fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
     }
 }
 
-/// Inject port env vars (`PITCHFORK_PORT` / `PITCHFORK_PORT0..N`) resolved
-/// for the daemon, mirroring the daemon's own spawn environment (`PORT` /
-/// `PORT0..N`, see `apply_runtime_env` in lifecycle.rs) but namespaced to
-/// match the other hook env vars.
-async fn inject_port_env(command: &mut tokio::process::Command, daemon_id: &DaemonId) {
-    let resolved_ports = {
-        let state_file = SUPERVISOR.state_file.lock().await;
-        state_file
-            .daemons
-            .get(daemon_id)
-            .map(|d| d.resolved_port.clone())
-            .unwrap_or_default()
-    };
+/// Inject port env vars (`PITCHFORK_PORT` / `PITCHFORK_PORT0..N`) for the
+/// daemon, mirroring the daemon's own spawn environment (`PORT` / `PORT0..N`,
+/// see `apply_runtime_env` in lifecycle.rs) but namespaced to match the other
+/// hook env vars.
+fn inject_port_env(command: &mut tokio::process::Command, resolved_ports: &[u16]) {
     if let Some(port) = resolved_ports.first() {
         command.env("PITCHFORK_PORT", port.to_string());
         for (index, port) in resolved_ports.iter().enumerate() {
@@ -105,6 +97,10 @@ async fn inject_port_env(command: &mut tokio::process::Command, daemon_id: &Daem
 /// Reads the hook command from fresh config rooted at the daemon's directory,
 /// then spawns it in the background. Errors are logged but never block the caller.
 ///
+/// `resolved_ports` must be snapshotted by the caller before spawning this
+/// task, so the hook observes the triggering attempt's ports even if a retry
+/// or restart replaces the daemon's state afterwards.
+///
 /// The spawned task is also registered in `SUPERVISOR.hook_tasks` so that
 /// supervisor shutdown (`close()`) can await all in-flight hooks before calling
 /// `exit(0)`, ensuring hooks are not silently dropped during shutdown.
@@ -114,6 +110,7 @@ pub(crate) async fn fire_hook(
     daemon_dir: PathBuf,
     retry_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
+    resolved_ports: Vec<u16>,
     extra_env: Vec<(String, String)>,
 ) {
     let handle = tokio::spawn(async move {
@@ -167,7 +164,7 @@ pub(crate) async fn fire_hook(
             .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
             .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string());
-        inject_port_env(&mut command, &daemon_id).await;
+        inject_port_env(&mut command, &resolved_ports);
 
         for (key, value) in &extra_env {
             command.env(key, value);
@@ -200,11 +197,14 @@ pub(crate) async fn fire_hook(
 ///
 /// `cmd` is the hook command string resolved at call time (from `on_output.run`).
 /// `matched_line` is exposed to the command via `PITCHFORK_MATCHED_LINE`.
+/// `resolved_ports` must be snapshotted by the caller before spawning this task
+/// (same contract as `fire_hook`).
 pub(crate) async fn fire_output_hook(
     daemon_id: DaemonId,
     daemon_dir: PathBuf,
     retry_count: u32,
     daemon_env: Option<IndexMap<String, String>>,
+    resolved_ports: Vec<u16>,
     cmd: String,
     matched_line: String,
 ) {
@@ -248,7 +248,7 @@ pub(crate) async fn fire_output_hook(
             .env("PITCHFORK_DAEMON_NAMESPACE", daemon_id.namespace())
             .env("PITCHFORK_RETRY_COUNT", retry_count.to_string())
             .env("PITCHFORK_MATCHED_LINE", &matched_line);
-        inject_port_env(&mut command, &daemon_id).await;
+        inject_port_env(&mut command, &resolved_ports);
 
         match command.status().await {
             Ok(status) => {

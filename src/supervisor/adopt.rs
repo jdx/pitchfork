@@ -460,6 +460,7 @@ impl Supervisor {
             .clone()
             .unwrap_or_else(|| crate::env::CWD.clone());
         let hook_env = daemon.env.clone();
+        let hook_resolved_ports = daemon.resolved_port.clone();
         let hook_retry = daemon.retry;
         let hook_retry_count = daemon.retry_count;
 
@@ -632,6 +633,7 @@ impl Supervisor {
                     daemon_dir.clone(),
                     hook_retry_count,
                     hook_env.clone(),
+                    hook_resolved_ports.clone(),
                     hook_extra_env.clone(),
                 )
                 .await;

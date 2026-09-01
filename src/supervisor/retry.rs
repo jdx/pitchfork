@@ -77,6 +77,7 @@ impl Supervisor {
                 dir.clone(),
                 daemon.retry_count + 1,
                 daemon.env.clone(),
+                daemon.resolved_port.clone(),
                 vec![],
             )
             .await;
