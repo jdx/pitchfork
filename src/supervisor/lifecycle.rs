@@ -734,6 +734,13 @@ impl Supervisor {
         {
             pipe.supervise(id.clone(), monitor_token, child);
         }
+        // The attempt's actual resolved ports, captured before the upsert
+        // moves them into state. Hooks, readiness probes, and the failure
+        // response must reflect this attempt: the state merge keeps the
+        // existing resolved_port when an update is empty, so a no-port
+        // attempt would otherwise inherit a previous run's stale ports
+        // through the upserted record.
+        let attempt_resolved_ports = resolved_ports.clone();
         let daemon = self
             .upsert_daemon(
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
@@ -779,9 +786,11 @@ impl Supervisor {
         let hook_daemon_env = opts.env.clone();
         // Ports of THIS attempt, snapshotted before the monitor starts: a retry
         // or restart may replace state.resolved_port before a hook task runs.
-        let hook_resolved_ports = daemon.resolved_port.clone();
+        // Sourced from the attempt's local value, not the upserted record —
+        // the state merge inherits stale ports for a no-port attempt.
+        let hook_resolved_ports = attempt_resolved_ports.clone();
         let readiness_daemon_env = opts.env.clone();
-        let readiness_resolved_ports = daemon.resolved_port.clone();
+        let readiness_resolved_ports = attempt_resolved_ports.clone();
         let on_output_hook = opts.on_output_hook.clone();
         // Whether this daemon has any port-related config — used to skip the
         // active_port detection task for daemons that never bind a port (e.g. `sleep 60`).
@@ -1789,7 +1798,7 @@ impl Supervisor {
                     }
                     Ok(IpcResponse::DaemonFailedWithCode {
                         exit_code,
-                        resolved_ports: daemon.resolved_port.clone(),
+                        resolved_ports: attempt_resolved_ports,
                     })
                 }
                 Err(_) => {
