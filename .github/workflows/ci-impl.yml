@@ -34,6 +34,8 @@ jobs:
           cache: false
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.trusted && 'server' || 'github' }}
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
@@ -98,6 +100,8 @@ jobs:
         with:
           cache: false
       - uses: ./.github/actions/mbx
+        with:
+          backend: ${{ inputs.trusted && 'server' || 'github' }}
       - name: Build UI assets
         working-directory: ui
         run: |

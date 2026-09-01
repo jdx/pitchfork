@@ -3,8 +3,8 @@ description: Select the trusted jdx server or fork-safe GitHub cache backend
 
 inputs:
   backend:
-    description: Explicit backend for structurally trusted or untrusted callers
-    default: auto
+    description: Backend selected by the structurally trusted caller
+    default: github
   cache-links:
     description: Cache native links; "auto" enables this on Linux
     default: auto
@@ -21,7 +21,7 @@ runs:
         cache-generation: v2
         cache-links: ${{ inputs.cache-links }}
         toolchain: ${{ inputs.toolchain }}
-        backend: ${{ inputs.backend != 'auto' && inputs.backend || ((github.actor != 'jdx' || (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login != 'jdx'))) && 'github' || 'server') }}
+        backend: ${{ inputs.backend }}
         server-url: https://cache.mise.jdx.dev
         namespace: jdx/pitchfork
         oidc-audience: https://cache.mise.jdx.dev
