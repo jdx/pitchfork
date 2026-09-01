@@ -77,6 +77,9 @@ impl Supervisor {
                 dir.clone(),
                 daemon.retry_count + 1,
                 daemon.env.clone(),
+                // Per-attempt value: run_once clears the record when an
+                // attempt resolves no ports, so a port-less child's retry
+                // hook receives no port vars.
                 daemon.resolved_port.clone(),
                 vec![],
             )

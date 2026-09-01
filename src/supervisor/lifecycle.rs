@@ -756,7 +756,7 @@ impl Supervisor {
                             expected_ports,
                             opts.port.as_ref().map(|p| p.bump).unwrap_or_default(),
                         );
-                        o.resolved_port = resolved_ports;
+                        o.resolved_port = Some(resolved_ports);
                     })
                     .build(),
             )

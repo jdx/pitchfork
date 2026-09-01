@@ -76,8 +76,10 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_cmd: Option<ReadyCmd>,
     /// Port configuration
     pub port: Option<PortConfig>,
-    /// Resolved ports actually used after auto-bump (may differ from expected)
-    pub resolved_port: Vec<u16>,
+    /// Resolved ports actually used after auto-bump (may differ from expected).
+    /// `None` inherits the existing record's value; `Some` sets it explicitly,
+    /// including an empty vec, which clears ports left by a previous run.
+    pub resolved_port: Option<Vec<u16>>,
     /// The first port the process is actually listening on (detected at runtime).
     pub active_port: Option<u16>,
     /// Optional stable slug alias for this daemon.
@@ -266,12 +268,11 @@ impl Supervisor {
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),
             port: opts.port.or_else(|| existing.and_then(|d| d.port.clone())),
-            resolved_port: if opts.resolved_port.is_empty() {
-                existing
+            resolved_port: match opts.resolved_port {
+                Some(ports) => ports,
+                None => existing
                     .map(|d| d.resolved_port.clone())
-                    .unwrap_or_default()
-            } else {
-                opts.resolved_port
+                    .unwrap_or_default(),
             },
             depends: opts
                 .depends
