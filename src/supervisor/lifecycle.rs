@@ -309,7 +309,10 @@ impl Supervisor {
                     IpcResponse::DaemonReady { daemon } => {
                         return Ok(IpcResponse::DaemonReady { daemon });
                     }
-                    IpcResponse::DaemonFailedWithCode { exit_code } => {
+                    IpcResponse::DaemonFailedWithCode {
+                        exit_code,
+                        resolved_ports,
+                    } => {
                         if attempt < opts.retry.count() {
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
@@ -324,12 +327,7 @@ impl Supervisor {
                                 opts.dir.0.clone(),
                                 attempt + 1,
                                 opts.env.clone(),
-                                // In-process retry: the attempt's resolved ports are not
-                                // in scope here, so fall back to the configured expectation.
-                                opts.port
-                                    .as_ref()
-                                    .map(|p| p.expect.clone())
-                                    .unwrap_or_default(),
+                                resolved_ports,
                                 vec![],
                             )
                             .await;
@@ -337,7 +335,10 @@ impl Supervisor {
                             continue;
                         } else {
                             info!("daemon {id} failed after {max_attempts} attempts");
-                            return Ok(IpcResponse::DaemonFailedWithCode { exit_code });
+                            return Ok(IpcResponse::DaemonFailedWithCode {
+                                exit_code,
+                                resolved_ports,
+                            });
                         }
                     }
                     other => return Ok(other),
@@ -1786,7 +1787,10 @@ impl Supervisor {
                     if using_sink && last_attempt {
                         super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
                     }
-                    Ok(IpcResponse::DaemonFailedWithCode { exit_code })
+                    Ok(IpcResponse::DaemonFailedWithCode {
+                        exit_code,
+                        resolved_ports: daemon.resolved_port.clone(),
+                    })
                 }
                 Err(_) => {
                     error!("readiness channel closed unexpectedly for daemon {id}");

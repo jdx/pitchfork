@@ -414,7 +414,7 @@ impl IpcClient {
                     error_message: None,
                 })
             }
-            IpcResponse::DaemonFailedWithCode { exit_code } => {
+            IpcResponse::DaemonFailedWithCode { exit_code, .. } => {
                 let code = exit_code.unwrap_or(1);
                 Ok(RunResult {
                     started: false,
