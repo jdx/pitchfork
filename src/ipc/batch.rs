@@ -111,24 +111,6 @@ pub async fn build_run_options(
         .map_err(|e| format!("Failed to parse command: {e}"))?;
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
-    // Resolve the project-scoped setting in the client process. The supervisor is
-    // long-lived and may have been started from a different directory. Use this
-    // daemon's defining config path rather than the invoking client's CWD because
-    // batch operations can include daemons from other registered namespaces.
-    if run_opts.mise.is_none() || run_opts.ready_delay.is_none() {
-        let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
-        let project_settings = tokio::task::spawn_blocking(move || {
-            crate::settings::Settings::load_from_dir(&project_dir)
-        })
-        .await
-        .map_err(|e| format!("Failed to load project settings: {e}"))?;
-        if run_opts.mise.is_none() {
-            run_opts.mise = Some(project_settings.general.mise);
-        }
-        if run_opts.ready_delay.is_none() {
-            run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
-        }
-    }
     run_opts.wait_ready = true;
 
     if let Some(opts) = overrides {
@@ -156,7 +138,33 @@ pub async fn build_run_options(
         }
     }
 
+    // Resolve project-scoped defaults in the client process after all readiness
+    // overrides are merged. The supervisor is long-lived and may have been
+    // started from a different directory.
+    if run_opts.mise.is_none() || should_inject_default_ready_delay(&run_opts) {
+        let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
+        let project_settings = tokio::task::spawn_blocking(move || {
+            crate::settings::Settings::load_from_dir(&project_dir)
+        })
+        .await
+        .map_err(|e| format!("Failed to load project settings: {e}"))?;
+        if run_opts.mise.is_none() {
+            run_opts.mise = Some(project_settings.general.mise);
+        }
+        if should_inject_default_ready_delay(&run_opts) {
+            run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
+        }
+    }
+
     Ok(run_opts)
+}
+
+fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
+    opts.ready_delay.is_none()
+        && opts.ready_output.is_none()
+        && opts.ready_http.is_none()
+        && opts.ready_port.is_none()
+        && opts.ready_cmd.is_none()
 }
 
 /// Render Tera templates for a single daemon config before starting it.
@@ -845,33 +853,14 @@ impl IpcClient {
         let quiet = opts.quiet;
 
         tokio::spawn(async move {
-            // Only consult the global setting when no explicit --delay was given,
-            // mirroring build_run_options above.
-            let default_delay = if delay.is_some() {
-                None
-            } else {
-                Some(
-                    match crate::settings::settings().general_ready_delay_secs() {
-                        Ok(delay) => delay,
-                        Err(e) => {
-                            return SpawnTaskResult {
-                                id,
-                                job: None,
-                                run_result: Err(miette::miette!("{e}")),
-                            };
-                        }
-                    },
-                )
-            };
-
-            let run_opts = RunOptions {
+            let mut run_opts = RunOptions {
                 id: id.clone(),
                 cmd,
                 force,
                 shell_pid,
                 dir: crate::config_types::Dir(dir),
                 retry,
-                ready_delay: delay.or(default_delay),
+                ready_delay: delay,
                 ready_output: output.map(ReadyOutput::new),
                 ready_http: http,
                 ready_port: port.map(ReadyPort::new),
@@ -889,6 +878,20 @@ impl IpcClient {
                 proxy: None,
                 ..RunOptions::default()
             };
+            if should_inject_default_ready_delay(&run_opts) {
+                run_opts.ready_delay = Some(
+                    match crate::settings::settings().general_ready_delay_secs() {
+                        Ok(delay) => delay,
+                        Err(e) => {
+                            return SpawnTaskResult {
+                                id,
+                                job: None,
+                                run_result: Err(miette::miette!("{e}")),
+                            };
+                        }
+                    },
+                );
+            }
 
             let check_type = ready_check_type(&run_opts);
 
@@ -1079,25 +1082,14 @@ impl IpcClient {
         dir: PathBuf,
         opts: StartOptions,
     ) -> Result<RunResult> {
-        // Only consult the global setting when no explicit --delay was given.
-        let default_delay = if opts.delay.is_some() {
-            None
-        } else {
-            Some(
-                crate::settings::settings()
-                    .general_ready_delay_secs()
-                    .map_err(|e| miette::miette!("{e}"))?,
-            )
-        };
-
-        self.run(RunOptions {
+        let mut run_opts = RunOptions {
             id,
             cmd,
             shell_pid: opts.shell_pid,
             force: opts.force,
             dir: crate::config_types::Dir(dir),
             retry: opts.retry.unwrap_or_default(),
-            ready_delay: opts.delay.or(default_delay),
+            ready_delay: opts.delay,
             ready_output: opts.output.map(ReadyOutput::new),
             ready_http: merge_ready_http_override(None, opts.http),
             ready_port: opts.port.map(ReadyPort::new),
@@ -1111,8 +1103,16 @@ impl IpcClient {
             slug: None,
             proxy: None,
             ..RunOptions::default()
-        })
-        .await
+        };
+        if should_inject_default_ready_delay(&run_opts) {
+            run_opts.ready_delay = Some(
+                crate::settings::settings()
+                    .general_ready_delay_secs()
+                    .map_err(|e| miette::miette!("{e}"))?,
+            );
+        }
+
+        self.run(run_opts).await
     }
 }
 
@@ -1343,6 +1343,72 @@ mod tests {
         let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
 
         assert_eq!(run_opts.ready_delay, Some(5));
+    }
+
+    #[tokio::test]
+    async fn build_run_options_skips_default_delay_for_configured_ready_checks() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let configured_checks = [
+            PitchforkTomlDaemon {
+                run: "echo ready".to_string(),
+                ready_output: Some(ReadyOutput::new("ready")),
+                ..PitchforkTomlDaemon::default()
+            },
+            PitchforkTomlDaemon {
+                run: "echo ready".to_string(),
+                ready_http: Some(ReadyHttp::new("http://localhost/health")),
+                ..PitchforkTomlDaemon::default()
+            },
+            PitchforkTomlDaemon {
+                run: "echo ready".to_string(),
+                ready_port: Some(ReadyPort::new(3000)),
+                ..PitchforkTomlDaemon::default()
+            },
+            PitchforkTomlDaemon {
+                run: "echo ready".to_string(),
+                ready_cmd: Some(ReadyCmd::new("true")),
+                ..PitchforkTomlDaemon::default()
+            },
+        ];
+
+        for daemon_config in configured_checks {
+            let run_opts = build_run_options(&id, &daemon_config, None).await.unwrap();
+            assert_eq!(run_opts.ready_delay, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn build_run_options_skips_default_delay_for_cli_ready_check_overrides() {
+        let id = DaemonId::try_new("project", "api").unwrap();
+        let daemon_config = PitchforkTomlDaemon {
+            run: "echo ready".to_string(),
+            ..PitchforkTomlDaemon::default()
+        };
+        let cli_overrides = [
+            StartOptions {
+                output: Some("ready".to_string()),
+                ..StartOptions::default()
+            },
+            StartOptions {
+                http: Some("http://localhost/health".to_string()),
+                ..StartOptions::default()
+            },
+            StartOptions {
+                port: Some(3000),
+                ..StartOptions::default()
+            },
+            StartOptions {
+                cmd: Some("true".to_string()),
+                ..StartOptions::default()
+            },
+        ];
+
+        for overrides in &cli_overrides {
+            let run_opts = build_run_options(&id, &daemon_config, Some(overrides))
+                .await
+                .unwrap();
+            assert_eq!(run_opts.ready_delay, None);
+        }
     }
 
     #[tokio::test]
