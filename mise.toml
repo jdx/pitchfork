@@ -6,7 +6,7 @@ _.path = ["target/debug", "test/bats/bin"]
 [tasks.test]
 depends = ["build:ui"]
 run = [
-  "mbx nextest run",
+  "cargo nextest run",
   "git submodule update --init --recursive",
   "mise run test:bats",
 ]
@@ -52,7 +52,7 @@ run = "hk fix --all"
 
 [tasks.build]
 depends = ["build:ui"]
-run = ["mbx build"]
+run = ["cargo build"]
 
 [tasks."test:web-ui"]
 depends = ["build"]
