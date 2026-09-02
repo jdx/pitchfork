@@ -45,7 +45,6 @@ provenance = "github-attestations"
 checksum = "sha256:5383e428dc7ab02853bb37ceec1a5d72894b6455471c8d02ce9d84ed82430ab6"
 url = "https://github.com/jdx/aube/releases/download/v2.0.1/aube-v2.0.1-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/jdx/aube/releases/assets/525700617"
-provenance = "github-attestations"
 
 [[tools.cargo-binstall]]
 version = "1.22.0"
