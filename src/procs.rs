@@ -256,11 +256,14 @@ impl Procs {
         // A start-time check alone cannot prevent the numeric PID/PGID from
         // being recycled before killpg. Linux closes that race with a pidfd.
         // Other Unix platforms have no durable process handle, so they do the
-        // next best thing: re-verify the start time here, inside the blocking
-        // operation and immediately before the signal. A daemon that exits in
-        // the microseconds remaining is indistinguishable from one that died
-        // a moment earlier, and the close-enough window is bounded by one
-        // refresh + one killpg instead of an arbitrary await pause.
+        // next best thing: re-read the start time fresh from the kernel here,
+        // inside the blocking operation and immediately before the signal, so
+        // the check-to-signal gap is just the adjacency of two syscalls in one
+        // thread — no await, no scheduler boundary. For that gap to matter, the
+        // kernel would have to wrap the entire sequential PID space (XNU
+        // allocates monotonically from lastpid and refuses IDs still in use as
+        // a proc, pgrp, or session) and hand the exact PGID to a new group
+        // leader between the two syscalls, which is not reachable in practice.
         #[cfg(not(target_os = "linux"))]
         if let Some(expected) = expected_start_time {
             if !self.start_time_matches(pid, expected) {
