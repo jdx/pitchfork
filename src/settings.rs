@@ -1401,6 +1401,17 @@ fn readable_settings_file(path: &Path) -> bool {
 /// matching the previous loader, which rejected invalid durations at load
 /// time. A value equal to the declared default is left alone (the
 /// `logs.time_retention` default is the empty string, meaning "disabled").
+/// Duration settings where `0s` is never meaningful: the value is passed
+/// straight into `tokio::time::timeout` for a health probe, so a zero
+/// timeout fails every probe immediately and would crash-kill a healthy
+/// daemon after the retry threshold. Same defect family as the per-daemon
+/// health timeout rejection in `config_types.rs` (`parse_positive_timeout`).
+const NON_ZERO_DURATION_KEYS: &[&str] = &[
+    "supervisor.health_cmd_timeout",
+    "supervisor.health_http_timeout",
+    "supervisor.health_port_timeout",
+];
+
 fn sanitize_durations(resolved: &mut Resolved) {
     let registry = Settings::SETTINGS_REGISTRY;
     for id in registry.ids() {
@@ -1415,22 +1426,28 @@ fn sanitize_durations(resolved: &mut Resolved) {
             Some(Const::Str(s)) => s,
             _ => "",
         };
-        if text == default_text || humantime::parse_duration(text).is_ok() {
+        if text == default_text {
             continue;
         }
-        let text = text.clone();
+        let reason = match humantime::parse_duration(text) {
+            Err(_) => Some(format!("invalid duration {text:?}")),
+            Ok(d) if d.is_zero() && NON_ZERO_DURATION_KEYS.contains(&meta.key) => Some(format!(
+                "supervisor health probe timeout must be greater than 0, got {text:?}"
+            )),
+            Ok(_) => None,
+        };
+        let Some(reason) = reason else {
+            continue;
+        };
         let origin = resolved
             .origin(id)
             .map(|o| o.describe().to_string())
             .unwrap_or_default();
-        warn!(
-            "invalid duration {:?} for {} (set by {}), using default",
-            text, meta.key, origin
-        );
+        warn!("{reason} (set by {origin}), using default");
         resolved.coerced(
             id,
             Value::String(default_text.to_string()),
-            format!("invalid duration {text:?}; the default stands"),
+            format!("{reason}; the default stands"),
         );
     }
 }
@@ -2076,6 +2093,34 @@ mod tests {
         let settings = Settings::read(&resolved).unwrap();
         assert_eq!(settings.general.autostop_delay, "1m");
         assert_eq!(settings.general_autostop_delay(), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_zero_health_timeout_from_env_falls_back_to_default() {
+        // A zero health probe timeout goes straight into tokio::time::timeout
+        // and fails every probe immediately; the sanitize pass falls back to
+        // the schema default like any other invalid duration.
+        let env = EnvLayer::new([
+            ("PITCHFORK_HEALTH_CMD_TIMEOUT".to_string(), "0s".to_string()),
+            (
+                "PITCHFORK_HEALTH_HTTP_TIMEOUT".to_string(),
+                "0s".to_string(),
+            ),
+            (
+                "PITCHFORK_HEALTH_PORT_TIMEOUT".to_string(),
+                "0s".to_string(),
+            ),
+        ]);
+        let mut resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&env)).unwrap();
+        sanitize_durations(&mut resolved);
+        let settings = Settings::read(&resolved).unwrap();
+        assert_eq!(settings.supervisor.health_cmd_timeout, "10s");
+        assert_eq!(
+            settings.supervisor_health_cmd_timeout(),
+            Duration::from_secs(10)
+        );
+        assert_eq!(settings.supervisor.health_http_timeout, "5s");
+        assert_eq!(settings.supervisor.health_port_timeout, "5s");
     }
 
     #[test]
