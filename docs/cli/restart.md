@@ -35,5 +35,8 @@ Examples:
 - **`--http <HTTP>`** — Wait until HTTP endpoint returns 2xx status before considering daemon ready
 - **`--port <PORT>`** — Wait until TCP port is listening before considering daemon ready
 - **`--cmd <CMD>`** — Shell command to poll for readiness (exit code 0 = ready)
+- **`--health-cmd <HEALTH_CMD>`** — Shell command to poll for health (exit code 0 = healthy)
+- **`--health-http <HEALTH_HTTP>`** — HTTP endpoint URL to poll for health
+- **`--health-port <HEALTH_PORT>`** — TCP port to probe for health (connection success = healthy)
 - **`-q --quiet`** — Suppress startup log output
 - **`-h --help`** — Print help

@@ -726,6 +726,48 @@ pub struct SettingsSupervisor {
     #[usage(env = "PITCHFORK_FILE_WATCH_DEBOUNCE", default = "1s", ty = "duration")]
     pub file_watch_debounce: String,
 
+    /// Default time between health probes
+    ///
+    /// When a daemon has `health_cmd`, `health_http` or `health_port`
+    /// configured but does not set its own `interval`, the supervisor probes
+    /// it this often.
+    #[usage(
+        env = "PITCHFORK_HEALTH_CHECK_INTERVAL",
+        default = "10s",
+        ty = "duration"
+    )]
+    pub health_check_interval: String,
+
+    /// Default consecutive health-check failures before killing a daemon
+    ///
+    /// When a daemon's `health_cmd`, `health_http` or `health_port` fails this
+    /// many times in a row, the daemon is killed as a crash so the retry logic
+    /// restarts it. Individual daemons can override this with `retries` in
+    /// their health check configuration.
+    #[usage(env = "PITCHFORK_HEALTH_CHECK_RETRIES", default = 3)]
+    pub health_check_retries: i64,
+
+    /// Default per-probe timeout for `health_cmd`
+    ///
+    /// Maximum time to wait for a `health_cmd` shell command to finish before
+    /// counting the probe as failed and cancelling it.
+    #[usage(env = "PITCHFORK_HEALTH_CMD_TIMEOUT", default = "10s", ty = "duration")]
+    pub health_cmd_timeout: String,
+
+    /// Default per-request timeout for `health_http`
+    ///
+    /// Maximum time to wait for a response from a `health_http` endpoint before
+    /// counting the probe as failed.
+    #[usage(env = "PITCHFORK_HEALTH_HTTP_TIMEOUT", default = "5s", ty = "duration")]
+    pub health_http_timeout: String,
+
+    /// Default per-connect timeout for `health_port`
+    ///
+    /// Maximum time to wait for a TCP connection to a `health_port` to
+    /// establish before counting the probe as failed.
+    #[usage(env = "PITCHFORK_HEALTH_PORT_TIMEOUT", default = "5s", ty = "duration")]
+    pub health_port_timeout: String,
+
     /// Timeout for HTTP ready checks
     ///
     /// Maximum time to wait for a response when checking `ready_http` endpoints.
@@ -1094,6 +1136,10 @@ duration_getters! {
     proxy_auto_start_timeout => proxy.auto_start_timeout, "30s";
     supervisor_cron_check_interval => supervisor.cron_check_interval, "10s";
     supervisor_file_watch_debounce => supervisor.file_watch_debounce, "1s";
+    supervisor_health_check_interval => supervisor.health_check_interval, "10s";
+    supervisor_health_cmd_timeout => supervisor.health_cmd_timeout, "10s";
+    supervisor_health_http_timeout => supervisor.health_http_timeout, "5s";
+    supervisor_health_port_timeout => supervisor.health_port_timeout, "5s";
     supervisor_http_client_timeout => supervisor.http_client_timeout, "5s";
     supervisor_log_flush_interval => supervisor.log_flush_interval, "500ms";
     supervisor_ready_check_interval => supervisor.ready_check_interval, "500ms";
@@ -1355,6 +1401,17 @@ fn readable_settings_file(path: &Path) -> bool {
 /// matching the previous loader, which rejected invalid durations at load
 /// time. A value equal to the declared default is left alone (the
 /// `logs.time_retention` default is the empty string, meaning "disabled").
+/// Duration settings where `0s` is never meaningful: the value is passed
+/// straight into `tokio::time::timeout` for a health probe, so a zero
+/// timeout fails every probe immediately and would crash-kill a healthy
+/// daemon after the retry threshold. Same defect family as the per-daemon
+/// health timeout rejection in `config_types.rs` (`parse_positive_timeout`).
+const NON_ZERO_DURATION_KEYS: &[&str] = &[
+    "supervisor.health_cmd_timeout",
+    "supervisor.health_http_timeout",
+    "supervisor.health_port_timeout",
+];
+
 fn sanitize_durations(resolved: &mut Resolved) {
     let registry = Settings::SETTINGS_REGISTRY;
     for id in registry.ids() {
@@ -1369,22 +1426,28 @@ fn sanitize_durations(resolved: &mut Resolved) {
             Some(Const::Str(s)) => s,
             _ => "",
         };
-        if text == default_text || humantime::parse_duration(text).is_ok() {
+        if text == default_text {
             continue;
         }
-        let text = text.clone();
+        let reason = match humantime::parse_duration(text) {
+            Err(_) => Some(format!("invalid duration {text:?}")),
+            Ok(d) if d.is_zero() && NON_ZERO_DURATION_KEYS.contains(&meta.key) => Some(format!(
+                "supervisor health probe timeout must be greater than 0, got {text:?}"
+            )),
+            Ok(_) => None,
+        };
+        let Some(reason) = reason else {
+            continue;
+        };
         let origin = resolved
             .origin(id)
             .map(|o| o.describe().to_string())
             .unwrap_or_default();
-        warn!(
-            "invalid duration {:?} for {} (set by {}), using default",
-            text, meta.key, origin
-        );
+        warn!("{reason} (set by {origin}), using default");
         resolved.coerced(
             id,
             Value::String(default_text.to_string()),
-            format!("invalid duration {text:?}; the default stands"),
+            format!("{reason}; the default stands"),
         );
     }
 }
@@ -1656,6 +1719,16 @@ settings_partial! {
         cron_check_interval: String,
         /// File watch debounce duration
         file_watch_debounce: String,
+        /// Default time between health probes
+        health_check_interval: String,
+        /// Default consecutive health-check failures before killing a daemon
+        health_check_retries: i64,
+        /// Default per-probe timeout for health_cmd
+        health_cmd_timeout: String,
+        /// Default per-request timeout for health_http
+        health_http_timeout: String,
+        /// Default per-connect timeout for health_port
+        health_port_timeout: String,
         /// Timeout for HTTP ready checks
         http_client_timeout: String,
         /// Daemon log buffer flush interval
@@ -1847,9 +1920,10 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 69, "{keys:?}");
+        assert_eq!(keys.len(), 74, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"logs.archive_hook.command"));
+        assert!(keys.contains(&"supervisor.health_check_interval"));
         assert!(keys.contains(&"supervisor.watch_interval"));
 
         let registry = Settings::SETTINGS_REGISTRY;
@@ -2019,6 +2093,34 @@ mod tests {
         let settings = Settings::read(&resolved).unwrap();
         assert_eq!(settings.general.autostop_delay, "1m");
         assert_eq!(settings.general_autostop_delay(), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_zero_health_timeout_from_env_falls_back_to_default() {
+        // A zero health probe timeout goes straight into tokio::time::timeout
+        // and fails every probe immediately; the sanitize pass falls back to
+        // the schema default like any other invalid duration.
+        let env = EnvLayer::new([
+            ("PITCHFORK_HEALTH_CMD_TIMEOUT".to_string(), "0s".to_string()),
+            (
+                "PITCHFORK_HEALTH_HTTP_TIMEOUT".to_string(),
+                "0s".to_string(),
+            ),
+            (
+                "PITCHFORK_HEALTH_PORT_TIMEOUT".to_string(),
+                "0s".to_string(),
+            ),
+        ]);
+        let mut resolved = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&env)).unwrap();
+        sanitize_durations(&mut resolved);
+        let settings = Settings::read(&resolved).unwrap();
+        assert_eq!(settings.supervisor.health_cmd_timeout, "10s");
+        assert_eq!(
+            settings.supervisor_health_cmd_timeout(),
+            Duration::from_secs(10)
+        );
+        assert_eq!(settings.supervisor.health_http_timeout, "5s");
+        assert_eq!(settings.supervisor.health_port_timeout, "5s");
     }
 
     #[test]

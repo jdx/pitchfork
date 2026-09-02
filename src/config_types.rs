@@ -134,6 +134,43 @@ fn parse_timeout(raw: &Option<String>) -> std::result::Result<Option<std::time::
         .transpose()
 }
 
+/// Like `parse_timeout` but rejects a zero duration: health probes pass the
+/// timeout straight into `tokio::time::timeout`, where `0s` fails every probe
+/// immediately and eventually crash-kills a healthy daemon.
+fn parse_positive_timeout(
+    raw: &Option<String>,
+) -> std::result::Result<Option<std::time::Duration>, String> {
+    raw.as_ref()
+        .map(|s| {
+            let duration =
+                humantime::parse_duration(s).map_err(|e| format!("invalid timeout: {e}"))?;
+            if duration.is_zero() {
+                Err("invalid timeout: must be greater than 0".to_string())
+            } else {
+                Ok(duration)
+            }
+        })
+        .transpose()
+}
+
+/// Parse a humantime duration for an `interval` field. Same as `parse_timeout`
+/// but reports the correct field name in the error.
+fn parse_interval(
+    raw: &Option<String>,
+) -> std::result::Result<Option<std::time::Duration>, String> {
+    raw.as_ref()
+        .map(|s| {
+            let duration =
+                humantime::parse_duration(s).map_err(|e| format!("invalid interval: {e}"))?;
+            if duration.is_zero() {
+                Err("invalid interval: must be greater than 0".to_string())
+            } else {
+                Ok(duration)
+            }
+        })
+        .transpose()
+}
+
 /// Format a `Duration` as a humantime string, or `None` when unset.
 fn format_timeout(timeout: Option<std::time::Duration>) -> Option<String> {
     timeout.map(|d| humantime::format_duration(d).to_string())
@@ -435,6 +472,522 @@ impl JsonSchema for ReadyCmd {
                         "timeout": { "type": "string", "description": "Overall readiness polling timeout (e.g. '30s', '5m')" }
                     },
                     "required": ["run"]
+                }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HealthCmd
+// ---------------------------------------------------------------------------
+
+/// Command health check configuration.
+/// TOML forms:
+///   health_cmd = "openssl s_client -connect localhost:8443 -brief </dev/null"
+///   health_cmd = { run = "...", interval = "10s", timeout = "10s", retries = 3 }
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HealthCmd {
+    /// Shell command to run. Exit code 0 = healthy.
+    pub run: String,
+    /// Time between probes. None = the `supervisor.health_check_interval` setting (default 10s).
+    pub interval: Option<std::time::Duration>,
+    /// Per-probe timeout. None = the `supervisor.health_cmd_timeout` setting (default 10s).
+    pub timeout: Option<std::time::Duration>,
+    /// Consecutive failed probes before the daemon is killed. None = the `supervisor.health_check_retries` setting (default 3).
+    pub retries: Option<u32>,
+}
+
+impl HealthCmd {
+    pub fn new(run: impl Into<String>) -> Self {
+        Self {
+            run: run.into(),
+            interval: None,
+            timeout: None,
+            retries: None,
+        }
+    }
+}
+
+impl std::fmt::Display for HealthCmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.run)
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct HealthCmdRaw {
+    run: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retries: Option<u32>,
+}
+
+impl StringOrStruct for HealthCmd {
+    type Short = String;
+    type Raw = HealthCmdRaw;
+
+    fn from_short(run: String) -> Self {
+        Self::new(run)
+    }
+
+    fn from_raw(raw: HealthCmdRaw) -> std::result::Result<Self, String> {
+        if let Some(retries) = raw.retries
+            && retries < 1
+        {
+            return Err(format!("health_cmd retries must be >= 1: {retries}"));
+        }
+        let interval = parse_interval(&raw.interval)?;
+        let timeout = parse_positive_timeout(&raw.timeout)?;
+        Ok(Self {
+            run: raw.run,
+            interval,
+            timeout,
+            retries: raw.retries,
+        })
+    }
+
+    fn is_shorthand(&self) -> bool {
+        self.interval.is_none() && self.timeout.is_none() && self.retries.is_none()
+    }
+
+    fn to_short(&self) -> String {
+        self.run.clone()
+    }
+
+    fn to_raw(&self) -> HealthCmdRaw {
+        HealthCmdRaw {
+            run: self.run.clone(),
+            interval: format_timeout(self.interval),
+            timeout: format_timeout(self.timeout),
+            retries: self.retries,
+        }
+    }
+}
+
+impl Serialize for HealthCmd {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.string_or_struct_serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for HealthCmd {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::string_or_struct_deserialize(d)
+    }
+}
+
+impl JsonSchema for HealthCmd {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("HealthCmd")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Command health check: a shell command string, or { run, interval, timeout, retries } object with periodic probing",
+            "oneOf": [
+                { "type": "string", "description": "Shell command that returns exit code 0 when healthy" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "run": { "type": "string", "description": "Shell command that returns exit code 0 when healthy" },
+                        "interval": { "type": "string", "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s)." },
+                        "timeout": { "type": "string", "description": "Per-probe timeout (e.g. '10s', '5m'). Omit to use the `supervisor.health_cmd_timeout` setting (default 10s)." },
+                        "retries": { "type": "integer", "minimum": 1, "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3)." }
+                    },
+                    "required": ["run"]
+                }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HealthHttp
+// ---------------------------------------------------------------------------
+
+/// HTTP health check configuration.
+/// TOML forms:
+///   health_http = "http://localhost:3000/health"
+///   health_http = { url = "...", status = [200], interval = "10s", timeout = "5s", retries = 3 }
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HealthHttp {
+    pub url: String,
+    /// Exact accepted status codes; empty = any 2xx.
+    pub status: Vec<u16>,
+    /// Time between probes. None = the `supervisor.health_check_interval` setting (default 10s).
+    pub interval: Option<std::time::Duration>,
+    /// Per-request timeout. None = the `supervisor.health_http_timeout` setting (default 5s).
+    pub timeout: Option<std::time::Duration>,
+    /// Consecutive failed probes before the daemon is killed. None = the `supervisor.health_check_retries` setting (default 3).
+    pub retries: Option<u32>,
+}
+
+impl HealthHttp {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            status: vec![],
+            interval: None,
+            timeout: None,
+            retries: None,
+        }
+    }
+}
+
+impl std::fmt::Display for HealthHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.status.is_empty() {
+            f.write_str(&self.url)
+        } else {
+            let status = self
+                .status
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            write!(f, "{} (status: {})", self.url, status)
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct HealthHttpRaw {
+    url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    status: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retries: Option<u32>,
+}
+
+impl StringOrStruct for HealthHttp {
+    type Short = String;
+    type Raw = HealthHttpRaw;
+
+    fn from_short(url: String) -> Self {
+        Self::new(url)
+    }
+
+    fn from_raw(raw: HealthHttpRaw) -> std::result::Result<Self, String> {
+        for status in &raw.status {
+            if !(100..=599).contains(status) {
+                return Err(format!(
+                    "health_http status must be between 100 and 599: {status}"
+                ));
+            }
+        }
+        if let Some(retries) = raw.retries
+            && retries < 1
+        {
+            return Err(format!("health_http retries must be >= 1: {retries}"));
+        }
+        let interval = parse_interval(&raw.interval)?;
+        let timeout = parse_positive_timeout(&raw.timeout)?;
+        Ok(Self {
+            url: raw.url,
+            status: raw.status,
+            interval,
+            timeout,
+            retries: raw.retries,
+        })
+    }
+
+    fn is_shorthand(&self) -> bool {
+        self.status.is_empty()
+            && self.interval.is_none()
+            && self.timeout.is_none()
+            && self.retries.is_none()
+    }
+
+    fn to_short(&self) -> String {
+        self.url.clone()
+    }
+
+    fn to_raw(&self) -> HealthHttpRaw {
+        HealthHttpRaw {
+            url: self.url.clone(),
+            status: self.status.clone(),
+            interval: format_timeout(self.interval),
+            timeout: format_timeout(self.timeout),
+            retries: self.retries,
+        }
+    }
+}
+
+impl Serialize for HealthHttp {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.string_or_struct_serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for HealthHttp {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::string_or_struct_deserialize(d)
+    }
+}
+
+impl JsonSchema for HealthHttp {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("HealthHttp")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "HTTP health check: a URL string accepting any 2xx response, or { url, status, interval, timeout, retries } object with periodic probing",
+            "oneOf": [
+                { "type": "string", "description": "HTTP URL to poll for health; any 2xx response is healthy" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "HTTP URL to poll for health" },
+                        "status": {
+                            "type": "array",
+                            "description": "Exact HTTP status codes that indicate health. Omit to accept any 2xx response.",
+                            "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+                        },
+                        "interval": { "type": "string", "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s)." },
+                        "timeout": { "type": "string", "description": "Per-request timeout (e.g. '5s', '30s'). Omit to use the `supervisor.health_http_timeout` setting (default 5s)." },
+                        "retries": { "type": "integer", "minimum": 1, "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3)." }
+                    },
+                    "required": ["url"]
+                }
+            ]
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HealthPort
+// ---------------------------------------------------------------------------
+
+/// TCP port health check configuration.
+/// TOML forms:
+///   health_port = 8443                                  # literal port
+///   health_port = "{{ daemons.redis.port }}"            # template
+///   health_port = { port = 8443, interval = "10s", retries = 3, timeout = "5s" }
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HealthPort {
+    /// TCP port number to probe for health. `None` when the port is
+    /// provided as a template.
+    pub port: Option<u16>,
+    /// Tera template string that renders to a port number. `None` when a
+    /// literal port is used.
+    pub template: Option<String>,
+    /// Time between probes. None = the `supervisor.health_check_interval` setting (default 10s).
+    pub interval: Option<std::time::Duration>,
+    /// Consecutive failed probes before the daemon is killed. None = the `supervisor.health_check_retries` setting (default 3).
+    pub retries: Option<u32>,
+    /// Per-connect timeout. None = the `supervisor.health_port_timeout` setting (default 5s).
+    pub timeout: Option<std::time::Duration>,
+}
+
+impl HealthPort {
+    pub fn new(port: u16) -> Self {
+        Self {
+            port: Some(port),
+            template: None,
+            interval: None,
+            retries: None,
+            timeout: None,
+        }
+    }
+
+    pub fn from_template(template: impl Into<String>) -> Self {
+        Self {
+            port: None,
+            template: Some(template.into()),
+            interval: None,
+            retries: None,
+            timeout: None,
+        }
+    }
+
+    /// The resolved port number. `None` if this is an unrendered template.
+    pub fn as_port(&self) -> Option<u16> {
+        self.port
+    }
+}
+
+impl From<u16> for HealthPort {
+    fn from(port: u16) -> Self {
+        Self::new(port)
+    }
+}
+
+impl std::str::FromStr for HealthPort {
+    type Err = String;
+
+    /// Numeric strings must be a valid port (1-65535); anything else
+    /// (non-empty) is treated as a Tera template.
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let s = s.trim();
+        if s.is_empty() {
+            Err("health_port cannot be empty".to_string())
+        } else if let Ok(n) = s.parse::<i64>() {
+            u16::try_from(n)
+                .ok()
+                .filter(|&p| p > 0)
+                .map(Self::new)
+                .ok_or_else(|| format!("health_port out of range (1-65535): {n}"))
+        } else {
+            Ok(Self::from_template(s.to_string()))
+        }
+    }
+}
+
+impl std::fmt::Display for HealthPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (&self.port, &self.template) {
+            (Some(port), _) => write!(f, "{port}"),
+            (None, Some(template)) => f.write_str(template),
+            (None, None) => Ok(()),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[doc(hidden)]
+pub struct HealthPortRaw {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retries: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout: Option<String>,
+}
+
+impl Serialize for HealthPort {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if self.interval.is_none() && self.retries.is_none() && self.timeout.is_none() {
+            if let Some(port) = self.port {
+                return s.serialize_u16(port);
+            }
+            if let Some(template) = &self.template {
+                return s.serialize_str(template);
+            }
+            return s.serialize_none();
+        }
+        HealthPortRaw {
+            port: self.port,
+            template: self.template.clone(),
+            interval: format_timeout(self.interval),
+            retries: self.retries,
+            timeout: format_timeout(self.timeout),
+        }
+        .serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for HealthPort {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = HealthPort;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(
+                    "a port number, a template string, or an object with 'port'/'template' and optional 'interval'/'retries'/'timeout'",
+                )
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                u16::try_from(v)
+                    .ok()
+                    .filter(|&p| p > 0)
+                    .map(HealthPort::new)
+                    .ok_or_else(|| E::custom(format!("health_port out of range (1-65535): {v}")))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                if v < 0 {
+                    Err(E::custom("health_port cannot be negative"))
+                } else {
+                    self.visit_u64(v as u64)
+                }
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                v.parse().map_err(E::custom)
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let raw =
+                    HealthPortRaw::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                if raw.port.is_none() && raw.template.is_none() {
+                    return Err(serde::de::Error::custom(
+                        "health_port object must have either 'port' or 'template'",
+                    ));
+                }
+                if let Some(port) = raw.port
+                    && port == 0
+                {
+                    return Err(serde::de::Error::custom("port must be between 1 and 65535"));
+                }
+                if let Some(retries) = raw.retries
+                    && retries < 1
+                {
+                    return Err(serde::de::Error::custom(format!(
+                        "health_port retries must be >= 1: {retries}"
+                    )));
+                }
+                let interval = parse_interval(&raw.interval).map_err(serde::de::Error::custom)?;
+                let timeout =
+                    parse_positive_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
+                Ok(HealthPort {
+                    port: raw.port,
+                    template: raw.template,
+                    interval,
+                    retries: raw.retries,
+                    timeout,
+                })
+            }
+        }
+
+        d.deserialize_any(V)
+    }
+}
+
+impl JsonSchema for HealthPort {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("HealthPort")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "TCP port health check: a port number, a template string rendering to one, or a { port, interval, retries, timeout } object with periodic probing",
+            "oneOf": [
+                { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to probe for health" },
+                { "type": "string", "description": "Tera template that renders to a port number" },
+                {
+                    "type": "object",
+                    "properties": {
+                        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "TCP port number to probe for health" },
+                        "template": { "type": "string", "description": "Tera template that renders to a port number" },
+                        "interval": { "type": "string", "description": "Time between health probes (e.g. '10s', '5m'). Omit to use the `supervisor.health_check_interval` setting (default 10s)." },
+                        "retries": { "type": "integer", "minimum": 1, "description": "Consecutive failed probes before the daemon is killed. Omit to use the `supervisor.health_check_retries` setting (default 3)." },
+                        "timeout": { "type": "string", "description": "Per-connect timeout (e.g. '5s', '30s'). Omit to use the `supervisor.health_port_timeout` setting (default 5s)." }
+                    },
+                    "oneOf": [
+                        { "required": ["port"] },
+                        { "required": ["template"] }
+                    ]
                 }
             ]
         })
@@ -1532,5 +2085,429 @@ pub struct Dir(pub std::path::PathBuf);
 impl Default for Dir {
     fn default() -> Self {
         Self(crate::env::CWD.clone())
+    }
+}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Minimal wrapper exercising the same TOML shape as `[daemons.<name>]`.
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    struct TestDaemon {
+        health_cmd: Option<HealthCmd>,
+        health_http: Option<HealthHttp>,
+        health_port: Option<HealthPort>,
+    }
+
+    #[test]
+    fn test_health_cmd_string_form() {
+        let daemon: TestDaemon = toml::from_str(
+            "health_cmd = 'openssl s_client -connect localhost:8443 -brief </dev/null'",
+        )
+        .unwrap();
+        let hc = daemon.health_cmd.unwrap();
+        assert_eq!(
+            hc.run,
+            "openssl s_client -connect localhost:8443 -brief </dev/null"
+        );
+        assert!(hc.interval.is_none());
+        assert!(hc.timeout.is_none());
+        assert!(hc.retries.is_none());
+    }
+
+    #[test]
+    fn test_health_cmd_object_form() {
+        let daemon: TestDaemon = toml::from_str(
+            r#"
+health_cmd = { run = "curl -f http://localhost:3000/health", interval = "10s", timeout = "10s", retries = 3 }
+"#,
+        )
+        .unwrap();
+        let hc = daemon.health_cmd.unwrap();
+        assert_eq!(hc.run, "curl -f http://localhost:3000/health");
+        assert_eq!(hc.interval, Some(Duration::from_secs(10)));
+        assert_eq!(hc.timeout, Some(Duration::from_secs(10)));
+        assert_eq!(hc.retries, Some(3));
+    }
+
+    #[test]
+    fn test_health_http_string_form() {
+        let daemon: TestDaemon =
+            toml::from_str(r#"health_http = "http://localhost:3000/health""#).unwrap();
+        let hh = daemon.health_http.unwrap();
+        assert_eq!(hh.url, "http://localhost:3000/health");
+        assert!(hh.status.is_empty());
+        assert!(hh.interval.is_none());
+        assert!(hh.timeout.is_none());
+        assert!(hh.retries.is_none());
+    }
+
+    #[test]
+    fn test_health_http_object_form() {
+        let daemon: TestDaemon = toml::from_str(
+            r#"
+health_http = { url = "http://localhost:3000/health", status = [200, 401], interval = "10s", timeout = "5s", retries = 3 }
+"#,
+        )
+        .unwrap();
+        let hh = daemon.health_http.unwrap();
+        assert_eq!(hh.url, "http://localhost:3000/health");
+        assert_eq!(hh.status, vec![200, 401]);
+        assert_eq!(hh.interval, Some(Duration::from_secs(10)));
+        assert_eq!(hh.timeout, Some(Duration::from_secs(5)));
+        assert_eq!(hh.retries, Some(3));
+    }
+
+    #[test]
+    fn test_health_serialize_roundtrip() {
+        let daemon = TestDaemon {
+            health_cmd: Some(HealthCmd {
+                run: "curl -f http://localhost:3000/health".to_string(),
+                interval: Some(Duration::from_secs(5)),
+                timeout: None,
+                retries: Some(2),
+            }),
+            health_http: Some(HealthHttp {
+                url: "http://localhost:3000/health".to_string(),
+                status: vec![200],
+                interval: None,
+                timeout: Some(Duration::from_secs(5)),
+                retries: Some(2),
+            }),
+            health_port: None,
+        };
+        let serialized = toml::to_string(&daemon).unwrap();
+        let back: TestDaemon = toml::from_str(&serialized).unwrap();
+        assert_eq!(back.health_cmd, daemon.health_cmd);
+        assert_eq!(back.health_http, daemon.health_http);
+    }
+
+    #[test]
+    fn test_health_serialize_shorthand_roundtrip() {
+        let daemon = TestDaemon {
+            health_cmd: Some(HealthCmd::new("pg_isready -h localhost")),
+            health_http: Some(HealthHttp::new("http://localhost:3000/health")),
+            health_port: None,
+        };
+        let serialized = toml::to_string(&daemon).unwrap();
+        assert!(serialized.contains("health_cmd = \"pg_isready -h localhost\""));
+        assert!(serialized.contains("health_http = \"http://localhost:3000/health\""));
+        let back: TestDaemon = toml::from_str(&serialized).unwrap();
+        assert_eq!(back.health_cmd, daemon.health_cmd);
+        assert_eq!(back.health_http, daemon.health_http);
+    }
+
+    #[test]
+    fn test_health_port_object_missing_port_and_template_rejected() {
+        let err = toml::from_str::<TestDaemon>("health_port = { retries = 2 }").unwrap_err();
+        let err = format!("{err:?}");
+        assert!(
+            err.contains("health_port object must have either 'port' or 'template'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_invalid_status_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", status = [99] }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("health_http status must be between 100 and 599"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_invalid_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", timeout = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_invalid_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", timeout = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_invalid_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", interval = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_invalid_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", interval = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_zero_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", interval = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_zero_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", interval = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_zero_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 8443, interval = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_zero_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", timeout = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_zero_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", timeout = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_zero_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 8443, timeout = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_retries_zero_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", retries = 0 }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("health_cmd retries must be >= 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_retries_zero_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", retries = 0 }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("health_http retries must be >= 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_literal_form() {
+        let daemon: TestDaemon = toml::from_str("health_port = 8443").unwrap();
+        let hp = daemon.health_port.unwrap();
+        assert_eq!(hp.port, Some(8443));
+        assert!(hp.template.is_none());
+        assert!(hp.interval.is_none());
+        assert!(hp.retries.is_none());
+    }
+
+    #[test]
+    fn test_health_port_template_string_form() {
+        let daemon: TestDaemon =
+            toml::from_str(r#"health_port = "{{ daemons.redis.port }}""#).unwrap();
+        let hp = daemon.health_port.unwrap();
+        assert!(hp.port.is_none());
+        assert_eq!(hp.template.as_deref(), Some("{{ daemons.redis.port }}"));
+        assert!(hp.interval.is_none());
+        assert!(hp.retries.is_none());
+    }
+
+    #[test]
+    fn test_health_port_object_form() {
+        let daemon: TestDaemon = toml::from_str(
+            r#"
+health_port = { port = 8443, interval = "10s", retries = 3 }
+"#,
+        )
+        .unwrap();
+        let hp = daemon.health_port.unwrap();
+        assert_eq!(hp.port, Some(8443));
+        assert!(hp.template.is_none());
+        assert_eq!(hp.interval, Some(Duration::from_secs(10)));
+        assert_eq!(hp.retries, Some(3));
+    }
+
+    #[test]
+    fn test_health_port_out_of_range_rejected() {
+        let err = toml::from_str::<TestDaemon>("health_port = 0").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("health_port out of range (1-65535)"),
+            "unexpected error: {err}"
+        );
+        let err = toml::from_str::<TestDaemon>("health_port = 70000").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("health_port out of range (1-65535)"),
+            "unexpected error: {err}"
+        );
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 0 }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("between 1 and 65535"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_invalid_interval_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 8443, interval = "not-a-duration" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_retries_zero_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 8443, retries = 0 }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("health_port retries must be >= 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_serialize_roundtrip() {
+        let daemon = TestDaemon {
+            health_cmd: None,
+            health_http: None,
+            health_port: Some(HealthPort {
+                port: Some(8443),
+                template: None,
+                interval: Some(Duration::from_secs(10)),
+                retries: Some(3),
+                timeout: Some(Duration::from_secs(5)),
+            }),
+        };
+        let serialized = toml::to_string(&daemon).unwrap();
+        let back: TestDaemon = toml::from_str(&serialized).unwrap();
+        assert_eq!(back.health_port, daemon.health_port);
+
+        let shorthand = TestDaemon {
+            health_cmd: None,
+            health_http: None,
+            health_port: Some(HealthPort::new(8443)),
+        };
+        let serialized = toml::to_string(&shorthand).unwrap();
+        assert!(serialized.contains("health_port = 8443"));
     }
 }

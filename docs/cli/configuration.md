@@ -644,6 +644,56 @@ When using `watch` patterns to auto-restart daemons on file changes, this contro
 
 This prevents rapid restart cycles when many files change at once (e.g., during a build or git checkout).
 
+## `supervisor.health_check_interval`
+
+- **Type:** `duration`
+- **Default:** `10s`
+- **Set with:** `PITCHFORK_HEALTH_CHECK_INTERVAL`
+
+Default time between health probes
+
+When a daemon has `health_cmd`, `health_http` or `health_port` configured but does not set its own `interval`, the supervisor probes it this often.
+
+## `supervisor.health_check_retries`
+
+- **Type:** `int`
+- **Default:** `3`
+- **Set with:** `PITCHFORK_HEALTH_CHECK_RETRIES`
+
+Default consecutive health-check failures before killing a daemon
+
+When a daemon's `health_cmd`, `health_http` or `health_port` fails this many times in a row, the daemon is killed as a crash so the retry logic restarts it. Individual daemons can override this with `retries` in their health check configuration.
+
+## `supervisor.health_cmd_timeout`
+
+- **Type:** `duration`
+- **Default:** `10s`
+- **Set with:** `PITCHFORK_HEALTH_CMD_TIMEOUT`
+
+Default per-probe timeout for `health_cmd`
+
+Maximum time to wait for a `health_cmd` shell command to finish before counting the probe as failed and cancelling it.
+
+## `supervisor.health_http_timeout`
+
+- **Type:** `duration`
+- **Default:** `5s`
+- **Set with:** `PITCHFORK_HEALTH_HTTP_TIMEOUT`
+
+Default per-request timeout for `health_http`
+
+Maximum time to wait for a response from a `health_http` endpoint before counting the probe as failed.
+
+## `supervisor.health_port_timeout`
+
+- **Type:** `duration`
+- **Default:** `5s`
+- **Set with:** `PITCHFORK_HEALTH_PORT_TIMEOUT`
+
+Default per-connect timeout for `health_port`
+
+Maximum time to wait for a TCP connection to a `health_port` to establish before counting the probe as failed.
+
 ## `supervisor.http_client_timeout`
 
 - **Type:** `duration`

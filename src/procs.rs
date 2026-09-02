@@ -98,7 +98,7 @@ impl Procs {
         process_start_token(pid)
     }
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(unix, windows))]
     fn start_time_matches(&self, pid: u32, expected: u64) -> bool {
         self.start_time(pid) == Some(expected)
     }
@@ -197,14 +197,23 @@ impl Procs {
     /// Identity is refreshed inside the blocking kill operation, immediately
     /// before signaling. Linux holds a pidfd and Windows holds an open process
     /// handle across termination so the validated PID cannot be recycled.
-    /// Unix platforms without a durable process handle fail closed.
+    /// Unix platforms without a durable process handle re-verify the start
+    /// time inside the blocking operation, right before the signal — the
+    /// same check-then-signal atomicity tokio affords in one closure. Pass
+    /// `None` to fail closed (refuse to signal anything).
     pub async fn kill_process_group_if_start_time_matches_async(
         &self,
         pid: u32,
-        expected_start_time: u64,
+        expected_start_time: Option<u64>,
         stop_signal: i32,
         stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
+        let Some(expected_start_time) = expected_start_time else {
+            warn!(
+                "no recorded start time for pid {pid}; refusing to signal it (identity cannot be bound to a process generation)"
+            );
+            return Ok(false);
+        };
         tokio::task::spawn_blocking(move || {
             PROCS.kill_process_group(pid, stop_signal, stop_timeout, Some(expected_start_time))
         })
@@ -245,14 +254,22 @@ impl Procs {
         }
 
         // A start-time check alone cannot prevent the numeric PID/PGID from
-        // being recycled before killpg. Linux closes that race with a pidfd;
-        // other Unix platforms must refuse identity-checked termination.
+        // being recycled before killpg. Linux closes that race with a pidfd.
+        // Other Unix platforms have no durable process handle, so they do the
+        // next best thing: re-read the start time fresh from the kernel here,
+        // inside the blocking operation and immediately before the signal, so
+        // the check-to-signal gap is just the adjacency of two syscalls in one
+        // thread — no await, no scheduler boundary. For that gap to matter, the
+        // kernel would have to wrap the entire sequential PID space (XNU
+        // allocates monotonically from lastpid and refuses IDs still in use as
+        // a proc, pgrp, or session) and hand the exact PGID to a new group
+        // leader between the two syscalls, which is not reachable in practice.
         #[cfg(not(target_os = "linux"))]
-        if expected_start_time.is_some() {
-            warn!(
-                "cannot securely identify process group {pgid} on this platform; refusing to signal it"
-            );
-            return Ok(false);
+        if let Some(expected) = expected_start_time {
+            if !self.start_time_matches(pid, expected) {
+                debug!("process {pid} identity changed before killpg; refusing to signal it");
+                return Ok(false);
+            }
         }
 
         debug!("killing process group {pgid} with {signal_name}");
@@ -1274,7 +1291,7 @@ mod tests {
         let killed = PROCS
             .kill_process_group_if_start_time_matches_async(
                 pid,
-                actual_start_time.saturating_add(1),
+                Some(actual_start_time.saturating_add(1)),
                 libc::SIGTERM,
                 Some(Duration::from_millis(100)),
             )
@@ -1285,9 +1302,13 @@ mod tests {
         assert!(PROCS.is_running(pid), "mismatched process must survive");
     }
 
-    #[cfg(not(target_os = "linux"))]
+    /// On Unix platforms without a durable process handle the generation
+    /// check runs inside the blocking operation, immediately before the
+    /// signal: a matching generation is signalled, a mismatched one is
+    /// refused at the last moment.
+    #[cfg(all(unix, not(target_os = "linux")))]
     #[tokio::test]
-    async fn orphan_identity_checked_group_kill_fails_closed_without_pidfd() {
+    async fn identity_checked_group_kill_reverifies_inside_blocking_op() {
         let mut command = Command::new("sleep");
         command
             .arg("30")
@@ -1315,17 +1336,17 @@ mod tests {
         let killed = PROCS
             .kill_process_group_if_start_time_matches_async(
                 pid,
-                actual_start_time,
+                Some(actual_start_time),
                 libc::SIGTERM,
                 Some(Duration::from_millis(100)),
             )
             .await
             .expect("identity-checked kill should not error");
 
-        assert!(!killed);
+        assert!(killed, "matching generation must be signalled");
         assert!(
-            PROCS.is_running(pid),
-            "process must survive when identity cannot be pinned"
+            !PROCS.is_running(pid),
+            "signalled process group must be gone"
         );
     }
 

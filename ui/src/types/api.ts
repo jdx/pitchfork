@@ -42,6 +42,9 @@ export interface DaemonEntry {
   ready_http_url: string | null
   ready_port: number | null
   ready_cmd: string | null
+  health_cmd: string | null
+  health_http_url: string | null
+  health_port: number | null
   proxy_url: string | null
   pty: boolean | null
   proxy: boolean | null

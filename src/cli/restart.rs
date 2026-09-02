@@ -74,6 +74,15 @@ pub struct Restart {
     /// Shell command to poll for readiness (exit code 0 = ready)
     #[usage(long)]
     cmd: Option<String>,
+    /// Shell command to poll for health (exit code 0 = healthy)
+    #[usage(long)]
+    health_cmd: Option<String>,
+    /// HTTP endpoint URL to poll for health
+    #[usage(long)]
+    health_http: Option<String>,
+    /// TCP port to probe for health (connection success = healthy)
+    #[usage(long)]
+    health_port: Option<u16>,
     /// Suppress startup log output
     #[usage(short, long)]
     quiet: bool,
@@ -113,6 +122,9 @@ impl Restart {
             http: self.http.clone(),
             port: self.port,
             cmd: self.cmd.clone(),
+            health_cmd: self.health_cmd.clone(),
+            health_http: self.health_http.clone(),
+            health_port: self.health_port,
             quiet: self.quiet,
             ..Default::default()
         };

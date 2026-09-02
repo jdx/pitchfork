@@ -170,9 +170,103 @@ pitchfork metadata, and resolved `$PORT`, `$PORT0`, `$PORT1`, ... variables.
 Use this when you need more complex readiness checks than the built-in options provide.
 :::
 
+## Health Checks
+
+Ready checks gate startup: they run once, and startup fails if they never succeed.
+Health checks run periodically for the daemon's whole lifetime. If a probe fails
+`retries` consecutive times, pitchfork kills the daemon and treats it exactly
+like a crash: the monitor records `Errored`, the `retry` setting restarts it as
+usual, and the `on_retry` hook fires. A successful probe resets the
+consecutive-failure counter, and a restarted daemon gets a fresh failure budget.
+
+**CLI:**
+```bash
+pitchfork run myapp --health-cmd "curl -sf http://localhost:3000/health" -- node server.js
+pitchfork start myapp --health-http http://localhost:3000/health
+pitchfork restart myapp --health-cmd "pg_isready -h localhost"
+pitchfork start myapp --health-port 8443
+```
+
+`--health-cmd` and `--health-http` take the string shorthand form on
+`pitchfork daemons add`, `pitchfork start`, `pitchfork run`, and
+`pitchfork restart`; `--health-port` takes a plain TCP port number.
+
+**Config:**
+```toml
+[daemons.api]
+run = "node server.js"
+health_cmd = "curl -sf http://localhost:3000/health"
+
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+health_cmd = { run = "pg_isready -h localhost", interval = "10s", timeout = "10s", retries = 3 }
+
+[daemons.webserver]
+run = "nginx"
+health_http = "http://localhost:3000/health"
+
+[daemons.web]
+run = "./web"
+health_http = { url = "http://localhost:3000/health", status = [200], interval = "10s", timeout = "5s", retries = 3 }
+
+[daemons.database]
+run = "postgres -D /var/lib/pgsql/data"
+health_port = 5432
+
+[daemons.cache]
+run = "./cache-server"
+health_port = { port = 6379, interval = "10s", retries = 3, timeout = "5s" }
+```
+
+The command form treats exit code 0 as healthy; the HTTP form accepts any 2xx
+status, or exactly the `status` codes you list; the port form considers a TCP
+connection to `127.0.0.1:<port>` a success (connection refused/reset counts as
+failed). When a daemon omits a field, it falls back to the
+`supervisor.health_check_interval`, `supervisor.health_cmd_timeout`,
+`supervisor.health_http_timeout`, `supervisor.health_port_timeout`, and
+`supervisor.health_check_retries` settings, which default to `interval` 10s,
+`timeout` 10s for `health_cmd`, 5s for `health_http` and `health_port`, and
+`retries` 3. `health_port` also accepts a per-daemon `timeout` field, falling
+back to `supervisor.health_port_timeout` when omitted.
+
+::: tip
+The health check starts as soon as the daemon is running, so the
+`retries * interval` window doubles as the startup grace period: a daemon that
+is still becoming ready has that long before a healthy probe is required.
+Slow-starting daemons should raise `interval` or `retries`. If multiple probe
+kinds (`health_cmd`, `health_http`, `health_port`) are configured, all run
+every interval and any one failing counts as an unhealthy probe.
+:::
+
+**Best for:** long-running processes that stay alive but stop working. The
+classic case is an SSH tunnel, which keeps running after the connection drops
+and would pass any pid-based check:
+
+```toml
+[daemons.tunnel]
+run = "ssh -N -L 8443:localhost:443 tunnel-host"
+retry = 3
+health_cmd = { run = "openssl s_client -connect localhost:8443 -brief </dev/null", interval = "10s", retries = 3 }
+```
+
+The probe makes a real TLS connection through the tunnel; once it fails 3
+times in a row, pitchfork kills the tunnel and `retry` restarts it.
+
+A plain TCP-connect probe is the cheaper equivalent — it only verifies that
+something accepts connections on the forwarded port, without the TLS
+handshake:
+
+```toml
+[daemons.tunnel]
+run = "ssh -N -L 8443:localhost:443 tunnel-host"
+retry = 3
+health_port = 8443
+```
+
 ## Templates
 
-All ready check fields (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`) accept
+All ready check fields (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`)
+and health check fields (`health_cmd`, `health_http`, `health_port`) accept
 [Tera templates](/guides/configuration-templates) to reference resolved values from
 daemons started earlier in the dependency order:
 
@@ -190,6 +284,16 @@ depends = ["redis"]
 
 `ready_port` templates must render to a port number (1-65535); otherwise the daemon
 fails to start with an error.
+
+Health checks can reference the same resolved values:
+
+```toml
+[daemons.worker]
+run = "worker --redis-port {{ daemons.redis.port }}"
+# Health: redis must keep answering pings on the resolved (possibly bumped) port
+depends = ["redis"]
+health_cmd = "redis-cli -p {{ daemons.redis.port }} ping"
+```
 
 ## Behaviors
 

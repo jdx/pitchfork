@@ -11,6 +11,9 @@ use crate::daemon_status::DaemonStatus;
 use crate::error::FileError;
 use crate::pitchfork_toml::CpuLimit;
 use crate::pitchfork_toml::CronRetrigger;
+use crate::pitchfork_toml::HealthCmd;
+use crate::pitchfork_toml::HealthHttp;
+use crate::pitchfork_toml::HealthPort;
 use crate::pitchfork_toml::MemoryLimit;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::pitchfork_toml::PortConfig;
@@ -74,6 +77,9 @@ pub(crate) struct UpsertDaemonOpts {
     pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<ReadyPort>,
     pub ready_cmd: Option<ReadyCmd>,
+    pub health_cmd: Option<HealthCmd>,
+    pub health_http: Option<HealthHttp>,
+    pub health_port: Option<HealthPort>,
     /// Port configuration
     pub port: Option<PortConfig>,
     /// Resolved ports actually used after auto-bump (may differ from expected).
@@ -161,6 +167,9 @@ impl UpsertDaemonOpts {
             o.ready_http = opts.ready_http.clone();
             o.ready_port = opts.ready_port.clone();
             o.ready_cmd = opts.ready_cmd.clone();
+            o.health_cmd = opts.health_cmd.clone();
+            o.health_http = opts.health_http.clone();
+            o.health_port = opts.health_port.clone();
             o.port = opts.port.clone();
             o.depends = Some(opts.depends.clone());
             o.env = opts.env.clone();
@@ -267,6 +276,15 @@ impl Supervisor {
             ready_cmd: opts
                 .ready_cmd
                 .or(existing.and_then(|d| d.ready_cmd.clone())),
+            health_cmd: opts
+                .health_cmd
+                .or(existing.and_then(|d| d.health_cmd.clone())),
+            health_http: opts
+                .health_http
+                .or(existing.and_then(|d| d.health_http.clone())),
+            health_port: opts
+                .health_port
+                .or(existing.and_then(|d| d.health_port.clone())),
             port: opts.port.or_else(|| existing.and_then(|d| d.port.clone())),
             resolved_port: match opts.resolved_port {
                 Some(ports) => ports,

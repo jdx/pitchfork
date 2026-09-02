@@ -12,6 +12,7 @@
 
 mod adopt;
 mod autostop;
+mod health;
 mod hooks;
 mod ipc_handlers;
 mod lifecycle;
@@ -1512,7 +1513,7 @@ async fn cleanup_orphaned_daemon(
     let termination_result = PROCS
         .kill_process_group_if_start_time_matches_async(
             pid,
-            expected_start_time,
+            Some(expected_start_time),
             stop_cfg.signal.into(),
             stop_cfg.timeout,
         )

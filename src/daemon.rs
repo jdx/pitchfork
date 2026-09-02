@@ -1,8 +1,8 @@
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{
-    CpuLimit, CronRetrigger, Dir, MemoryLimit, PortConfig, ReadyCmd, ReadyHttp, ReadyOutput,
-    ReadyPort, Retry, StopConfig, WatchMode,
+    CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, PortConfig,
+    ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, WatchMode,
 };
 use indexmap::IndexMap;
 use std::fmt::Display;
@@ -85,6 +85,12 @@ pub struct Daemon {
     pub ready_port: Option<ReadyPort>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_cmd: Option<ReadyCmd>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub health_cmd: Option<HealthCmd>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub health_http: Option<HealthHttp>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub health_port: Option<HealthPort>,
     /// Port configuration (expected ports and auto-bump settings)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port: Option<PortConfig>,
@@ -171,6 +177,9 @@ pub struct RunOptions {
     pub ready_http: Option<ReadyHttp>,
     pub ready_port: Option<ReadyPort>,
     pub ready_cmd: Option<ReadyCmd>,
+    pub health_cmd: Option<HealthCmd>,
+    pub health_http: Option<HealthHttp>,
+    pub health_port: Option<HealthPort>,
     pub port: Option<PortConfig>,
     pub wait_ready: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -261,6 +270,9 @@ impl Daemon {
             ready_http: self.ready_http.clone(),
             ready_port: self.ready_port.clone(),
             ready_cmd: self.ready_cmd.clone(),
+            health_cmd: self.health_cmd.clone(),
+            health_http: self.health_http.clone(),
+            health_port: self.health_port.clone(),
             port: self.port.clone(),
             wait_ready: false,
             depends: self.depends.clone(),

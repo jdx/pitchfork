@@ -1677,6 +1677,27 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
             ]));
         }
 
+        if let Some(cmd) = &cfg.health_cmd {
+            lines.push(Line::from(vec![
+                Span::styled("Health cmd: ", Style::default().fg(GRAY)),
+                Span::styled(cmd.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if let Some(http) = &cfg.health_http {
+            lines.push(Line::from(vec![
+                Span::styled("Health HTTP: ", Style::default().fg(GRAY)),
+                Span::styled(http.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+
+        if let Some(port) = &cfg.health_port {
+            lines.push(Line::from(vec![
+                Span::styled("Health port: ", Style::default().fg(GRAY)),
+                Span::styled(port.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+
         if cfg.boot_start.unwrap_or(false) {
             lines.push(Line::from(vec![
                 Span::styled("Boot start: ", Style::default().fg(GRAY)),

@@ -49,6 +49,9 @@ Examples:
 - **`--ready-http <READY_HTTP>`** — HTTP endpoint URL to poll for readiness
 - **`--ready-port <READY_PORT>`** — TCP port to check for readiness (a number or Tera template)
 - **`--ready-cmd <READY_CMD>`** — Shell command to poll for readiness
+- **`--health-cmd <HEALTH_CMD>`** — Shell command to poll for health (exit code 0 = healthy)
+- **`--health-http <HEALTH_HTTP>`** — HTTP endpoint URL to poll for health
+- **`--health-port <HEALTH_PORT>`** — TCP port to probe for health (connection success = healthy)
 - **`--expected-port <EXPECTED_PORT>`** — Ports the daemon is expected to bind to (can be specified multiple times or comma-separated)
 - **`--bump [BUMP]`** — Automatically find an available port if the expected port is in use
 - **`--depends <DEPENDS>`** — Daemon dependencies that must start first (can be specified multiple times)
