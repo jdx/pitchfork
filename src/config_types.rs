@@ -134,6 +134,25 @@ fn parse_timeout(raw: &Option<String>) -> std::result::Result<Option<std::time::
         .transpose()
 }
 
+/// Like `parse_timeout` but rejects a zero duration: health probes pass the
+/// timeout straight into `tokio::time::timeout`, where `0s` fails every probe
+/// immediately and eventually crash-kills a healthy daemon.
+fn parse_positive_timeout(
+    raw: &Option<String>,
+) -> std::result::Result<Option<std::time::Duration>, String> {
+    raw.as_ref()
+        .map(|s| {
+            let duration =
+                humantime::parse_duration(s).map_err(|e| format!("invalid timeout: {e}"))?;
+            if duration.is_zero() {
+                Err("invalid timeout: must be greater than 0".to_string())
+            } else {
+                Ok(duration)
+            }
+        })
+        .transpose()
+}
+
 /// Parse a humantime duration for an `interval` field. Same as `parse_timeout`
 /// but reports the correct field name in the error.
 fn parse_interval(
@@ -523,7 +542,7 @@ impl StringOrStruct for HealthCmd {
             return Err(format!("health_cmd retries must be >= 1: {retries}"));
         }
         let interval = parse_interval(&raw.interval)?;
-        let timeout = parse_timeout(&raw.timeout)?;
+        let timeout = parse_positive_timeout(&raw.timeout)?;
         Ok(Self {
             run: raw.run,
             interval,
@@ -672,7 +691,7 @@ impl StringOrStruct for HealthHttp {
             return Err(format!("health_http retries must be >= 1: {retries}"));
         }
         let interval = parse_interval(&raw.interval)?;
-        let timeout = parse_timeout(&raw.timeout)?;
+        let timeout = parse_positive_timeout(&raw.timeout)?;
         Ok(Self {
             url: raw.url,
             status: raw.status,
@@ -929,7 +948,8 @@ impl<'de> Deserialize<'de> for HealthPort {
                     )));
                 }
                 let interval = parse_interval(&raw.interval).map_err(serde::de::Error::custom)?;
-                let timeout = parse_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
+                let timeout =
+                    parse_positive_timeout(&raw.timeout).map_err(serde::de::Error::custom)?;
                 Ok(HealthPort {
                     port: raw.port,
                     template: raw.template,
@@ -2301,6 +2321,48 @@ health_port = { port = 8443, interval = "0s" }
         .unwrap_err();
         assert!(
             err.to_string().contains("invalid interval"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_cmd_zero_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_cmd = { run = "pg_isready", timeout = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_http_zero_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_http = { url = "http://localhost:3000/health", timeout = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_health_port_zero_timeout_rejected() {
+        let err = toml::from_str::<TestDaemon>(
+            r#"
+health_port = { port = 8443, timeout = "0s" }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("invalid timeout"),
             "unexpected error: {err}"
         );
     }
