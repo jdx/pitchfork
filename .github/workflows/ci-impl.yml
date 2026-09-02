@@ -102,7 +102,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/mbx
         with:
-          backend: ${{ inputs.trusted && 'local' || 'github' }}
+          backend: github
           mirror-github-cache: "true"
       - name: Build UI assets
         working-directory: ui
