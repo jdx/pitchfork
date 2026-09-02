@@ -13,6 +13,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  MBX_DIAGNOSTICS: true
   MISE_EXPERIMENTAL: true
 
 jobs:
@@ -37,6 +38,14 @@ jobs:
         with:
           backend: ${{ inputs.trusted && 'server' || 'github' }}
           mirror-github-cache: "true"
+      - name: Install diagnostic mbx
+        if: ${{ inputs.trusted }}
+        shell: bash
+        run: |
+          cargo install --git https://github.com/jdx/mr-boxington.git \
+            --rev 94674126e3a6ba63a22c7e7c77bbabb3e4da6da6 \
+            --locked --root "$RUNNER_TEMP/mbx-diagnostic" mbx
+          echo "$RUNNER_TEMP/mbx-diagnostic/bin" >> "$GITHUB_PATH"
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
