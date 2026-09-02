@@ -28,7 +28,7 @@ runs:
       shell: bash
       env:
         CACHE_LINKS: ${{ inputs.cache-links }}
-      run: |
+      run: | # zizmor: ignore[github-env] mise where returns the trusted tool install directory
         mise install mr-boxington
         echo "$(mise where mr-boxington)" >> "$GITHUB_PATH"
         echo "MBX_REMOTE_URL=" >> "$GITHUB_ENV"
