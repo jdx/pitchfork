@@ -30,7 +30,7 @@ jobs:
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
         with:
-          backend: ${{ inputs.trusted && 'local' || 'server' }}
+          backend: ${{ inputs.trusted && 'local' || 'github' }}
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
