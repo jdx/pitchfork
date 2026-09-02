@@ -186,14 +186,13 @@ impl Supervisor {
     /// probe (or the resource-limit observation) ran, not a fresh read: the
     /// kill is refused if the recorded daemon has since moved to a new process
     /// generation, because a restarted daemon that reuses the PID must not be
-    /// killed for its predecessor's failures. On Linux and Windows the signal
-    /// is issued via [`PROCS::kill_process_group_if_start_time_matches_async`],
-    /// which binds the start-time check and the kill into one atomic
-    /// operation (pidfd on Linux, an open process handle on Windows). Other
-    /// Unix platforms lack a durable process handle, so that checked kill is
-    /// refused there; the enforcement falls back to a best-effort signal after
-    /// the identity checks above have already confirmed the recorded
-    /// generation, so a failed daemon can still be terminated and restarted.
+    /// killed for its predecessor's failures. The signal is issued via
+    /// [`PROCS::kill_process_group_if_start_time_matches_async`], which binds
+    /// the start-time check and the kill into one blocking operation — pinned
+    /// atomically by a pidfd on Linux and an open process handle on Windows,
+    /// and re-verified immediately before the signal on other Unix platforms,
+    /// so a PID recycled between the checks above and the killpg is still
+    /// rejected there.
     ///
     /// `reason` names the enforcement in log lines (e.g. "due to resource
     /// limit violation" or "due to health check failure (2 consecutive
@@ -254,39 +253,28 @@ impl Supervisor {
         }
         let stop_cfg = daemon.stop_signal.unwrap_or_default();
         let stop_signal: i32 = stop_cfg.signal.into();
-        // Linux (pidfd) and Windows (open process handle) can pin the process
-        // identity across the kill, so use the atomically identity-checked
-        // path there. Fail closed when no start time was ever recorded: the
-        // kill cannot be bound to a process generation, so refuse rather than
-        // risk signalling a recycled PID.
-        #[cfg(any(target_os = "linux", windows))]
-        let kill_result = {
-            let Some(expected_start_time) = expected_start_time else {
-                warn!(
-                    "daemon {id} has no recorded start time; cannot securely kill pid {pid} {reason}"
-                );
-                return;
-            };
-            PROCS
-                .kill_process_group_if_start_time_matches_async(
-                    pid,
-                    expected_start_time,
-                    stop_signal,
-                    stop_cfg.timeout,
-                )
-                .await
+        // Fail closed when no start time was ever recorded: the kill cannot
+        // be bound to a process generation, so refuse rather than risk
+        // signalling a recycled PID.
+        let Some(expected_start_time) = expected_start_time else {
+            warn!(
+                "daemon {id} has no recorded start time; cannot securely kill pid {pid} {reason}"
+            );
+            return;
         };
-        // Other Unix platforms (macOS, BSD, ...) have no durable process
-        // handle, so an identity-checked process-group kill is refused there
-        // and a failed daemon would never be terminated (and thus never
-        // restarted). Fall back to a best-effort signal: the identity checks
-        // above just confirmed the recorded generation against the live
-        // process, and the window between that check and the killpg is
-        // negligible next to the probe period — far less exposure than
-        // leaving a failed daemon running forever.
-        #[cfg(all(unix, not(target_os = "linux")))]
+        // The identity check runs inside the blocking kill operation,
+        // immediately before the signal: Linux and Windows pin the process
+        // identity with a pidfd / open process handle, and other Unix
+        // platforms re-verify the start time in the same closure, so a PID
+        // recycled after the checks above is still rejected at the last
+        // moment before killpg.
         let kill_result = PROCS
-            .kill_process_group_async(pid, stop_signal, stop_cfg.timeout)
+            .kill_process_group_if_start_time_matches_async(
+                pid,
+                Some(expected_start_time),
+                stop_signal,
+                stop_cfg.timeout,
+            )
             .await;
         match kill_result {
             Ok(true) => {}

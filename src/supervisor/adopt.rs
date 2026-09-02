@@ -287,7 +287,7 @@ impl Supervisor {
             match PROCS
                 .kill_process_group_if_start_time_matches_async(
                     pid,
-                    expected_start_time,
+                    Some(expected_start_time),
                     stop_cfg.signal.into(),
                     stop_cfg.timeout,
                 )
