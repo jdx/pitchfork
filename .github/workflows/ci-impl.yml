@@ -35,7 +35,7 @@ jobs:
       - run: rm -rf .cargo
       - uses: ./.github/actions/mbx
         with:
-          backend: ${{ inputs.trusted && 'server' || 'github' }}
+          backend: ${{ inputs.trusted && 'local' || 'github' }}
           mirror-github-cache: "true"
       - name: Install Rust components
         run: rustup component add rustfmt clippy
@@ -102,7 +102,7 @@ jobs:
           cache: false
       - uses: ./.github/actions/mbx
         with:
-          backend: ${{ inputs.trusted && 'server' || 'github' }}
+          backend: ${{ inputs.trusted && 'local' || 'github' }}
           mirror-github-cache: "true"
       - name: Build UI assets
         working-directory: ui
