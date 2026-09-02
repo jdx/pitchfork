@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.24.0](https://github.com/jdx/pitchfork/compare/v2.23.0...v2.24.0) - 2026-08-31
+
+### Added
+
+- *(settings)* add global ready_delay default override ([#785](https://github.com/jdx/pitchfork/pull/785))
+
 ## [2.23.0](https://github.com/jdx/pitchfork/compare/v2.22.0...v2.23.0) - 2026-08-26
 
 ### Added
