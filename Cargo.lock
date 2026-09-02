@@ -4496,9 +4496,9 @@ checksum = "832f849be4b8046c843219bc92d067a6689530df53f56e3c0a52ff5ebbd2f89b"
 
 [[package]]
 name = "usage-config"
-version = "6.4.0"
+version = "6.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26de7cdb0937b87c778ae50e733a6922eaf9994d79eede89af62e09edf7dbd9f"
+checksum = "22f4f849c148dec82a367200a7b86376c529e46858a63d58350f8e8196f27486"
 dependencies = [
  "toml",
 ]
