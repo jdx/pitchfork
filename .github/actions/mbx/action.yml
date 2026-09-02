@@ -37,6 +37,7 @@ runs:
       run:
         | # zizmor: ignore[github-env] mise where returns the trusted tool install directory
         mise install mr-boxington
+        mise reshim -f
         echo "$(mise where mr-boxington)" >> "$GITHUB_PATH"
         echo "MBX_REMOTE_URL=" >> "$GITHUB_ENV"
         if [[ "$CACHE_LINKS" == true || ( "$CACHE_LINKS" == auto && "$RUNNER_OS" == Linux ) ]]; then
