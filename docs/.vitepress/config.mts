@@ -189,18 +189,14 @@ export default defineConfig({
     ["meta", { property: "og:site_name", content: "pitchfork" }],
     [
       "meta",
-      {
-        property: "og:image",
-        content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png",
-      },
+      { property: "og:image", content: "https://pitchfork.jdx.dev/img/og.png" },
     ],
-    ["meta", { name: "twitter:card", content: "summary" }],
+    ["meta", { property: "og:image:width", content: "1200" }],
+    ["meta", { property: "og:image:height", content: "630" }],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
     [
       "meta",
-      {
-        name: "twitter:image",
-        content: "https://pitchfork.jdx.dev/img/android-chrome-512x512.png",
-      },
+      { name: "twitter:image", content: "https://pitchfork.jdx.dev/img/og.png" },
     ],
   ],
 
