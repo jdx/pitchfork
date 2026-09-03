@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  MBX_DISABLE: "1"
   CARGO_TERM_COLOR: always
   MISE_EXPERIMENTAL: true
 
@@ -28,9 +29,9 @@ jobs:
         with:
           cache: false
       - run: rm -rf .cargo
-      - uses: ./.github/actions/mbx
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
-          backend: ${{ inputs.trusted && 'local' || 'server' }}
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
@@ -94,9 +95,9 @@ jobs:
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           cache: false
-      - uses: ./.github/actions/mbx
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
-          backend: server
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
       - name: Build UI assets
         working-directory: ui
         run: |
