@@ -30,7 +30,7 @@ jobs:
       - run: rm -rf .cargo
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
-          save-if: ${{ inputs.trusted && github.ref == 'refs/heads/main' }}
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
       - name: Install Rust components
         run: rustup component add rustfmt clippy
       - run: mise run build:ui
@@ -96,7 +96,7 @@ jobs:
           cache: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # zizmor: ignore[cache-poisoning] v2
         with:
-          save-if: ${{ inputs.trusted && github.ref == 'refs/heads/main' }}
+          save-if: ${{ inputs.trusted && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
       - name: Build UI assets
         working-directory: ui
         run: |
