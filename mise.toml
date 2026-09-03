@@ -95,7 +95,6 @@ run = [
 ]
 
 [tools]
-mr-boxington = "1.5.0"
 usage = "6.6.1"
 # Pinned rather than "latest" because tak is the measuring instrument: an
 # upgrade that changes how it samples would land in the series as a step change
@@ -110,10 +109,6 @@ pkl = "latest"
 "cargo:cargo-nextest" = "latest"
 rust = "stable"
 
-[wrappers.cargo]
-command = "mbx"
-env = { MBX_CARGO_SHIM_MODE = "1" }
-
 # Instruction-counted benchmarks (see tak.toml). Needs valgrind for the counts;
 # without it tak reports wall clock only and says so, so this still works on
 # macOS where there is no usable cachegrind.
@@ -122,7 +117,7 @@ env = { MBX_CARGO_SHIM_MODE = "1" }
 [tasks.perf]
 depends = ["build:ui"]
 dir = "{{config_root}}"
-run = ["mbx build --release", "tak run"]
+run = ["cargo build --release", "tak run"]
 
 # Same measurement, appended to refs/notes/tak for this commit. Run by the
 # `perf` workflow on every push to main; the notes are the history. Safe to run
@@ -130,4 +125,4 @@ run = ["mbx build --release", "tak run"]
 [tasks."perf:record"]
 depends = ["build:ui"]
 dir = "{{config_root}}"
-run = ["mbx build --release", "tak run --record"]
+run = ["cargo build --release", "tak run --record"]
