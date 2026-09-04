@@ -32,13 +32,17 @@ if (!versionMatch) {
   console.warn("Unable to find package version in Cargo.toml");
 }
 const latestVersion = versionMatch?.[1] ?? "0.0.0";
+const siteUrl = "https://pitchfork.jdx.dev";
+const siteDescription =
+  "Run and supervise long-lived development processes with automatic restarts, ready checks, file watching, schedules, logs, and terminal or web dashboards.";
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
   title: "pitchfork",
-  description: "A devilishly good process manager for developers",
+  description: siteDescription,
   // Dark-only site: forces the dark theme and hides the appearance toggle
   appearance: "force-dark",
+  sitemap: { hostname: siteUrl },
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
@@ -81,7 +85,10 @@ export default defineConfig({
       {
         text: "Advanced",
         items: [
-          { text: "Configuration Templates", link: "/guides/configuration-templates" },
+          {
+            text: "Configuration Templates",
+            link: "/guides/configuration-templates",
+          },
           { text: "Container Mode", link: "/guides/container-mode" },
           { text: "mise Integration", link: "/guides/mise-integration" },
           { text: "MCP Server (AI Assistants)", link: "/guides/mcp" },
@@ -116,9 +123,7 @@ export default defineConfig({
       {
         text: "Resources",
         collapsed: true,
-        items: [
-          { text: "Troubleshooting", link: "/troubleshooting" },
-        ],
+        items: [{ text: "Troubleshooting", link: "/troubleshooting" }],
       },
     ],
 
@@ -175,15 +180,35 @@ export default defineConfig({
   } catch (e) {}
 })();`,
     ],
-    ["link", { rel: "icon", href: "/img/favicon.ico" }],
+    ["link", { rel: "icon", href: "/img/favicon.ico", sizes: "any" }],
+    [
+      "link",
+      {
+        rel: "icon",
+        href: "/img/favicon-32x32.png",
+        type: "image/png",
+        sizes: "32x32",
+      },
+    ],
+    ["link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }],
+    [
+      "link",
+      {
+        rel: "apple-touch-icon",
+        href: "/img/apple-touch-icon.png",
+        sizes: "180x180",
+      },
+    ],
+    ["link", { rel: "manifest", href: "/site.webmanifest" }],
     ["meta", { name: "theme-color", content: "#dc2626" }],
     ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:locale", content: "en_US" }],
     ["meta", { property: "og:title", content: "pitchfork" }],
     [
       "meta",
       {
         property: "og:description",
-        content: "A devilishly good process manager for developers",
+        content: siteDescription,
       },
     ],
     ["meta", { property: "og:site_name", content: "pitchfork" }],
@@ -193,12 +218,57 @@ export default defineConfig({
     ],
     ["meta", { property: "og:image:width", content: "1200" }],
     ["meta", { property: "og:image:height", content: "630" }],
-    ["meta", { name: "twitter:card", content: "summary_large_image" }],
     [
       "meta",
-      { name: "twitter:image", content: "https://pitchfork.jdx.dev/img/og.png" },
+      {
+        property: "og:image:alt",
+        content: "pitchfork — a process manager for development daemons",
+      },
+    ],
+    ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ["meta", { name: "twitter:site", content: "@jdxcode" }],
+    [
+      "meta",
+      {
+        name: "twitter:image",
+        content: "https://pitchfork.jdx.dev/img/og.png",
+      },
+    ],
+    [
+      "meta",
+      {
+        name: "twitter:image:alt",
+        content: "pitchfork — a process manager for development daemons",
+      },
     ],
   ],
+
+  transformHead({ pageData, title, description }) {
+    const url = `${siteUrl}/${pageData.relativePath}`
+      .replace(/index\.md$/, "")
+      .replace(/\.md$/, ".html");
+
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      ["meta", { name: "twitter:title", content: title }],
+      ["meta", { name: "twitter:description", content: description }],
+      [
+        "script",
+        { type: "application/ld+json" },
+        JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          name: title,
+          description,
+          url,
+          isPartOf: { "@type": "WebSite", name: "pitchfork", url: siteUrl },
+        }),
+      ],
+    ];
+  },
 
   // Ignore localhost URLs in CLI examples
   ignoreDeadLinks: [/^http:\/\/localhost/, /^http:\/\/127\.0\.0\.1/],
