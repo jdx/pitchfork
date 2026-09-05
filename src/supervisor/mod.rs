@@ -368,6 +368,19 @@ impl Supervisor {
         // reading it too late.
         let unclean = supervisor_exited_uncleanly(self).await;
 
+        // Claim the IPC socket and start accepting requests before anything
+        // else can observe or mutate shared state. The socket claim is the
+        // single ownership proof for the supervisor role: a competing
+        // `supervisor run` loses the claim here and bails out before it ever
+        // upserts its own PID below, so a contender can no longer overwrite
+        // the live supervisor's persisted record on its way down.
+        let (ipc, ipc_handle) = IpcServer::new().await?;
+        *self.ipc_shutdown.lock().await = Some(ipc_handle);
+        // The request loop runs in the background so the rest of startup
+        // (watchers, web/proxy servers, boot daemons) can proceed; the main
+        // task parks at the end of this function instead.
+        tokio::spawn(async move { SUPERVISOR.conn_watch(ipc).await });
+
         self.upsert_daemon(
             UpsertDaemonOpts::builder(DaemonId::pitchfork())
                 .set(|o| {
@@ -379,6 +392,15 @@ impl Supervisor {
         .await?;
         #[cfg(unix)]
         fix_state_dir_permissions();
+
+        // Publish our record to disk only after the socket claim succeeded,
+        // and *before* any boot daemons can start below. A boot daemon whose
+        // command invokes pitchfork again (e.g. `pitchfork start`) detects an
+        // existing supervisor by reading the state file and connecting to the
+        // socket bound above; having both in place up front guarantees the
+        // nested call attaches to us instead of spawning a second supervisor
+        // (split brain).
+        self.flush_state().await;
 
         // Self-heal: if the boot registration points to a stale binary path
         // (e.g. after a brew/mise upgrade), re-register with the current path.
@@ -565,10 +587,10 @@ impl Supervisor {
             crate::proxy::server::get_cached_slugs().await;
         });
 
-        let (ipc, ipc_handle) = IpcServer::new()?;
-        *self.ipc_shutdown.lock().await = Some(ipc_handle);
         self.start_state_flush_task();
-        self.conn_watch(ipc).await
+        // Startup is complete: park forever. Shutdown is driven entirely by
+        // the signal handlers spawned above, which run close() and exit().
+        std::future::pending::<Result<()>>().await
     }
 
     /// Start mDNS publishing for LAN mode (called after the proxy binds successfully).
