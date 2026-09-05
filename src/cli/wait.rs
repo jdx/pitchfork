@@ -125,7 +125,7 @@ impl Wait {
 
         // Register signal handlers only when --kill is set.
         let mut signal_rx = if self.kill {
-            Some(register_signal_receiver())
+            Some(register_signal_receiver()?)
         } else {
             None
         };
@@ -138,16 +138,26 @@ impl Wait {
 
         loop {
             tokio::select! {
-                signo = wait_for_signal(&mut signal_rx), if self.kill => {
-                    if let Some(signo) = signo {
-                        // Graceful SIGTERM -> SIGKILL stop via the supervisor
-                        // (hooks fire, reverse dependency order), then exit
-                        // like the shell does when killed by the signal.
-                        let ipc = ipc.as_ref().expect("--kill connects IPC upfront");
-                        if let Err(e) = ipc.stop_daemons(&ids).await {
-                            warn!("failed to stop waited daemons on signal: {e}");
+                signo = wait_for_signal(&mut signal_rx), if signal_rx.is_some() => {
+                    match signo {
+                        Some(signo) => {
+                            // Graceful SIGTERM -> SIGKILL stop via the supervisor
+                            // (hooks fire, reverse dependency order), then exit
+                            // like the shell does when killed by the signal.
+                            let ipc = ipc.as_ref().expect("--kill connects IPC upfront");
+                            if let Err(e) = ipc.stop_daemons(&ids).await {
+                                warn!("failed to stop waited daemons on signal: {e}");
+                            }
+                            std::process::exit(128 + signo);
                         }
-                        std::process::exit(128 + signo);
+                        None => {
+                            // Every signal listener closed without firing (e.g.
+                            // ctrl_c() failed at await time on Windows). Signal
+                            // handling is gone, so --kill can no longer act;
+                            // disable the branch and keep polling.
+                            warn!("--kill signal handling is no longer active; continuing to wait");
+                            signal_rx = None;
+                        }
                     }
                 }
                 _ = interval.tick() => {
@@ -192,9 +202,13 @@ impl Wait {
 /// Register one-shot handlers for the signals that should stop waited
 /// daemons under `--kill`, returning a receiver that yields the signal
 /// number once one of them arrives.
+///
+/// Errors if not a single handler could be registered: `--kill` would then
+/// silently do nothing.
 #[cfg(unix)]
-fn register_signal_receiver() -> mpsc::Receiver<i32> {
+fn register_signal_receiver() -> Result<mpsc::Receiver<i32>> {
     let (tx, rx) = mpsc::channel(4);
+    let mut registered = 0;
     for (kind, signo) in [
         (SignalKind::interrupt(), libc::SIGINT),
         (SignalKind::terminate(), libc::SIGTERM),
@@ -208,6 +222,7 @@ fn register_signal_receiver() -> mpsc::Receiver<i32> {
                 continue;
             }
         };
+        registered += 1;
         let tx = tx.clone();
         tokio::spawn(async move {
             let mut stream = stream;
@@ -216,12 +231,19 @@ fn register_signal_receiver() -> mpsc::Receiver<i32> {
             }
         });
     }
-    rx
+    if registered == 0 {
+        return Err(miette::miette!(
+            "failed to register any signal handler for --kill"
+        ));
+    }
+    Ok(rx)
 }
 
-/// Windows has no POSIX signals; Ctrl-C is the only stop signal.
+/// Windows has no POSIX signals; Ctrl-C is the only stop signal. The
+/// registration itself cannot fail here; a ctrl_c() error at await time
+/// closes the receiver and is handled by the main loop.
 #[cfg(windows)]
-fn register_signal_receiver() -> mpsc::Receiver<i32> {
+fn register_signal_receiver() -> Result<mpsc::Receiver<i32>> {
     let (tx, rx) = mpsc::channel(4);
     tokio::spawn(async move {
         if signal::ctrl_c().await.is_ok() {
@@ -229,7 +251,7 @@ fn register_signal_receiver() -> mpsc::Receiver<i32> {
             let _ = tx.send(2).await;
         }
     });
-    rx
+    Ok(rx)
 }
 
 /// Resolves when a registered signal arrives, yielding its signal number.

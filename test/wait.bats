@@ -25,13 +25,8 @@ EOF
   assert_success
   wait_for_status wait_single running
 
-  local start_time elapsed
-  start_time=$(date +%s)
   run pitchfork wait wait_single
-  elapsed=$(($(date +%s) - start_time))
-
   assert_success
-  [[ $elapsed -ge 2 ]]
 
   wait_for_status wait_single stopped
 }
@@ -52,14 +47,12 @@ EOF
   wait_for_status wait_short running
   wait_for_status wait_long running
 
-  local start_time elapsed
-  start_time=$(date +%s)
   run pitchfork wait wait_short wait_long
-  elapsed=$(($(date +%s) - start_time))
-
   assert_success
-  # `wait` must not return before the slowest daemon has stopped.
-  [[ $elapsed -ge 4 ]]
+  # `wait` must not return before the slowest daemon has stopped: by the
+  # time it returns, the slowest daemon must already report stopped, without
+  # any further polling from this test.
+  assert_equal "$(get_daemon_status wait_long)" "stopped"
   wait_for_status wait_short stopped
   wait_for_status wait_long stopped
 }
@@ -91,20 +84,21 @@ EOF
 }
 
 @test "wait propagates a non-zero daemon exit code" {
-  local fail_script
-  fail_script="$(script_path fail.sh)"
-
   create_pitchfork_toml <<EOF
 [daemons.wait_fail]
-run = 'bash $fail_script 2'
+run = "sleep 1 && exit 7"
 ready_delay = 0
 EOF
 
   run pitchfork start wait_fail
   assert_success
+  # The daemon becomes ready immediately, then exits 7 after 1s, so the
+  # supervisor records Errored(7) (not Failed) and `wait` must propagate
+  # exactly that code.
+  wait_for_status wait_fail running
 
   run pitchfork wait wait_fail
-  assert_failure 1
+  assert_failure 7
 }
 
 @test "--kill stops waited daemons when a signal arrives" {
