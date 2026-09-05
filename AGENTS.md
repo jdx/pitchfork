@@ -123,7 +123,8 @@ Configs merge in order (later overrides earlier):
 
 ## Conventional Commits
 
-All commit messages and PR titles MUST follow conventional commit format:
+PR titles MUST follow conventional commit format. Intermediate commit subjects
+SHOULD use the same format:
 
 **Format:** `<type>(<scope>): <description>`
 
@@ -137,13 +138,15 @@ All commit messages and PR titles MUST follow conventional commit format:
 - `test:` - Testing changes
 - `chore:` - Maintenance tasks, releases, dependency updates, CI/infrastructure changes
 - `security:` - Security-related changes
+- `ci:` - CI and automation changes
+- `revert:` - Reverting a previous change
 
 **Scopes:**
 - For command-specific changes, use the command name: `start`, `stop`, `status`, `logs`, `run`, etc.
 - For subsystem changes: `supervisor`, `ipc`, `config`, `state`, `daemon`, `cron`, `deps`
 
 **Description Style:**
-- Use lowercase after the colon
+- Start the description with a lowercase character
 - Use imperative mood ("add feature" not "added feature")
 - Keep it concise but descriptive
 
@@ -155,6 +158,11 @@ All commit messages and PR titles MUST follow conventional commit format:
 - `chore: release 0.2.0`
 - `chore(ci): fix linting in CI pipeline`
 - `chore(deps): update dependencies`
+
+CI validates the pull request title and re-runs when it is edited. Intermediate
+commit subjects are not checked because pull requests are squash-merged. CI
+mechanically checks the allowed type, syntax, and lowercase-leading description;
+imperative mood remains a review rule.
 
 ## GitHub Interactions
 
