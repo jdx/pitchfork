@@ -68,17 +68,29 @@ impl IpcServerHandle {
 }
 
 impl IpcServer {
-    pub fn new() -> Result<(Self, IpcServerHandle)> {
-        // Unix: create the socket directory and remove any stale socket file.
-        // Windows: named pipes exist in a flat kernel namespace — no files to create or clean up.
+    pub async fn new() -> Result<(Self, IpcServerHandle)> {
+        // Unix: bind to a per-process claim path first, then hard-link it onto
+        // the canonical socket path (see `publish_claim`) — that link is the
+        // atomic ownership claim. Windows: named pipes exist in a flat kernel
+        // namespace — no files to create or clean up.
+        #[cfg(unix)]
+        // No dots: `fs_name` passes the name through `with_extension`, which
+        // would replace anything after a dot instead of appending the suffix.
+        let bind_name = format!("main-claim-{}", std::process::id());
+        #[cfg(windows)]
+        let bind_name = "main".to_string();
+        #[cfg(unix)]
+        let claim_path = env::IPC_SOCK_DIR.join(format!("{bind_name}.sock"));
+
         #[cfg(unix)]
         {
             xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
-            let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
+            // Only a crashed predecessor with this exact pid can have left a
+            // claim file behind; clear it so the bind below succeeds.
+            let _ = xx::file::remove_file(&claim_path);
         }
-        let opts = ListenerOptions::new().name(fs_name("main")?);
-        #[cfg(unix)]
-        debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
+
+        let opts = ListenerOptions::new().name(fs_name(&bind_name)?);
         #[cfg(windows)]
         debug!("Listening on named pipe");
         let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -100,6 +112,15 @@ impl IpcServer {
         }
 
         let listener = listener_result.into_diagnostic()?;
+
+        // Publish the bound claim socket onto the canonical path. Failing here
+        // (a live supervisor owns the path) aborts startup before the caller
+        // records anything in the state file.
+        #[cfg(unix)]
+        {
+            Self::publish_claim(&claim_path).await?;
+            debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
+        }
 
         // When the supervisor is started as root, the socket file and directory
         // are owned by root with restrictive permissions (0600/0700). Non-root CLI
@@ -312,6 +333,122 @@ impl IpcServer {
             trace!("IPC send task terminated cleanly");
         });
         tx
+    }
+
+    /// Hard-link the freshly bound claim socket onto the canonical IPC socket
+    /// path, atomically claiming supervisor ownership.
+    ///
+    /// `link(2)` fails with `EEXIST` when any file already owns the path,
+    /// which is the mutual exclusion against a concurrent fresh claim. A live
+    /// incumbent is detected through that failure plus a connection probe —
+    /// a socket on the canonical path always belongs to a listening process,
+    /// because the link only happens after bind + listen — and startup
+    /// refuses to take over. Only a refused connection proves an incumbent
+    /// dead, and the stale-file replacement (probe → remove → link retry)
+    /// runs under an inter-process lock: the probe/remove pair is not atomic,
+    /// so without serialization a contender suspended between its own probe
+    /// and its removal could unlink a live socket another contender published
+    /// in between.
+    #[cfg(unix)]
+    async fn publish_claim(claim_path: &std::path::Path) -> Result<()> {
+        fn discard_claim(claim_path: &std::path::Path) {
+            let _ = xx::file::remove_file(claim_path);
+        }
+
+        enum Owner {
+            Live,
+            Dead,
+            Unknown(std::io::Error),
+        }
+
+        async fn probe_owner() -> Owner {
+            match tokio::net::UnixStream::connect(&*env::IPC_SOCK_MAIN).await {
+                Ok(_) => Owner::Live,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+                    ) =>
+                {
+                    Owner::Dead
+                }
+                Err(e) => Owner::Unknown(e),
+            }
+        }
+
+        // Fast path: the canonical path is free, and link(2) claims it
+        // atomically against every contender.
+        match std::fs::hard_link(claim_path, &*env::IPC_SOCK_MAIN) {
+            Ok(()) => {
+                discard_claim(claim_path);
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => {
+                discard_claim(claim_path);
+                return Err(e).into_diagnostic();
+            }
+        }
+
+        // The path is owned. Serialize the replacement protocol across
+        // contenders (same flock scheme as the state file). The lock is held
+        // for a few syscalls only; blocking here is safe because supervisor
+        // startup runs no other tasks yet.
+        let _claim_lock = xx::fslock::get(&env::IPC_SOCK_MAIN, false)?
+            .expect("fslock::get returns a lock unless forced");
+
+        for _ in 0..3 {
+            match probe_owner().await {
+                // Never silently take over a socket owned by a live
+                // supervisor: unlinking the file would strand the running
+                // instance while we steal new clients (split brain).
+                Owner::Live => {
+                    discard_claim(claim_path);
+                    bail!(
+                        "another pitchfork supervisor is listening on {}; refusing to take over \
+                         (use `pitchfork supervisor stop` first, or `--force` to replace it)",
+                        env::IPC_SOCK_MAIN.display()
+                    );
+                }
+                // e.g. permission denied: the owner cannot be proven dead, so
+                // leave the file alone and fail startup.
+                Owner::Unknown(e) => {
+                    discard_claim(claim_path);
+                    bail!(
+                        "cannot probe existing IPC socket {}: {e}",
+                        env::IPC_SOCK_MAIN.display()
+                    );
+                }
+                Owner::Dead => {
+                    // Refused connection (or no file at all) proves the path
+                    // stale; replace it.
+                    debug!(
+                        "removing stale IPC socket file {}",
+                        env::IPC_SOCK_MAIN.display()
+                    );
+                    let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
+                    match std::fs::hard_link(claim_path, &*env::IPC_SOCK_MAIN) {
+                        Ok(()) => {
+                            discard_claim(claim_path);
+                            return Ok(());
+                        }
+                        // A lock-free fresh claimer won the freed path in
+                        // between; the next iteration's probe decides
+                        // whether it is live.
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(e) => {
+                            discard_claim(claim_path);
+                            return Err(e).into_diagnostic();
+                        }
+                    }
+                }
+            }
+        }
+        discard_claim(claim_path);
+        bail!(
+            "failed to claim IPC socket path {} after repeated attempts",
+            env::IPC_SOCK_MAIN.display()
+        );
     }
 
     pub async fn read(&mut self) -> Result<(IpcRequest, Sender<IpcResponse>)> {
