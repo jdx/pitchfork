@@ -215,10 +215,17 @@ jobs:
           gh release download "$TAG" --repo "$REPO" --dir dist --clobber \
             --pattern 'pitchfork-*.tar.gz' --pattern 'pitchfork-*.zip'
           ls -la dist
-      # A consumer that has this file can generate completions, a man page,
-      # and documentation with its own copy of usage, so nothing of
-      # pitchfork's runs on the machine it is installed on.
-      - name: Publish the CLI specification
+      # The spec supports documentation generation without running the binary.
+      # Native completion scripts call the installed binary on each completion.
+      - name: Install completion syntax checkers
+        timeout-minutes: 5
+        run: |
+          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install -y zsh fish
+      - name: Publish the CLI specification and completions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
@@ -227,10 +234,23 @@ jobs:
           mkdir -p bin
           tar -xzf dist/pitchfork-x86_64-unknown-linux-gnu.tar.gz -C bin
           bin/pitchfork usage > pitchfork.usage.kdl
-          gh release upload "$TAG" pitchfork.usage.kdl --repo "$REPO" --clobber
+          for shell in bash zsh fish; do
+            bin/pitchfork completion "$shell" > pitchfork.$shell
+            test -s pitchfork.$shell
+            grep -Fq '__complete_word__' pitchfork.$shell
+            bin/pitchfork __complete_word__ --shell "$shell" --line 'pitchfork st' | grep -Fq -- 'status'
+          done
+          bash -n pitchfork.bash
+          zsh -n pitchfork.zsh
+          fish --no-execute pitchfork.fish
+          gh release upload "$TAG" pitchfork.usage.kdl pitchfork.bash pitchfork.zsh pitchfork.fish --repo "$REPO" --clobber
       - uses: jdx/packslip@a0d434ad57571c62dbd0ab5095b4eff607a71fd3 # v1.1.1
         with:
           tag: ${{ inputs.tag }}
           artifacts: dist/pitchfork-*.tar.gz dist/pitchfork-*.zip
           bin: pitchfork
-          resources: cli-spec/usage=asset:pitchfork.usage.kdl
+          resources: |
+            cli-spec/usage=asset:pitchfork.usage.kdl
+            completion/bash=asset:pitchfork.bash
+            completion/zsh=asset:pitchfork.zsh
+            completion/fish=asset:pitchfork.fish
