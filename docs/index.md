@@ -1,6 +1,7 @@
 ---
 # https://vitepress.dev/reference/default-theme-home-page
 layout: home
+title: Development process supervision and dashboards
 
 hero:
   name: "pitchfork"
