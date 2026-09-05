@@ -97,6 +97,8 @@ pub struct StartOptions {
     pub auto_bump_port: Option<crate::config_types::PortBump>,
     /// Number of times to retry on failure (for ad-hoc daemons)
     pub retry: Option<crate::config_types::Retry>,
+    /// Number of times to retry when startup fails before becoming ready (for ad-hoc daemons)
+    pub ready_retry: Option<crate::config_types::Retry>,
     /// Suppress output (ready check hints, startup logs)
     pub quiet: bool,
 }
@@ -1155,6 +1157,7 @@ impl IpcClient {
             force: opts.force,
             dir: crate::config_types::Dir(dir),
             retry: opts.retry.unwrap_or_default(),
+            ready_retry: opts.ready_retry.unwrap_or_default(),
             ready_delay: opts.delay,
             ready_output: opts.output.map(ReadyOutput::new),
             ready_http: merge_ready_http_override(None, opts.http),

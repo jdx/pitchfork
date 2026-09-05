@@ -25,7 +25,7 @@ features:
     link: /first-daemon
   - icon: "\U0001F608"
     title: Eternal Vigilance
-    details: Automatic restarts on failure with configurable retry limits and exponential backoff. Your daemons will rise again.
+    details: Automatic restarts on failure with configurable startup and background retry limits. Your daemons will rise again.
     link: /guides/auto-restart
   - icon: "\u26A1"
     title: Ready When Summoned

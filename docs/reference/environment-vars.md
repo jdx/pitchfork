@@ -79,7 +79,7 @@ echo "Running in namespace: $PITCHFORK_DAEMON_NAMESPACE"
 
 ### `PITCHFORK_RETRY_COUNT`
 
-The current retry attempt number. `0` on the initial run, `1` on the first retry, etc.
+The current retry attempt number. `0` on the initial run, `1` on the first retry, etc. Counts startup retries (`ready_retry`) during a blocking start and background restarts (`retry`) afterwards.
 
 ```bash
 # In your daemon script

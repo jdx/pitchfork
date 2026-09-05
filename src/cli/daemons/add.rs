@@ -57,6 +57,9 @@ pub struct Add {
     /// Number of retry attempts on failure (use \"true\" for infinite)
     #[usage(long)]
     retry: Option<String>,
+    /// Number of retry attempts when startup fails before ready (use \"true\" for infinite)
+    #[usage(long, value_name = "READY_RETRY")]
+    ready_retry: Option<String>,
     /// Glob patterns to watch for changes (can be specified multiple times)
     #[usage(long = "watch")]
     watch: Vec<String>,
@@ -181,6 +184,12 @@ impl Add {
             Retry::default()
         };
 
+        let ready_retry = if let Some(ref retry_str) = self.ready_retry {
+            Self::parse_retry(retry_str)?
+        } else {
+            Retry::default()
+        };
+
         let env = if self.env.is_empty() {
             None
         } else {
@@ -258,6 +267,7 @@ impl Add {
                 auto,
                 cron,
                 retry,
+                ready_retry,
                 ready_delay: self.ready_delay,
                 ready_output: self.ready_output.clone().map(ReadyOutput::new),
                 ready_http: self.ready_http.clone().map(ReadyHttp::new),

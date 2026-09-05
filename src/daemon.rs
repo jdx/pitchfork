@@ -74,6 +74,8 @@ pub struct Daemon {
     #[serde(default)]
     pub retry: Retry,
     #[serde(default)]
+    pub ready_retry: Retry,
+    #[serde(default)]
     pub retry_count: u32,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
@@ -172,6 +174,12 @@ pub struct RunOptions {
     pub cron_immediate: Option<bool>,
     pub retry: Retry,
     pub retry_count: u32,
+    pub ready_retry: Retry,
+    /// Whether `retry_count` is written to persisted state. `None` means persist;
+    /// inline ready-retry attempts beyond the first pass `Some(false)` so the
+    /// persisted counter only tracks background (tick) restarts.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub persist_retry_count: Option<bool>,
     pub ready_delay: Option<u64>,
     pub ready_output: Option<ReadyOutput>,
     pub ready_http: Option<ReadyHttp>,
@@ -264,7 +272,9 @@ impl Daemon {
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,
             retry: self.retry,
+            ready_retry: self.ready_retry,
             retry_count: self.retry_count,
+            persist_retry_count: None,
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),
