@@ -1,0 +1,21 @@
+can we use workflow dispatch to try to relese 2.24.1? [https://github.com/jdx/pitchfork](https://github.com/jdx/pitchfork)
+
+---
+
+why did ci fail?
+
+---
+
+add an empty fix commit to make a new release pr
+
+---
+
+udpate mise to latest
+
+---
+
+push the empty commit to origin/main
+
+---
+
+try again
