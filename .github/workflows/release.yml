@@ -186,3 +186,51 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           token: ${{ secrets.GITHUB_TOKEN }}
           profile: serious
+
+  # The packslip is this release's signed inventory: every archive's digest,
+  # the executable inside it, the shared objects it needs from the host, and
+  # the workflow identity that signed for all of it. An installer checks a
+  # download against jdx/pitchfork's identity rather than against a key this
+  # project would have to hold. See https://packslip.dev.
+  #
+  # Its own job because the matrix above uploads straight to the release from
+  # seven runners; one document covering the whole release can only be written
+  # once every one of them has landed.
+  packslip:
+    name: Publish the packslip
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p dist
+          gh release download "$TAG" --repo "$REPO" --dir dist --clobber \
+            --pattern 'pitchfork-*.tar.gz' --pattern 'pitchfork-*.zip'
+          ls -la dist
+      # A consumer that has this file can generate completions, a man page,
+      # and documentation with its own copy of usage, so nothing of
+      # pitchfork's runs on the machine it is installed on.
+      - name: Publish the CLI specification
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p bin
+          tar -xzf dist/pitchfork-x86_64-unknown-linux-gnu.tar.gz -C bin
+          bin/pitchfork usage > pitchfork.usage.kdl
+          gh release upload "$TAG" pitchfork.usage.kdl --repo "$REPO" --clobber
+      - uses: jdx/packslip@433c0c0f033e64c22f12433471768c255ef2bd93 # v0.3.0
+        with:
+          tag: ${{ inputs.tag }}
+          artifacts: dist/pitchfork-*.tar.gz dist/pitchfork-*.zip
+          bin: pitchfork
+          resources: cli-spec/usage=asset:pitchfork.usage.kdl
