@@ -19,7 +19,8 @@ use tokio::signal::unix::{self, SignalKind};
 
 /// Wait for daemons to stop, tailing the logs along the way
 ///
-/// Exits with the exit code of the last daemon to stop
+/// Exits 0 only when every daemon stopped cleanly; otherwise the last
+/// non-zero daemon exit code is propagated
 #[derive(Debug, usage_rs::Args)]
 #[usage(
     verbatim_doc_comment,
@@ -36,9 +37,9 @@ SIGTERM then SIGKILL, hooks fire, reverse dependency order), then the
 command exits with 128 + the signal number like the shell, so Ctrl-C
 yields 130.
 
-Exit code: 0 when every waited daemon stopped cleanly. Otherwise the exit
-code of the last daemon to stop is propagated, with unknown exit codes and
-failed daemons mapping to 1.
+Exit code: 0 when every waited daemon stopped cleanly. Otherwise the
+non-zero exit code of the last failed daemon to stop is propagated; unknown
+exit codes, failed daemons, and missing statuses map to 1.
 
 Useful in scripts that need to wait for daemons to complete.
 
@@ -132,8 +133,8 @@ impl Wait {
 
         let mut interval = time::interval(time::Duration::from_millis(100));
         let mut remaining = watched;
-        // Order in which the daemons stopped; the last entry decides the
-        // exit code propagated to the caller.
+        // Order in which the daemons stopped; among multiple non-zero exit
+        // codes, the last entry wins when propagating the exit code.
         let mut finish_order: Vec<DaemonId> = Vec::new();
 
         loop {
@@ -144,8 +145,12 @@ impl Wait {
                             // Graceful SIGTERM -> SIGKILL stop via the supervisor
                             // (hooks fire, reverse dependency order), then exit
                             // like the shell does when killed by the signal.
+                            // Stop only the daemons this invocation actually
+                            // watches (running at snapshot time): daemons
+                            // that were not running then may have started in
+                            // the meantime and must not be killed here.
                             let ipc = ipc.as_ref().expect("--kill connects IPC upfront");
-                            if let Err(e) = ipc.stop_daemons(&ids).await {
+                            if let Err(e) = ipc.stop_daemons(&watched_ids).await {
                                 warn!("failed to stop waited daemons on signal: {e}");
                             }
                             std::process::exit(128 + signo);
@@ -182,17 +187,22 @@ impl Wait {
         // process exits, so poll fresh state until every waited daemon
         // reaches a terminal status (bounded at ~2s).
         let statuses = read_terminal_statuses(&watched_ids).await;
-        let exit_code = match finish_order
-            .last()
-            .and_then(|id| statuses.iter().find(|(status_id, _)| status_id == id))
+        // Exit 0 only when every watched daemon's terminal status maps to
+        // 0; a status missing from the state (not persisted yet) maps to 1.
+        if watched_ids
+            .iter()
+            .any(|id| daemon_exit_code(id, &statuses) != 0)
         {
-            Some((_, status)) => status_exit_code(status),
-            // No terminal status recorded (state update not persisted yet):
-            // assume the daemon stopped cleanly.
-            None => 0,
-        };
-
-        if exit_code != 0 {
+            // Propagate the failure of the last daemon to stop among the
+            // failing ones; multiple failures in the same poll tick are
+            // ordered by target-list order, which only tiebreaks which
+            // non-zero code is returned.
+            let exit_code = finish_order
+                .iter()
+                .rev()
+                .map(|id| daemon_exit_code(id, &statuses))
+                .find(|code| *code != 0)
+                .unwrap_or(1);
             std::process::exit(exit_code);
         }
         Ok(())
@@ -258,6 +268,16 @@ fn register_signal_receiver() -> Result<mpsc::Receiver<i32>> {
 /// Returns None if the stream closed without ever receiving a signal.
 async fn wait_for_signal(signal_rx: &mut Option<mpsc::Receiver<i32>>) -> Option<i32> {
     signal_rx.as_mut()?.recv().await
+}
+
+/// Exit code a waited daemon's terminal status represents: the mapped
+/// status, or 1 when no terminal status was recorded yet (the supervisor
+/// has not persisted it, so the exit code is unknown).
+fn daemon_exit_code(id: &DaemonId, statuses: &[(DaemonId, DaemonStatus)]) -> i32 {
+    statuses
+        .iter()
+        .find(|(status_id, _)| status_id == id)
+        .map_or(1, |(_, status)| status_exit_code(status))
 }
 
 /// Map a daemon's terminal status to the exit code it represents.

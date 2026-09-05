@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 # E2E tests for the `pitchfork wait` command: waiting for one or more
-# daemons to exit, propagating the last exit code, and stopping waited
+# daemons to exit, propagating non-zero exit codes, and stopping waited
 # daemons on a signal with --kill.
 
 setup() {
@@ -99,6 +99,32 @@ EOF
 
   run pitchfork wait wait_fail
   assert_failure 7
+}
+
+@test "wait propagates an early failure even when a later daemon stops cleanly" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_fail_early]
+run = "sleep 1 && exit 7"
+ready_delay = 0
+
+[daemons.wait_clean_late]
+run = "sleep 4"
+ready_delay = 0
+EOF
+
+  run pitchfork start wait_fail_early wait_clean_late
+  assert_success
+  wait_for_status wait_fail_early running
+  wait_for_status wait_clean_late running
+
+  # 'wait_fail_early' exits 7 after 1s; 'wait_clean_late' stops cleanly
+  # after 4s. The later clean stop must not mask the earlier failure:
+  # 'wait' has to exit with exactly 7.
+  run pitchfork wait wait_fail_early wait_clean_late
+  assert_failure 7
+
+  wait_for_status wait_fail_early errored
+  wait_for_status wait_clean_late stopped
 }
 
 @test "--kill stops waited daemons when a signal arrives" {
