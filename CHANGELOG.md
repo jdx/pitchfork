@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.24.2](https://github.com/jdx/pitchfork/compare/v2.24.1...v2.24.2) - 2026-09-05
+
+### Other
+
+- publish a patch release with the current packaged contents
+
 ## [2.24.1](https://github.com/jdx/pitchfork/compare/v2.24.0...v2.24.1) - 2026-09-02
 
 ### Other
