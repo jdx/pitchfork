@@ -127,6 +127,32 @@ EOF
   wait_for_status wait_clean_late stopped
 }
 
+@test "wait propagates the first failing daemon's exit code in argument order" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_fail_first]
+run = "sleep 1 && exit 3"
+ready_delay = 0
+
+[daemons.wait_fail_second]
+run = "sleep 2 && exit 7"
+ready_delay = 0
+EOF
+
+  run pitchfork start wait_fail_first wait_fail_second
+  assert_success
+  wait_for_status wait_fail_first running
+  wait_for_status wait_fail_second running
+
+  # Both daemons fail, but 'wait_fail_first' is listed first: its exit
+  # code wins even though 'wait_fail_second' stops later. A "last failed
+  # to stop" rule would return 7 here, so this pins the new semantics.
+  run pitchfork wait wait_fail_first wait_fail_second
+  assert_failure 3
+
+  wait_for_status wait_fail_first errored
+  wait_for_status wait_fail_second errored
+}
+
 @test "--kill stops waited daemons when a signal arrives" {
   skip_on_windows "POSIX signals are not supported on Windows"
 

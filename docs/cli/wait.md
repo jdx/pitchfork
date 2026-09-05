@@ -17,9 +17,9 @@ SIGTERM then SIGKILL, hooks fire, reverse dependency order), then the
 command exits with 128 + the signal number like the shell, so Ctrl-C
 yields 130.
 
-Exit code: 0 when every waited daemon stopped cleanly. Otherwise the
-non-zero exit code of the last failed daemon to stop is propagated; unknown
-exit codes, failed daemons, and missing statuses map to 1.
+Exit code: 0 when every waited daemon stopped cleanly. Otherwise the exit
+code of the first failing daemon (in the order given) is propagated;
+unknown exit codes, failed daemons, and missing statuses map to 1.
 
 Useful in scripts that need to wait for daemons to complete.
 

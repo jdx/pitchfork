@@ -19,8 +19,8 @@ use tokio::signal::unix::{self, SignalKind};
 
 /// Wait for daemons to stop, tailing the logs along the way
 ///
-/// Exits 0 only when every daemon stopped cleanly; otherwise the last
-/// non-zero daemon exit code is propagated
+/// Exits 0 only when every daemon stopped cleanly; otherwise the exit
+/// code of the first failing daemon (in the order given) is propagated
 #[derive(Debug, usage_rs::Args)]
 #[usage(
     verbatim_doc_comment,
@@ -37,9 +37,9 @@ SIGTERM then SIGKILL, hooks fire, reverse dependency order), then the
 command exits with 128 + the signal number like the shell, so Ctrl-C
 yields 130.
 
-Exit code: 0 when every waited daemon stopped cleanly. Otherwise the
-non-zero exit code of the last failed daemon to stop is propagated; unknown
-exit codes, failed daemons, and missing statuses map to 1.
+Exit code: 0 when every waited daemon stopped cleanly. Otherwise the exit
+code of the first failing daemon (in the order given) is propagated;
+unknown exit codes, failed daemons, and missing statuses map to 1.
 
 Useful in scripts that need to wait for daemons to complete.
 
@@ -133,9 +133,6 @@ impl Wait {
 
         let mut interval = time::interval(time::Duration::from_millis(100));
         let mut remaining = watched;
-        // Order in which the daemons stopped; among multiple non-zero exit
-        // codes, the last entry wins when propagating the exit code.
-        let mut finish_order: Vec<DaemonId> = Vec::new();
 
         loop {
             tokio::select! {
@@ -170,8 +167,7 @@ impl Wait {
                     while i < remaining.len() {
                         let (_, pid) = &remaining[i];
                         if !PROCS.is_running(*pid) {
-                            let (id, _) = remaining.remove(i);
-                            finish_order.push(id);
+                            remaining.remove(i);
                         } else {
                             i += 1;
                         }
@@ -188,21 +184,14 @@ impl Wait {
         // reaches a terminal status (bounded at ~2s).
         let statuses = read_terminal_statuses(&watched_ids).await;
         // Exit 0 only when every watched daemon's terminal status maps to
-        // 0; a status missing from the state (not persisted yet) maps to 1.
-        if watched_ids
+        // 0; a status missing from the state (not persisted yet) maps to
+        // 1. Otherwise propagate the exit code of the first failing daemon
+        // in the order the daemons were selected (argument order).
+        if let Some(exit_code) = watched_ids
             .iter()
-            .any(|id| daemon_exit_code(id, &statuses) != 0)
+            .map(|id| daemon_exit_code(id, &statuses))
+            .find(|code| *code != 0)
         {
-            // Propagate the failure of the last daemon to stop among the
-            // failing ones; multiple failures in the same poll tick are
-            // ordered by target-list order, which only tiebreaks which
-            // non-zero code is returned.
-            let exit_code = finish_order
-                .iter()
-                .rev()
-                .map(|id| daemon_exit_code(id, &statuses))
-                .find(|code| *code != 0)
-                .unwrap_or(1);
             std::process::exit(exit_code);
         }
         Ok(())
