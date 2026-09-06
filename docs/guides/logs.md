@@ -1,6 +1,9 @@
+---
+description: Follow daemon logs, filter messages and structured fields, and configure retention and archives.
+---
 # Log Management
 
-View, filter, and manage daemon logs. Pitchfork stores all daemon logs in an SQLite database (`~/.local/state/pitchfork/logs/logs.db`) with full timestamp indexing, making filtering by time fast and reliable.
+View, filter, and manage daemon logs. Pitchfork stores all daemon logs in a SQLite database (`~/.local/state/pitchfork/logs/logs.db`) with full timestamp indexing, making filtering by time fast and reliable.
 
 ## View Logs
 
@@ -32,6 +35,17 @@ pitchfork logs api worker database
 ```
 
 Logs are interleaved with timestamps to show the correct order.
+
+## Search message text
+
+```sh
+pitchfork logs api --grep timeout
+pitchfork logs api --grep timeout --grep refused
+pitchfork logs api --regex 'HTTP [45][0-9]{2}'
+```
+
+`--grep` is case-insensitive unless you add `--case-sensitive`. Repeated `--grep`
+values match with OR. Use `--regex` for a regular expression.
 
 ## Filter by Line Count
 
@@ -96,10 +110,10 @@ pitchfork logs api --since 1h -n 20
 
 ## Structured Log Parsing
 
-Pitchfork can automatically parse structured logs produced by your daemons. When a log line is written in JSON or logfmt format, pitchfork extracts fields such as `level`, `msg`, and `logger` and stores them alongside the original message. This makes it possible to filter by log level, query individual fields, and pipe output through jq expressions.
+Pitchfork can parse structured logs when configured produced by your daemons. When a log line is written in JSON or logfmt format, pitchfork extracts fields such as `level`, `msg`, and `logger` and stores them alongside the original message. This makes it possible to filter by log level, query individual fields, and pipe output through jq expressions.
 
 <div class="structured-logs-screenshot">
-  <img src="/img/structured-logs.png" alt="Structured log output with level badges, logger names, and highlighted fields" />
+  <img loading="lazy" decoding="async" src="/img/structured-logs.png" alt="Structured log output with level badges, logger names, and highlighted fields" />
 </div>
 
 <style scoped>
@@ -153,7 +167,7 @@ pitchfork logs api --level error
 pitchfork logs api --level warn
 ```
 
-Level values are normalized automatically. For example, `fatal`, `critical`, `panic`, and `err` all match `error`, while `warning` matches `warn`.
+`--level warn` includes both warnings and errors; the flag selects a minimum severity. Level values are normalized automatically. For example, `fatal`, `critical`, `panic`, and `err` all match `error`, while `warning` matches `warn`.
 
 ### Filter by Field
 
@@ -162,13 +176,13 @@ pitchfork logs api --field request_id=abc123
 pitchfork logs api --field status=500 --field method=GET
 ```
 
-Field queries use SQLite `json_extract` on the stored `fields_json` column. Multiple `--field` flags are combined with AND.
+Multiple `--field` flags must all match. Field names refer to the structured data in the original log line.
 
 ### jq Filtering
 
 ```bash
-pitchfork logs api --jq '.level == "error" and .status >= 500'
-pitchfork logs api --jq '.request_id | startswith("req_00")'
+pitchfork logs api --jq '.level == "error" and .fields.status >= 500'
+pitchfork logs api --jq '.fields.request_id | startswith("req_00")'
 ```
 
 Each log entry is serialized into a JSON object with `timestamp`, `daemon_id`, `message`, `level`, `msg`, `logger`, and `fields`. The jq expression is evaluated against each object; entries that return a truthy value are kept.
@@ -205,7 +219,7 @@ The `level`, `msg`, `logger`, and `fields` fields are only present when the log 
 
 ```bash
 # SQL layer filters level=error, then jq filters status>=500
-pitchfork logs api --level error --jq '.status >= 500'
+pitchfork logs api --level error --jq '.fields.status >= 500'
 
 # --grep and --field can be combined
 pitchfork logs api --grep "timeout" --field service=api
@@ -268,7 +282,7 @@ Supported formats:
 - **Count-based (`line_retention`):** `10000`, `5000` — keep only the most recent N entries per daemon
 - **Unset (default):** no automatic pruning
 
-The supervisor evaluates this policy during its regular interval watcher cycle.
+The supervisor evaluates retention during its interval watcher cycle, no more than once per hour.
 
 ## Migrate Legacy Logs
 
@@ -288,17 +302,21 @@ You can also view logs in real-time through the [TUI](/guides/tui) (`pitchfork t
 
 ## Log Storage Location
 
-Logs are stored in a single SQLite database at `~/.local/state/pitchfork/logs/logs.db`. Each daemon has its own table partition identified by its qualified ID (`namespace/name`). See [File Locations](/reference/file-locations#logs) for details on the state directory resolution.
+Logs are stored in a single SQLite database at `~/.local/state/pitchfork/logs/logs.db`. Entries are keyed by the daemon's qualified ID (`namespace/name`). See [File Locations](/reference/file-locations#logs) for details on the state directory resolution.
 
-## Performance
+## Archive before pruning
 
-Structured logs are parsed once at ingestion time and stored as indexed columns (`level`, `msg`, `logger`, `fields_json`) in SQLite. Queries read these columns directly without re-parsing the original log line.
+Send entries to an archive command before retention deletes them:
 
-Benchmarked against [hl](https://github.com/pamburus/hl) (a multi-core terminal log viewer that parses JSON on every read) on 100,000 JSON log lines (~300 bytes each, 8 fields):
+```toml
+[settings.logs.archive_hook]
+command = "gzip -c >> /path/to/archive.jsonl.gz"
+batch_size = 1000
+```
 
-| Scenario | pitchfork (single-core) | hl (single-core) | hl (16-core) |
-|---|---|---|---|
-| Full retrieval | 135ms | 117ms | 20ms |
-| Level filter (`--level error`) | 40ms | 75ms | 15ms |
+The command receives JSON Lines on stdin. If it fails, pruning is skipped for
+that batch. Create the destination directory and make sure the supervisor can
+write to it. See the [archive settings](/cli/configuration#logs-archive-hook-command).
 
-On a single core, pitchfork is competitive on full retrieval and significantly faster on filtered queries thanks to SQLite's `idx_daemon_level_ts` index. hl's multi-core advantage comes from its striped reader/worker/writer pipeline, which is suited for one-off streaming inspection rather than persistent storage and repeated queries.
+For one daemon, use `[daemons.api.logs]` with `time_retention`, `line_retention`,
+and `archive_hook` fields. These override global defaults.

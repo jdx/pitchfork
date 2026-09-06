@@ -2,6 +2,7 @@
 .aube/
 node_modules
 /docs/.vitepress/dist
+/docs/.vitepress/.temp
 /ui/dist
 /ui/playwright-report
 /ui/test-results

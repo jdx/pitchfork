@@ -1,10 +1,13 @@
+---
+description: Enable the browser dashboard and configure its address, path prefix, and API access.
+---
 # Web UI
 
-Pitchfork includes a built-in web interface for monitoring and managing daemons. The web UI is served as a single-page application (SPA) that communicates with the supervisor via a REST API.
+Use the web dashboard to inspect daemon status, start and stop services, and follow logs from your browser. It connects to the same supervisor as the CLI and TUI.
 
 <div class="webui-screenshots">
-  <img src="/img/webui-pc.png" alt="Web UI dashboard on desktop" />
-  <img src="/img/webui-phone.png" alt="Web UI on mobile" />
+  <img loading="lazy" decoding="async" src="/img/webui-pc.png" alt="Web UI dashboard on desktop" />
+  <img loading="lazy" decoding="async" src="/img/webui-phone.png" alt="Web UI on mobile" />
 </div>
 
 <style scoped>
@@ -65,7 +68,7 @@ supervisor startup and do not hot-reload. Changing `[settings.web]` in any
 config file requires restarting the supervisor with
 `pitchfork supervisor start --force` for the change to take effect.
 
-Add to your config:
+Add this to `~/.config/pitchfork/config.toml` for a consistent user-wide setup:
 
 ```toml
 [settings.web]
@@ -89,7 +92,7 @@ pitchfork supervisor start --force
 
 Open http://127.0.0.1:3120 in your browser.
 
-If the specified port is in use, pitchfork tries the next 10 ports automatically (configurable via `web.port_attempts`).
+If the specified port is in use, pitchfork tries up to 10 consecutive ports, including the requested port, (configurable via `web.port_attempts`).
 
 ### Path prefix
 
@@ -114,226 +117,56 @@ By default, the REST API is bundled with the web UI on the same port. You can ru
 
 ```toml
 [settings.api]
+auto_start = true
 bind_port = 8080          # Dedicated API port
 bind_address = "127.0.0.1"
 port_attempts = 10
 ```
 
-When `api.bind_port` is set, the API endpoints are available on that port without the static file serving. This is useful when you only need programmatic access and not the browser UI.
+When `api.auto_start = true` and a valid `api.bind_port` are set, the API endpoints are available on that port without the static file serving. This is useful when you only need programmatic access and not the browser UI.
 
 ## Authentication
 
 The API uses token-based authentication when binding to non-loopback addresses.
+The web UI and standalone API serve plain HTTP: the token does not encrypt the
+connection. Keep their listeners on loopback, or use an HTTPS reverse proxy on
+the same host with a loopback HTTP backend for remote access. Sending `X-Pitchfork-Token`
+directly over a network via HTTP lets anyone who can observe the traffic
+capture and reuse the token.
 
-- **Loopback only** (`127.0.0.1`, `::1`): No authentication required. Safe for local development.
-- **Non-loopback** (e.g., `0.0.0.0`, LAN IP): A random 64-character hex token is auto-generated at startup. The token is printed to stderr and logged. Include it in every request:
+- **Loopback only** (`127.0.0.1`, `::1`): No token is required by default. If you configure a token, it is enforced for local requests too.
+- **Non-loopback** (e.g., `0.0.0.0`, LAN IP): If no token is configured, a random 64-character hex token is auto-generated at startup. The generated token is printed to stderr and logged.
 
-```bash
-curl -H "X-Pitchfork-Token: <token>" http://192.168.1.100:3120/api/daemons
-```
-
-You can also set a fixed token in config:
+To require a token on a loopback backend behind your HTTPS reverse proxy,
+configure one explicitly:
 
 ```toml
 [settings.api]
-token = "my-secret-token"
+token = "replace-with-a-long-random-token"
+```
+
+The proxy must forward `X-Pitchfork-Token` unchanged to the loopback API, which
+validates it. HTTPS protects the client-to-proxy connection; the HTTP hop to
+`127.0.0.1` stays on the same host. If the proxy runs on another host, use an
+authenticated encrypted tunnel to the API host instead of forwarding the
+token over a plain HTTP network connection. Pitchfork's API listener does not
+support TLS directly.
+
+Include the token in every request when one is configured. This example assumes
+you have configured an HTTPS reverse proxy at `pitchfork.example.com`:
+
+```bash
+curl -H "X-Pitchfork-Token: <token>" https://pitchfork.example.com/api/daemons
 ```
 
 ::: warning
-Never expose the API to a public network without authentication. The auto-generated token is secure (128 bits of entropy), but you should still treat it as a secret.
+Never expose the API to a public network without authentication. The bundled web page receives the API token so it can make requests. The token is not a login barrier for the web dashboard; restrict network access to trusted clients or enforce access control at the reverse proxy.
 :::
 
-## API Reference
+## API reference
 
-The following REST endpoints are available on the web UI port (or the dedicated API port if configured). All endpoints accept and return JSON unless otherwise noted.
-
-### GET /api/stats
-
-Return system-level statistics.
-
-```bash
-curl http://127.0.0.1:3120/api/stats
-```
-
-**Response:**
-
-```json
-{
-  "process_count": 42,
-  "cpu_count": 8,
-  "total_memory": 17179869184
-}
-```
-
-### GET /api/daemons
-
-List all daemons with full runtime state.
-
-```bash
-curl http://127.0.0.1:3120/api/daemons
-```
-
-**Response:**
-
-```json
-[
-  {
-    "id": {
-      "namespace": "myproject",
-      "name": "api",
-      "qualified": "myproject/api",
-      "safe_path": "myproject--api"
-    },
-    "title": "API Server",
-    "pid": 12345,
-    "status": { "type": "running" },
-    "dir": "/home/user/myproject",
-    "cpu_percent": 2.3,
-    "memory_bytes": 67108864,
-    "uptime_secs": 3600,
-    "proxy_url": "https://api.localhost",
-    "slug": "api",
-    "active_port": 3000,
-    "resolved_port": [3000]
-  }
-]
-```
-
-### GET /api/daemons/{id}
-
-Get a single daemon by qualified ID.
-
-```bash
-curl http://127.0.0.1:3120/api/daemons/myproject/api
-```
-
-Returns a single `ApiDaemonEntry` object (same shape as `/api/daemons` items).
-
-### POST /api/daemons/{id}/start
-
-Start a daemon.
-
-```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/start
-```
-
-**Response:**
-
-```json
-{ "ok": true, "error": null }
-```
-
-### POST /api/daemons/{id}/stop
-
-Stop a running daemon.
-
-```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/stop
-```
-
-### POST /api/daemons/{id}/restart
-
-Restart a daemon.
-
-```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/restart
-```
-
-### POST /api/daemons/{id}/enable
-
-Enable a daemon so it can be started.
-
-```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/enable
-```
-
-### POST /api/daemons/{id}/disable
-
-Disable a daemon.
-
-```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/disable
-```
-
-### GET /api/logs/{id}/tail
-
-Stream logs for a daemon via **Server-Sent Events**. Each line is a server-sent event:
-
-```bash
-curl http://127.0.0.1:3120/api/logs/myproject/api/tail
-```
-
-**Response format (SSE):**
-
-```text
-data: 2026-05-31 10:00:00 Hello from api daemon
-
-data: 2026-05-31 10:00:02 Another log line
-
-...
-```
-
-### GET /api/namespaces
-
-List all registered namespaces.
-
-```bash
-curl http://127.0.0.1:3120/api/namespaces
-```
-
-### POST /api/namespaces
-
-Register a namespace by directory.
-
-```bash
-curl -X POST http://127.0.0.1:3120/api/namespaces \
-  -H "Content-Type: application/json" \
-  -d '{"dir": "/home/user/new-project"}'
-```
-
-### DELETE /api/namespaces/{name}
-
-Remove a namespace.
-
-```bash
-curl -X DELETE http://127.0.0.1:3120/api/namespaces/oldproject
-```
-
-### GET /api/proxies
-
-List all configured proxy slugs.
-
-```bash
-curl http://127.0.0.1:3120/api/proxies
-```
-
-### GET /api/processes/{id}/tree
-
-Get the process tree for a daemon, including all child processes.
-
-```bash
-curl http://127.0.0.1:3120/api/processes/myproject/api/tree
-```
-
-**Response:**
-
-```json
-[
-  {
-    "pid": 12345,
-    "name": "node",
-    "cmdline": "node server.js",
-    "children": [
-      {
-        "pid": 12346,
-        "name": "node",
-        "cmdline": "node worker.js",
-        "children": []
-      }
-    ]
-  }
-]
-```
+See the [HTTP API reference](/reference/http-api) for daemon control, log streaming,
+namespace management, and response examples.
 
 ## Features
 

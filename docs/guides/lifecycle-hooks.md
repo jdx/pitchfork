@@ -1,3 +1,6 @@
+---
+description: Run commands on readiness, retries, failures, exits, and matching daemon output.
+---
 # Lifecycle Hooks
 
 Run custom shell commands when daemons become ready, fail, are retried, stop, or produce specific output.
@@ -49,7 +52,7 @@ Fires before each retry attempt.
 
 ```toml
 [daemons.api.hooks]
-on_retry = "echo 'Retrying api (attempt $PITCHFORK_RETRY_COUNT)...'"
+on_retry = "echo Retrying api: attempt $PITCHFORK_RETRY_COUNT"
 ```
 
 ### `on_stop`
@@ -69,7 +72,7 @@ Fires on **any** daemon termination — intentional stop, clean exit, or crash. 
 
 ```toml
 [daemons.infra.hooks]
-on_exit = "docker compose down --volumes"
+on_exit = "docker compose down"
 ```
 
 The `PITCHFORK_EXIT_CODE` and `PITCHFORK_EXIT_REASON` environment variables are available to distinguish the cause.
@@ -84,6 +87,9 @@ Fires when the daemon writes a line to stdout or stderr that matches an optional
 # Shorthand (run only, fires on every line)
 on_output = "./scripts/log-activity.sh"
 
+```
+
+```toml
 # Full form with filter/regex/debounce
 on_output = { filter = "Server started", run = "curl https://monitor.example.com/up" }
 ```
@@ -99,12 +105,20 @@ on_output = { filter = "Server started", run = "curl https://monitor.example.com
 
 ```toml
 [daemons.api.hooks]
-# Fire once when a specific string appears
+# Fire when the string appears, subject to the debounce interval
 on_output = { filter = "Server started", run = "curl https://monitor.example.com/up" }
 
+```
+
+```toml
+[daemons.api.hooks]
 # Fire when a line matches a regex
 on_output = { regex = "listening on port [0-9]+", run = "./scripts/register-port.sh" }
 
+```
+
+```toml
+[daemons.api.hooks]
 # Fire on every line, but no more than once per 5 seconds
 on_output = { run = "./scripts/log-activity.sh", debounce = "5s" }
 ```
@@ -138,6 +152,9 @@ By default, pitchfork sends `SIGTERM` to gracefully stop daemons. Some daemons (
 run = "node server.js"
 stop_signal = "SIGINT"
 
+```
+
+```toml
 # Signal with custom timeout
 [daemons.api]
 run = "node server.js"
@@ -157,6 +174,11 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 
 ## Behavior
 
+Hooks run asynchronously, so do not use `on_ready` to acquire a lock or perform
+setup that must finish before the daemon can serve requests. Put required setup
+in the daemon's `run` command or a dependency.
+
+
 - Hooks are **fire-and-forget** — they run in the background and never block the daemon
 - Hook commands run in the daemon's working directory
 - Errors in hooks are logged but do not affect the daemon
@@ -165,16 +187,19 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 
 ## Examples
 
-**Send a Slack notification on failure:**
+**Handle a failure in a script:**
 
 ```toml
 [daemons.api]
-run = "npm run server"
+run = "node server.js"
 retry = 3
 
 [daemons.api.hooks]
-on_fail = "curl -s -X POST $SLACK_WEBHOOK -d '{\"text\": \"API failed (exit $PITCHFORK_EXIT_CODE)\"}'"
+on_fail = "./scripts/report-failure.sh"
 ```
+
+The script can read `PITCHFORK_DAEMON_ID` and `PITCHFORK_EXIT_CODE` from its
+environment. Use a script for commands that need JSON encoding or complex quoting.
 
 **Log retry attempts to a file:**
 
@@ -184,7 +209,7 @@ run = "python worker.py"
 retry = 5
 
 [daemons.worker.hooks]
-on_retry = "sh -c 'echo \"$(date): retry $PITCHFORK_RETRY_COUNT\" >> /var/log/worker-retries.log'"
+on_retry = "sh -c 'echo \"$(date): retry $PITCHFORK_RETRY_COUNT\" >> ./worker-retries.log'"
 ```
 
 **Run cleanup on failure:**
@@ -206,7 +231,7 @@ on_ready = "./scripts/acquire-locks.sh"
 run = "docker compose up"
 
 [daemons.infra.hooks]
-on_exit = "docker compose down --volumes --remove-orphans"
+on_exit = "docker compose down --remove-orphans"
 ```
 
 **Distinguish stop reason in a shared cleanup script:**
@@ -216,7 +241,7 @@ on_exit = "docker compose down --volumes --remove-orphans"
 run = "npm run server"
 
 [daemons.api.hooks]
-on_exit = "sh -c 'echo \"Daemon exited: reason=$PITCHFORK_EXIT_REASON code=$PITCHFORK_EXIT_CODE\" >> /var/log/api-exits.log'"
+on_exit = "sh -c 'echo \"Daemon exited: reason=$PITCHFORK_EXIT_REASON code=$PITCHFORK_EXIT_CODE\" >> ./api-exits.log'"
 ```
 
 **React to a specific log message:**
@@ -246,5 +271,5 @@ on_output = { regex = "listening on port [0-9]+", run = "sh -c 'echo \"$PITCHFOR
 run = "python worker.py"
 
 [daemons.worker.hooks]
-on_output = { run = "sh -c 'echo \"$(date): active\" >> /var/log/worker-activity.log'", debounce = "10s" }
+on_output = { run = "sh -c 'echo \"$(date): active\" >> ./worker-activity.log'", debounce = "10s" }
 ```

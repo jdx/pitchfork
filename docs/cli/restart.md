@@ -5,7 +5,7 @@
 
 Restarts a daemon (stops then starts it)
 
-Equivalent to `start --force` - stops the daemon (SIGTERM) then starts it again
+Equivalent to `start --force` - stops the daemon with its configured signal, then starts it again
 from the pitchfork.toml configuration with dependency resolution.
 
 Examples:

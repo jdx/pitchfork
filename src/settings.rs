@@ -39,7 +39,7 @@ use usage_rs::config::{
 };
 
 /// The `api.*` settings: the standalone API server (JSON REST endpoints for
-/// the Vue SPA). When `api.bind_port` is set, the API server binds
+/// the Vue SPA). When `api.auto_start` is enabled and `api.bind_port` is set, the API server binds
 /// independently of the web UI.
 #[derive(usage_rs::Config, Debug, Clone, PartialEq)]
 #[usage(prefix = "api")]
@@ -65,7 +65,7 @@ pub struct SettingsApi {
     /// Port the standalone API server listens on
     ///
     /// Set to 0 (default) to disable the standalone API server.
-    /// Set to any valid port number (e.g. 8081) to start the API on its own port.
+    /// Set to a valid port (e.g. 8081) and enable `api.auto_start` to start the API on its own port.
     #[usage(env = "PITCHFORK_API_BIND_PORT", default = 0)]
     pub bind_port: i64,
 
@@ -337,12 +337,12 @@ pub struct SettingsLogsArchiveHook {
     /// **Examples:**
     ///
     /// ```toml
-    /// [logs.archive_hook]
+    /// [settings.logs.archive_hook]
     /// command = "gzip -c >> /var/log/pitchfork/archive.jsonl.gz"
     /// ```
     ///
     /// ```toml
-    /// [logs.archive_hook]
+    /// [settings.logs.archive_hook]
     /// command = "aws s3 cp - s3://my-bucket/pitchfork-logs/"
     /// ```
     #[usage(env = "PITCHFORK_LOG_ARCHIVE_HOOK_COMMAND", default = "")]
@@ -855,7 +855,7 @@ pub struct SettingsSupervisor {
 
     /// Maximum time to wait for daemon to stop gracefully
     ///
-    /// When stopping a daemon, pitchfork sends SIGTERM and waits this long
+    /// When stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long
     /// for the process to exit gracefully before sending SIGKILL.
     ///
     /// Increase for daemons that need time to clean up (e.g., flush data).

@@ -41,8 +41,8 @@ Examples:
                                    Add to pitchfork.local.toml instead
     pitchfork daemons add api --run 'npm start' --global
                                   Add to ~/.config/pitchfork/config.toml instead
-    pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
-                                  Add cron daemon that triggers immediately
+    pitchfork daemons add worker --run './worker' --cron-schedule '0 */5 * * * *' --cron-immediate
+                                  Schedule every five minutes, including a just-missed trigger
 "
 )]
 pub struct Add {
@@ -129,7 +129,7 @@ pub struct Add {
     /// Cron retrigger behavior: finish, always, success, fail
     #[usage(long)]
     cron_retrigger: Option<String>,
-    /// Trigger cron immediately on first check (default: deferred until next scheduled time)
+    /// On the first cron check, include scheduled times from the previous 10 seconds
     #[usage(long)]
     cron_immediate: bool,
     /// Write to pitchfork.local.toml instead of pitchfork.toml

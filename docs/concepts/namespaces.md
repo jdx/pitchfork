@@ -1,3 +1,6 @@
+---
+description: Resolve daemon names across projects, global configuration, and Git worktrees.
+---
 # Namespaces
 
 How Pitchfork handles daemons with the same name across different projects.
@@ -29,7 +32,7 @@ Namespace derivation rules:
 
 - `~/.config/pitchfork/config.toml` and `/etc/pitchfork/config.toml` use namespace `global`
 - Project configs use top-level `namespace = "..."` when provided
-- Otherwise project configs use the parent directory name of the config file
+- Otherwise project configs use the project directory name (`.config/` files use its parent)
 - If the derived directory namespace is invalid (e.g. contains `--`, spaces, or non-ASCII), loading fails with a clear error and you should set `namespace`
 
 Example override:
@@ -62,7 +65,7 @@ Pitchfork resolves short IDs in this order:
 
 ## Using Qualified IDs
 
-From any directory, you can use fully qualified IDs:
+For a daemon known to the supervisor or registered configuration, use its qualified ID from another directory:
 
 ```bash
 # From anywhere
@@ -76,13 +79,13 @@ This is useful when:
 - Managing daemons from multiple projects at once
 - Avoiding ambiguity when the same short name exists in multiple projects
 
-Qualified IDs are parsed directly and work even when there is no local `pitchfork.toml`.
+Qualified IDs are parsed directly even without a local `pitchfork.toml`. A name alone does not discover an unknown project directory; start from that project first or register its namespace.
 
 ## Git Worktrees
 
 Pitchfork supports Git worktrees out of the box — no extra configuration required.
 
-Namespaces are derived from the directory a project config lives in, and every worktree is a separate directory. Each worktree therefore gets its own namespace automatically, so daemons defined in a worktree never collide with daemons in the main checkout or in other worktrees, even when they define daemons with the same name.
+Namespaces are derived from the directory a project config lives in, and every worktree is a separate directory. Worktrees with distinct directory names therefore get distinct namespaces. Worktrees with the same final directory name need explicit namespace overrides to avoid collisions.
 
 ```bash
 cd ~/myapp-feature            # a linked worktree
@@ -149,17 +152,11 @@ The `--` sequence is reserved for internal path encoding (converting `namespace/
 
 Because of this, project directory names containing `--` (or other invalid namespace characters) require an explicit top-level `namespace` override.
 
-## Path Encoding
+## Path encoding
 
-Internally, Pitchfork converts qualified IDs to filesystem-safe paths:
-
-| Daemon ID | Log Directory | Log File |
-|-----------|---------------|----------|
-| `frontend/api` | `logs/frontend--api/` | `frontend--api.log` |
-| `my-project/web-server` | `logs/my-project--web-server/` | `my-project--web-server.log` |
-| `global/postgres` | `logs/global--postgres/` | `global--postgres.log` |
-
-This encoding is transparent to users—you always use `/` in commands, and Pitchfork handles the conversion automatically.
+Some internal paths encode `frontend/api` as `frontend--api`. This is why `--`
+is reserved in names. Current logs use a shared SQLite store keyed by qualified
+ID, not one text file per daemon. See [file locations](/reference/file-locations#logs).
 
 ## Examples
 

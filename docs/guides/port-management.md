@@ -1,6 +1,9 @@
+---
+description: Assign and bump service ports, configure stable local URLs, and enable HTTPS or LAN access.
+---
 # Port Management & Reverse Proxy
 
-Pitchfork provides smart port management and an optional reverse proxy that gives your daemons stable, human-friendly URLs.
+Assign ports to your services, choose another port when one is busy, and give each service a stable local URL with the optional reverse proxy.
 
 ## Port Assignment
 
@@ -20,7 +23,20 @@ run = "./start.sh"
 port = [8080, 8443]
 ```
 
-Pitchfork checks if the port is available before starting, injects it into the daemon's environment, and fails with a clear error if the port is already in use.
+Pitchfork checks availability, injects the resolved ports into the daemon's environment,
+and reports a conflict if a port is occupied and bumping is disabled.
+
+**Your application must use the assigned port.** A program that hardcodes a port
+will not move just because pitchfork sets `PORT`. For example:
+
+```toml
+[daemons.web]
+run = "python3 -u -m http.server $PORT --bind 127.0.0.1"
+port = { expect = [8000], bump = 10 }
+ready_cmd = "curl -fsS http://127.0.0.1:$PORT/"
+```
+
+For the Node.js examples below, `server.js` must read `process.env.PORT`.
 
 Resolved ports are exposed via the following environment variables:
 
@@ -79,60 +95,39 @@ https://myapp.localhost  →  http://localhost:3001
 ```
 
 The URL stays the same even if the port changes. This is especially useful for:
-- Sharing URLs with teammates
+- Using the same URL conventions in each teammate's local setup
 - AI agents that need stable endpoints
 - Browser bookmarks
 - Webhook configurations
 
 ### Quick start
 
-1. Enable the proxy in `pitchfork.toml`:
+Start with HTTP on an unprivileged port. Add this to
+`~/.config/pitchfork/config.toml` so it applies regardless of the directory
+where the supervisor starts:
 
 ```toml
 [settings.proxy]
 enable = true
+https = false
+port = 8088
 ```
 
-2. Start the supervisor:
+From a project that defines an `api` daemon:
 
-```bash
-sudo pitchfork supervisor start --force   # port 80 or 443 requires sudo
-```
-
-3. Add a slug in the **global** config:
-
-```bash
+```sh
 pitchfork proxy add api
-# or with explicit dir and daemon name:
-pitchfork proxy add api --dir /path/to/project --daemon server
-```
-
-This registers the slug in `~/.config/pitchfork/config.toml`:
-
-```toml
-[slugs]
-api = { dir = "/path/to/project", daemon = "server" }
-```
-
-4. Start the daemon:
-
-```bash
+pitchfork supervisor start --force
 pitchfork start api
+pitchfork proxy status
 ```
 
-5. Open the proxy URL:
+Open `http://api.localhost:8088` in a browser that resolves `.localhost` names.
+The slug maps the URL to your project's `api` daemon. If its name is `server`
+instead, use `pitchfork proxy add api --daemon server` and start `server`.
 
-```bash
-open https://api.localhost
-```
-
-The CA certificate is automatically installed into your system trust store
-on first start. If auto-trust failed (e.g. on Linux without `sudo`),
-you can manually install it:
-
-```bash
-pitchfork proxy trust         # On Linux, run with `sudo`
-```
+The supervisor reads proxy settings at startup; restart it after editing them.
+Continue below for standard ports, HTTPS, custom domains, and LAN access.
 
 ### Slugs
 
@@ -188,7 +183,7 @@ https://api.localhost  (port 443)
 
 ### Binding to Privileged Ports
 
-Ports below 1024 require elevated privileges on Unix systems. You must start the supervisor with `sudo`:
+If your operating system restricts binding ports below 1024, start the supervisor with `sudo`:
 
 ```bash
 # HTTP on port 80
@@ -206,9 +201,7 @@ port = 80     # requires: sudo pitchfork supervisor start
 https = false
 ```
 
-::: warning Requires sudo
-Binding to ports below 1024 (including 80 and 443) requires the supervisor to be started with `sudo`. The proxy will fail to start if it cannot bind to the configured port.
-:::
+If binding fails, use an unprivileged port such as `8088` or `8443`, or run the supervisor with the required permissions.
 
 
 ## HTTPS Support
@@ -432,8 +425,13 @@ Setting `lan_ip` implies `lan = true`, so you can omit the `lan` flag.
 
 ### HTTPS on LAN
 
-Other devices need to trust the pitchfork CA certificate to use HTTPS. Run
-`pitchfork proxy trust` on each device, or disable HTTPS for simplicity:
+Other devices need to trust the **proxy host's** certificate to use HTTPS.
+Copy `proxy/cert.pem` from that host's state directory and install it using the
+client device's certificate settings. On a supported desktop with pitchfork,
+use `pitchfork proxy trust --cert /path/to/copied-cert.pem` (with `sudo` on Linux).
+Running `proxy trust` without `--cert` would select that device's own certificate.
+
+For HTTP-only access on a trusted development network:
 
 ```toml
 [settings.proxy]
@@ -486,7 +484,9 @@ auto_start_timeout = "60s"
 
 ---
 
-## Viewing Proxy URLs
+## Viewing proxy URLs
+
+Illustrative output with HTTPS on the default port:
 
 Proxy URLs are shown in CLI output when the proxy is enabled and the daemon has a registered slug:
 

@@ -350,7 +350,7 @@ pub struct Logs {
 
     /// Show last N lines of logs
     ///
-    /// Only applies when --since/--until is not used.
+    /// With --since/--until, shows the last N matching lines in that time range.
     /// Without this option, all logs are shown.
     #[usage(short)]
     n: Option<usize>,

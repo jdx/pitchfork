@@ -11,3 +11,9 @@ new URL.
 for matching Open Graph/Twitter metadata and the exact image expected from each
 page title. Regression tests reject swapped images and empty alt text. Edit
 `social-images.mjs` to adjust colors or layout.
+
+
+From the repository root, run `mise run build:docs` to generate and verify the
+previews. From `docs/`, run `node --test .vitepress/social-images.test.mjs` to
+check the renderer independently. Generated images live in `.vitepress/dist/`
+and should not be committed.

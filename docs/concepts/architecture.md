@@ -1,157 +1,78 @@
+---
+description: A contributor-oriented overview of pitchfork's clients, supervisor, IPC, persistence, and process lifecycle.
+---
 # Architecture
 
-Technical overview of pitchfork's internal design.
+Pitchfork has a client-server architecture. The CLI and TUI request operations
+from a background supervisor; the optional web UI uses the supervisor's HTTP API.
+For the user-facing model, see [how pitchfork works](/concepts/how-it-works).
 
-## System Overview
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                         USER                                │
-│           pitchfork start/stop/status/run/logs              │
-└───────────────────────────┬────────────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────────┐
-│                          CLI                                │
-│  • Reads pitchfork.toml configs                             │
-│  • Sends IPC requests                                       │
-└───────────────────────────┬────────────────────────────────┘
-                            │ Unix Socket
-                            │ ~/.local/state/pitchfork/sock/main.sock
-                            ▼
-┌────────────────────────────────────────────────────────────┐
-│                       SUPERVISOR                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │ IPC Server  │  │  Interval   │  │    Cron     │         │
-│  │             │  │  Watcher    │  │   Watcher   │         │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
-│         │                │                │                 │
-│         └────────────────┼────────────────┘                 │
-│                          ▼                                  │
-│              ┌───────────────────────┐                      │
-│              │   Daemon Management   │                      │
-│              │  • spawn processes    │                      │
-│              │  • monitor output     │                      │
-│              │  • handle retries     │                      │
-│              └───────────────────────┘                      │
-└────────────────────────────────────────────────────────────┘
-                            │
-             ┌──────────────┼──────────────┐
-             ▼              ▼              ▼
-        ┌─────────┐   ┌─────────┐   ┌─────────┐
-        │ Daemon  │   │ Daemon  │   │ Daemon  │
-        └─────────┘   └─────────┘   └─────────┘
+```text
+CLI / TUI ────── IPC ──────┐
+                          ├── Supervisor ── Daemon process groups
+Web UI ─────── HTTP API ───┘       │
+                                 ├── State file (TOML)
+                                 └── Log store (SQLite)
 ```
 
-## Components
+## Code map
 
-| Component | Purpose |
-|-----------|---------|
-| CLI | User commands, config parsing, IPC client |
-| Supervisor | Background daemon, process management |
-| IPC | Unix socket communication (MessagePack) |
-| State File | Persistent state in TOML with file locking |
+| Module | Responsibility |
+| --- | --- |
+| `src/cli/` | Parse commands, load configuration, and make client requests |
+| `src/ipc/` | Serialize requests and responses with MessagePack |
+| `src/supervisor/lifecycle.rs` | Spawn, monitor, and terminate daemons |
+| `src/supervisor/watchers.rs` | Periodic work, cron schedules, and file watching |
+| `src/supervisor/hooks.rs` | Dispatch lifecycle hooks |
+| `src/supervisor/log_sink.rs` | Capture output independently of the supervisor on supported paths |
+| `src/pitchfork_toml.rs` | Load and merge configuration; resolve namespaces |
+| `src/state_file.rs` | Persist daemon and session state with file locking |
+| `src/log_store/` | Store, query, and retain logs in SQLite |
+| `src/web/` | Serve the web UI and API |
 
-## Supervisor Auto-Start
+On Unix, clients connect through `sock/main.sock` in the state directory.
+See [file locations](/reference/file-locations) for path resolution.
 
-When you run a command like `pitchfork start`, the CLI:
+## Starting a daemon
 
-1. Checks if the supervisor is running
-2. If not, starts it in the background
-3. Connects via Unix socket
-4. Sends the command
+1. The client resolves daemon IDs and orders their dependencies.
+2. Templates use values from dependencies that have already started.
+3. The supervisor resolves the working directory, environment, and ports.
+4. The configured shell receives the `run` string verbatim (`sh -c` by default).
+5. The supervisor records the process and monitors readiness and exit status.
 
-The supervisor runs independently and manages all daemons.
+With `mise = true`, execution becomes `mise x -- sh -c "<run>"` (or the
+configured shell). Pitchfork does not prepend `exec`; doing so would break
+compound commands such as `a && b`. Users can place `exec` before a final
+command themselves.
 
-## Background Watchers
+Output is stored in SQLite. On supported Unix configurations, a separate log
+sink process keeps capturing output if the supervisor exits unexpectedly.
+The supervisor can re-adopt surviving daemons according to
+[`supervisor.orphan_policy`](/cli/configuration#supervisor-orphan-policy).
 
-### Interval Watcher (10 seconds)
+## Background work
 
-- Refreshes process list (checks which PIDs are alive)
-- Handles autostop (stops daemons when shell leaves directory)
-- Retries failed daemons with remaining retry attempts
-- Checks resource limits (memory and CPU) for running daemons
+| Watcher | Work | Default cadence |
+| --- | --- | --- |
+| Interval | Refresh process state, evaluate autostop, retry failures, enforce resource limits | `general.interval`: `10s` |
+| Cron | Discover scheduled daemons and evaluate retrigger policies | `supervisor.cron_check_interval`: `10s` |
+| File | Match file changes and restart running daemons | `supervisor.file_watch_debounce`: `1s` debounce |
+| Health | Probe configured commands, HTTP endpoints, or TCP ports | `supervisor.health_check_interval`: `10s` |
 
-### Cron Watcher (10 seconds)
+File watching supports native notifications and polling. Health probes have
+their own timeouts and failure thresholds; they are distinct from readiness.
 
-- Checks daemons with cron schedules
-- Triggers according to retrigger policy
+## State and shutdown
 
-### File Watcher
+The locked TOML state file records process identities, status, retry state,
+disabled daemons, and project sessions. SQLite stores timestamped logs and
+supports concurrent readers. These are runtime files, not configuration to edit
+by hand.
 
-- Monitors directories matching daemon `watch` glob patterns
-- Debounces changes (default 1 second) to avoid rapid restarts
-- Dynamically adds/removes watch directories as daemons start/stop
-- Only restarts running daemons (stopped daemons ignore changes)
+On Unix, stopping a daemon sends its configured signal to the process group
+(`SIGTERM` by default). Pitchfork waits for `stop_signal.timeout`, falling back
+to `supervisor.stop_timeout` (`5s`), then escalates to `SIGKILL` if necessary.
+Batch stops use reverse dependency order.
 
-## Daemon States
-
-| State | Meaning |
-|-------|---------|
-| Running | Process is alive |
-| Waiting | Waiting for ready check |
-| Stopping | Being terminated (SIGTERM sent) |
-| Stopped | Exited successfully (code 0) |
-| Failed | Failed to start (pre-ready check) |
-| Errored | Exited with error (code ≠ 0) |
-
-## State Persistence
-
-Daemon state is stored in `~/.local/state/pitchfork/state.toml`:
-
-```toml
-[daemons.myapp]
-id = "myapp"
-pid = 12345
-status = "running"
-dir = "/path/to/project"
-autostop = true
-retry = 2
-retry_count = 0
-
-[disabled]
-# Set of disabled daemon IDs
-
-[shell_dirs]
-# Map of shell_pid → working_directory
-```
-
-All state file access uses file locking for concurrent safety.
-
-## Process Spawning
-
-When starting a daemon:
-
-1. Check if already running
-2. Prepend `exec` to command (eliminates shell wrapper)
-3. Create log file
-4. Spawn process with piped stdout/stderr
-5. Record PID in state file
-6. Start monitoring for readiness
-
-## Process Termination
-
-When stopping a daemon, pitchfork uses a graceful shutdown strategy:
-
-1. **SIGTERM** - Send termination signal, wait up to `stop_timeout` (default: 5 seconds)
-2. **SIGKILL** - Force kill if process still running
-
-This ensures:
-- Fast-exiting processes don't cause unnecessary delays (checked every 10ms initially)
-- Well-behaved processes have time to clean up resources
-- Stubborn processes are eventually force-terminated
-- Zombie processes are correctly detected and don't cause unnecessary escalation
-
-Child processes are terminated before the parent process.
-
-## Readiness Detection
-
-| Method | Trigger |
-|--------|---------|
-| Delay | Wait N seconds, still running = ready |
-| Output | Regex matches stdout/stderr |
-| HTTP | Endpoint returns 2xx |
-| Port | TCP port is listening |
-| Command | Shell command exits with code 0 |
-
-First check to succeed (output/HTTP/port/command) marks daemon as ready. Delay only fires when no other check type is configured.
+See [contributing](/contributing) for the development and verification workflow.
