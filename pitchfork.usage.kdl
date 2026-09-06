@@ -193,6 +193,9 @@ Examples:
         flag --retry help="Number of retry attempts on failure (use \\\"true\\\" for infinite)" {
             arg <RETRY>
         }
+        flag --ready-retry help="Number of retry attempts when startup fails before ready (use \\\"true\\\" for infinite)" {
+            arg <READY_RETRY>
+        }
         flag --watch help="Glob patterns to watch for changes (can be specified multiple times)" var=#true {
             arg <WATCH>
         }
@@ -853,6 +856,9 @@ Examples:
     flag --retry help="Number of times to retry on error exit" default="0" {
         arg <RETRY>
     }
+    flag --ready-retry help="Number of times to retry starting when the process fails before becoming ready" default="0" {
+        arg <READY_RETRY>
+    }
     flag "-d --delay" help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
         arg <DELAY>
     }
@@ -1169,42 +1175,24 @@ https://usage.jdx.dev
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
 }
-cmd wait help="Wait for daemons to stop, tailing the logs along the way" effect=read {
+cmd wait help="Wait for a daemon to stop, tailing the logs along the way" effect=read {
     alias w
     long_help #"""
-Wait for one or more daemons to stop, tailing the logs along the way
+Wait for a daemon to stop, tailing the logs along the way
 
-Blocks until every specified daemon stops running, while displaying its
-log output in real-time. With no daemon IDs and no `--group`, shows an
-interactive picker of the currently running daemons.
+Blocks until the specified daemon stops running, while displaying its
+log output in real-time. Exits with the same status code as the daemon.
 
-With `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C
-on Windows) first stops the waited daemons via the supervisor (graceful
-SIGTERM then SIGKILL, hooks fire, reverse dependency order), then the
-command exits with 128 + the signal number like the shell, so Ctrl-C
-yields 130.
-
-Exit code: 0 when every waited daemon stopped cleanly. Otherwise the exit
-code of the first failing daemon (in the order given) is propagated;
-unknown exit codes, failed daemons, and missing statuses map to 1.
-
-Useful in scripts that need to wait for daemons to complete.
+Useful in scripts that need to wait for a daemon to complete.
 
 Examples:
 
-    pitchfork wait api              Wait for 'api' to stop, exit with its status
-    pitchfork wait api worker       Wait for 'api' and 'worker' to stop
-    pitchfork wait --group backend  Wait for the whole 'backend' group
-    pitchfork wait --kill api       Stop 'api' gracefully when a signal arrives
+    pitchfork wait api              Wait for 'api' to stop
     pitchfork w api                 Alias for 'wait'
-    pitchfork wait api && echo done Run command after the daemon stops
+    pitchfork wait api && echo done Run command after daemon stops
 """#
-    flag --group help="Wait for all daemons in the named group" {
-        arg <GROUP>
-    }
-    flag --kill help="Stop the waited daemons when a signal is received while waiting"
     flag "-h --help" help="Print help" action=help builtin=#true
-    arg "[ID]..." help="The name of the daemon(s) to wait for"
+    arg <ID> help="The name of the daemon to wait for"
 }
 
 config {

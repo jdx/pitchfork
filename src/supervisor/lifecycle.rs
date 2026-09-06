@@ -263,12 +263,25 @@ const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 impl Supervisor {
     /// Run a daemon, keeping the id in `in_flight_runs` for the whole start
     /// (including inline ready-retry backoffs) so the background retry tick
-    /// never races it with a duplicate start.
+    /// never races it with a duplicate start. The map refcounts concurrent
+    /// `run`s for the same id: each adds one and removes its own, so one
+    /// returning early does not clear another's protection.
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = opts.id.clone();
-        self.in_flight_runs.lock().await.insert(id.clone());
+        *self
+            .in_flight_runs
+            .lock()
+            .await
+            .entry(id.clone())
+            .or_insert(0) += 1;
         let result = self.run_inner(opts).await;
-        self.in_flight_runs.lock().await.remove(&id);
+        let mut in_flight = self.in_flight_runs.lock().await;
+        if let Some(count) = in_flight.get_mut(&id) {
+            *count -= 1;
+            if *count == 0 {
+                in_flight.remove(&id);
+            }
+        }
         result
     }
 
@@ -346,6 +359,11 @@ impl Supervisor {
                         exit_code,
                         resolved_ports,
                     } => {
+                        // Snapshot this attempt's pid before the hook/sleep:
+                        // the monitor flips the record to Errored only after
+                        // draining output (up to ~5s), so during the backoff
+                        // the record may still show the just-failed pid.
+                        let failed_pid = self.get_daemon(id).await.and_then(|d| d.pid);
                         if attempt < opts.ready_retry.count() {
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
@@ -367,11 +385,15 @@ impl Supervisor {
                             time::sleep(Duration::from_secs(backoff_secs)).await;
                             // Another owner (e.g. the background retry tick) may
                             // have started the daemon while this loop slept; do
-                            // not spawn a duplicate.
+                            // not spawn a duplicate. The monitor clears the
+                            // record only after draining output, so a record
+                            // still showing this attempt's pid is stale, not a
+                            // successor.
                             if let Some(d) = self.get_daemon(id).await
                                 && !d.status.is_stopping()
                                 && !d.status.is_stopped()
                                 && d.pid.is_some()
+                                && d.pid != failed_pid
                             {
                                 info!(
                                     "daemon {id} already running (started outside this retry loop); ending inline retries"
@@ -830,6 +852,14 @@ impl Supervisor {
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
         let hook_ready_retry = opts.ready_retry;
+        // Whether this daemon has any readiness gate configured. A run with
+        // no readiness gate has no startup phase: every exit is post-start
+        // and consumes the background `retry` budget.
+        let hook_has_readiness_gate = opts.ready_output.is_some()
+            || opts.ready_http.is_some()
+            || opts.ready_port.is_some()
+            || opts.ready_cmd.is_some()
+            || opts.ready_delay.is_some();
         let hook_daemon_env = opts.env.clone();
         // Ports of THIS attempt, snapshotted before the monitor starts: a retry
         // or restart may replace state.resolved_port before a hook task runs.
@@ -1819,9 +1849,11 @@ impl Supervisor {
                 // budget is exhausted. A daemon that became ready (flagged by
                 // `ready_notified`) is governed by the background `retry`
                 // budget; one that died before readiness falls under the
-                // startup `ready_retry` budget.
+                // startup `ready_retry` budget. A run with no readiness gate
+                // has no startup phase, so every exit is post-start and
+                // consumes the `retry` budget regardless.
                 _ if hook_retry_count
-                    >= if ready_notified {
+                    >= if ready_notified || !hook_has_readiness_gate {
                         hook_retry.count()
                     } else {
                         hook_ready_retry.count()

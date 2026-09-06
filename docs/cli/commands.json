@@ -476,6 +476,25 @@
                 }
               },
               {
+                "name": "ready-retry",
+                "usage": "--ready-retry <READY_RETRY>",
+                "help": "Number of retry attempts when startup fails before ready (use \\\"true\\\" for infinite)",
+                "help_first_line": "Number of retry attempts when startup fails before ready (use \\\"true\\\" for infinite)",
+                "short": [],
+                "long": [
+                  "ready-retry"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_RETRY",
+                  "usage": "<READY_RETRY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "watch",
                 "usage": "--watch <WATCH>",
                 "help": "Glob patterns to watch for changes (can be specified multiple times)",
@@ -2970,6 +2989,28 @@
             ]
           },
           {
+            "name": "ready-retry",
+            "usage": "--ready-retry <READY_RETRY>",
+            "help": "Number of times to retry starting when the process fails before becoming ready",
+            "help_first_line": "Number of times to retry starting when the process fails before becoming ready",
+            "short": [],
+            "long": [
+              "ready-retry"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "READY_RETRY",
+              "usage": "<READY_RETRY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "0"
+            ]
+          },
+          {
             "name": "delay",
             "usage": "-d --delay <DELAY>",
             "help": "Delay in seconds before considering daemon ready (default: 3 seconds)",
@@ -4597,52 +4638,20 @@
         "full_cmd": [
           "wait"
         ],
-        "usage": "wait [--group <GROUP>] [--kill] [ID]…",
+        "usage": "wait <ID>",
         "subcommands": {},
         "args": [
           {
             "name": "ID",
-            "usage": "[ID]…",
-            "help": "The name of the daemon(s) to wait for",
-            "help_first_line": "The name of the daemon(s) to wait for",
-            "required": false,
+            "usage": "<ID>",
+            "help": "The name of the daemon to wait for",
+            "help_first_line": "The name of the daemon to wait for",
+            "required": true,
             "double_dash": "Optional",
-            "var": true,
             "hide": false
           }
         ],
         "flags": [
-          {
-            "name": "group",
-            "usage": "--group <GROUP>",
-            "help": "Wait for all daemons in the named group",
-            "help_first_line": "Wait for all daemons in the named group",
-            "short": [],
-            "long": [
-              "group"
-            ],
-            "hide": false,
-            "global": false,
-            "arg": {
-              "name": "GROUP",
-              "usage": "<GROUP>",
-              "required": true,
-              "double_dash": "Optional",
-              "hide": false
-            }
-          },
-          {
-            "name": "kill",
-            "usage": "--kill",
-            "help": "Stop the waited daemons when a signal is received while waiting",
-            "help_first_line": "Stop the waited daemons when a signal is received while waiting",
-            "short": [],
-            "long": [
-              "kill"
-            ],
-            "hide": false,
-            "global": false
-          },
           {
             "name": "help",
             "usage": "-h --help",
@@ -4665,8 +4674,8 @@
         "unknown_flags": null,
         "hide": false,
         "args_override_self": true,
-        "help": "Wait for daemons to stop, tailing the logs along the way",
-        "help_long": "Wait for one or more daemons to stop, tailing the logs along the way\n\nBlocks until every specified daemon stops running, while displaying its\nlog output in real-time. With no daemon IDs and no `--group`, shows an\ninteractive picker of the currently running daemons.\n\nWith `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C\non Windows) first stops the waited daemons via the supervisor (graceful\nSIGTERM then SIGKILL, hooks fire, reverse dependency order), then the\ncommand exits with 128 + the signal number like the shell, so Ctrl-C\nyields 130.\n\nExit code: 0 when every waited daemon stopped cleanly. Otherwise the exit\ncode of the first failing daemon (in the order given) is propagated;\nunknown exit codes, failed daemons, and missing statuses map to 1.\n\nUseful in scripts that need to wait for daemons to complete.\n\nExamples:\n\n    pitchfork wait api              Wait for 'api' to stop, exit with its status\n    pitchfork wait api worker       Wait for 'api' and 'worker' to stop\n    pitchfork wait --group backend  Wait for the whole 'backend' group\n    pitchfork wait --kill api       Stop 'api' gracefully when a signal arrives\n    pitchfork w api                 Alias for 'wait'\n    pitchfork wait api && echo done Run command after the daemon stops",
+        "help": "Wait for a daemon to stop, tailing the logs along the way",
+        "help_long": "Wait for a daemon to stop, tailing the logs along the way\n\nBlocks until the specified daemon stops running, while displaying its\nlog output in real-time. Exits with the same status code as the daemon.\n\nUseful in scripts that need to wait for a daemon to complete.\n\nExamples:\n\n    pitchfork wait api              Wait for 'api' to stop\n    pitchfork w api                 Alias for 'wait'\n    pitchfork wait api && echo done Run command after daemon stops",
         "name": "wait",
         "aliases": [
           "w"

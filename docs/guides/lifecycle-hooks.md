@@ -68,7 +68,7 @@ on_stop = "./scripts/notify-stopped.sh"
 
 Fires on **any** daemon termination — intentional stop, clean exit, or crash. Also fires during supervisor shutdown. Use this for cleanup that should always run regardless of why the daemon stopped.
 
-> **Note:** For daemons with `retry > 0` or `ready_retry > 0`, `on_exit` fires **only after the applicable retry budget is exhausted**, not on each individual crash attempt. Use `on_retry` if you need to react to every failure.
+> **Note:** For daemons with `retry > 0` or `ready_retry > 0`, a **failed** exit fires `on_exit` only after the applicable retry budget is exhausted, not on each individual crash attempt. Intentional stops (`pitchfork stop`) and clean exits fire `on_exit` immediately. Use `on_retry` if you need to react to every failure.
 
 ```toml
 [daemons.infra.hooks]

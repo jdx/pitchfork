@@ -174,6 +174,7 @@ pub struct RunOptions {
     pub cron_immediate: Option<bool>,
     pub retry: Retry,
     pub retry_count: u32,
+    #[serde(default)]
     pub ready_retry: Retry,
     /// Whether `retry_count` is written to persisted state. `None` means persist;
     /// inline ready-retry attempts beyond the first pass `Some(false)` so the

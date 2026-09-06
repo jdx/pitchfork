@@ -32,12 +32,13 @@ impl Supervisor {
                 .collect()
         };
 
-        // Skip daemons whose start/retry loop is in flight: `run` holds the
-        // id for its whole duration (including inline backoff sleeps) and
-        // re-checks state between attempts, so retrying here would race it.
-        let in_flight: std::collections::HashSet<DaemonId> =
-            self.in_flight_runs.lock().await.clone();
-        ids_to_retry.retain(|id| !in_flight.contains(id));
+        // Skip daemons whose start/retry loop is in flight: `run` holds a
+        // reference count on the id for its whole duration (including inline
+        // backoff sleeps) and re-checks state between attempts, so retrying
+        // here would race it. A concurrent run adds its own count, so it can
+        // exit early without clearing the first run's protection.
+        let in_flight = self.in_flight_runs.lock().await.clone();
+        ids_to_retry.retain(|id| !in_flight.contains_key(id));
 
         for id in ids_to_retry {
             // Look up daemon when needed and re-verify retry criteria
@@ -58,7 +59,7 @@ impl Supervisor {
             };
             // Re-verify under the current tick: an in-flight start/retry loop
             // may have claimed this daemon since the collection pass.
-            if self.in_flight_runs.lock().await.contains(&id) {
+            if self.in_flight_runs.lock().await.contains_key(&id) {
                 continue; // an in-flight start/retry loop owns this daemon
             }
             info!(

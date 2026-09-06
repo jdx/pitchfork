@@ -914,6 +914,7 @@ impl IpcClient {
         let expected_port = opts.expected_port.clone();
         let auto_bump_port = opts.auto_bump_port;
         let retry = opts.retry.unwrap_or_default();
+        let ready_retry = opts.ready_retry.unwrap_or_default();
         let shell_pid = opts.shell_pid;
         let quiet = opts.quiet;
 
@@ -925,6 +926,7 @@ impl IpcClient {
                 shell_pid,
                 dir: crate::config_types::Dir(dir),
                 retry,
+                ready_retry,
                 ready_delay: delay,
                 ready_output: output.map(ReadyOutput::new),
                 ready_http: http,
