@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { marked } from "marked";
+import { createMarkdownRenderer } from "vitepress";
 import { parse as parseToml } from "smol-toml";
 
 const docs = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,31 +17,35 @@ const report = (file, message) =>
   errors.add(`${relative(docs, file)}: ${message}`);
 
 if (process.argv.includes("--examples")) {
-  const files = [
-    ...walk(docs).filter((file) => file.endsWith(".md")),
-    resolve(docs, "../README.md"),
-  ];
+  const inputFiles = process.argv.slice(process.argv.indexOf("--examples") + 1);
+  const files = inputFiles.length
+    ? inputFiles.map((file) => resolve(file))
+    : [
+        ...walk(docs).filter((file) => file.endsWith(".md")),
+        resolve(docs, "../README.md"),
+      ];
+  // Use the site's parser and source maps, including fences nested in lists
+  // and blockquotes. Searching raw text can match a different occurrence.
+  const markdown = await createMarkdownRenderer(docs, { highlight: () => "" });
   let examples = 0;
   for (const file of files) {
     const source = readFileSync(file, "utf8");
-    marked.walkTokens(marked.lexer(source), (token) => {
-      if (token.type !== "code") return;
-      const language = token.lang?.split(/\s/)[0];
-      if (language !== "toml" && language !== "json") return;
+    for (const token of markdown.parse(source, {})) {
+      if (token.type !== "fence") continue;
+      const language = token.info.trim().split(/\s/)[0];
+      if (language !== "toml" && language !== "json") continue;
       examples++;
       try {
-        if (language === "toml") parseToml(token.text);
-        else JSON.parse(token.text);
+        if (language === "toml") parseToml(token.content);
+        else JSON.parse(token.content);
       } catch (error) {
-        const line = source
-          .slice(0, source.indexOf(token.raw))
-          .split("\n").length;
+        const line = token.map[0] + 1;
         report(
           file,
           `invalid ${language} example at line ${line}: ${error.message}`,
         );
       }
-    });
+    }
   }
   console.log(
     `Checked ${examples} TOML/JSON examples in ${files.length} Markdown files.`,

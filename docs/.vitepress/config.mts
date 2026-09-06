@@ -13,6 +13,7 @@ interface Cmd {
   hide?: boolean;
 }
 
+/** Build nested CLI navigation from the visible commands in the generated spec. */
 function commandSidebar(cmd: Cmd): DefaultTheme.SidebarItem[] {
   return Object.values(cmd.subcommands)
     .filter((sub) => !sub.hide)

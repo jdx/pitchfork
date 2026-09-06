@@ -108,14 +108,20 @@ template to depend on another environment template's result.
 
 ### Cross-Namespace References
 
-When referencing daemons in a different namespace, use the `namespace.name` key format:
+When referencing daemons in a different namespace, use the `namespace.name` key
+format in templates and `namespace/name` in `depends`. For example, if the
+registered `infra` namespace defines a `redis` daemon with a configured port:
 
 ```toml
+[daemons.api]
+run = "node server.js"
 env = { REDIS_URL = 'redis://localhost:{{ daemons["infra.redis"].port }}' }
 depends = ["infra/redis"]
 ```
 
-This mirrors the `depends` field, which also supports cross-namespace references like `depends = ["infra/redis"]`.
+Here, `server.js` must read `REDIS_URL` from its environment. See the
+[namespace registry](/reference/configuration#namespace-registry) to make the
+`infra` project available from other directories.
 
 ### Settings
 
