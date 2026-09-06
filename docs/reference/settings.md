@@ -1,78 +1,90 @@
-# Settings Reference
+---
+description: Configure pitchfork defaults, inspect effective values, and find which file or environment variable set them.
+---
+# Settings
 
-This page documents all configurable settings for pitchfork. Settings can be configured via:
+Settings control pitchfork itself: logging, shell execution, the supervisor,
+dashboards, and the reverse proxy. Daemon-specific behavior belongs under
+`[daemons.<name>]`; see the [configuration reference](/reference/configuration).
 
-1. **Environment variables** (highest priority)
-2. **Project-level:** `pitchfork.toml` or `pitchfork.local.toml` in `[settings]` section
-3. **User-level:** `~/.config/pitchfork/config.toml` in `[settings]` section
-4. **System-level:** `/etc/pitchfork/config.toml` in `[settings]` section
+**[Browse every setting, default, and environment variable →](/cli/configuration)**
 
-Settings are merged in precedence order, with later sources overriding earlier ones.
+## Inspect the effective value
 
-Settings for supervisor-owned services, such as `[settings.web]` and
-`[settings.proxy]`, are resolved when the supervisor process starts. After that,
-they do not hot-reload: changing any setting requires restarting the supervisor
-with `pitchfork supervisor start --force` for the change to take effect. This
-applies regardless of whether the setting is in a project-level or global config
-file.
+```sh
+pitchfork settings
+pitchfork settings list --group supervisor
+pitchfork settings get general.autostop_delay
+pitchfork settings explain general.autostop_delay
+```
 
-## Configuration in pitchfork.toml
+`get` returns the value. `explain` shows which environment variable or file won,
+which is useful when a local override seems to be ignored.
 
-Add a `[settings]` section to any `pitchfork.toml` file:
+## Change a setting
+
+```sh
+pitchfork settings set general.autostop_delay 30s --project
+pitchfork settings set web.auto_start true --global
+```
+
+| Target | File |
+| --- | --- |
+| `--project` (default) | `pitchfork.toml` |
+| `--local` | `pitchfork.local.toml` for personal project overrides |
+| `--global` | `~/.config/pitchfork/config.toml` for user-wide defaults |
+
+Or edit the file directly:
 
 ```toml
-# Daemon definitions
-[daemons.myapp]
-run = "node server.js"
-
-# Settings configuration
 [settings.general]
-autostop_delay = "5m"
-log_level = "debug"
+autostop_delay = "30s"
 
 [settings.logs]
 time_retention = "7d"
 
-[settings.tui]
-refresh_rate = "1s"
-
 [settings.supervisor]
-file_watch_debounce = "2s"
-```
-
-## Global Configuration
-
-For user-wide settings, create `~/.config/pitchfork/config.toml`:
-
-```toml
-# Global daemons (e.g., database services)
-[daemons.postgres]
-run = "postgres -D /usr/local/var/postgres"
-
-# Global settings
-[settings.general]
-log_level = "info"
+file_watch_debounce = "1s"
 
 [settings.web]
 auto_start = true
+bind_port = 3120
 ```
 
-## Environment Variables
+## Precedence
 
-Every setting has a corresponding environment variable that overrides all file configurations:
+From lowest to highest priority:
 
-```bash
-# Override via environment
-export PITCHFORK_LOG=debug
-export PITCHFORK_WEB_AUTO_START=true
-export PITCHFORK_AUTOSTOP_DELAY=5m
+1. Built-in defaults.
+2. `/etc/pitchfork/config.toml`.
+3. User config (`~/.config/pitchfork/config.toml`).
+4. Project configs, from filesystem root down to the current directory.
+5. Environment variables.
+
+Within each directory, the four project files follow the
+[configuration hierarchy](/reference/configuration#configuration-hierarchy).
+Each file stores settings in `[settings]` sections.
+
+```sh
+PITCHFORK_AUTOSTOP_DELAY=5m pitchfork settings explain general.autostop_delay
 ```
 
-## All Settings
+This environment variable wins over the file configuration for this invocation.
 
-The full settings reference — every setting with its type, default,
-environment variable, and documentation — is generated from the CLI's usage
-spec (settings are declared with `#[derive(usage_rs::Config)]` in
-`src/settings.rs`, and `mise run render` regenerates the page):
+## When changes take effect
 
-**[Configuration reference →](/cli/configuration)**
+Client commands resolve settings from their environment and working directory.
+Supervisor-owned services, including the web UI and proxy, read settings when
+the supervisor starts. Restart it to apply changes:
+
+```sh
+pitchfork supervisor start --force
+```
+
+Use the user config for supervisor settings you want to apply consistently
+across projects. A setting exported in a later terminal does not change the
+environment of an already running supervisor.
+
+See [environment variables](/reference/environment-vars) for process metadata
+and invocation controls, and the [generated settings reference](/cli/configuration)
+for the full list of supported keys.

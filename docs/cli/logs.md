@@ -38,7 +38,7 @@ Examples:
   **Effect:** destructive — may delete or irreversibly overwrite
 - **`-n <N>`** — Show last N lines of logs
 
-  Only applies when --since/--until is not used. Without this option, all logs are shown.
+  With --since/--until, shows the last N matching lines in that time range. Without this option, all logs are shown.
 - **`-t --tail`** — Show logs in real-time
 
   **Aliases:** `-f`, `--follow`

@@ -1,73 +1,64 @@
-# Quick Start
+---
+description: Install pitchfork, run a background HTTP server, inspect its logs, and stop it again.
+---
+# Quickstart
 
-Get pitchfork running in under 5 minutes.
+Run a background HTTP server, check that it is ready, and stop it when you're done.
+This walkthrough needs **Python 3** and an available **port 8000**.
 
-## Install
+## 1. Install pitchfork
 
-```bash
-# Using mise (recommended)
+```sh
 mise use -g pitchfork
-
-# Or with cargo
-cargo install pitchfork-cli
-
-# Or download from GitHub releases
-# https://github.com/jdx/pitchfork/releases
+pitchfork --version
 ```
 
-## Run Your First Daemon
+If you don't use mise, install with `cargo install pitchfork-cli --locked` or
+choose a binary from the [installation guide](/installation).
 
-Start a background process with a single command:
+## 2. Start a daemon
 
-```bash
-pitchfork run myserver -- python -m http.server 8000
+Run this from a directory whose files you want to serve:
+
+```sh
+pitchfork run demo --port 8000 -- \
+  python3 -u -m http.server 8000 --bind 127.0.0.1
 ```
 
-This starts a Python HTTP server in the background, labeled "myserver".
+`demo` is the name pitchfork uses to track this process. Everything after `--`
+is the command to run. `--port 8000` makes pitchfork wait for a TCP connection
+to succeed before returning. Python's `-u` makes log output appear promptly.
 
-## Check Status
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser. The server
+keeps running after the command finishes, even if you close this terminal.
+Pitchfork starts its background supervisor automatically.
 
-```bash
-pitchfork list
+## 3. Check status and logs
+
+```sh
+pitchfork status demo
+pitchfork logs demo --tail
 ```
 
-You'll see output like:
+Refresh the browser to produce a request log. Press `Ctrl+C` to leave the log
+viewer; the server stays running. Use `pitchfork list` to see all tracked and
+available daemons, or `pitchfork tui` for the interactive dashboard.
 
-```
-NAME       PID    STATUS
-myserver   12345  running
-```
+## 4. Stop and clean up
 
-## View Logs
-
-```bash
-pitchfork logs myserver
+```sh
+pitchfork stop demo
+pitchfork clean --daemon demo
 ```
 
-Or follow logs in real-time:
+`stop` terminates the process. `clean` removes its stopped entry from the daemon
+list; it does not delete logs or configuration.
 
-```bash
-pitchfork logs myserver --tail
-```
+## Next: save a project configuration
 
-## Interactive Dashboard
+One-off commands are useful for trying things out. A `pitchfork.toml` makes your
+services repeatable and shareable. Continue with [your first project](/first-daemon)
+to add dependencies, readiness checks, and project-scoped commands.
 
-For a richer monitoring experience, launch the terminal UI:
-
-```bash
-pitchfork tui
-```
-
-The TUI features vim-style keybindings, fuzzy search, and a built-in config editor.
-
-## Stop the Daemon
-
-```bash
-pitchfork stop myserver
-```
-
-## What's Next?
-
-- [Installation](/installation) - All installation methods and shell completion
-- [Your First Project](/first-daemon) - Set up a project with multiple daemons
-- [Shell Hook](/guides/shell-hook) - Auto-start daemons when entering a directory
+If this example fails, check `python3 --version`, choose another port in both
+places in the command, or see [troubleshooting](/troubleshooting).

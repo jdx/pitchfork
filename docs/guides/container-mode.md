@@ -1,84 +1,65 @@
-# Container Mode <Badge type="warning" text="Experimental" />
+---
+description: Run the foreground supervisor as a container entrypoint with signal handling and orphan reaping.
+---
+# Container mode <Badge type="warning" text="Experimental" />
 
-::: warning Experimental Feature
-Container mode is an **experimental** feature. Its behavior may change in future releases, and it is not guaranteed to work in all environments. Use at your own risk.
-:::
+Container mode lets the supervisor act as PID 1 on Linux. It reaps orphaned
+children and handles `SIGTERM` and `SIGINT` through graceful shutdown. This
+feature is experimental; test the lifecycle of your services in your container.
 
-Run pitchfork as PID 1 inside Docker containers, handling zombie reaping and signal forwarding.
+## Run the supervisor in the foreground
 
-## The Problem
-
-When running inside a Docker container, the entrypoint process becomes **PID 1**. Unlike a normal init system, PID 1 has special responsibilities:
-
-- **Zombie reaping** — Orphaned child processes are re-parented to PID 1. Without explicit reaping, they accumulate as zombies in the process table indefinitely.
-- **Signal forwarding** — The Linux kernel does not deliver default signal handlers to PID 1. Signals like `SIGTERM` must be explicitly caught and handled.
-
-If you run pitchfork as a container entrypoint without container mode, orphaned processes from your daemons may pile up as zombies, and `docker stop` may not shut down gracefully.
-
-## Enabling Container Mode
-
-There are three ways to enable container mode:
-
-### CLI Flag
-
-```bash
-pitchfork supervisor run --container
+```sh
+pitchfork supervisor run --container --boot
 ```
 
-### Environment Variable
+`--container` enables PID 1 behavior. `--boot` starts configured daemons whose
+`boot_start` is `true`. Container mode alone does not start every daemon.
 
-```bash
-PITCHFORK_CONTAINER=true pitchfork supervisor run
-```
+You can also enable container behavior with `PITCHFORK_CONTAINER=true` or
+`[settings.supervisor] container = true`.
 
-### Settings Configuration
+## A minimal example
 
-```toml
-[settings.supervisor]
-container = true
-```
-
-The CLI flag and environment variable take priority over the settings file.
-
-## What Container Mode Does
-
-When container mode is enabled, pitchfork:
-
-1. **Installs a SIGCHLD handler** to reap all orphaned/zombie child processes. Only processes that are _not_ managed by the supervisor are reaped by this handler — managed daemons are reaped by their own monitoring tasks.
-
-2. **Routes SIGTERM/SIGINT through the graceful shutdown sequence**, ensuring all daemons are stopped cleanly before the container exits.
-
-## Example Dockerfile
+This example serves `/app` with Python. Put a Linux pitchfork binary matching
+the container's architecture at `./pitchfork`, alongside the Dockerfile and
+configuration. You can obtain it from [releases](https://github.com/jdx/pitchfork/releases).
 
 ```dockerfile
-FROM debian:bookworm-slim
-
-# Install pitchfork
-COPY --from=ghcr.io/jdx/pitchfork:latest /usr/local/bin/pitchfork /usr/local/bin/pitchfork
-
-# Copy your configuration
-COPY pitchfork.toml /app/pitchfork.toml
+FROM python:3-slim
+COPY --chmod=755 pitchfork /usr/local/bin/pitchfork
 WORKDIR /app
-
-# Run pitchfork as PID 1 in container mode
-ENTRYPOINT ["pitchfork", "supervisor", "run", "--container"]
+COPY pitchfork.toml /app/pitchfork.toml
+EXPOSE 8000
+ENTRYPOINT ["pitchfork", "supervisor", "run", "--container", "--boot"]
 ```
 
-## Example Configuration
-
-A typical `pitchfork.toml` for container use:
+`pitchfork.toml`:
 
 ```toml
-[settings.supervisor]
-container = true
-
-[daemons.api]
-run = "node server.js"
-ready_http = "http://localhost:3000/health"
-retry = true
-
-[daemons.worker]
-run = "python worker.py"
-depends = ["api"]
+[daemons.web]
+run = "python3 -u -m http.server 8000 --bind 0.0.0.0"
+ready_port = { port = 8000, timeout = "15s" }
+boot_start = true
 retry = true
 ```
+
+```sh
+docker build -t pitchfork-demo .
+docker run --rm --name pitchfork-demo -p 127.0.0.1:8000:8000 pitchfork-demo
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). From another terminal, run
+`docker stop pitchfork-demo` to exercise graceful shutdown.
+
+## Use your own application
+
+Install the application's runtime and dependencies in the image, copy its files,
+and replace the `run` command. Keep service commands in the foreground and set
+`boot_start = true` for entrypoint services. Add `depends` and ready checks when
+services must start in order.
+
+The supervisor remains the container's main process. Do not assume a child
+daemon's exit will end the container or become the container's exit status.
+Inspect daemon [logs](/guides/logs) and status, and configure
+[health checks](/guides/health-checks) as needed.

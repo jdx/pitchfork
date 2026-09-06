@@ -1,117 +1,75 @@
-# Auto Restart on Failure
+---
+description: Configure bounded or unlimited retries for startup failures, runtime crashes, and failed health checks.
+---
+# Automatic retries
 
-Configure pitchfork to automatically restart daemons when they crash.
-
-## Basic Configuration
-
-Add the `retry` field to your daemon configuration:
+Set `retry` to restart a daemon after a failure. The default is no retries.
 
 ```toml
 [daemons.api]
-run = "npm run server:api"
-retry = 3  # Retry up to 3 times on failure
-```
-
-This tells pitchfork to retry up to 3 times if the daemon exits with an error. Total attempts: 4 (1 initial + 3 retries).
-
-## Infinite Retries
-
-Use `retry = true` for daemons that should always restart:
-
-```toml
-[daemons.critical-worker]
-run = "npm run worker"
-retry = true  # Retry forever until manually stopped
-```
-
-This is useful for critical services that must stay running.
-
-## CLI Override
-
-Override retry behavior from the command line:
-
-```bash
-# For pitchfork run
-pitchfork run my-task --retry 3 -- ./my-script.sh
-
-# For pitchfork start (overrides pitchfork.toml)
-pitchfork start api --retry 5
-```
-
-## How Retry Works
-
-Pitchfork uses two different retry mechanisms depending on when the failure occurs:
-
-### Startup Failures (Synchronous Retry)
-
-**When:** The daemon fails before the ready check completes.
-
-**Behavior:**
-- `pitchfork start` waits and retries synchronously
-- Uses exponential backoff: 1s, 2s, 4s, 8s, ...
-- Blocks until daemon becomes ready or all retries are exhausted
-
-```bash
-$ pitchfork start api
-# Daemon fails immediately
-# Wait 1 second... retry (attempt 1/3)
-# Daemon fails again
-# Wait 2 seconds... retry (attempt 2/3)
-# Daemon fails again
-# Wait 4 seconds... retry (attempt 3/3)
-# All retries exhausted
-ERROR: daemon api failed with exit code 1
-```
-
-**Use case:** Services that fail due to:
-- Waiting for dependent services
-- Temporary port conflicts
-- Resource constraints during startup
-
-### Runtime Crashes (Asynchronous Retry)
-
-**When:** The daemon crashes after successfully starting.
-
-**Behavior:**
-- The supervisor detects the crash in the background
-- Retries at each supervisor interval tick (default: 10 seconds, configurable via `settings.general.interval`)
-- Continues until retry count is exhausted
-- Happens independently of CLI commands
-
-```bash
-$ pitchfork start api
-# Daemon starts successfully
-started api
-$ # ... daemon runs for a while ...
-# Daemon crashes unexpectedly
-# Supervisor detects crash
-# Wait 10 seconds... retry (attempt 1/3)
-# Success! Daemon stays running
-```
-
-**Use case:** Services that experience:
-- Transient network issues
-- Memory leaks causing periodic crashes
-- External resource failures
-
-## Example Configurations
-
-**Flaky service with retries:**
-```toml
-[daemons.api]
-run = "npm run server"
-retry = 5
-ready_http = "http://localhost:3000/health"
-```
-
-**Database with startup retries:**
-```toml
-[daemons.postgres]
-run = "postgres -D /var/lib/pgsql/data"
+run = "node server.js"
+ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
 retry = 3
-ready_output = "ready to accept connections"
 ```
 
-## Lifecycle Hooks
+This allows the initial attempt plus three retries. It applies to startup
+failures and errors after startup, including termination caused by
+[health checks](/guides/health-checks) or resource limits.
 
-You can run custom commands when daemons become ready, fail, or retry. See the [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
+## Choose a policy
+
+| Value | Behavior |
+| --- | --- |
+| `0` or `false` | Do not retry (default) |
+| A positive integer | Retry up to that many times |
+| `true` | Keep retrying on failure until stopped or disabled |
+
+```toml
+[daemons.worker]
+run = "python3 worker.py"
+retry = true
+```
+
+Retries respond to failures. A process that completes successfully is not a
+crashed service; use [cron](/guides/scheduling) to repeat a successful task.
+
+## Startup failures versus runtime failures
+
+| When it fails | Who handles the retry | Timing |
+| --- | --- | --- |
+| Before becoming ready | The startup operation | Exponential backoff: `1s`, `2s`, `4s`, … |
+| After becoming ready | The supervisor in the background | Evaluated on interval ticks (`general.interval`, default `10s`) |
+
+During startup retries, the CLI keeps waiting until readiness or failure.
+Runtime retries happen independently of the terminal that started the daemon.
+Use `depends` and [ready checks](/guides/ready-checks) to handle startup ordering
+instead of relying on failures to delay a dependent service.
+
+## One-off commands
+
+`pitchfork run` accepts a retry count:
+
+```sh
+pitchfork run worker --retry 3 -- ./worker
+```
+
+For `pitchfork start`, configure `retry` in `pitchfork.toml`; it has no `--retry`
+override. You can also save a new daemon with a retry policy:
+
+```sh
+pitchfork daemons add worker --run './worker' --retry 3
+```
+
+## Inspect or interrupt retries
+
+```sh
+pitchfork status api
+pitchfork logs api --tail
+pitchfork stop api
+```
+
+To prevent later manual or automatic starts, use `pitchfork disable api`.
+Restore it with `pitchfork enable api`.
+
+Use `on_retry` to react to each retry and `on_fail` when attempts are exhausted.
+See [lifecycle hooks](/guides/lifecycle-hooks).

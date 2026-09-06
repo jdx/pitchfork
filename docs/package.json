@@ -1,7 +1,7 @@
 {
   "scripts": {
     "docs:dev": "vitepress dev",
-    "docs:build": "node --test .vitepress/social-images.test.mjs && vitepress build && node .vitepress/check-social-images.mjs .vitepress/dist",
+    "docs:build": "node .vitepress/check-content.mjs --examples && node --test .vitepress/social-images.test.mjs && vitepress build && node .vitepress/check-content.mjs && node .vitepress/check-social-images.mjs .vitepress/dist",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {

@@ -41,7 +41,7 @@ Use "0.0.0.0" to make the API reachable from other devices on your network. Keep
 
 Port the standalone API server listens on
 
-Set to 0 (default) to disable the standalone API server. Set to any valid port number (e.g. 8081) to start the API on its own port.
+Set to 0 (default) to disable the standalone API server. Set to a valid port (e.g. 8081) and enable `api.auto_start` to start the API on its own port.
 
 ## `api.port_attempts`
 
@@ -290,12 +290,12 @@ If the command exits with a non-zero status, the pruning is skipped for that bat
 **Examples:**
 
 ```toml
-[logs.archive_hook]
+[settings.logs.archive_hook]
 command = "gzip -c >> /var/log/pitchfork/archive.jsonl.gz"
 ```
 
 ```toml
-[logs.archive_hook]
+[settings.logs.archive_hook]
 command = "aws s3 cp - s3://my-bucket/pitchfork-logs/"
 ```
 
@@ -787,7 +787,7 @@ Brief pause after stopping a daemon before starting it again. Helps ensure resou
 
 Maximum time to wait for daemon to stop gracefully
 
-When stopping a daemon, pitchfork sends SIGTERM and waits this long for the process to exit gracefully before sending SIGKILL.
+When stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long for the process to exit gracefully before sending SIGKILL.
 
 Increase for daemons that need time to clean up (e.g., flush data).
 

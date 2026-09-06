@@ -1,105 +1,75 @@
-# File Locations
+---
+description: Locate pitchfork configuration, runtime state, logs, sockets, certificates, and boot registration files.
+---
+# File locations
 
-Where pitchfork stores its files.
+Pitchfork keeps configuration separate from runtime state. The paths below are
+the normal Unix defaults; environment variables can override the config and
+state directories.
 
-## Directory Resolution
+## Configuration files
 
-Pitchfork resolves key directories as follows:
-
-| Directory | Resolution Order |
-|-----------|-----------------|
-| **Home** | `SUDO_USER`'s home (when euid=0) → `dirs::home_dir()` → `/tmp` |
-| **Config** | `PITCHFORK_CONFIG_DIR` env → `~/.config/pitchfork` |
-| **State** | `PITCHFORK_STATE_DIR` env → (root + `settings.supervisor.user`) configured user's `~/.local/state/pitchfork` → (sudo) `SUDO_USER`'s `~/.local/state/pitchfork` → (non-sudo) `dirs::state_dir()/pitchfork` → `~/.local/state/pitchfork` |
-
-> **Note:** Under root (euid=0), `settings.supervisor.user` controls the default state directory owner and location when set. Otherwise, `sudo` invocations resolve `~` from `SUDO_USER` via the system password database, and `dirs::state_dir()` is bypassed to keep paths consistent with non-sudo invocations. On macOS `dirs::state_dir()` returns `None`, so the fallback `~/.local/state` is always used.
-
-## Configuration Files
-
-Pitchfork supports configuration files in multiple locations. Files are merged in order, with later files overriding earlier ones.
-
-| Location | Purpose |
+| Path | Purpose |
 | --- | --- |
-| `/etc/pitchfork/config.toml` | System-wide configuration |
-| `~/.config/pitchfork/config.toml` | User configuration |
-| `.config/pitchfork.toml` | Project configuration |
-| `.config/pitchfork.local.toml` | Project configuration |
-| `pitchfork.toml` | Project configuration |
-| `pitchfork.local.toml` | Local project overrides |
+| `/etc/pitchfork/config.toml` | System-wide defaults and global daemons |
+| `~/.config/pitchfork/config.toml` | User settings, global daemons, slug and namespace registries |
+| `.config/pitchfork.toml` | Project configuration in a `.config` directory |
+| `.config/pitchfork.local.toml` | Personal overrides for that project configuration |
+| `pitchfork.toml` | Project configuration in the project root |
+| `pitchfork.local.toml` | Personal project overrides |
 
-### Config File Precedence (lowest to highest)
+Project files are discovered from filesystem root down to the current directory.
+Within each directory, later rows above take precedence. See
+[configuration hierarchy](/reference/configuration#configuration-hierarchy).
+Add local override files to `.gitignore` yourself if they should stay private.
 
-1. `/etc/pitchfork/config.toml` - System-wide (lowest precedence)
-2. `~/.config/pitchfork/config.toml` - User-wide
-3. `.config/pitchfork.toml` - Project-level (in project's `.config/` subdirectory)
-4. `.config/pitchfork.local.toml` - Project-level (in project's `.config/` subdirectory)
-5. `pitchfork.toml` - Project-level (in project root)
-6. `pitchfork.local.toml` - Local project overrides (highest precedence)
+`PITCHFORK_CONFIG_DIR` changes the user config directory. It does not move
+project config files.
 
-### Global Config: Slug Registry
+## State directory
 
-The global config (`~/.config/pitchfork/config.toml`) also contains the `[slugs]` section — the single source of truth for reverse proxy slug→project mappings:
+The normal location is `~/.local/state/pitchfork/`:
 
-```toml
-[slugs]
-api = { dir = "/home/user/my-api", daemon = "server" }
-docs = { dir = "/home/user/docs-site" }  # daemon defaults to "docs"
-```
+| Path within the state directory | Purpose |
+| --- | --- |
+| `state.toml` | Daemon identities, status, retry state, and project sessions |
+| `logs/logs.db` | SQLite daemon log store |
+| `sock/main.sock` | CLI-to-supervisor Unix socket |
+| `proxy/cert.pem` | Generated proxy certificate |
 
-Manage slugs with `pitchfork proxy add` / `pitchfork proxy remove`.
-
-Within a given project directory, files take precedence in this order:
-- `.config/pitchfork.toml` has lowest precedence in that project
-- `.config/pitchfork.local.toml` overrides `.config/pitchfork.toml`
-- `pitchfork.toml` overrides anything in `.config/`
-- `pitchfork.local.toml` overrides both (typically git-ignored)
-
-## State Directory
-
-**Location:** `~/.local/state/pitchfork/`
-
-| File/Directory | Purpose |
-|----------------|---------|
-| `state.toml` | Persistent daemon state |
-| `logs/` | Daemon log files |
-| `sock/main.sock` | Unix socket for CLI-supervisor communication |
-
-### State File
-
-`~/.local/state/pitchfork/state.toml` tracks:
-- Known daemons and their status
-- Enabled/disabled state
-- Last run information
+`PITCHFORK_STATE_DIR` overrides this location. On Linux, the default also follows
+the system's state-directory resolution (including `XDG_STATE_HOME`). On macOS,
+pitchfork falls back to `~/.local/state/pitchfork`.
 
 ### Logs
 
-Logs are stored in a single SQLite database (`logs.db`) for efficient querying, filtering, and rotation. The database uses WAL mode for concurrent readers so the CLI, TUI, and Web UI can all read logs at the same time without blocking the supervisor's writes.
+Daemon logs live in a shared SQLite database, keyed by qualified daemon ID
+(`namespace/name`). WAL mode allows concurrent readers. Query them with
+`pitchfork logs`, the TUI, or the web UI rather than looking for one text file
+per daemon.
 
-```text
-~/.local/state/pitchfork/logs/logs.db
-```
+Older versions wrote directories such as `logs/my-project--api/`. Legacy text
+logs are imported on first access to the log store. Those paths are retained for
+migration, not the current storage layout.
 
-Inside the database, each daemon is identified by its qualified ID (`namespace/name`). Log entries include a timestamp (millisecond precision) and the raw message text, so time-based filtering is fast and reliable.
+See [log management](/guides/logs) for filtering, retention, and export.
 
-For backwards compatibility, the legacy log directory structure still exists but is no longer written to by the supervisor:
+### Running with sudo
 
-```text
-~/.local/state/pitchfork/logs/<namespace>--<daemon-name>/
-```
+When the supervisor runs as root and `settings.supervisor.user` is set, default
+state paths use that user's home and files are owned by that user. Otherwise,
+sudo invocations resolve the calling user's home through `SUDO_USER`.
+An explicit `PITCHFORK_STATE_DIR` takes precedence.
 
-Legacy text log files from older pitchfork versions are automatically imported into the SQLite store on first access, so no manual migration is needed.
+Keep clients and the supervisor pointed at the same state directory. Different
+values mean different state files and IPC sockets.
 
-### IPC Socket
+## Boot registration
 
-`~/.local/state/pitchfork/sock/main.sock`
+| Platform | User registration | System registration (root) |
+| --- | --- | --- |
+| macOS | `~/Library/LaunchAgents/pitchfork.plist` | `/Library/LaunchDaemons/pitchfork.plist` |
+| Linux | `~/.config/systemd/user/pitchfork.service` | `/etc/systemd/system/pitchfork.service` |
 
-Unix domain socket used for communication between CLI commands and the supervisor daemon.
-
-## Boot Start Files
-
-Varies by platform:
-
-| Platform | Location |
-|----------|----------|
-| macOS | `~/Library/LaunchAgents/com.pitchfork.agent.plist` |
-| Linux | `~/.config/systemd/user/pitchfork.service` |
+Use `pitchfork boot status` to inspect registration and `pitchfork boot disable`
+to remove it. See [start at login or boot](/guides/boot-start).

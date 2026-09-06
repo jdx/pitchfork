@@ -183,8 +183,8 @@ Examples:
                                    Add to pitchfork.local.toml instead
     pitchfork daemons add api --run 'npm start' --global
                                   Add to ~/.config/pitchfork/config.toml instead
-    pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
-                                  Add cron daemon that triggers immediately
+    pitchfork daemons add worker --run './worker' --cron-schedule '0 */5 * * * *' --cron-immediate
+                                  Schedule every five minutes, including a just-missed trigger
 
 """#
         flag --run help="Command to run (can also use positional args)" {
@@ -259,7 +259,7 @@ Examples:
         flag --cron-retrigger help="Cron retrigger behavior: finish, always, success, fail" {
             arg <CRON_RETRIGGER>
         }
-        flag --cron-immediate help="Trigger cron immediately on first check (default: deferred until next scheduled time)"
+        flag --cron-immediate help="On the first cron check, include scheduled times from the previous 10 seconds"
         flag --local help="Write to pitchfork.local.toml instead of pitchfork.toml"
         flag --project help="Write to pitchfork.toml explicitly (default if no flag specified)"
         flag --global help="Write to the user-level global config (~/.config/pitchfork/config.toml)"
@@ -287,12 +287,15 @@ Supported shells: bash, zsh, fish
 Installation:
 
     bash:
+      mkdir -p ~/.local/share/bash-completion/completions
       pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork
 
     zsh:
+      mkdir -p ~/.zfunc
       pitchfork completion zsh > ~/.zfunc/_pitchfork
 
     fish:
+      mkdir -p ~/.config/fish/completions
       pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
@@ -486,7 +489,7 @@ Examples:
         long_help #"""
 Show last N lines of logs
 
-Only applies when --since/--until is not used. Without this option, all logs are shown.
+With --since/--until, shows the last N matching lines in that time range. Without this option, all logs are shown.
 """#
         arg <N>
     }
@@ -580,33 +583,6 @@ Tools provided:
     pitchfork_stop      Stop a named daemon
     pitchfork_restart   Restart a named daemon
     pitchfork_logs      Return recent log output for a daemon
-"""#
-    after_long_help #"""
-Examples:
-
-    # Start the MCP server (used by AI assistant tools)
-    $ pitchfork mcp
-
-    # Claude Desktop configuration (claude_desktop_config.json):
-    {
-      "mcpServers": {
-        "pitchfork": {
-          "command": "pitchfork",
-          "args": ["mcp"]
-        }
-      }
-    }
-
-    # Interactive testing with JSON-RPC:
-    $ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | pitchfork mcp
-
-# Available tools:
-- pitchfork_status  - List all daemons and their state
-- pitchfork_start   - Start daemon(s) by name
-- pitchfork_stop    - Stop daemon(s) by name
-- pitchfork_restart - Restart daemon(s) by name
-- pitchfork_logs    - Return recent log output for daemon(s)
-
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
 }
@@ -792,7 +768,7 @@ cmd restart help="Restarts a daemon (stops then starts it)" {
     long_help #"""
 Restarts a daemon (stops then starts it)
 
-Equivalent to `start --force` - stops the daemon (SIGTERM) then starts it again
+Equivalent to `start --force` - stops the daemon with its configured signal, then starts it again
 from the pitchfork.toml configuration with dependency resolution.
 
 Examples:
@@ -1090,10 +1066,11 @@ cmd stop help="Sends a stop signal to a daemon" effect=write {
 Sends a stop signal to a daemon
 
 Uses a graceful shutdown strategy:
-1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)
+1. Send the configured stop signal (SIGTERM by default) to the process group
+   and wait for stop_signal.timeout or supervisor.stop_timeout (default: 5s)
 2. If still running, send SIGKILL to force termination
 
-Most processes will exit immediately after the first SIGTERM. The escalation
+Most processes exit promptly after the first signal. The escalation
 ensures stubborn processes are eventually terminated while giving well-behaved
 processes time to clean up resources.
 
@@ -1225,7 +1202,7 @@ config {
     prop "api.bind_address" type="string" default="127.0.0.1" help="IP address the API server binds to" long_help="IP address the API server binds to\n\nUse \"0.0.0.0\" to make the API reachable from other devices on your network. Keep \"127.0.0.1\" (default) to restrict it to localhost." {
         env "PITCHFORK_API_BIND_ADDRESS"
     }
-    prop "api.bind_port" type="int" default=0 help="Port the standalone API server listens on" long_help="Port the standalone API server listens on\n\nSet to 0 (default) to disable the standalone API server. Set to any valid port number (e.g. 8081) to start the API on its own port." {
+    prop "api.bind_port" type="int" default=0 help="Port the standalone API server listens on" long_help="Port the standalone API server listens on\n\nSet to 0 (default) to disable the standalone API server. Set to a valid port (e.g. 8081) and enable `api.auto_start` to start the API on its own port." {
         env "PITCHFORK_API_BIND_PORT"
     }
     prop "api.port_attempts" type="int" default=10 help="Number of consecutive ports to try if api.bind_port is in use" {
@@ -1288,7 +1265,7 @@ config {
     prop "logs.archive_hook.batch_size" type="int" default=1000 help="Maximum log entries per archive hook invocation" long_help="Maximum log entries per archive hook invocation\n\nLog entries selected for pruning are passed to the archive hook in batches of this size. Smaller batches use less memory and are easier to retry, while larger batches reduce hook invocation overhead." {
         env "PITCHFORK_LOG_ARCHIVE_HOOK_BATCH_SIZE"
     }
-    prop "logs.archive_hook.command" type="string" default="" help="Command to run before retention deletes old log entries" long_help="Command to run before retention deletes old log entries\n\nWhen set, the given command is invoked before log entries are permanently pruned by retention. The command receives the entries about to be deleted as JSON Lines (JSONL) on stdin. Each line is an object with the fields:\n\n- `id`: the SQLite row id - `daemon_id`: the qualified daemon id (e.g. `\"myproject/api\"`) - `timestamp`: the log timestamp in RFC 3339 format - `message`: the raw log message text\n\nThe following environment variables are also available:\n\n- `PITCHFORK_DAEMON_ID`: the qualified daemon id - `PITCHFORK_ARCHIVE_REASON`: either `\"age\"` or `\"count\"`\n\nIf the command exits with a non-zero status, the pruning is skipped for that batch. This prevents data loss when the archive destination is unavailable.\n\n**Examples:**\n\n```toml\n[logs.archive_hook]\ncommand = \"gzip -c >> /var/log/pitchfork/archive.jsonl.gz\"\n```\n\n```toml\n[logs.archive_hook]\ncommand = \"aws s3 cp - s3://my-bucket/pitchfork-logs/\"\n```" {
+    prop "logs.archive_hook.command" type="string" default="" help="Command to run before retention deletes old log entries" long_help="Command to run before retention deletes old log entries\n\nWhen set, the given command is invoked before log entries are permanently pruned by retention. The command receives the entries about to be deleted as JSON Lines (JSONL) on stdin. Each line is an object with the fields:\n\n- `id`: the SQLite row id - `daemon_id`: the qualified daemon id (e.g. `\"myproject/api\"`) - `timestamp`: the log timestamp in RFC 3339 format - `message`: the raw log message text\n\nThe following environment variables are also available:\n\n- `PITCHFORK_DAEMON_ID`: the qualified daemon id - `PITCHFORK_ARCHIVE_REASON`: either `\"age\"` or `\"count\"`\n\nIf the command exits with a non-zero status, the pruning is skipped for that batch. This prevents data loss when the archive destination is unavailable.\n\n**Examples:**\n\n```toml\n[settings.logs.archive_hook]\ncommand = \"gzip -c >> /var/log/pitchfork/archive.jsonl.gz\"\n```\n\n```toml\n[settings.logs.archive_hook]\ncommand = \"aws s3 cp - s3://my-bucket/pitchfork-logs/\"\n```" {
         env "PITCHFORK_LOG_ARCHIVE_HOOK_COMMAND"
     }
     prop "logs.line_retention" type="int" default=0 help="Count-based log retention (e.g. 10000)" long_help="Count-based log retention (e.g. 10000)\n\nMaximum number of log entries to keep per daemon in the SQLite log store.\n\nWhen set, only the most recent N log entries are retained. Older entries are automatically pruned.\n\nWhen set to `0` (default), no count-based pruning is performed. You can combine this with `time_retention` to enforce both a time limit and a line count limit.\n\nLogs are pruned automatically by the supervisor during its interval watcher cycle (no more than once per hour). No manual rotation command is needed." {
@@ -1399,7 +1376,7 @@ config {
     prop "supervisor.restart_delay" type="duration" default="100ms" help="Delay between stop and start during restart" long_help="Delay between stop and start during restart\n\nBrief pause after stopping a daemon before starting it again. Helps ensure resources (like ports) are fully released." {
         env "PITCHFORK_RESTART_DELAY"
     }
-    prop "supervisor.stop_timeout" type="duration" default="5s" help="Maximum time to wait for daemon to stop gracefully" long_help="Maximum time to wait for daemon to stop gracefully\n\nWhen stopping a daemon, pitchfork sends SIGTERM and waits this long for the process to exit gracefully before sending SIGKILL.\n\nIncrease for daemons that need time to clean up (e.g., flush data)." {
+    prop "supervisor.stop_timeout" type="duration" default="5s" help="Maximum time to wait for daemon to stop gracefully" long_help="Maximum time to wait for daemon to stop gracefully\n\nWhen stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long for the process to exit gracefully before sending SIGKILL.\n\nIncrease for daemons that need time to clean up (e.g., flush data)." {
         env "PITCHFORK_STOP_TIMEOUT"
     }
     prop "supervisor.user" type="string" default="" help="Default user to run daemon processes as" long_help="Default user to run daemon processes as\n\nDefault Unix user for daemon processes spawned by the supervisor.\n\nWhen set, all daemons run as this user unless an individual daemon sets `user = \"...\"`. The value may be a username (for example `\"postgres\"`) or a numeric UID (for example `\"501\"`).\n\nIf unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root." {

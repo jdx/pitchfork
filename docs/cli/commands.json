@@ -921,8 +921,8 @@
               {
                 "name": "cron-immediate",
                 "usage": "--cron-immediate",
-                "help": "Trigger cron immediately on first check (default: deferred until next scheduled time)",
-                "help_first_line": "Trigger cron immediately on first check (default: deferred until next scheduled time)",
+                "help": "On the first cron check, include scheduled times from the previous 10 seconds",
+                "help_first_line": "On the first cron check, include scheduled times from the previous 10 seconds",
                 "short": [],
                 "long": [
                   "cron-immediate"
@@ -989,7 +989,7 @@
             "hide": false,
             "args_override_self": true,
             "help": "Add a new daemon to pitchfork.toml",
-            "help_long": "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n\n    pitchfork daemons add api bun run server\n                                     Add daemon using positional args\n    pitchfork daemons add api --run 'npm start'\n                                     Add daemon with explicit run command\n    pitchfork daemons add api -- bun run server\n                                     Add daemon with explicit args after --\n    pitchfork daemons add api --run 'npm start' --retry 3\n                                     Add with retry policy\n    pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                     Add with file watching\n    pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                     Add with auto start/stop hooks\n    pitchfork daemons add worker --run './worker' --depends api\n                                     Add with daemon dependency\n    pitchfork daemons add api --run 'npm start' --local\n                                   Add to pitchfork.local.toml instead\n    pitchfork daemons add api --run 'npm start' --global\n                                  Add to ~/.config/pitchfork/config.toml instead\n    pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate\n                                  Add cron daemon that triggers immediately\n",
+            "help_long": "Add a new daemon to pitchfork.toml\n\nCreates a new daemon configuration section in the pitchfork.toml file.\nThe daemon will be added to the nearest pitchfork.toml found in the\nfilesystem hierarchy starting from the current directory.\n\nExamples:\n\n    pitchfork daemons add api bun run server\n                                     Add daemon using positional args\n    pitchfork daemons add api --run 'npm start'\n                                     Add daemon with explicit run command\n    pitchfork daemons add api -- bun run server\n                                     Add daemon with explicit args after --\n    pitchfork daemons add api --run 'npm start' --retry 3\n                                     Add with retry policy\n    pitchfork daemons add api --run 'npm start' --watch 'src/**/*.ts'\n                                     Add with file watching\n    pitchfork daemons add api --run 'npm start' --autostart --autostop\n                                     Add with auto start/stop hooks\n    pitchfork daemons add worker --run './worker' --depends api\n                                     Add with daemon dependency\n    pitchfork daemons add api --run 'npm start' --local\n                                   Add to pitchfork.local.toml instead\n    pitchfork daemons add api --run 'npm start' --global\n                                  Add to ~/.config/pitchfork/config.toml instead\n    pitchfork daemons add worker --run './worker' --cron-schedule '0 */5 * * * *' --cron-immediate\n                                  Schedule every five minutes, including a just-missed trigger\n",
             "name": "add",
             "aliases": [
               "a"
@@ -1190,7 +1190,7 @@
         "hide": false,
         "args_override_self": true,
         "help": "Generates shell completion scripts",
-        "help_long": "Generates shell completion scripts\n\nCreates self-contained tab-completion scripts for your shell.\n\nSupported shells: bash, zsh, fish\n\nInstallation:\n\n    bash:\n      pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork\n\n    zsh:\n      pitchfork completion zsh > ~/.zfunc/_pitchfork\n\n    fish:\n      pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish",
+        "help_long": "Generates shell completion scripts\n\nCreates self-contained tab-completion scripts for your shell.\n\nSupported shells: bash, zsh, fish\n\nInstallation:\n\n    bash:\n      mkdir -p ~/.local/share/bash-completion/completions\n      pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork\n\n    zsh:\n      mkdir -p ~/.zfunc\n      pitchfork completion zsh > ~/.zfunc/_pitchfork\n\n    fish:\n      mkdir -p ~/.config/fish/completions\n      pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish",
         "name": "completion",
         "aliases": [],
         "hidden_aliases": [],
@@ -1687,7 +1687,7 @@
             "name": "n",
             "usage": "-n <N>",
             "help": "Show last N lines of logs",
-            "help_long": "Show last N lines of logs\n\nOnly applies when --since/--until is not used. Without this option, all logs are shown.",
+            "help_long": "Show last N lines of logs\n\nWith --since/--until, shows the last N matching lines in that time range. Without this option, all logs are shown.",
             "help_first_line": "Show last N lines of logs",
             "short": [
               "n"
@@ -1994,7 +1994,6 @@
         "name": "mcp",
         "aliases": [],
         "hidden_aliases": [],
-        "after_help_long": "Examples:\n\n    # Start the MCP server (used by AI assistant tools)\n    $ pitchfork mcp\n\n    # Claude Desktop configuration (claude_desktop_config.json):\n    {\n      \"mcpServers\": {\n        \"pitchfork\": {\n          \"command\": \"pitchfork\",\n          \"args\": [\"mcp\"]\n        }\n      }\n    }\n\n    # Interactive testing with JSON-RPC:\n    $ echo '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}' | pitchfork mcp\n\n# Available tools:\n- pitchfork_status  - List all daemons and their state\n- pitchfork_start   - Start daemon(s) by name\n- pitchfork_stop    - Stop daemon(s) by name\n- pitchfork_restart - Restart daemon(s) by name\n- pitchfork_logs    - Return recent log output for daemon(s)\n",
         "examples": [],
         "headings": []
       },
@@ -2899,7 +2898,7 @@
         "hide": false,
         "args_override_self": true,
         "help": "Restarts a daemon (stops then starts it)",
-        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to `start --force` - stops the daemon (SIGTERM) then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n\n    pitchfork restart api           Restart a single daemon\n    pitchfork restart api worker    Restart multiple daemons\n    pitchfork restart --group backend Restart all daemons in the 'backend' group\n    pitchfork restart --all         Restart all running daemons\n    pitchfork restart -l            Restart all local daemons in pitchfork.toml\n    pitchfork restart -g            Restart all global daemons in config.toml\n    pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
+        "help_long": "Restarts a daemon (stops then starts it)\n\nEquivalent to `start --force` - stops the daemon with its configured signal, then starts it again\nfrom the pitchfork.toml configuration with dependency resolution.\n\nExamples:\n\n    pitchfork restart api           Restart a single daemon\n    pitchfork restart api worker    Restart multiple daemons\n    pitchfork restart --group backend Restart all daemons in the 'backend' group\n    pitchfork restart --all         Restart all running daemons\n    pitchfork restart -l            Restart all local daemons in pitchfork.toml\n    pitchfork restart -g            Restart all global daemons in config.toml\n    pitchfork restart api --delay 5 Wait 5 seconds for daemon to be ready",
         "name": "restart",
         "aliases": [],
         "hidden_aliases": [],
@@ -4181,7 +4180,7 @@
         "hide": false,
         "args_override_self": true,
         "help": "Sends a stop signal to a daemon",
-        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)\n2. If still running, send SIGKILL to force termination\n\nMost processes will exit immediately after the first SIGTERM. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all/--local/--global, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n\n    pitchfork stop api           Stop a single daemon\n    pitchfork stop api worker    Stop multiple daemons\n    pitchfork stop --group backend Stop all daemons in the 'backend' group\n    pitchfork stop --all         Stop all running daemons in dependency order\n    pitchfork stop -l            Stop all local daemons in pitchfork.toml\n    pitchfork stop -g            Stop all global daemons in config.toml\n    pitchfork kill api           Same as 'stop' (alias)",
+        "help_long": "Sends a stop signal to a daemon\n\nUses a graceful shutdown strategy:\n1. Send the configured stop signal (SIGTERM by default) to the process group\n   and wait for stop_signal.timeout or supervisor.stop_timeout (default: 5s)\n2. If still running, send SIGKILL to force termination\n\nMost processes exit promptly after the first signal. The escalation\nensures stubborn processes are eventually terminated while giving well-behaved\nprocesses time to clean up resources.\n\nWhen using --all/--local/--global, daemons are stopped in reverse dependency order:\ndependents are stopped before the daemons they depend on.\n\nExamples:\n\n    pitchfork stop api           Stop a single daemon\n    pitchfork stop api worker    Stop multiple daemons\n    pitchfork stop --group backend Stop all daemons in the 'backend' group\n    pitchfork stop --all         Stop all running daemons in dependency order\n    pitchfork stop -l            Stop all local daemons in pitchfork.toml\n    pitchfork stop -g            Stop all global daemons in config.toml\n    pitchfork kill api           Same as 'stop' (alias)",
         "name": "stop",
         "aliases": [
           "kill"
@@ -4774,7 +4773,7 @@
         "cli": [],
         "bindings": {},
         "help": "Port the standalone API server listens on",
-        "long_help": "Port the standalone API server listens on\n\nSet to 0 (default) to disable the standalone API server. Set to any valid port number (e.g. 8081) to start the API on its own port.",
+        "long_help": "Port the standalone API server listens on\n\nSet to 0 (default) to disable the standalone API server. Set to a valid port (e.g. 8081) and enable `api.auto_start` to start the API on its own port.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
@@ -5423,7 +5422,7 @@
         "cli": [],
         "bindings": {},
         "help": "Command to run before retention deletes old log entries",
-        "long_help": "Command to run before retention deletes old log entries\n\nWhen set, the given command is invoked before log entries are permanently pruned by retention. The command receives the entries about to be deleted as JSON Lines (JSONL) on stdin. Each line is an object with the fields:\n\n- `id`: the SQLite row id - `daemon_id`: the qualified daemon id (e.g. `\"myproject/api\"`) - `timestamp`: the log timestamp in RFC 3339 format - `message`: the raw log message text\n\nThe following environment variables are also available:\n\n- `PITCHFORK_DAEMON_ID`: the qualified daemon id - `PITCHFORK_ARCHIVE_REASON`: either `\"age\"` or `\"count\"`\n\nIf the command exits with a non-zero status, the pruning is skipped for that batch. This prevents data loss when the archive destination is unavailable.\n\n**Examples:**\n\n```toml\n[logs.archive_hook]\ncommand = \"gzip -c >> /var/log/pitchfork/archive.jsonl.gz\"\n```\n\n```toml\n[logs.archive_hook]\ncommand = \"aws s3 cp - s3://my-bucket/pitchfork-logs/\"\n```",
+        "long_help": "Command to run before retention deletes old log entries\n\nWhen set, the given command is invoked before log entries are permanently pruned by retention. The command receives the entries about to be deleted as JSON Lines (JSONL) on stdin. Each line is an object with the fields:\n\n- `id`: the SQLite row id - `daemon_id`: the qualified daemon id (e.g. `\"myproject/api\"`) - `timestamp`: the log timestamp in RFC 3339 format - `message`: the raw log message text\n\nThe following environment variables are also available:\n\n- `PITCHFORK_DAEMON_ID`: the qualified daemon id - `PITCHFORK_ARCHIVE_REASON`: either `\"age\"` or `\"count\"`\n\nIf the command exits with a non-zero status, the pruning is skipped for that batch. This prevents data loss when the archive destination is unavailable.\n\n**Examples:**\n\n```toml\n[settings.logs.archive_hook]\ncommand = \"gzip -c >> /var/log/pitchfork/archive.jsonl.gz\"\n```\n\n```toml\n[settings.logs.archive_hook]\ncommand = \"aws s3 cp - s3://my-bucket/pitchfork-logs/\"\n```",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
@@ -6607,7 +6606,7 @@
         "cli": [],
         "bindings": {},
         "help": "Maximum time to wait for daemon to stop gracefully",
-        "long_help": "Maximum time to wait for daemon to stop gracefully\n\nWhen stopping a daemon, pitchfork sends SIGTERM and waits this long for the process to exit gracefully before sending SIGKILL.\n\nIncrease for daemons that need time to clean up (e.g., flush data).",
+        "long_help": "Maximum time to wait for daemon to stop gracefully\n\nWhen stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long for the process to exit gracefully before sending SIGKILL.\n\nIncrease for daemons that need time to clean up (e.g., flush data).",
         "help_heading": null,
         "choices": [],
         "merge": "replace",

@@ -1,141 +1,105 @@
-# Cron Scheduling
+---
+description: Schedule recurring tasks with six-field cron expressions, local time, and explicit overlap policies.
+---
+# Cron scheduling
 
-Run daemons on a schedule using cron expressions.
-
-## Basic Configuration
-
-Add a `cron` field to your daemon. Accepts a cron expression string (shorthand) or an inline table (full form):
+Run a command on a schedule by adding `cron` to its daemon configuration:
 
 ```toml
-# Shorthand (retrigger defaults to "finish")
 [daemons.backup]
 run = "./scripts/backup.sh"
 cron = "0 0 2 * * *"
+```
 
-# Full form
+This runs daily at **02:00 in the supervisor's local time zone**. Keep the
+supervisor running for schedules to fire. It discovers cron daemons from known
+configuration, including ones that have not been manually started.
+
+## Expression format
+
+Pitchfork uses six fields, starting with **seconds**. A seventh year field is
+optional. This differs from the five-field format commonly used by `crontab`.
+
+```text
+second  minute  hour  day-of-month  month  day-of-week  [year]
+0       30      9     *             *      MON-FRI
+```
+
+| Schedule | Expression |
+| --- | --- |
+| Every hour | `0 0 * * * *` |
+| Every five minutes | `0 */5 * * * *` |
+| Daily at 02:00 | `0 0 2 * * *` |
+| Sunday at midnight | `0 0 0 * * SUN` |
+| Weekdays at 09:30 | `0 30 9 * * MON-FRI` |
+
+Use weekday names for clarity. Numeric weekdays are `1` (Sunday) through `7`
+(Saturday), not `0` through `6`.
+
+The supervisor checks schedules every `10s` by default
+(`supervisor.cron_check_interval`). A due run starts on a check, so scheduling
+is not a guarantee of execution at the exact second.
+
+## Decide what happens to the previous run
+
+```toml
 [daemons.backup]
 run = "./scripts/backup.sh"
 cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
 ```
 
-## Cron Expression Format
+| `retrigger` | When a scheduled time is reached |
+| --- | --- |
+| `finish` (default) | Run only if the previous execution has finished |
+| `always` | Stop any active execution and start again |
+| `success` | Run if the previous execution finished successfully |
+| `fail` | Run if the previous execution failed |
 
-Uses standard 6-field cron format:
+`success` and `fail` both allow the first execution. After that, the previous
+result decides whether another run is eligible. These modes do not create
+overlapping copies of the same daemon.
 
+## Startup behavior
+
+Starting or discovering a cron daemon registers its schedule; it does not
+normally run the command immediately.
+
+```sh
+pitchfork start backup
+pitchfork logs backup --tail
 ```
-┌──────────── second (0-59)
-│ ┌────────── minute (0-59)
-│ │ ┌──────── hour (0-23)
-│ │ │ ┌────── day of month (1-31)
-│ │ │ │ ┌──── month (1-12)
-│ │ │ │ │ ┌── day of week (0-6, Sunday = 0)
-│ │ │ │ │ │
-* * * * * *
-```
 
-**Examples:**
-- `0 0 * * * *` - Every hour
-- `0 */5 * * * *` - Every 5 minutes
-- `0 0 2 * * *` - Daily at 2 AM
-- `0 0 0 * * 0` - Weekly on Sunday at midnight
-- `0 30 9 * * 1-5` - Weekdays at 9:30 AM
-
-## First Trigger on Start
-
-By default, a cron daemon does **not** execute immediately when you run `pitchfork start`. It waits for the next scheduled time. If you want a scheduled time within the last 10 seconds before startup to also trigger the daemon, set `immediate = true`:
+`immediate = true` adds a ten-second lookback on the first schedule check:
 
 ```toml
-[daemons.backup]
-run = "./backup.sh"
 cron = { schedule = "0 0 2 * * *", immediate = true }
 ```
 
-## Retrigger Modes
+This catches a scheduled time that just passed. It does **not** mean “run now
+regardless of the schedule.” For a manual execution, use a separate one-off
+command, such as `pitchfork run backup-now -- ./scripts/backup.sh`.
 
-Control what happens when the schedule triggers while the previous run is still active:
+## Pause a schedule
 
-### `finish` (Default)
-
-Only retrigger if the previous execution has finished.
-
-```toml
-[daemons.backup]
-run = "./backup.sh"
-cron = { schedule = "0 0 2 * * *", retrigger = "finish" }
+```sh
+pitchfork disable backup
+pitchfork enable backup
 ```
 
-**Use case:** Long-running tasks that should not overlap.
+Use `disable` to prevent future scheduled starts. Stopping a process alone does
+not remove its schedule. Use `pitchfork list` and `pitchfork logs backup` to
+inspect status and output.
 
-### `always`
+## Tools outside an interactive shell
 
-Always retrigger. Stops the previous run if still active.
-
-```toml
-[daemons.health-check]
-run = "curl -f http://localhost:8080/health"
-cron = { schedule = "0 */5 * * * *", retrigger = "always" }
-```
-
-**Use case:** Health checks where you always want the latest execution.
-
-### `success`
-
-Only retrigger if the previous execution succeeded (exit code 0).
-
-```toml
-[daemons.process-data]
-run = "./process.sh"
-cron = { schedule = "0 0 * * * *", retrigger = "success" }
-```
-
-**Use case:** Chained tasks that depend on prior success.
-
-### `fail`
-
-Only retrigger if the previous execution failed.
-
-```toml
-[daemons.retry-task]
-run = "./flaky-task.sh"
-cron = { schedule = "0 */10 * * * *", retrigger = "fail" }
-```
-
-**Use case:** Automatic retry logic for failing tasks.
-
-## Starting Cron Daemons
-
-Start cron daemons like any other:
-
-```bash
-pitchfork start backup
-pitchfork start --all
-```
-
-The supervisor triggers the daemon according to its schedule.
-
-## Monitoring
-
-```bash
-# View all daemons including cron jobs
-pitchfork list
-
-# View logs
-pitchfork logs backup
-```
-
-## PATH and Tool Availability
-
-When running cron daemons via `pitchfork boot` (login daemon mode), tools installed by version
-managers (e.g. Node via mise, Python via pyenv) may not be available because interactive shell
-hooks haven't run.
-
-**Solution:** Use [mise integration](/guides/mise-integration) to wrap your commands:
+Scheduled services may run without your shell's tool setup. Enable
+[mise integration](/guides/mise-integration) when they need mise-managed tools:
 
 ```toml
 [daemons.backup]
 run = "node scripts/backup.js"
-cron = { schedule = "0 0 2 * * *" }
-mise = true  # Ensures Node is on PATH even in login daemon context
+cron = "0 0 2 * * *"
+mise = true
 ```
 
-See the [mise integration guide](/guides/mise-integration#built-in-mise-integration) for details.
+For a supervisor that starts at login or boot, see [boot registration](/guides/boot-start).

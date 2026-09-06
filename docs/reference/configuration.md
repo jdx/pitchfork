@@ -1,6 +1,22 @@
+---
+description: Look up every daemon option, shared environment values, configuration precedence, and registries.
+---
 # Configuration Reference
 
-Complete reference for `pitchfork.toml` configuration files.
+Use `pitchfork.toml` to define daemons and their lifecycle. For a walkthrough,
+see [your first project](/first-daemon). For pitchfork-wide defaults such as
+logging and dashboard ports, see [settings](/reference/settings).
+
+## Find an option
+
+| Task | Fields |
+| --- | --- |
+| Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
+| Order startup | [`depends`](#depends), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
+| Recover and monitor | [`retry`](#retry), [`health_cmd`](#health-cmd), [`health_http`](#health-http), [`health_port`](#health-port), [`memory_limit`](#memory-limit), [`cpu_limit`](#cpu-limit) |
+| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal) |
+| Configure ports and logs | [`port`](#port), [`logs`](#logs) |
+| Share project configuration | [Environment defaults](#shared-environment), [groups](#daemon-groups), [namespace registry](#namespace-registry), [proxy slugs](#global-config-slug-registry) |
 
 ## Configuration Hierarchy
 
@@ -14,7 +30,7 @@ Within each directory, files are processed in this order:
 - `.config/pitchfork.toml` (lowest precedence in directory)
 - `.config/pitchfork.local.toml` (overrides `.config/pitchfork.toml`)
 - `pitchfork.toml` (overrides everything in `.config/`)
-- `pitchfork.local.toml` (highest precedence in directory, not committed to version control)
+- `pitchfork.local.toml` (highest precedence in directory; add it to `.gitignore` for personal overrides)
 
 This mirrors [mise](https://mise.jdx.dev/configuration.html) behavior, allowing you to store project config in a centralized `.config/` directory if preferred.
 
@@ -35,7 +51,7 @@ A JSON Schema is available for editor autocompletion and validation:
 run = "npm run server"
 ```
 
-**JetBrains IDEs**: Add the schema URL in Settings → Languages & Frameworks → Schemas and DTDs → JSON Schema Mappings.
+Use the schema URL with a TOML editor or language server that supports JSON Schema validation.
 
 ## File Format
 
@@ -44,8 +60,8 @@ All configuration uses TOML format:
 ```toml
 namespace = "my-project" # optional, project-directory namespace override
 
-[daemons.<daemon-name>]
-run = "command to execute"
+[daemons.api]
+run = "node server.js"
 # ... other options
 ```
 
@@ -92,11 +108,33 @@ Notes:
 - If multiple files declare `namespace`, every value must match
 - Global config files must use `global`
 
-## Daemon Options
+## Shared environment
+
+Top-level `[env]` values supply defaults for all daemons. A daemon's own `env`
+overrides matching keys. Values support [templates](/guides/configuration-templates).
+
+```toml
+[env]
+APP_ENV = "development"
+LOG_LEVEL = "info"
+
+[daemons.api]
+run = "node server.js"
+env = { LOG_LEVEL = "debug" }
+```
+
+## Settings
+
+Use `[settings.<group>]` for pitchfork-wide behavior, such as
+`[settings.general]` or `[settings.web]`. These are separate from the daemon
+fields below. See [settings](/reference/settings) for precedence and commands
+to inspect or update them.
+
+## Daemon options
 
 ### `run` (required)
 
-The command to execute.
+The shell command to execute. Keep it in the foreground so pitchfork can supervise it. Avoid shell backgrounding (`&`) or daemonization flags.
 
 ```toml
 [daemons.api]
@@ -121,7 +159,7 @@ run = "cd /app && exec node server.js"
 
 ### `dir`
 
-Working directory for the daemon. Relative paths are resolved from the `pitchfork.toml` file location. If not set, defaults to the directory containing the `pitchfork.toml` file. A value of `~` or a path beginning with `~/` is resolved from the user's home directory; other shell-style expansions are left unchanged.
+Working directory for the daemon. Relative paths are resolved from the config's project directory, which is also the default working directory. Configs in `.config/` use its parent as the project directory. A value of `~` or a path beginning with `~/` is resolved from the user's home directory; other shell-style expansions are left unchanged.
 
 ```toml
 # Relative path (resolved from pitchfork.toml location)
@@ -206,7 +244,7 @@ retry = true  # Retry forever
 
 ### `auto`
 
-Auto-start and auto-stop behavior with shell hook. Options: `"start"`, `"stop"`
+Auto-start and auto-stop behavior with the [shell hook or project sessions](/guides/shell-hook). Options: `"start"`, `"stop"`. Autostop waits until the last tracked session leaves, plus `general.autostop_delay` (default `1m`).
 
 ```toml
 [daemons.api]
@@ -261,6 +299,7 @@ that renders to one.
 ```toml
 [daemons.api]
 run = "npm run server"
+port = 3000
 ready_port = 3000
 
 [daemons.worker]
@@ -290,6 +329,64 @@ run = "./server --port $PORT"
 port = { expect = [3000], bump = 10 }
 ready_cmd = "curl -f http://localhost:$PORT/health"
 ```
+
+### Readiness timeouts
+
+`ready_output`, `ready_http`, `ready_port`, and `ready_cmd` also accept object
+forms with an overall polling deadline:
+
+```toml
+# Alternative checks: choose the one that represents readiness for your service.
+ready_output = { pattern = "Server ready", timeout = "30s" }
+ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
+ready_port = { port = 3000, timeout = "30s" }
+ready_cmd = { run = "./check-ready.sh", timeout = "30s" }
+```
+
+With multiple checks, the first success marks the daemon ready. If every check
+expires, startup fails with code `124`; any unbounded check keeps startup open.
+`ready_delay` is only a fallback when no other check exists.
+See [ready checks](/guides/ready-checks).
+
+### `health_cmd`
+
+Shell command to probe periodically. Exit code `0` is healthy.
+
+```toml
+[daemons.redis]
+run = "redis-server --port $PORT"
+port = 6379
+health_cmd = { run = "redis-cli -p $PORT ping", interval = "10s", timeout = "5s", retries = 3 }
+retry = 3
+```
+
+The shorthand is `health_cmd = "redis-cli ping"`. The command receives the
+daemon's working directory and environment, including resolved ports.
+
+### `health_http`
+
+HTTP endpoint to probe periodically. Accepts any `2xx` response unless `status`
+lists exact accepted codes.
+
+```toml
+health_http = { url = "http://127.0.0.1:3000/health", status = [200], interval = "10s", timeout = "5s", retries = 3 }
+```
+
+The shorthand is `health_http = "http://127.0.0.1:3000/health"`.
+
+### `health_port`
+
+TCP port to probe on `127.0.0.1`. A successful connection is healthy.
+
+```toml
+health_port = { port = 6379, interval = "10s", timeout = "5s", retries = 3 }
+```
+
+The shorthand is `health_port = 6379`. Health checks default to a `10s` interval
+and three consecutive failures. Default per-probe timeouts are `10s` for
+commands and `5s` for HTTP/TCP. Probes start while the daemon is starting.
+The health-check `retries` counts failed probes; daemon `retry` determines
+whether to restart after termination. See [health checks](/guides/health-checks).
 
 ### `depends`
 
@@ -356,9 +453,9 @@ watch = ["src/**/*.ts", "package.json"]
 - `package.json` - Specific file
 
 **Behavior:**
-- Patterns are resolved relative to the `pitchfork.toml` file
+- Patterns are resolved relative to the config's project directory, independently of `dir`
 - Only running daemons are restarted (stopped daemons ignore changes)
-- Changes are debounced for 1 second to avoid rapid restarts
+- Changes are debounced for 1 second by default (`supervisor.file_watch_debounce`)
 
 See [File Watching guide](/guides/file-watching) for more details.
 
@@ -397,6 +494,9 @@ port = 3000
 run = "./start.sh"
 port = [8080, 8443]
 
+```
+
+```toml
 # Full form with auto-bump
 [daemons.api]
 run = "node server.js"
@@ -409,7 +509,7 @@ port = { expect = [3000], bump = 10 }
 
 **Behavior:**
 - Pitchfork checks if the port is available before starting
-- The resolved port is injected as `$PORT` into the daemon's environment
+- The first resolved port is injected as `$PORT` and `$PORT0`; additional ports use `$PORT1`, `$PORT2`, and so on. Your command must use these values, directly or through arguments
 - When `bump` is enabled and the port is occupied, all ports are incremented by the same offset to maintain relative spacing
 - Resolved ports are available via `pitchfork status` and in the start output
 
@@ -448,7 +548,7 @@ port_bump_attempts = 20    # deprecated: use port = { expect = [3000], bump = 20
 
 ### `boot_start`
 
-Start this daemon automatically on system boot. Default: `false`
+Start this daemon when the supervisor launches in boot mode (`supervisor run --boot`). Default: `false`. Register the supervisor with [`pitchfork boot enable`](/guides/boot-start) for login or system startup.
 
 ```toml
 [daemons.postgres]
@@ -476,7 +576,7 @@ on_retry = "echo 'retrying...'"
 - `on_fail` - Runs when the daemon fails and all retries are exhausted
 - `on_retry` - Runs before each retry attempt
 - `on_stop` - Runs when the daemon is explicitly stopped by pitchfork
-- `on_exit` - Runs on any daemon termination (stop, clean exit, or crash); also fires during supervisor shutdown
+- `on_exit` - Runs on terminal exit (stop, clean exit, or exhausted failure); also fires during supervisor shutdown. With retries, it waits until attempts are exhausted
 - `on_output` - Fires when the daemon produces matching output. Accepts a command string (shorthand) or an inline table `{ run, filter?, regex?, debounce? }`
 
 Hook commands receive environment variables: `PITCHFORK_DAEMON_ID` (fully-qualified `namespace/name`), `PITCHFORK_DAEMON_NAMESPACE`, `PITCHFORK_RETRY_COUNT`, `PITCHFORK_EXIT_CODE`, and (for `on_stop`/`on_exit`) `PITCHFORK_EXIT_REASON` (`"stop"`, `"exit"`, or `"fail"`). See [Lifecycle Hooks guide](/guides/lifecycle-hooks) for details.
@@ -491,6 +591,9 @@ Cron scheduling configuration. Accepts a cron expression string (shorthand) or a
 run = "./backup.sh"
 cron = "0 0 2 * * *"
 
+```
+
+```toml
 # Full form
 [daemons.backup]
 run = "./backup.sh"
@@ -498,7 +601,7 @@ cron = { schedule = "0 0 2 * * *", retrigger = "always" }
 ```
 
 **Fields:**
-- `schedule` - Cron expression (6 fields: second, minute, hour, day, month, weekday)
+- `schedule` - Cron expression (second, minute, hour, day, month, weekday; optional year). Evaluated in local time. Use weekday names such as `MON-FRI`
 - `retrigger` - Behavior when schedule fires: `"finish"` (default), `"always"`, `"success"`, `"fail"`
 - `immediate` - Also fire if a scheduled time occurred within the 10 seconds before the daemon started. Default: `false`
 
@@ -592,6 +695,46 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - If the process does not exit within the timeout, `SIGKILL` is sent as a last resort
 - Useful for daemons that handle `SIGINT` (Ctrl+C) for graceful termination but ignore `SIGTERM`
 
+### `pty`
+
+Allocate a pseudo-terminal on Unix. Default: `false`.
+
+```toml
+[daemons.worker]
+run = "./worker"
+pty = true
+```
+
+Use this for commands that change buffering or color output when attached to a
+terminal. It does not turn the daemon into an interactive terminal session.
+
+### `logs`
+
+Configure structured parsing and retention for one daemon:
+
+```toml
+[daemons.api]
+run = "node server.js"
+
+[daemons.api.logs]
+log_format = "json"
+time_retention = "7d"
+line_retention = 10000
+archive_hook = "gzip -c >> /path/to/api-archive.jsonl.gz"
+```
+
+| Field | Meaning |
+| --- | --- |
+| `log_format` | `text` (default), `json`, or `logfmt` |
+| `time_retention` | Maximum age, such as `7d`; no age pruning by default |
+| `line_retention` | Maximum entries per daemon; `0` disables count pruning |
+| `archive_hook` | Command receiving JSONL on stdin before pruning; a failure preserves the batch |
+
+These fields override `[settings.logs]` defaults. The daemon-level fields
+`time_retention`, `line_retention`, and `archive_hook` are also accepted for
+compatibility; values in `[daemons.<name>.logs]` take precedence over them.
+See [logs](/guides/logs) for filtering and archive behavior.
+
 ## Daemon Groups
 
 Named groups of daemons for batch operations. Use the `--group` flag with `start`, `stop`, or `restart`.
@@ -609,7 +752,9 @@ daemons = ["postgres", "redis", "api", "worker"]
 - Groups merge like other config values: later definitions override earlier ones
 - `pitchfork start --group backend` resolves dependencies and starts daemons in parallel as usual
 
-## Complete Example
+## Complete example
+
+Adapt commands, initialized database paths, and application endpoints to your project. The API in this example must read `PORT` from its environment.
 
 ```toml
 # Database - starts on boot, no auto-stop
@@ -629,12 +774,12 @@ ready_output = "Ready to accept connections"
 run = "npm run server"
 dir = "api"
 depends = ["postgres", "redis"]
-watch = ["src/**/*.ts", "package.json"]
-ready_http = "http://localhost:3000/health"
+watch = ["api/src/**/*.ts", "api/package.json"]
+ready_cmd = "curl -fsS http://127.0.0.1:$PORT/health"
 auto = ["start", "stop"]
 retry = 5
 port = { expect = [3000], bump = true }
-env = { NODE_ENV = "development", PORT = "3000" }
+env = { NODE_ENV = "development" }
 memory_limit = "2GiB"
 cpu_limit = 200
 
@@ -683,3 +828,20 @@ pitchfork proxy add api --dir /home/user/api --daemon srv  # explicit dir and da
 pitchfork proxy remove api                                 # remove a slug
 pitchfork proxy status                                     # show all slugs and their state
 ```
+
+## Namespace registry
+
+The user config can map a namespace to a project directory:
+
+```toml
+# ~/.config/pitchfork/config.toml
+[namespaces.my-app]
+dir = "~/projects/my-app"
+
+[slugs]
+api = { namespace = "my-app", daemon = "server" }
+```
+
+A slug can reference a registered namespace instead of repeating `dir`.
+`pitchfork proxy add` manages slug registrations. See
+[namespaces](/concepts/namespaces) for daemon ID resolution and worktree isolation.

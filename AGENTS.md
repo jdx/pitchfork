@@ -1,4 +1,4 @@
-# CLAUDE.md
+# Agent guide
 
 ## mbx build cache
 
@@ -11,7 +11,7 @@ the repository and commit, OS, `mbx --version`, both commands and outputs, the
 cache summary, and `MBX_BYPASS_LOG` details when relevant. Do not silently make
 Cargo the permanent path, and do not post externally without user authorization.
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file documents repository conventions for coding agents. `CLAUDE.md` and `CRUSH.md` point to this guide.
 
 ## Build Commands
 
@@ -90,12 +90,12 @@ Configs merge in order (later overrides earlier):
 
 | Source | Pipeline | Outputs |
 |--------|----------|---------|
-| `src/settings.rs` (`#[derive(usage_rs::Config)]`) | derive generates the settings registry + spec `config` block; `mise run render` renders it | `docs/cli/configuration.md` (settings reference), config block in `pitchfork.usage.kdl` |
-| Rust clap + schemars | `mise run render`: `pitchfork usage` → `usage` tool; `pitchfork schema` | `docs/cli/*.md` + `docs/cli/commands.json` (CLI reference); `docs/public/schema.json` (JSON Schema for editor autocomplete) |
+| `src/settings.rs` (`#[derive(usage_rs::Config)]`) | derive generates the settings registry and spec `config` block; `mise run render` renders it | `docs/cli/configuration.md` (settings reference), config block in `pitchfork.usage.kdl` |
+| Rust usage-rs + schemars | `mise run render`: `pitchfork usage` → `usage` tool; `pitchfork schema` | `docs/cli/*.md` + `docs/cli/commands.json` (CLI reference); `docs/public/schema.json` (JSON Schema for editor autocomplete) |
 
 **Update rules:**
 - Changing user settings → edit the `#[derive(usage_rs::Config)]` structs in `src/settings.rs` (sole source of truth), then run `mise run render`
-- Changing CLI flags/args/help text (clap) or config struct (schemars) → run `mise run render` (running `mise run ci-dev` includes itself, recommended) to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
+- Changing CLI flags/args/help text (usage-rs) or config struct (schemars) → run `mise run render` (running `mise run ci-dev` includes itself, recommended) to regenerate `docs/cli/`, `docs/public/schema.json`, and `pitchfork.usage.kdl`
 
 **These files are generated and should not be manually edited:**
 - `docs/cli/*.md`
@@ -113,7 +113,7 @@ Configs merge in order (later overrides earlier):
 - **Serialization**: Heavy use of serde with TOML for config/state, MessagePack for IPC
 - **File locking**: Always lock state file for concurrent access (`xx::fslock`)
 - **Daemon commands**: Run via the shell verbatim; do NOT prepend `exec` — it breaks compound commands (e.g. `exec a && b` silently drops `b`). Users can add `exec` themselves in the run string for single commands
-- **Idiomatical Rust**: Prefer Idiomatical Rust patterns and idioms
+- **Idiomatic Rust**: Prefer standard Rust patterns and idioms
 
 ## Dependency Updates
 
