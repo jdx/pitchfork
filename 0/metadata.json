@@ -1,0 +1,50 @@
+{
+  "cli_version": "0.10.5",
+  "checkpoint_id": "01M1TKD03Y40M99V53ZD0VX8VS",
+  "session_id": "01a074ec-69c5-7912-9855-0bcb9defa290",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-06T05:35:02.937892Z",
+  "branch": "codex/docs-overhaul",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/guides/web-ui.md",
+    "docs/reference/http-api.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "d7fefd734c17",
+  "checkpoint_transcript_start": 1043,
+  "transcript_lines_at_start": 1043,
+  "compact_transcript_start": 134,
+  "token_usage": {
+    "input_tokens": 15092,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1278976,
+    "output_tokens": 5655,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-06T05:35:02.71101Z",
+    "agent_lines": 26,
+    "agent_removed": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 26,
+    "total_lines_changed": 31,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
