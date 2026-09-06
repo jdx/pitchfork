@@ -33,12 +33,15 @@ Supported shells: bash, zsh, fish
 Installation:
 
     bash:
+      mkdir -p ~/.local/share/bash-completion/completions
       pitchfork completion bash > ~/.local/share/bash-completion/completions/pitchfork
 
     zsh:
+      mkdir -p ~/.zfunc
       pitchfork completion zsh > ~/.zfunc/_pitchfork
 
     fish:
+      mkdir -p ~/.config/fish/completions
       pitchfork completion fish > ~/.config/fish/completions/pitchfork.fish"
 )]
 pub struct Completion {

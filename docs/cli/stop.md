@@ -8,10 +8,11 @@
 Sends a stop signal to a daemon
 
 Uses a graceful shutdown strategy:
-1. Send SIGTERM and wait up to ~3 seconds for the process to exit (fast 10ms checks initially, then 50ms)
+1. Send the configured stop signal (SIGTERM by default) to the process group
+   and wait for stop_signal.timeout or supervisor.stop_timeout (default: 5s)
 2. If still running, send SIGKILL to force termination
 
-Most processes will exit immediately after the first SIGTERM. The escalation
+Most processes exit promptly after the first signal. The escalation
 ensures stubborn processes are eventually terminated while giving well-behaved
 processes time to clean up resources.
 

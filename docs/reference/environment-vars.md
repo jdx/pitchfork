@@ -1,126 +1,91 @@
-# Environment Variables
+---
+description: Find environment overrides for pitchfork and the metadata passed to daemons, probes, and hooks.
+---
+# Environment variables
 
-Environment variables that control pitchfork behavior.
+Environment variables have two roles: configure pitchfork, and pass runtime
+information to daemon commands. For every setting's environment override, see
+the [full settings reference](/cli/configuration).
 
-## `PITCHFORK_LOG`
+## Configure pitchfork
 
-Controls log verbosity for the pitchfork supervisor.
+| Variable | Purpose |
+| --- | --- |
+| `PITCHFORK_CONFIG_DIR` | Override the user config directory |
+| `PITCHFORK_STATE_DIR` | Override state and IPC paths |
+| `PITCHFORK_LOGS_DIR` | Override the log directory |
+| `PITCHFORK_LOG` | Console verbosity: `error`, `warn`, `info`, `debug`, `trace` |
+| `PITCHFORK_LOG_FILE_LEVEL` | File-log verbosity |
+| `PITCHFORK_SUPERVISOR_AUTO_START` | Allow client commands to launch the supervisor; default `true` |
+| `PITCHFORK_READY_DELAY` | Default readiness delay as a whole-second duration, such as `5s` |
+| `PITCHFORK_AUTOSTOP_DELAY` | Delay after the last project session leaves; default `1m` |
 
-**Values:** `error`, `warn`, `info`, `debug`, `trace`
+Environment overrides affect the process that reads them. Exporting a variable
+does not change an already running supervisor; restart it when changing its
+settings. Keep the same state directory in clients and the supervisor.
 
-```bash
-# Enable debug logging
-PITCHFORK_LOG=debug pitchfork supervisor start --force
-```
-
-::: tip
-The supervisor only reads this variable at startup. Use `--force` to restart the supervisor with new log settings.
-:::
-
-## `PITCHFORK_WEB_BIND_PORT`
-
-Sets the default port for the web UI in persistent settings. The web UI is disabled by default — use `PITCHFORK_WEB_PORT` (or `--web-port`) to enable it for a single invocation.
-
-```bash
-# Persist the default port in environment
-export PITCHFORK_WEB_BIND_PORT=19876
-```
-
-If the specified port is in use, pitchfork tries up to `port_attempts` consecutive ports.
-
-## `PITCHFORK_WEB_PORT`
-
-Enables the web UI on the specified port for this invocation. The web UI is disabled by default.
-
-```bash
-PITCHFORK_WEB_PORT=19876 pitchfork supervisor start --force
-```
-
-If the specified port is in use, pitchfork tries up to 10 consecutive ports.
-
-## `PITCHFORK_SUPERVISOR_AUTO_START`
-
-Controls whether client commands automatically launch a background supervisor
-when none is running. The default is `true`.
-
-Set it to `false` when systemd, launchd, or another service manager owns the
-supervisor:
-
-```bash
-export PITCHFORK_SUPERVISOR_AUTO_START=false
-```
-
-Client commands then fail with an actionable connection error instead of
-spawning an unmanaged supervisor. Explicit `pitchfork supervisor start` and
-`pitchfork supervisor run` commands are unaffected.
-
-## Daemon Process Variables
-
-These environment variables are automatically set for every daemon process, its
-`ready_cmd` probes, and its [lifecycle hooks](/guides/lifecycle-hooks).
-
-### `PITCHFORK_DAEMON_ID`
-
-The daemon's fully-qualified identifier in `namespace/name` format (e.g. `my-project/api`).
-
-```bash
-# In your daemon script
-echo "I am daemon: $PITCHFORK_DAEMON_ID"
-```
-
-### `PITCHFORK_DAEMON_NAMESPACE`
-
-The daemon's namespace component alone (e.g. `my-project`). Useful when you only need the
-namespace part without parsing `PITCHFORK_DAEMON_ID`.
-
-```bash
-echo "Running in namespace: $PITCHFORK_DAEMON_NAMESPACE"
-```
-
-### `PITCHFORK_RETRY_COUNT`
-
-The current retry attempt number. `0` on the initial run, `1` on the first retry, etc. Counts startup retries (`ready_retry`) during a blocking start and background restarts (`retry`) afterwards.
-
-```bash
-# In your daemon script
-if [ "$PITCHFORK_RETRY_COUNT" -gt 0 ]; then
-  echo "This is retry attempt $PITCHFORK_RETRY_COUNT"
-fi
-```
-
-### `PITCHFORK_EXIT_CODE`
-
-The exit code from the daemon process. Available in `on_fail`, `on_stop`, and `on_exit` hooks.
-
-```bash
-# In an on_exit hook
-echo "Daemon exited with code: $PITCHFORK_EXIT_CODE"
-```
-
-### `PITCHFORK_EXIT_REASON`
-
-The reason the daemon stopped. Available in `on_stop` and `on_exit` hooks.
-
-| Value | Meaning |
-|-------|---------|
-| `stop` | Explicitly stopped by pitchfork (`pitchfork stop`, `auto = ["stop"]`, or supervisor shutdown) |
-| `exit` | Process exited on its own with exit code 0 |
-| `fail` | Process exited with a non-zero exit code |
-
-```bash
-# In an on_exit hook
-if [ "$PITCHFORK_EXIT_REASON" = "fail" ]; then
-  echo "Daemon crashed with code $PITCHFORK_EXIT_CODE"
-fi
-```
-
-## Example: Debug Setup
-
-Start the supervisor with debug logging and web UI enabled:
-
-```bash
-PITCHFORK_LOG=debug PITCHFORK_WEB_PORT=19876 pitchfork supervisor start --force
-
-# View supervisor logs
+```sh
+PITCHFORK_LOG=debug PITCHFORK_LOG_FILE_LEVEL=debug pitchfork supervisor start --force
 pitchfork logs pitchfork
 ```
+
+## Enable the web UI
+
+These similarly named variables do different jobs:
+
+| Variable | Effect |
+| --- | --- |
+| `PITCHFORK_WEB_PORT=3120` | Enable the web UI for this supervisor invocation |
+| `PITCHFORK_WEB_AUTO_START=true` | Enable the web UI through the settings system |
+| `PITCHFORK_WEB_BIND_PORT=3120` | Choose the settings-based default port; does not enable the UI alone |
+| `PITCHFORK_WEB_PATH=ps` | Serve the UI under `/ps/` for this invocation |
+
+```sh
+PITCHFORK_WEB_PORT=3120 pitchfork supervisor start --force
+```
+
+The server tries up to `web.port_attempts` consecutive ports (default `10`).
+Check supervisor logs for the bound address. See [web UI setup](/guides/web-ui).
+
+## Daemon process variables
+
+Pitchfork supplies these to daemon commands and readiness/health command probes:
+
+| Variable | Value |
+| --- | --- |
+| `PITCHFORK_DAEMON_ID` | Qualified ID, such as `my-project/api` |
+| `PITCHFORK_DAEMON_NAMESPACE` | Namespace alone, such as `my-project` |
+| `PITCHFORK_RETRY_COUNT` | `0` on the initial run, `1` on the first retry, and so on. Counts `ready_retry` attempts during a blocking start and `retry` restarts afterwards |
+| `PORT` / `PORT0` | First resolved port, when `port` is configured |
+| `PORT1`, `PORT2`, … | Additional resolved ports, indexed from zero |
+
+Ports include any offset chosen by [port bumping](/guides/port-management).
+Your service must read them or accept them as command arguments:
+
+```toml
+[daemons.web]
+run = "python3 -u -m http.server $PORT --bind 127.0.0.1"
+port = { expect = [8000], bump = 10 }
+```
+
+## Hook variables
+
+[Lifecycle hooks](/guides/lifecycle-hooks) receive daemon metadata and configured
+environment values, plus event-specific fields:
+
+| Variable | Available in |
+| --- | --- |
+| `PITCHFORK_EXIT_CODE` | `on_fail`, `on_stop`, `on_exit`; `-1` when a Unix signal leaves no exit code |
+| `PITCHFORK_EXIT_REASON` | `on_stop`, `on_exit`: `stop`, `exit`, or `fail` |
+| `PITCHFORK_MATCHED_LINE` | `on_output`: the matching raw output line |
+| `PITCHFORK_PORT`, `PITCHFORK_PORT0`, … | Hooks for a daemon with resolved ports |
+
+Quote variables when using them in shell scripts:
+
+```sh
+printf '%s exited: reason=%s code=%s\n' \
+  "$PITCHFORK_DAEMON_ID" "$PITCHFORK_EXIT_REASON" "$PITCHFORK_EXIT_CODE"
+```
+
+To supply your own values, use top-level `[env]` or a daemon's `env` field in
+[`pitchfork.toml`](/reference/configuration#env).

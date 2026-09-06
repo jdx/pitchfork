@@ -1,3 +1,6 @@
+---
+description: Share dependency ports, daemon metadata, and environment values with Tera templates.
+---
 # Configuration Templates
 
 Use [Tera](https://keats.github.io/tera/) templates in configuration fields to reference values from other daemons, settings, and runtime state.
@@ -8,7 +11,7 @@ When daemons depend on each other, you often need to pass connection details bet
 
 ```toml
 [daemons.redis]
-run = "redis-server"
+run = "redis-server --port $PORT"
 port = 6379
 
 [daemons.api]
@@ -21,11 +24,11 @@ This breaks when `redis` uses `port = { expect = [6379], bump = 10 }` and the po
 
 ## Basic Usage
 
-Any field that accepts a string can use <code v-pre>{{ ... }}</code> template expressions:
+The supported fields listed below can use <code v-pre>{{ ... }}</code> template expressions:
 
 ```toml
 [daemons.redis]
-run = "redis-server"
+run = "redis-server --port $PORT"
 port = 6379
 
 [daemons.api]
@@ -44,11 +47,15 @@ Templates work in these configuration fields:
 |-------|---------|
 | `run` | <code v-pre>run = "server --port {{ daemons.redis.port }}"</code> |
 | `env` values | <code v-pre>env = { DB_URL = "postgres://localhost:{{ daemons.db.port }}" }</code> |
-| `hooks.*` commands | <code v-pre>on_ready = "curl http://localhost:{{ daemons.api.port }}/health"</code> |
-| `ready_cmd` | <code v-pre>ready_cmd = "curl http://localhost:{{ daemons.api.port }}/health"</code> |
-| `ready_http` | <code v-pre>ready_http = "http://localhost:{{ daemons.api.port }}/health"</code> |
-| `ready_port` | <code v-pre>ready_port = "{{ daemons.api.port }}"</code> (must render to a port number) |
+| `hooks.*` commands | <code v-pre>on_ready = "echo {{ id }} is ready"</code> |
+| `ready_cmd` | <code v-pre>ready_cmd = "redis-cli -p {{ daemons.redis.port }} ping"</code> |
+| `ready_http` | <code v-pre>ready_http = "http://localhost:{{ daemons.backend.port }}/health"</code> |
+| `ready_port` | <code v-pre>ready_port = "{{ daemons.redis.port }}"</code> (must render to a port number) |
 | `ready_output` | <code v-pre>ready_output = "listening on port {{ daemons.api.port }}"</code> |
+
+Health check fields (`health_cmd`, `health_http`, and `health_port`) also accept
+templates. These examples reference dependencies; use `$PORT` in commands for
+the current daemon's own assigned port.
 
 ## Template Variables
 
@@ -83,15 +90,38 @@ Reference same-namespace daemons by their short name:
 `port` is shorthand for `ports[0]`. Use `ports[N]` when a daemon has multiple ports configured.
 :::
 
-### Cross-Namespace References
+### Environment values
 
-When referencing daemons in a different namespace, use the `namespace.name` key format:
+Top-level `[env]` values apply to all daemons; per-daemon values override them.
+After the environment is rendered, commands and probes can reference it:
 
 ```toml
-{{ daemons["infra.redis"].port }}
+[env]
+APP_ENV = "development"
+
+[daemons.worker]
+run = "./worker --environment {{ env.APP_ENV }}"
 ```
 
-This mirrors the `depends` field, which also supports cross-namespace references like `depends = ["infra/redis"]`.
+Environment values are rendered independently, so do not use one environment
+template to depend on another environment template's result.
+
+### Cross-Namespace References
+
+When referencing daemons in a different namespace, use the `namespace.name` key
+format in templates and `namespace/name` in `depends`. For example, if the
+registered `infra` namespace defines a `redis` daemon with a configured port:
+
+```toml
+[daemons.api]
+run = "node server.js"
+env = { REDIS_URL = 'redis://localhost:{{ daemons["infra.redis"].port }}' }
+depends = ["infra/redis"]
+```
+
+Here, `server.js` must read `REDIS_URL` from its environment. See the
+[namespace registry](/reference/configuration#namespace-registry) to make the
+`infra` project available from other directories.
 
 ### Settings
 
@@ -153,7 +183,7 @@ depends = ["postgres"]
 
 ```toml
 [daemons.redis]
-run = "redis-server"
+run = "redis-server --port $PORT"
 port = 6379
 
 [daemons.postgres]
@@ -184,9 +214,9 @@ When `bump` is configured, the resolved port may differ from the expected port. 
 
 ```toml
 [daemons.redis]
-run = "redis-server"
+run = "redis-server --port $PORT"
 port = { expect = [6379], bump = 10 }
-# If 6379 is occupied, redis starts on 6380, 6390, etc.
+# If 6379 is occupied, redis starts on 6380 or another available port within the attempt limit
 
 [daemons.api]
 run = "server --redis-port {{ daemons.redis.port }}"

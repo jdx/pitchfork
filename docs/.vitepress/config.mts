@@ -1,7 +1,8 @@
+import { socialCard, writeSocialCard } from "./social-images.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitepress";
+import { defineConfig, type DefaultTheme } from "vitepress";
 
 import spec from "../cli/commands.json";
 
@@ -12,17 +13,20 @@ interface Cmd {
   hide?: boolean;
 }
 
-function getCommands(cmd: Cmd): string[][] {
-  const commands: string[][] = [];
-  for (const [name, sub] of Object.entries(cmd.subcommands)) {
-    if (sub.hide) continue;
-    commands.push(sub.full_cmd);
-    commands.push(...getCommands(sub));
-  }
-  return commands;
+/** Build nested CLI navigation from the visible commands in the generated spec. */
+function commandSidebar(cmd: Cmd): DefaultTheme.SidebarItem[] {
+  return Object.values(cmd.subcommands)
+    .filter((sub) => !sub.hide)
+    .map((sub) => {
+      const children = commandSidebar(sub);
+      return {
+        text: sub.name,
+        link: `/cli/${sub.full_cmd.join("/")}`,
+        ...(children.length ? { collapsed: true, items: children } : {}),
+      };
+    });
 }
 
-const commands = getCommands(spec.cmd);
 const configDir = dirname(fileURLToPath(import.meta.url));
 const cargoToml = readFileSync(resolve(configDir, "../../Cargo.toml"), "utf8");
 const versionMatch = cargoToml.match(
@@ -40,16 +44,15 @@ const siteDescription =
 export default defineConfig({
   title: "pitchfork",
   description: siteDescription,
-  // Dark-only site: forces the dark theme and hides the appearance toggle
-  appearance: "force-dark",
+  // Default to dark while allowing readers to choose a light theme.
+  appearance: "dark",
   sitemap: { hostname: siteUrl },
   themeConfig: {
     // https://vitepress.dev/reference/default-theme-config
     nav: [
-      { text: "Home", link: "/" },
-      { text: "Quick Start", link: "/quickstart" },
-      { text: "Guides", link: "/guides/shell-hook" },
-      { text: "CLI Reference", link: "/cli" },
+      { text: "Get started", link: "/quickstart" },
+      { text: "Guides", link: "/guides/" },
+      { text: "Reference", link: "/reference/configuration" },
       {
         text: `v${latestVersion}`,
         link: "https://github.com/jdx/pitchfork/releases",
@@ -58,72 +61,79 @@ export default defineConfig({
 
     sidebar: [
       {
-        text: "Getting Started",
+        text: "Get started",
         items: [
-          { text: "Quick Start", link: "/quickstart" },
+          { text: "Quickstart", link: "/quickstart" },
           { text: "Installation", link: "/installation" },
-          { text: "Your First Project", link: "/first-daemon" },
-          { text: "Contributing", link: "/contributing" },
+          { text: "Your first project", link: "/first-daemon" },
+          { text: "How pitchfork works", link: "/concepts/how-it-works" },
         ],
       },
       {
-        text: "How-To Guides",
+        text: "Run your project",
         items: [
-          { text: "Shell Hook (Auto Start/Stop)", link: "/guides/shell-hook" },
-          { text: "Ready Checks", link: "/guides/ready-checks" },
-          { text: "Port Management & Proxy", link: "/guides/port-management" },
-          { text: "File Watching", link: "/guides/file-watching" },
-          { text: "Auto Restart on Failure", link: "/guides/auto-restart" },
-          { text: "Lifecycle Hooks", link: "/guides/lifecycle-hooks" },
-          { text: "Cron Scheduling", link: "/guides/scheduling" },
-          { text: "Start on Boot", link: "/guides/boot-start" },
-          { text: "Log Management", link: "/guides/logs" },
-          { text: "TUI Dashboard", link: "/guides/tui" },
-          { text: "Web UI & API", link: "/guides/web-ui" },
+          { text: "Guide index", link: "/guides/" },
+          { text: "Shell hooks & sessions", link: "/guides/shell-hook" },
+          { text: "Ready checks", link: "/guides/ready-checks" },
+          { text: "File watching", link: "/guides/file-watching" },
+          { text: "Automatic retries", link: "/guides/auto-restart" },
+          { text: "Health checks", link: "/guides/health-checks" },
+          { text: "Ports & local URLs", link: "/guides/port-management" },
+          { text: "Namespaces & worktrees", link: "/concepts/namespaces" },
         ],
       },
       {
-        text: "Advanced",
+        text: "Observe & troubleshoot",
         items: [
+          { text: "Logs", link: "/guides/logs" },
+          { text: "Terminal dashboard", link: "/guides/tui" },
+          { text: "Web dashboard", link: "/guides/web-ui" },
+          { text: "Troubleshooting", link: "/troubleshooting" },
+        ],
+      },
+      {
+        text: "Automate & integrate",
+        collapsed: true,
+        items: [
+          { text: "mise integration", link: "/guides/mise-integration" },
           {
-            text: "Configuration Templates",
+            text: "Configuration templates",
             link: "/guides/configuration-templates",
           },
-          { text: "Container Mode", link: "/guides/container-mode" },
-          { text: "mise Integration", link: "/guides/mise-integration" },
-          { text: "MCP Server (AI Assistants)", link: "/guides/mcp" },
+          { text: "Lifecycle hooks", link: "/guides/lifecycle-hooks" },
+          { text: "Cron scheduling", link: "/guides/scheduling" },
+          { text: "Login & boot", link: "/guides/boot-start" },
+          { text: "MCP server", link: "/guides/mcp" },
+          { text: "Container mode", link: "/guides/container-mode" },
         ],
       },
       {
         text: "Reference",
+        collapsed: false,
         items: [
-          { text: "Configuration", link: "/reference/configuration" },
+          { text: "Daemon configuration", link: "/reference/configuration" },
           { text: "Settings", link: "/reference/settings" },
-          { text: "File Locations", link: "/reference/file-locations" },
           {
-            text: "CLI Reference",
-            link: "/cli",
+            text: "Environment variables",
+            link: "/reference/environment-vars",
+          },
+          { text: "File locations", link: "/reference/file-locations" },
+          { text: "HTTP API", link: "/reference/http-api" },
+          {
+            text: "CLI reference",
+            link: "/cli/",
             collapsed: true,
-            items: commands.map((cmd) => ({
-              text: cmd.join(" "),
-              link: `/cli/${cmd.join("/")}`,
-            })),
+            items: commandSidebar(spec.cmd),
           },
         ],
       },
       {
-        text: "Concepts",
+        text: "Contribute",
         collapsed: true,
         items: [
-          { text: "How Pitchfork Works", link: "/concepts/how-it-works" },
-          { text: "Namespaces", link: "/concepts/namespaces" },
+          { text: "Development guide", link: "/contributing" },
           { text: "Architecture", link: "/concepts/architecture" },
         ],
-      },
-      {
-        text: "Resources",
-        collapsed: true,
-        items: [{ text: "Troubleshooting", link: "/troubleshooting" }],
       },
     ],
 
@@ -203,47 +213,28 @@ export default defineConfig({
     ["meta", { name: "theme-color", content: "#dc2626" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:locale", content: "en_US" }],
-    ["meta", { property: "og:title", content: "pitchfork" }],
-    [
-      "meta",
-      {
-        property: "og:description",
-        content: siteDescription,
-      },
-    ],
     ["meta", { property: "og:site_name", content: "pitchfork" }],
-    [
-      "meta",
-      { property: "og:image", content: "https://pitchfork.jdx.dev/img/og.png" },
-    ],
     ["meta", { property: "og:image:width", content: "1200" }],
     ["meta", { property: "og:image:height", content: "630" }],
-    [
-      "meta",
-      {
-        property: "og:image:alt",
-        content: "pitchfork — a process manager for development daemons",
-      },
-    ],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
     ["meta", { name: "twitter:site", content: "@jdxcode" }],
-    [
-      "meta",
-      {
-        name: "twitter:image",
-        content: "https://pitchfork.jdx.dev/img/og.png",
-      },
-    ],
-    [
-      "meta",
-      {
-        name: "twitter:image:alt",
-        content: "pitchfork — a process manager for development daemons",
-      },
-    ],
   ],
 
-  transformHead({ pageData, title, description }) {
+  transformPageData(pageData) {
+    if (pageData.relativePath.startsWith("cli/")) {
+      pageData.frontmatter.editLink = false;
+    }
+  },
+
+  transformHead({ pageData, title, description, siteConfig }) {
+    const heading =
+      pageData.relativePath === "index.md"
+        ? "Daemons with DX"
+        : pageData.title || "pitchfork";
+    const card = socialCard(heading);
+    writeSocialCard(siteConfig.outDir, card);
+    const image = new URL(card.path, `${siteUrl}/`).toString();
+    const imageAlt = `${heading} — pitchfork docs`;
     const url = `${siteUrl}/${pageData.relativePath}`
       .replace(/index\.md$/, "")
       .replace(/\.md$/, ".html");
@@ -251,6 +242,10 @@ export default defineConfig({
     return [
       ["link", { rel: "canonical", href: url }],
       ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:image", content: image }],
+      ["meta", { property: "og:image:alt", content: imageAlt }],
+      ["meta", { name: "twitter:image", content: image }],
+      ["meta", { name: "twitter:image:alt", content: imageAlt }],
       ["meta", { property: "og:title", content: title }],
       ["meta", { property: "og:description", content: description }],
       ["meta", { name: "twitter:title", content: title }],

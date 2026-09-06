@@ -31,8 +31,8 @@ Examples:
                                    Add to pitchfork.local.toml instead
     pitchfork daemons add api --run 'npm start' --global
                                   Add to ~/.config/pitchfork/config.toml instead
-    pitchfork daemons add worker --run './worker' --cron-schedule '0 * * * *' --cron-immediate
-                                  Add cron daemon that triggers immediately
+    pitchfork daemons add worker --run './worker' --cron-schedule '0 */5 * * * *' --cron-immediate
+                                  Schedule every five minutes, including a just-missed trigger
 
 ## Arguments
 - **`<ID>`** — ID of the daemon to add (e.g., "api" or "namespace/api")
@@ -65,7 +65,7 @@ Examples:
 - **`--on-exit <ON_EXIT>`** — Command to run on any daemon termination (clean exit, crash, or stop)
 - **`--cron-schedule <CRON_SCHEDULE>`** — Cron schedule expression (6 fields: second minute hour day month weekday)
 - **`--cron-retrigger <CRON_RETRIGGER>`** — Cron retrigger behavior: finish, always, success, fail
-- **`--cron-immediate`** — Trigger cron immediately on first check (default: deferred until next scheduled time)
+- **`--cron-immediate`** — On the first cron check, include scheduled times from the previous 10 seconds
 - **`--local`** — Write to pitchfork.local.toml instead of pitchfork.toml
 - **`--project`** — Write to pitchfork.toml explicitly (default if no flag specified)
 - **`--global`** — Write to the user-level global config (~/.config/pitchfork/config.toml)

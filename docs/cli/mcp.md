@@ -32,28 +32,3 @@ Tools provided:
 
 ## Flags
 - **`-h --help`** — Print help
-
-Examples:
-
-    # Start the MCP server (used by AI assistant tools)
-    $ pitchfork mcp
-
-    # Claude Desktop configuration (claude_desktop_config.json):
-    {
-      "mcpServers": {
-        "pitchfork": {
-          "command": "pitchfork",
-          "args": ["mcp"]
-        }
-      }
-    }
-
-    # Interactive testing with JSON-RPC:
-    $ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' | pitchfork mcp
-
-# Available tools:
-- pitchfork_status  - List all daemons and their state
-- pitchfork_start   - Start daemon(s) by name
-- pitchfork_stop    - Stop daemon(s) by name
-- pitchfork_restart - Restart daemon(s) by name
-- pitchfork_logs    - Return recent log output for daemon(s)

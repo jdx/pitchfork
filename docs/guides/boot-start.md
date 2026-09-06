@@ -1,6 +1,9 @@
-# Start on Boot
+---
+description: Register the supervisor at login or boot and choose which daemons start automatically.
+---
+# Start at login or boot
 
-Configure pitchfork to start automatically when your system boots.
+Register the supervisor with launchd on macOS or systemd on Linux, then choose which daemons it starts. User registration starts at login; system registration runs at boot.
 
 ## Enable Boot Start
 
@@ -34,7 +37,7 @@ The registration mode is determined automatically based on whether the command r
 
 | | User-level | System-level (`sudo`) |
 |---|---|---|
-| macOS | `~/Library/LaunchAgents/pitchfork.plist` | `/Library/LaunchAgents/pitchfork.plist` |
+| macOS | `~/Library/LaunchAgents/pitchfork.plist` | `/Library/LaunchDaemons/pitchfork.plist` |
 | Linux | `~/.config/systemd/user/pitchfork.service` | `/etc/systemd/system/pitchfork.service` |
 
 ## Running the Supervisor as Root
@@ -52,7 +55,7 @@ With this setting, the supervisor process runs as root but spawns daemons and wr
 
 ## Configure Boot Daemons
 
-Add `boot_start = true` to daemons you want to start at boot. These should be in your global config file (`~/.config/pitchfork/config.toml`):
+Add `boot_start = true` to daemons you want to start at boot. For a straightforward setup, define them in your user config file (`~/.config/pitchfork/config.toml`):
 
 ```toml
 [daemons.postgres]
@@ -72,7 +75,7 @@ boot_start = false  # Won't start at boot
 
 | Platform | User-level method | System-level method |
 |----------|-------------------|---------------------|
-| macOS | LaunchAgents (user) | LaunchAgents (system) |
+| macOS | LaunchAgent | LaunchDaemon |
 | Linux | systemd user service | systemd system service |
 
 When boot start is enabled:
@@ -95,6 +98,15 @@ connect to the managed supervisor without spawning an unmanaged replacement if
 the service is unavailable or still starting. Explicit
 `pitchfork supervisor start` and `pitchfork supervisor run` commands remain
 available.
+
+## Tool availability
+
+Login and boot services do not load your interactive shell setup. Use absolute
+paths or [mise integration](/guides/mise-integration) when a command relies on
+tools that are normally added to `PATH` by shell hooks.
+
+Use the same registration mode when disabling: `pitchfork boot disable` removes
+the user entry; `sudo pitchfork boot disable` removes the system entry.
 
 ## Typical Setup
 

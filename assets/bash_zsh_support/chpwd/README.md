@@ -1,17 +1,29 @@
-# Bash support for Zsh like chpwd hook
+# Directory-change hooks for Bash
 
-Implemented based on the description from
-<http://zsh.sourceforge.net/Doc/Release/Functions.html#Hook-Functions>
+This helper implements a `chpwd_functions` array in Bash, following
+[Zsh's hook-function convention](https://zsh.sourceforge.io/Doc/Release/Functions.html#Hook-Functions).
+Pitchfork loads it as part of Bash activation.
 
-## Usage
+## Load the helper
 
-1. load `function.sh` and `load.sh`, eg:
+From the `bash_zsh_support` directory:
 
-        source chpwd/functions.sh
-        source chpwd/load.sh
+```bash
+source chpwd/functions.sh
+source chpwd/load.sh
+```
 
-2. add the hook - replace `_hook_name` with your function name:
+## Register a hook
 
-        export -a chpwd_functions                              # define hooks as an shell array
-        [[ " ${chpwd_functions[*]} " == *" _hook_name "* ]] || # prevent double addition
-        chpwd_functions+=(_hook_name)                          # finally add it to the list
+Define your function, then add its name to the array once:
+
+```bash
+my_directory_hook() {
+  printf 'Directory changed to %s\n' "$PWD"
+}
+
+declare -a chpwd_functions
+if [[ " ${chpwd_functions[*]} " != *" my_directory_hook "* ]]; then
+  chpwd_functions+=(my_directory_hook)
+fi
+```

@@ -1,362 +1,152 @@
-# Ready Checks
+---
+description: Wait for output, HTTP, TCP, or a command before marking a daemon ready and starting its dependents.
+---
+# Ready checks
 
-Configure how pitchfork determines when a daemon is ready to accept requests.
+`pitchfork start` and `pitchfork run` wait for readiness before returning.
+Dependent daemons wait for the same signal. Pick a check that shows the service
+can do useful work, such as an HTTP health endpoint or a database query.
 
-## Why Use Ready Checks?
+## Choose a check
 
-When you run `pitchfork start` or `pitchfork run`, the command waits until the daemon is "ready" before returning. This ensures dependent processes don't start before their dependencies are actually available.
+| Check | Ready when… | Use it for… |
+| --- | --- | --- |
+| `ready_http` | An endpoint returns an accepted status | APIs and web servers |
+| `ready_cmd` | A shell command exits with code `0` | Database clients or custom probes |
+| `ready_port` | A TCP connection succeeds on `127.0.0.1` | Services without an application-level probe |
+| `ready_output` | A regex matches stdout or stderr | Services with a reliable startup message |
+| `ready_delay` | The process stays running for a fixed delay | A fallback when no other check is available |
 
-## Delay Check (Default)
+::: tip More than one check means “any,” not “all”
+The first successful output, HTTP, TCP, or command check marks the daemon ready.
+Use one `ready_cmd` that combines conditions if you need all of them to pass.
+`ready_delay` only applies when no other readiness check is configured.
+:::
 
-Wait a fixed number of seconds after starting. If the daemon is still running, it's considered ready.
+## HTTP endpoint
 
-**CLI:**
-```bash
-pitchfork run myapp --delay 5 -- node server.js
-pitchfork start myapp --delay 10
-```
-
-**Config:**
 ```toml
-[daemons.myapp]
+[daemons.api]
 run = "node server.js"
-ready_delay = 5  # Wait 5 seconds (CLI default: 3)
+ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
 ```
 
-The default delay when no ready check is configured can be changed globally in
-`[settings.general]` (or via the `PITCHFORK_READY_DELAY` environment variable):
+The string form, `ready_http = "http://127.0.0.1:3000/health"`, accepts any
+`2xx` status and has no overall deadline. To accept specific status codes:
+
+```toml
+ready_http = { url = "http://127.0.0.1:3000/health", status = [200, 401], timeout = "30s" }
+```
+
+The default polling interval is `500ms`; the default per-request timeout is
+`5s`. The object's `timeout` caps the overall polling period.
+
+```sh
+pitchfork start api --http http://127.0.0.1:3000/health
+```
+
+## Shell command
+
+Use an application client when a listening socket alone is not enough:
+
+```toml
+[daemons.redis]
+run = "redis-server --port $PORT"
+port = { expect = [6379], bump = 10 }
+ready_cmd = { run = "redis-cli -p $PORT ping", timeout = "30s" }
+```
+
+The command runs in the daemon's working directory and receives its environment,
+including the resolved `$PORT`, `$PORT0`, `$PORT1`, and pitchfork metadata.
+This makes command checks useful with [port bumping](/guides/port-management).
+The default polling interval is `500ms`.
+
+```sh
+pitchfork start database --cmd "pg_isready -h 127.0.0.1"
+```
+
+## TCP port
+
+```toml
+[daemons.web]
+run = "python3 -u -m http.server 8000 --bind 127.0.0.1"
+ready_port = { port = 8000, timeout = "15s" }
+```
+
+The shorthand is `ready_port = 8000`. The check attempts a TCP connection to
+`127.0.0.1:8000` every `500ms` by default. A successful connection proves that
+something is listening, not that the application is healthy.
+
+```sh
+pitchfork run web --port 8000 -- python3 -u -m http.server 8000 --bind 127.0.0.1
+```
+
+`--port` is a readiness check. Port assignment uses the separate `port` config
+field or `--expected-port` CLI flag; the service must actually use the assigned port.
+
+## Output pattern
+
+```toml
+[daemons.postgres]
+run = "postgres -D /path/to/initialized/data"
+ready_output = { pattern = "database system is ready to accept connections", timeout = "30s" }
+```
+
+The shorthand accepts a regex string:
+
+```toml
+ready_output = "database system is ready to accept connections"
+```
+
+Match the actual startup output. If a service buffers output when run in the
+background, enable unbuffered output (for example, Python's `-u`) or use a
+network check instead.
+
+```sh
+pitchfork start database --output "ready to accept connections"
+```
+
+## Delay fallback
+
+With no other check, pitchfork waits **three seconds** by default:
+
+```toml
+[daemons.worker]
+run = "./worker"
+ready_delay = 5
+```
+
+The daemon field is an integer number of seconds. The global default is a
+duration string, which must resolve to whole seconds:
 
 ```toml
 [settings.general]
 ready_delay = "5s"
 ```
 
-Individual daemons always override the global default with their own
-`ready_delay` setting.
+Use `pitchfork start worker --delay 5` for a one-time override. Raising the delay
+does not extend the timeout of an HTTP, TCP, output, or command check.
 
-The global `ready_delay` setting accepts duration strings but must be a whole
-number of seconds; subsecond values such as `"500ms"` are rejected with an
-error rather than silently truncated to a zero delay.
+## Timeouts and failures
 
-**Best for:** Simple services where a time delay is sufficient.
+The object forms of `ready_output`, `ready_http`, `ready_port`, and `ready_cmd`
+accept an overall `timeout`. Without it, a check can keep waiting while the
+process remains alive.
 
-## Output Check
+If every configured check reaches its deadline, startup fails with exit code
+`124`, the daemon is killed, and normal `ready_retry` and dependency handling
+applies.
+One unbounded check keeps startup open. If the process exits with a nonzero code
+before readiness, startup returns that code.
 
-Wait until a specific pattern appears in the daemon's output. Uses regular expressions.
+## Templates and dependencies
 
-**CLI:**
-```bash
-pitchfork run myapp --output "Server listening" -- node server.js
-pitchfork start myapp --output "ready to accept connections"
-```
+Ready checks can use [templates](/guides/configuration-templates) to reference
+ports from dependencies started earlier. `ready_port` templates must render to
+a port number from `1` to `65535`. For the current daemon's dynamically assigned
+port, use `$PORT` in `ready_cmd`.
 
-**Config:**
-```toml
-[daemons.database]
-run = "postgres -D /var/lib/pgsql/data"
-ready_output = "database system is ready to accept connections"
+## Health checks {#health-checks}
 
-[daemons.webserver]
-run = "python -m http.server 8080"
-ready_output = "Serving HTTP on"
-```
-
-**Best for:** Services that print a specific message when ready.
-
-## HTTP Check
-
-Wait until an HTTP endpoint returns a 2xx status code, or a configured exact
-status code.
-
-**CLI:**
-```bash
-pitchfork run myapp --http http://localhost:8080/health -- node server.js
-pitchfork start myapp --http http://localhost:3000/ready
-```
-
-**Config:**
-```toml
-[daemons.api]
-run = "python -m uvicorn main:app"
-ready_http = "http://localhost:8000/health"
-
-[daemons.webserver]
-run = "node server.js"
-ready_http = "http://localhost:3000/ready"
-
-[daemons.private_api]
-run = "node server.js"
-ready_http = { url = "http://localhost:3000/health", status = [200, 401], timeout = "30s" }
-```
-
-**Best for:** Web services with health check endpoints.
-
-::: tip
-The HTTP check polls every 500ms with a 5 second timeout per request. The string
-form accepts any 2xx response; the object form accepts the exact `status` codes
-you list and an optional overall `timeout` for the entire readiness polling period.
-:::
-
-## Port Check
-
-Wait until the daemon is listening on a TCP port.
-
-**CLI:**
-```bash
-pitchfork run myapp --port 8080 -- node server.js
-pitchfork start myapp --port 3000
-```
-
-**Config:**
-```toml
-[daemons.api]
-run = "node server.js"
-ready_port = 3000
-
-[daemons.database]
-run = "postgres -D /var/lib/pgsql/data"
-ready_port = 5432
-
-[daemons.api_with_timeout]
-run = "node server.js"
-ready_port = { port = 3000, timeout = "30s" }
-```
-
-**Best for:** Services that listen on a known port but don't have a health endpoint.
-
-::: tip
-The port check polls every 500ms by attempting a TCP connection to 127.0.0.1:port.
-Add a `timeout` to cap how long the check will poll. Without a timeout, the check
-remains open until the daemon starts listening.
-:::
-
-## Command Check
-
-Wait until a shell command returns exit code 0.
-
-**CLI:**
-```bash
-pitchfork run myapp --cmd "pg_isready -h localhost" -- node server.js
-pitchfork start myapp --cmd "curl -sf http://localhost:3000/health"
-```
-
-**Config:**
-```toml
-[daemons.api]
-run = "node server.js"
-ready_cmd = "curl -sf http://localhost:3000/health"
-
-[daemons.database]
-run = "postgres -D /var/lib/pgsql/data"
-ready_cmd = "pg_isready -h localhost"
-
-[daemons.worker]
-run = "./start-worker.sh"
-ready_cmd = { run = "test -f /tmp/worker.ready", timeout = "60s" }
-
-[daemons.web]
-run = "./web --port $PORT"
-port = { expect = [3000], bump = 10 }
-# PORT is the resolved value, including any bump selected by pitchfork
-ready_cmd = "curl -sf http://localhost:$PORT/health"
-```
-
-**Best for:** Services that require custom readiness logic or external tools.
-
-::: tip
-The command check polls every 500ms. Add a `timeout` to cap how long the check
-will poll. Readiness commands inherit the daemon's configured environment,
-pitchfork metadata, and resolved `$PORT`, `$PORT0`, `$PORT1`, ... variables.
-Use this when you need more complex readiness checks than the built-in options provide.
-:::
-
-## Health Checks
-
-Ready checks gate startup: they run once, and startup fails if they never succeed.
-Health checks run periodically for the daemon's whole lifetime. If a probe fails
-`retries` consecutive times, pitchfork kills the daemon and treats it exactly
-like a crash: the monitor records `Errored`, the `retry` setting restarts it as
-usual, and the `on_retry` hook fires. A successful probe resets the
-consecutive-failure counter, and a restarted daemon gets a fresh failure budget.
-
-**CLI:**
-```bash
-pitchfork run myapp --health-cmd "curl -sf http://localhost:3000/health" -- node server.js
-pitchfork start myapp --health-http http://localhost:3000/health
-pitchfork restart myapp --health-cmd "pg_isready -h localhost"
-pitchfork start myapp --health-port 8443
-```
-
-`--health-cmd` and `--health-http` take the string shorthand form on
-`pitchfork daemons add`, `pitchfork start`, `pitchfork run`, and
-`pitchfork restart`; `--health-port` takes a plain TCP port number.
-
-**Config:**
-```toml
-[daemons.api]
-run = "node server.js"
-health_cmd = "curl -sf http://localhost:3000/health"
-
-[daemons.database]
-run = "postgres -D /var/lib/pgsql/data"
-health_cmd = { run = "pg_isready -h localhost", interval = "10s", timeout = "10s", retries = 3 }
-
-[daemons.webserver]
-run = "nginx"
-health_http = "http://localhost:3000/health"
-
-[daemons.web]
-run = "./web"
-health_http = { url = "http://localhost:3000/health", status = [200], interval = "10s", timeout = "5s", retries = 3 }
-
-[daemons.database]
-run = "postgres -D /var/lib/pgsql/data"
-health_port = 5432
-
-[daemons.cache]
-run = "./cache-server"
-health_port = { port = 6379, interval = "10s", retries = 3, timeout = "5s" }
-```
-
-The command form treats exit code 0 as healthy; the HTTP form accepts any 2xx
-status, or exactly the `status` codes you list; the port form considers a TCP
-connection to `127.0.0.1:<port>` a success (connection refused/reset counts as
-failed). When a daemon omits a field, it falls back to the
-`supervisor.health_check_interval`, `supervisor.health_cmd_timeout`,
-`supervisor.health_http_timeout`, `supervisor.health_port_timeout`, and
-`supervisor.health_check_retries` settings, which default to `interval` 10s,
-`timeout` 10s for `health_cmd`, 5s for `health_http` and `health_port`, and
-`retries` 3. `health_port` also accepts a per-daemon `timeout` field, falling
-back to `supervisor.health_port_timeout` when omitted.
-
-::: tip
-The health check starts as soon as the daemon is running, so the
-`retries * interval` window doubles as the startup grace period: a daemon that
-is still becoming ready has that long before a healthy probe is required.
-Slow-starting daemons should raise `interval` or `retries`. If multiple probe
-kinds (`health_cmd`, `health_http`, `health_port`) are configured, all run
-every interval and any one failing counts as an unhealthy probe.
-:::
-
-**Best for:** long-running processes that stay alive but stop working. The
-classic case is an SSH tunnel, which keeps running after the connection drops
-and would pass any pid-based check:
-
-```toml
-[daemons.tunnel]
-run = "ssh -N -L 8443:localhost:443 tunnel-host"
-retry = 3
-health_cmd = { run = "openssl s_client -connect localhost:8443 -brief </dev/null", interval = "10s", retries = 3 }
-```
-
-The probe makes a real TLS connection through the tunnel; once it fails 3
-times in a row, pitchfork kills the tunnel and `retry` restarts it.
-
-A plain TCP-connect probe is the cheaper equivalent — it only verifies that
-something accepts connections on the forwarded port, without the TLS
-handshake:
-
-```toml
-[daemons.tunnel]
-run = "ssh -N -L 8443:localhost:443 tunnel-host"
-retry = 3
-health_port = 8443
-```
-
-## Templates
-
-All ready check fields (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`)
-and health check fields (`health_cmd`, `health_http`, `health_port`) accept
-[Tera templates](/guides/configuration-templates) to reference resolved values from
-daemons started earlier in the dependency order:
-
-```toml
-[daemons.redis]
-run = "redis-server"
-port = { expect = [6379], bump = 10 }
-
-[daemons.worker]
-run = "worker --redis-port {{ daemons.redis.port }}"
-# Ready once the worker can reach redis, even if its port was auto-bumped
-ready_cmd = "redis-cli -p {{ daemons.redis.port }} ping"
-depends = ["redis"]
-```
-
-`ready_port` templates must render to a port number (1-65535); otherwise the daemon
-fails to start with an error.
-
-Health checks can reference the same resolved values:
-
-```toml
-[daemons.worker]
-run = "worker --redis-port {{ daemons.redis.port }}"
-# Health: redis must keep answering pings on the resolved (possibly bumped) port
-depends = ["redis"]
-health_cmd = "redis-cli -p {{ daemons.redis.port }} ping"
-```
-
-## Behaviors
-
-| Check Type | Ready When |
-|------------|-----------|
-| Delay | Daemon runs for N seconds without crashing |
-| Output | Pattern matches stdout/stderr |
-| HTTP | Endpoint returns 2xx status, or a configured exact status |
-| Port | TCP connection to port succeeds |
-| Command | Shell command returns exit code 0 |
-
-- If multiple checks are configured (HTTP, port, command), the first one to succeed marks the daemon as ready
-- **Delay check** only fires when no other check type (`ready_output`, `ready_http`, `ready_port`, `ready_cmd`) is configured. It acts as the fallback default.
-- If the daemon exits with a non-zero code before becoming ready, `pitchfork start/run` exits with that same code
-- A timed `ready_http`, `ready_port`, or `ready_cmd` stops polling when its deadline is reached. Startup fails only when every configured check has reached its deadline; any unbounded check keeps startup open. When startup fails because all checks are exhausted, pitchfork exits with code `124`, kills the daemon, and applies normal `ready_retry` and dependency behavior.
-
-## Common Patterns
-
-**PostgreSQL:**
-```toml
-[daemons.postgres]
-run = "postgres -D /var/lib/pgsql/data"
-ready_output = "database system is ready to accept connections"
-```
-
-**Redis:**
-```toml
-[daemons.redis]
-run = "redis-server"
-ready_output = "Ready to accept connections"
-```
-
-**Node.js:**
-```toml
-[daemons.api]
-run = "npm run start"
-ready_http = "http://localhost:3000/health"
-```
-
-**Python FastAPI:**
-```toml
-[daemons.api]
-run = "uvicorn main:app"
-ready_http = "http://localhost:8000/health"
-```
-
-**PostgreSQL (using pg_isready):**
-```toml
-[daemons.postgres]
-run = "postgres -D /var/lib/pgsql/data"
-ready_cmd = "pg_isready -h localhost"
-```
-
-**Redis (using redis-cli):**
-```toml
-[daemons.redis]
-run = "redis-server"
-ready_cmd = "redis-cli ping"
-```
-
-**File-based readiness:**
-```toml
-[daemons.worker]
-run = "./start-worker.sh"
-ready_cmd = "test -f /tmp/worker.ready"
-```
+Readiness gates startup. [Health checks](/guides/health-checks) keep probing
+throughout a daemon's lifetime and can trigger a restart if it stops responding.

@@ -1,135 +1,105 @@
-# Your First Project
+---
+description: Define project services in pitchfork.toml, start dependencies in order, and manage their lifecycle.
+---
+# Your first project
 
-This tutorial walks through setting up a project with multiple daemons managed by pitchfork.
+Put your project's background commands in `pitchfork.toml` so everyone can start
+the same services. This example uses **Redis**, **Node.js**, and an existing
+`server.js` that reads `PORT` and `REDIS_URL` and serves `/health`.
+For an example that only needs Python, start with the [quickstart](/quickstart).
 
-## Create a Configuration File
+## Define the services
 
-In your project root, create `pitchfork.toml`:
+Create `pitchfork.toml` in the project root:
 
 ```toml
-[daemons.api]
-run = "npm run server:api"
-
-[daemons.docs]
-run = "npm run server:docs"
+#:schema https://pitchfork.jdx.dev/schema.json
 
 [daemons.redis]
-run = "redis-server"
+run = "redis-server --port $PORT"
+port = 6379
+ready_cmd = { run = "redis-cli -p $PORT ping", timeout = "15s" }
+
+[daemons.api]
+run = "node server.js"
+port = 3000
+depends = ["redis"]
+env = { REDIS_URL = "redis://127.0.0.1:{{ daemons.redis.port }}" }
+ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
+retry = 3
 ```
 
-This defines three daemons: an API server, a docs server, and Redis.
+Replace the API command and health endpoint with your project's equivalents.
+Commands run from the config's project directory. Use [`dir`](/reference/configuration#dir)
+for a service in a subdirectory.
 
-## Start Your Daemons
+`depends` starts Redis before the API. Redis must answer its readiness command
+before the API starts; the API must pass its HTTP check before startup completes.
+The environment template uses Redis's resolved port.
 
-Start all daemons at once:
+::: tip Keep processes in the foreground
+Use the foreground command for each service. Avoid `&`, `--daemonize`, or
+`docker run -d`: pitchfork needs to track the process that does the work.
+:::
 
-```bash
-pitchfork start --all
+## Start the project
+
+```sh
+pitchfork start api
 ```
 
-Or start specific ones:
+This starts Redis too. Run it again and already running services stay running.
+Independent dependencies start in parallel.
 
-```bash
-pitchfork start api redis
-
-pitchfork api redis # shorthand for `pitchfork start api redis`
+```sh
+pitchfork start --local   # All daemons in the merged local config
+pitchfork list --project  # Only this project's namespace
+pitchfork status api      # Details for one daemon
 ```
 
-## Check Status
+`--local` includes local configs inherited from parent directories. `--all`
+also includes system and user daemons. Use explicit names or a
+[group](/reference/configuration#daemon-groups) when you want a fixed set.
 
-View all running daemons:
+## Inspect and restart
 
-```bash
-pitchfork list
+```sh
+pitchfork logs api redis --tail
 ```
 
-Output:
+Press `Ctrl+C` to stop following logs. To apply a changed command or environment:
 
-```
-NAME   PID    STATUS
-api    12345  running
-docs   12346  running
-redis  12347  running
+```sh
+pitchfork restart api
 ```
 
-Get detailed status for one daemon:
+Only the requested daemon restarts; its already running dependencies stay up.
+For automatic restarts after source edits, add [file watching](/guides/file-watching).
 
-```bash
-pitchfork status api
+## Stop the project
+
+```sh
+pitchfork stop --local
 ```
 
-## View Logs
+Pitchfork stops dependents before their dependencies. Configured services remain
+available for the next `pitchfork start`.
 
-See logs for a specific daemon:
+## Start and stop with your shell
 
-```bash
-pitchfork logs api
-```
-
-Follow logs in real-time:
-
-```bash
-pitchfork logs api --tail
-```
-
-View logs for multiple daemons:
-
-```bash
-pitchfork logs api docs
-```
-
-## Stop Daemons
-
-Stop a specific daemon:
-
-```bash
-pitchfork stop api
-```
-
-Stop all daemons:
-
-```bash
-pitchfork stop api docs redis
-```
-
-## Restart on Changes
-
-If a daemon is already running, `pitchfork start` does nothing. Use `--force` to restart:
-
-```bash
-pitchfork start api --force
-```
-
-## Add Ready Checks
-
-Make pitchfork wait until your daemon is actually ready:
+Install the [shell hook](/guides/shell-hook), then add this field to each daemon
+that should follow your project sessions:
 
 ```toml
-[daemons.api]
-run = "npm run server:api"
-ready_http = "http://localhost:3000/health"
-
-[daemons.redis]
-run = "redis-server"
-ready_output = "Ready to accept connections"
+auto = ["start", "stop"]
 ```
 
-See [Ready Checks](/guides/ready-checks) for all options.
+Services start when you enter the project. Once the last tracked session leaves,
+they become eligible to stop after the configured delay (one minute by default).
 
-## Enable Auto-Restart
+## Keep going
 
-Have pitchfork automatically restart daemons that crash:
-
-```toml
-[daemons.api]
-run = "npm run server:api"
-retry = 3  # Restart up to 3 times on failure
-```
-
-See [Auto Restart](/guides/auto-restart) for details.
-
-## What's Next?
-
-- [Shell Hook](/guides/shell-hook) - Auto-start when entering project directories
-- [Ready Checks](/guides/ready-checks) - Configure readiness detection
-- [Configuration Reference](/reference/configuration) - All configuration options
+- [Ready checks](/guides/ready-checks): choose the right startup signal.
+- [Health checks](/guides/health-checks): detect a running service that stops responding.
+- [Namespaces](/concepts/namespaces): use the same service names across projects and worktrees.
+- [Configuration reference](/reference/configuration): look up every daemon option.

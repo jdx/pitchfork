@@ -1,6 +1,9 @@
+---
+description: Manage daemon status, logs, configuration, and batch operations from the terminal dashboard.
+---
 # TUI Dashboard
 
-Pitchfork includes a full-featured terminal UI for monitoring and managing daemons without leaving your terminal.
+Inspect status, follow logs, and start or stop services from one terminal dashboard. Press `?` inside the TUI for help with the current view.
 
 ## Launch the TUI
 
@@ -8,7 +11,7 @@ Pitchfork includes a full-featured terminal UI for monitoring and managing daemo
 pitchfork tui
 ```
 
-The TUI connects to the supervisor automatically, starting it if needed.
+The TUI connects to the supervisor automatically, starting it if needed unless `supervisor.auto_start` is disabled. Quitting the TUI leaves your daemons running.
 
 ## Namespace Scoping
 
@@ -31,7 +34,7 @@ Scoping happens when the daemon list is fetched, so search (`/`), sorting, and b
 
 The same `--namespace` and `--project` flags work with `pitchfork list`.
 
-## Features
+## Views
 
 ### Dashboard View
 

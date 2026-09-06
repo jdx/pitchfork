@@ -1,31 +1,16 @@
-# MCP Server (AI Assistants)
+---
+description: Connect an MCP-compatible assistant to pitchfork over stdio to inspect and manage development services.
+---
+# MCP server
 
-Pitchfork includes a built-in [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server, allowing AI assistants to manage your daemons directly.
+Pitchfork includes a [Model Context Protocol](https://modelcontextprotocol.io/)
+server. An MCP-compatible client can launch it as a subprocess to inspect,
+start, stop, and restart daemons and read their logs.
 
-## What is MCP?
+## Connect a client
 
-MCP is an open protocol that lets AI assistants interact with external tools via JSON-RPC over stdin/stdout. Pitchfork's MCP server exposes daemon management operations so AI coding assistants can start, stop, restart, and monitor your development services.
-
-## Setup
-
-### Claude Desktop
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "pitchfork": {
-      "command": "pitchfork",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to your Cursor MCP configuration:
+Configure a **stdio** server with command `pitchfork` and argument `mcp`.
+For clients that use the `mcpServers` JSON format:
 
 ```json
 {
@@ -38,32 +23,34 @@ Add to your Cursor MCP configuration:
 }
 ```
 
-### Other MCP-Compatible Tools
+Use your client's MCP settings to choose the configuration file and scope.
+The client must be able to find `pitchfork` on `PATH`; if it cannot, replace
+`command` with the absolute path to the installed binary.
 
-Any tool that supports the MCP protocol can use pitchfork. The server communicates over stdin/stdout using JSON-RPC.
+For project-local configuration and short daemon names, launch the server in
+the project directory if your client supports setting a working directory.
+Otherwise use [qualified daemon IDs](/concepts/namespaces), such as `my-app/api`,
+for known projects.
 
-## Available Tools
+## Available tools
 
-The MCP server exposes five tools:
+| Tool | What it does |
+| --- | --- |
+| `pitchfork_status` | List daemons and their current state |
+| `pitchfork_start` | Start named daemons; supports forcing a restart |
+| `pitchfork_stop` | Stop named daemons |
+| `pitchfork_restart` | Restart named daemons |
+| `pitchfork_logs` | Read recent output; defaults to 50 lines |
 
-| Tool | Description |
-|------|-------------|
-| `pitchfork_status` | List all daemons and their current state (PID, status, errors) |
-| `pitchfork_start` | Start one or more daemons by name (supports `force` for restart) |
-| `pitchfork_stop` | Stop one or more daemons by name |
-| `pitchfork_restart` | Restart one or more daemons (equivalent to start with force) |
-| `pitchfork_logs` | Return recent log output for one or more daemons (default: 50 lines) |
+The MCP server uses the same supervisor as the CLI. Changes made through an
+assistant are visible in `pitchfork list`, the TUI, and the web UI.
 
-## Usage Examples
+## Try it
 
-Once configured, you can ask your AI assistant things like:
+Ask your assistant to list the daemons, inspect `my-app/api`, or show its recent
+logs. Once the connection works, you can ask it to start or restart that service.
+The client's approval settings determine when it asks before executing a tool.
 
-- "What daemons are running?"
-- "Start the API server"
-- "Restart the worker daemon"
-- "Show me the logs for the API"
-- "Stop all daemons"
-
-The AI assistant will use the MCP tools to execute these operations through pitchfork.
-
-
+If a daemon is missing, check the server's working directory and confirm it is
+visible with `pitchfork list` from that directory. See
+[the CLI reference](/cli/mcp) for the command's full help.

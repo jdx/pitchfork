@@ -1,182 +1,87 @@
-# File Watching
+---
+description: Restart running daemons on source changes using glob patterns, debouncing, and native or polling watchers.
+---
+# File watching
 
-Automatically restart daemons when source files change. This is useful for development workflows where you want hot-reloading behavior.
-
-## Basic Configuration
-
-Add the `watch` field to your daemon configuration with glob patterns:
-
-```toml
-[daemons.api]
-run = "npm run dev"
-watch = ["src/**/*.ts", "package.json"]
-```
-
-When any `.ts` file in `src/` or `package.json` changes, the daemon will automatically restart.
-
-You can also select the watcher backend per daemon:
+Add `watch` patterns to restart a running daemon when its source changes.
 
 ```toml
 [daemons.api]
-run = "npm run dev"
-watch = ["src/**/*.ts", "package.json"]
-watch_mode = "auto" # native | poll | auto
+run = "node server.js"
+watch = ["server.js", "src/**/*.js", "package.json"]
+ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
+retry = 3
 ```
 
-- `native` (default): use OS-native notifications (inotify/FSEvents/etc.)
-- `poll`: use polling file scans (works better on some NFS/remote mounts)
-- `auto`: prefer native, automatically fall back to polling when native watch setup fails
+Start it with `pitchfork start api`, edit a matching file, and inspect the restart
+with `pitchfork logs api --tail`. Stopped daemons ignore changes.
 
-## How It Works
-
-1. **On supervisor start**: Pitchfork scans all daemons for `watch` patterns
-2. **Directory watching**: Patterns are expanded and their parent directories are watched recursively
-3. **File change detection**: The `notify` crate detects file changes with debouncing (1 second)
-4. **Pattern matching**: Changed files are matched against glob patterns
-5. **Auto-restart**: Running daemons with matching patterns are automatically restarted
-
-When `watch_mode = "poll"` (or `"auto"` falls back), polling interval is controlled by `settings.supervisor.watch_poll_interval`.
-
-::: tip
-Only running daemons are restarted. If a daemon is stopped, file changes won't start it.
+::: tip Choose one reloader
+If your command already watches files (such as `vite`, `flask run --reload`, or
+`node --watch`), let it handle source reloads. Use pitchfork's watcher when the
+command needs a full restart, or watch additional configuration files separately.
 :::
 
-## Glob Pattern Syntax
-
-Patterns use standard glob syntax:
+## Choose patterns
 
 | Pattern | Matches |
-|---------|---------|
-| `*.js` | All `.js` files in the daemon's directory |
-| `src/**/*.ts` | All `.ts` files in `src/` and subdirectories |
-| `package.json` | Specific file |
-| `lib/**/*.py` | All `.py` files in `lib/` and subdirectories |
-| `config/*.toml` | All `.toml` files in `config/` directory |
+| --- | --- |
+| `*.js` | JavaScript files in the config's project directory |
+| `src/**/*.ts` | TypeScript files in `src` and its subdirectories |
+| `package.json` | One file |
+| `config/*.toml` | TOML files directly inside `config` |
 
-Patterns are resolved relative to the `pitchfork.toml` file that defines the daemon.
-
-## Examples
-
-### Node.js Development Server
+Patterns are case-sensitive and relative to the config's project directory,
+not the daemon's `dir`. Configs in `.config/` use that directory's parent as
+the project base.
 
 ```toml
 [daemons.api]
-run = "npm run dev"
-watch = ["src/**/*.ts", "src/**/*.tsx", "package.json", "tsconfig.json"]
-ready_http = "http://localhost:3000/health"
+run = "node server.js"
+dir = "api"
+watch = ["api/server.js", "api/src/**/*.js"]
 ```
 
-### Python Flask App
+Keep patterns narrow enough to avoid build output, log files, `node_modules`,
+and `target`. A daemon that writes to its own watched files can restart repeatedly.
 
-```toml
-[daemons.flask]
-run = "flask run --reload"
-watch = ["app/**/*.py", "templates/**/*.html", "requirements.txt"]
-ready_port = 5000
-```
-
-### Go Service
-
-```toml
-[daemons.server]
-run = "go run ./cmd/server"
-watch = ["**/*.go", "go.mod", "go.sum"]
-ready_port = 8080
-```
-
-### Multi-Service Setup
-
-```toml
-[daemons.postgres]
-run = "postgres -D /var/lib/pgsql/data"
-ready_port = 5432
-# No watch - database doesn't need hot reload
-
-[daemons.api]
-run = "npm run dev"
-depends = ["postgres"]
-watch = ["src/**/*.ts", "package.json"]
-ready_http = "http://localhost:3000/health"
-
-[daemons.worker]
-run = "npm run worker"
-depends = ["postgres"]
-watch = ["src/worker/**/*.ts", "package.json"]
-```
-
-## Combining with Other Features
-
-### With Ready Checks
-
-File watching works well with ready checks to ensure the daemon is fully restarted:
+## Native notifications or polling
 
 ```toml
 [daemons.api]
-run = "npm run dev"
-watch = ["src/**/*.ts"]
-ready_http = "http://localhost:3000/health"  # Wait for health endpoint
+run = "node server.js"
+watch = ["src/**/*.js"]
+watch_mode = "auto"
 ```
 
-### With Auto Start/Stop
+| Mode | Behavior |
+| --- | --- |
+| `native` | Use operating-system notifications (default) |
+| `poll` | Scan files periodically; useful on network or remote mounts |
+| `auto` | Try native notifications and fall back to polling if setup fails |
 
-Combine with shell hook for full development workflow automation:
+## Tune restart timing
 
-```toml
-[daemons.api]
-run = "npm run dev"
-watch = ["src/**/*.ts"]
-auto = ["start", "stop"]  # Auto-start when entering directory
-```
-
-### With Retry
-
-If your daemon might fail during restart, add retry:
-
-```toml
-[daemons.api]
-run = "npm run dev"
-watch = ["src/**/*.ts"]
-retry = 3  # Retry up to 3 times if restart fails
-```
-
-## Performance Considerations
-
-- **Debouncing**: Changes are debounced for 1 second to avoid rapid restarts during batch saves
-- **Directory watching**: Only unique parent directories are watched, not individual files
-- **Recursive watching**: Subdirectories are watched automatically for `**` patterns
-- **Running daemons only**: Stopped daemons ignore file changes
-
-### Polling Tuning
-
-Use settings to tune watcher behavior globally:
+Changes are debounced for one second by default. A batch of saves produces one
+restart after the changes settle.
 
 ```toml
 [settings.supervisor]
+file_watch_debounce = "1s"
 watch_poll_interval = "500ms"
 watch_interval = "10s"
 ```
 
-- `watch_poll_interval`: polling scan cadence for `watch_mode = "poll"` (and auto fallback)
-- `watch_interval`: supervisor refresh cadence for watch config updates (new/removed watched daemons)
+`watch_poll_interval` controls file scans in polling mode. `watch_interval`
+controls refreshes of watched daemon configuration; it is not the debounce.
+Restart the supervisor after changing its settings.
 
-For remote development or network filesystems, values like `watch_poll_interval = "100ms"` to `"1s"` are common depending on CPU/IO budget.
+## If a file change does nothing
 
-## Troubleshooting
+1. Check that the daemon is running with `pitchfork status api`.
+2. Check the path relative to the config's project directory, especially with `dir`.
+3. On a remote mount, try `watch_mode = "poll"` and restart the daemon.
+4. Inspect [supervisor logs](/troubleshooting#enable-debug-logging) for watch registration errors.
 
-### Files not triggering restart
-
-1. Check the pattern matches your files (patterns are case-sensitive)
-2. Ensure the daemon is running (`pitchfork list`)
-3. Check supervisor logs for watch registration messages
-
-### Too many restarts
-
-1. Add more specific patterns to avoid matching build artifacts
-2. Exclude directories like `node_modules`, `target`, `.git`:
-   ```toml
-   watch = ["src/**/*.ts"]  # Only watch src/, not node_modules
-   ```
-
-### Restart delay
-
-File changes are debounced for 1 second. If you're making rapid edits, only the final state triggers a restart.
+Combine watching with [ready checks](/guides/ready-checks) to verify each restart,
+and [retries](/guides/auto-restart) to recover from a failed attempt.

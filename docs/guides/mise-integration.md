@@ -1,166 +1,92 @@
-# mise Integration
+---
+description: Run daemons with mise-managed tools and environment variables, including outside an interactive shell.
+---
+# mise integration
 
-Use [mise](https://mise.jdx.dev) with pitchfork for enhanced development workflows.
+[mise](https://mise.jdx.dev) supplies project tools and environment variables.
+Pitchfork manages the processes that use them. Enable the integration when a
+daemon needs mise's environment, especially at login or from a non-interactive
+supervisor.
 
-## Why Use mise with Pitchfork?
-
-[mise](https://mise.jdx.dev) handles:
-- Installing and managing dev tools (Node, Python, etc.)
-- Environment variables
-- Task dependencies and setup
-
-Pitchfork handles:
-- Running background daemons
-- Process lifecycle management
-- Ready checks and retries
-
-Together, they provide a complete development environment solution.
-
-## Built-in mise Integration
-
-When pitchfork runs as a **login daemon** (e.g. via `pitchfork boot`) or in non-interactive
-environments (e.g. cron), tools installed by mise may not be on `PATH` because shell hooks
-haven't run. The built-in mise integration solves this by wrapping your daemon commands with
-`mise x --`, which activates the mise environment before executing the command.
-
-### Global Setting
-
-Enable mise for all daemons in [settings](/reference/settings):
-
-```toml
-# ~/.config/pitchfork/config.toml
-[settings.general]
-mise = true
-```
-
-### Per-Daemon Override
-
-Enable or disable mise for individual daemons in `pitchfork.toml`:
+## Enable it for a daemon
 
 ```toml
 [daemons.api]
 run = "node server.js"
-mise = true  # Enable mise for this daemon
-
-[daemons.simple]
-run = "echo hello"
-mise = false  # Disable mise even if globally enabled
+mise = true
 ```
 
-Per-daemon `mise` overrides the global `general.mise` setting. If neither is set, mise is
-disabled by default.
+Pitchfork runs the command as `mise x -- sh -c "node server.js"` by default.
+If you configure `general.shell`, that shell is used inside `mise x --`.
+Shell expansion, pipes, and compound commands retain their normal behavior.
 
-### Custom mise Binary Path
+## Make it the default
 
-If `mise` is not in a well-known location, specify the path:
+In `~/.config/pitchfork/config.toml`:
 
 ```toml
-# ~/.config/pitchfork/config.toml
 [settings.general]
 mise = true
-mise_bin = "/opt/custom/bin/mise"
 ```
 
-Pitchfork automatically searches these paths when `mise_bin` is not set:
+A daemon's `mise = true` or `mise = false` overrides the global default.
+Without either setting, the integration is disabled.
+
+## Locate mise
+
+Pitchfork searches these well-known locations:
+
 - `~/.local/bin/mise`
 - `~/.cargo/bin/mise`
 - `/usr/local/bin/mise`
 - `/opt/homebrew/bin/mise`
 
-### How It Works
+For another location, set an absolute path:
 
-When `mise = true` is set for a daemon, pitchfork wraps the command:
-
-```
-# Without mise:
-sh -c "exec node server.js"
-
-# With mise:
-sh -c "exec /path/to/mise x -- node server.js"
-```
-
-`mise x --` activates all tools and environment variables from `mise.toml` / `.tool-versions`
-in the daemon's working directory before running the command.
-
-## Using mise Tasks
-
-You can also use mise tasks directly as daemon commands. This approach gives you full control
-over tool installation, environment variables, and task dependencies:
-
-**pitchfork.toml:**
 ```toml
-[daemons.docs]
-run = "mise run docs:dev"
+[settings.general]
+mise = true
+mise_bin = "/opt/tools/mise"
 ```
 
-**mise.toml:**
-```toml
-[env]
-NODE_ENV = "development"
+If mise cannot be found, pitchfork logs a warning and runs without it. Check
+the supervisor logs if a daemon cannot find its runtime.
 
-[tools]
-node = "20"
+## Run a mise task
 
-[tasks."docs:setup"]
-run = "npm install"
+You can also make a mise task the daemon command. For example, in `pitchfork.toml`:
 
-[tasks."docs:dev"]
-run = "node docs/index.js"
-depends = ["docs:setup"]
-```
-
-### Workflow
-
-1. `pitchfork start docs` launches the daemon
-2. Pitchfork calls `mise run docs:dev`
-3. mise ensures Node 20 is installed
-4. mise runs the `docs:setup` dependency first
-5. mise sets `NODE_ENV=development` and starts the server
-6. Pitchfork monitors the process and handles restarts
-
-## Example: Full Stack App
-
-**pitchfork.toml:**
 ```toml
 [daemons.api]
 run = "mise run api:dev"
+ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
 auto = ["start", "stop"]
-ready_http = "http://localhost:3000/health"
-
-[daemons.frontend]
-run = "mise run frontend:dev"
-auto = ["start", "stop"]
-ready_output = "ready in"
 ```
 
-**mise.toml:**
+And in `mise.toml`:
+
 ```toml
 [tools]
-node = "20"
-python = "3.11"
+node = "24"
 
 [env]
-DATABASE_URL = "postgres://localhost/myapp"
+NODE_ENV = "development"
 
 [tasks."api:setup"]
-run = "pip install -r requirements.txt"
-
-[tasks."api:dev"]
-run = "uvicorn main:app --reload"
-depends = ["api:setup"]
-
-[tasks."frontend:setup"]
 run = "npm install"
 
-[tasks."frontend:dev"]
-run = "npm run dev"
-depends = ["frontend:setup"]
+[tasks."api:dev"]
+depends = ["api:setup"]
+run = "node server.js"
 ```
 
-## Benefits
+`pitchfork start api` invokes the task, and mise handles its task dependencies
+and environment. Pitchfork waits for the health endpoint and then monitors the
+process. This example assumes your application exposes `/health` on port 3000.
 
-- **Tool management:** mise ensures correct tool versions are installed
-- **Environment:** mise sets environment variables before the daemon starts
-- **Dependencies:** mise runs setup tasks (npm install, etc.) automatically
-- **Lifecycle:** pitchfork handles process monitoring, restarts, and ready checks
-- **Login daemons:** Built-in `mise = true` ensures tools are available even without interactive shell hooks
+With a literal `mise run` command, the shell must be able to find `mise`; the
+`mise_bin` setting applies to pitchfork's built-in wrapper. Use `mise = true`
+or an absolute command path when the supervisor's `PATH` is limited.
+
+See [boot registration](/guides/boot-start) and [cron scheduling](/guides/scheduling)
+for workflows that run outside your interactive shell.

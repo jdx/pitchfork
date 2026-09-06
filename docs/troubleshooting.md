@@ -1,192 +1,180 @@
+---
+description: Diagnose startup, readiness, port, shell-session, and supervisor problems without deleting state first.
+---
 # Troubleshooting
 
-Common issues and how to resolve them.
+Start with the daemon's status and recent output. They usually show whether a
+failure belongs to the command, its environment, or pitchfork's startup checks.
 
-## Enable Debug Logging
-
-Get detailed logs to diagnose issues:
-
-```bash
-PITCHFORK_LOG=debug pitchfork supervisor start --force
-pitchfork logs pitchfork
+```sh
+pitchfork --version
+pitchfork status api
+pitchfork logs api -n 100 --no-pager
+pitchfork supervisor status
 ```
 
-::: tip
-The `--force` flag is needed to restart the supervisor with new log settings.
-:::
+Replace `api` with your daemon's name. Use a qualified ID, such as
+`my-project/api`, when working outside its project.
 
-For even more detail:
+## Daemon won't start
 
-```bash
-PITCHFORK_LOG=trace pitchfork supervisor start --force
+Run the configured command manually from the daemon's working directory.
+Check `dir`, required files, runtime versions, and environment variables.
+Keep the process in the foreground so pitchfork can track it.
+
+```sh
+pitchfork daemons --json
+pitchfork logs api --tail
 ```
 
-## Common Issues
+If it works in your shell but fails at login or on a schedule, the supervisor
+may not have your shell's `PATH`. Use [mise integration](/guides/mise-integration)
+or absolute executable paths. A disabled daemon needs `pitchfork enable api`
+before it can start.
 
-### Daemon Won't Start
+## Ready check times out
 
-**Symptoms:** `pitchfork start` fails or daemon immediately stops.
+An alive process is not necessarily ready. Test the configured check directly:
 
-**Check:**
+```sh
+curl -i http://127.0.0.1:3000/health
+```
 
-1. Verify the command works manually:
-   ```bash
-   cd /path/to/project
-   npm run server  # or whatever your command is
-   ```
+Check the URL, expected status, listening address, and actual port. With port
+bumping, a hardcoded health URL can target the wrong process; use `$PORT` in
+`ready_cmd` when the daemon's port is dynamic.
 
-2. Check daemon logs:
-   ```bash
-   pitchfork logs myapp
-   ```
+```toml
+[daemons.api]
+run = "node server.js"
+port = { expect = [3000], bump = 10 }
+ready_cmd = { run = "curl -fsS http://127.0.0.1:$PORT/health", timeout = "60s" }
+```
 
-3. Check supervisor logs:
-   ```bash
-   pitchfork logs pitchfork
-   ```
+This assumes `server.js` reads `PORT`. Raise the check's `timeout` for a slow
+startup. Raising `ready_delay` will not affect an explicit HTTP, TCP, output,
+or command check. If all checks expire, startup exits with code `124`.
+See [ready checks](/guides/ready-checks).
 
-### Autostop Not Working
+## Port already in use
 
-**Symptoms:** Daemons don't stop when leaving directory.
+Inspect the listener before changing or stopping anything:
 
-**Check:**
+```sh
+lsof -nP -iTCP:3000 -sTCP:LISTEN
+```
 
-1. Verify shell hook is installed:
-   ```bash
-   # For zsh, check ~/.zshrc contains:
-   eval "$(pitchfork activate zsh)"
-   ```
+Choose another port or configure [port bumping](/guides/port-management).
+For the web dashboard, choose a different starting port:
 
-2. Verify `auto` includes `"stop"`:
-   ```toml
-   [daemons.api]
-   auto = ["start", "stop"]  # Must include "stop"
-   ```
-
-3. Autostop has a delay. Wait a few seconds after leaving.
-
-4. Other terminals in the same directory prevent autostop.
-
-### Supervisor Won't Start
-
-**Symptoms:** Commands hang or fail to connect.
-
-**Check:**
-
-1. Kill any existing supervisor:
-   ```bash
-   pitchfork supervisor stop
-   # Or force kill
-   pkill -f "pitchfork supervisor"
-   ```
-
-2. Remove stale socket:
-   ```bash
-   rm ~/.local/state/pitchfork/sock/main.sock
-   ```
-
-3. Start fresh:
-   ```bash
-   pitchfork supervisor start
-   ```
-
-### Port Already in Use
-
-**Symptoms:** Web UI doesn't start, or daemon fails with port conflict.
-
-**For Web UI:**
-```bash
-# Use a different port
+```sh
 PITCHFORK_WEB_PORT=8888 pitchfork supervisor start --force
 ```
 
-**For your daemon:** Check what's using the port:
-```bash
-lsof -i :3000  # Replace 3000 with your port
+The dashboard can select a later port if that one is occupied. Read the
+supervisor log for its bound address.
+
+## Autostop not working
+
+Check that the [shell hook](/guides/shell-hook) is loaded and the daemon has
+`auto = ["stop"]` or `auto = ["start", "stop"]`.
+
+```sh
+pitchfork project list
+pitchfork settings explain general.autostop_delay
 ```
 
-### Ready Check Times Out
+Another terminal or IDE session in the project keeps it active. The default
+delay is **one minute**, followed by the next supervisor evaluation. Leaving
+and quickly returning cancels the pending stop.
 
-**Symptoms:** Daemon starts but pitchfork reports failure.
+If an integration created a session, it must call `project leave` with the same
+PID and directory. On Windows, crashed host sessions also need explicit cleanup.
 
-**Solutions:**
+## A setting appears to be ignored
 
-1. Increase the delay:
-   ```toml
-   [daemons.api]
-   ready_delay = 30  # Give more time
-   ```
+```sh
+pitchfork settings explain web.auto_start
+```
 
-2. Use output pattern instead:
-   ```toml
-   [daemons.api]
-   ready_output = "listening on"  # Wait for specific output
-   ```
+Environment variables override files. Project files can override user settings.
+Supervisor-owned settings are read at supervisor startup; restart it after
+editing those settings. See [settings precedence](/reference/settings#precedence).
 
-3. Check your HTTP health endpoint:
-   ```bash
-   curl http://localhost:3000/health
-   ```
+## Supervisor won't start
 
-### State File Corruption
+First check that clients use the same `PITCHFORK_STATE_DIR` as the supervisor.
+If `supervisor.auto_start = false`, a service manager must start it, or you can
+start it explicitly with `pitchfork supervisor start`.
 
-**Symptoms:** Strange behavior, daemons showing wrong status.
+For a stuck supervisor, try the normal stop/start sequence:
 
-**Fix:**
+```sh
+pitchfork supervisor stop
+pitchfork supervisor start
+```
 
-1. Stop all daemons:
-   ```bash
-   pitchfork supervisor stop
-   ```
+Stopping the supervisor affects its managed services. Inspect its logs before
+escalating to manual process or socket cleanup. Removing the IPC socket while
+a supervisor is alive can disconnect clients from it.
 
-2. Remove state file:
-   ```bash
-   rm ~/.local/state/pitchfork/state.toml
-   ```
+## Daemon won't stop
 
-3. Start fresh:
-   ```bash
-   pitchfork start --all
-   ```
+On Unix, pitchfork sends the configured signal (`SIGTERM` by default), waits
+up to the configured stop timeout (`5s` by default), and escalates to `SIGKILL`
+if needed. The signal applies to the process group.
 
-### Daemon Won't Stop
+For a service that expects `SIGINT`, or needs longer to flush data:
 
-**Symptoms:** `pitchfork stop` takes a long time or daemon remains running.
+```toml
+[daemons.api]
+run = "node server.js"
+stop_signal = { signal = "SIGINT", timeout = "10s" }
+```
 
-**How stop works:**
+Apply configuration changes with a restart. If shutdown remains slow, inspect
+the service's signal handling and [supervisor debug logs](#enable-debug-logging).
 
-Pitchfork uses a graceful shutdown strategy:
-1. **SIGTERM** - Wait up to `stop_timeout` (default 5 seconds) for graceful shutdown
-2. **SIGKILL** - Force termination if process doesn't respond
+## Stale entries or damaged state
 
-Most well-behaved processes exit within milliseconds of the first SIGTERM.
-If your daemon consistently takes 3+ seconds to stop, it may be ignoring
-SIGTERM signals or have a slow cleanup routine.
+For stopped entries you no longer need, use:
 
-**Check:**
+```sh
+pitchfork clean --daemon api
+pitchfork clean --prune
+```
 
-1. Verify the daemon handles SIGTERM:
-   ```bash
-   # Test manual SIGTERM
-   kill -TERM $(pitchfork status myapp --json | jq .pid)
-   ```
+These clean registrations, not config files. They do not stop running daemons.
+Do not delete `state.toml` as a first troubleshooting step: it contains the
+identities pitchfork uses to recognize managed processes. For a parse error,
+stop the supervisor normally and preserve a copy of the state file before any
+manual repair. See [file locations](/reference/file-locations).
 
-2. Check debug logs for timing:
-   ```bash
-   PITCHFORK_LOG=debug pitchfork supervisor start --force
-   pitchfork stop myapp
-   pitchfork logs pitchfork | grep -i "sigterm\|sigkill\|terminated"
-   ```
+## Enable debug logging
 
-3. If the daemon ignores signals, you may need to fix the daemon's signal handling.
+Both console and file verbosity can be set explicitly:
 
-## Getting Help
+```sh
+PITCHFORK_LOG=debug PITCHFORK_LOG_FILE_LEVEL=debug pitchfork supervisor start --force
+pitchfork logs pitchfork
+```
 
-If you're still stuck:
+If the CLI cannot connect, inspect the supervisor text log directly at the
+default path:
 
-1. Check the [GitHub Issues](https://github.com/jdx/pitchfork/issues)
-2. Open a new issue with:
-   - Your pitchfork version (`pitchfork --version`)
-   - Your OS
-   - Debug logs (`PITCHFORK_LOG=debug`)
-   - Your `pitchfork.toml` configuration
+```sh
+tail -n 100 ~/.local/state/pitchfork/logs/pitchfork/pitchfork.log
+```
+
+Adjust the path if you override the state or log directory. Use `trace` instead
+of `debug` for more detail. A later normal supervisor start restores defaults
+unless verbosity is also set in a config file.
+
+## Getting help
+
+Search [existing issues](https://github.com/jdx/pitchfork/issues), then report:
+
+- Pitchfork version and operating system.
+- The command you ran and the first substantive error.
+- A minimal `pitchfork.toml` that reproduces the problem.
+- Relevant daemon and supervisor logs, with credentials removed.

@@ -1,23 +1,29 @@
+---
+description: Start and stop project services automatically with shell hooks and IDE project sessions.
+---
 # Shell Hook (Auto Start/Stop)
 
-Automatically start daemons when you enter a project directory and stop them when you leave.
+Connect your shell to pitchfork so selected daemons start when you enter a project and stop after its last tracked session leaves.
 
 ## Install the Shell Hook
 
-Add the shell hook to your shell configuration:
+Add the matching line to your shell configuration once:
 
 ::: code-group
 
 ```bash [Bash]
-echo 'eval "$(pitchfork activate bash)"' >> ~/.bashrc
+# ~/.bashrc
+eval "$(pitchfork activate bash)"
 ```
 
 ```bash [Zsh]
-echo 'eval "$(pitchfork activate zsh)"' >> ~/.zshrc
+# ~/.zshrc
+eval "$(pitchfork activate zsh)"
 ```
 
 ```bash [Fish]
-echo 'pitchfork activate fish | source' >> ~/.config/fish/config.fish
+# ~/.config/fish/config.fish
+pitchfork activate fish | source
 ```
 
 :::
@@ -54,12 +60,23 @@ auto = ["stop"]  # Manually start, auto-stops when you leave
 
 1. When you `cd` into a directory containing `pitchfork.toml`, daemons with `auto = ["start", ...]` are started
 2. When you `cd` out of the directory, daemons with `auto = [..., "stop"]` are marked for stopping
-3. Pitchfork waits a few seconds before actually stopping, in case you quickly return to the directory
+3. Pitchfork waits for `general.autostop_delay` (one minute by default), in case you return
 4. If no terminal sessions are still in the directory, the daemons stop
 
 ::: tip
 You can manually start daemons with `pitchfork start` and they will still auto-stop when you leave if configured with `auto = ["stop"]`.
 :::
+
+## Set the stop delay
+
+```toml
+[settings.general]
+autostop_delay = "30s"
+```
+
+Restart the supervisor after changing this setting. Stops are evaluated by the
+background watcher, so allow for its interval too. Use `pitchfork project list`
+to see which sessions are keeping a project active.
 
 ## Example Workflow
 
