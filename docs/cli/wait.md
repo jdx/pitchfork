@@ -8,8 +8,9 @@
 Wait for one or more daemons to stop, tailing the logs along the way
 
 Blocks until every specified daemon stops running, while displaying its
-log output in real-time. With no daemon IDs and no `--group`, shows an
-interactive picker of the currently running daemons.
+log output in real-time. Already-finished daemons are evaluated without
+waiting; their exit codes still count. With no daemon IDs and no
+`--group`, shows an interactive picker of the currently running daemons.
 
 With `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C
 on Windows) first stops the waited daemons via the supervisor (graceful

@@ -28,8 +28,9 @@ use tokio::signal::unix::{self, SignalKind};
 Wait for one or more daemons to stop, tailing the logs along the way
 
 Blocks until every specified daemon stops running, while displaying its
-log output in real-time. With no daemon IDs and no `--group`, shows an
-interactive picker of the currently running daemons.
+log output in real-time. Already-finished daemons are evaluated without
+waiting; their exit codes still count. With no daemon IDs and no
+`--group`, shows an interactive picker of the currently running daemons.
 
 With `--kill`, an incoming signal (SIGINT/SIGTERM/SIGHUP/SIGQUIT, or Ctrl-C
 on Windows) first stops the waited daemons via the supervisor (graceful
@@ -79,22 +80,36 @@ impl Wait {
             PitchforkToml::resolve_ids_and_group(&self.id, self.group.as_deref())?
         };
 
-        // Snapshot the daemons we will actually wait on. Liveness is polled
-        // via the pid, so the (possibly stale) state snapshot is only used
-        // to learn the initial pids.
+        // Snapshot the daemons we will actually wait on, classifying each
+        // resolved target in argument order. The (possibly stale) state
+        // snapshot is only used to learn the initial pids.
         let sf = StateFile::get();
-        let watched: Vec<(DaemonId, u32)> = ids
-            .iter()
-            .filter_map(|id| match sf.daemons.get(id).and_then(|d| d.pid) {
-                Some(pid) => Some((id.clone(), pid)),
+        let mut watched_ids: Vec<DaemonId> = Vec::new();
+        let mut polled: Vec<(DaemonId, u32)> = Vec::new();
+        for id in &ids {
+            match sf.daemons.get(id) {
+                Some(daemon) if !is_terminal_status(&daemon.status) => {
+                    // Non-terminal: evaluate the daemon after it stops and
+                    // poll its pid to learn when; a missing pid means the
+                    // process is already gone, which the bounded re-read
+                    // after the poll loop resolves (missing maps to 1).
+                    watched_ids.push(id.clone());
+                    if let Some(pid) = daemon.pid {
+                        polled.push((id.clone(), pid));
+                    }
+                }
+                Some(_) => {
+                    // Already terminal: evaluate immediately, its exit
+                    // code still counts toward the result.
+                    watched_ids.push(id.clone());
+                }
                 None => {
                     warn!("{id} is not running");
-                    None
                 }
-            })
-            .collect();
+            }
+        }
 
-        if watched.is_empty() {
+        if watched_ids.is_empty() {
             return Ok(());
         }
 
@@ -107,7 +122,6 @@ impl Wait {
             None
         };
 
-        let watched_ids: Vec<DaemonId> = watched.iter().map(|(id, _)| id.clone()).collect();
         let tail_names = watched_ids.clone();
         tokio::spawn(async move {
             logs::tail_logs(
@@ -131,49 +145,56 @@ impl Wait {
             None
         };
 
-        let mut interval = time::interval(time::Duration::from_millis(100));
-        let mut remaining = watched;
+        // Only live daemons are polled; when every target was already
+        // finished (or gone), skip straight to the evaluation below.
+        if !polled.is_empty() {
+            let mut interval = time::interval(time::Duration::from_millis(100));
+            let mut remaining = polled;
 
-        loop {
-            tokio::select! {
-                signo = wait_for_signal(&mut signal_rx), if signal_rx.is_some() => {
-                    match signo {
-                        Some(signo) => {
-                            // Graceful SIGTERM -> SIGKILL stop via the supervisor
-                            // (hooks fire, reverse dependency order), then exit
-                            // like the shell does when killed by the signal.
-                            // Stop only the daemons this invocation actually
-                            // watches (running at snapshot time): daemons
-                            // that were not running then may have started in
-                            // the meantime and must not be killed here.
-                            let ipc = ipc.as_ref().expect("--kill connects IPC upfront");
-                            if let Err(e) = ipc.stop_daemons(&watched_ids).await {
-                                warn!("failed to stop waited daemons on signal: {e}");
+            loop {
+                tokio::select! {
+                    signo = wait_for_signal(&mut signal_rx), if signal_rx.is_some() => {
+                        match signo {
+                            Some(signo) => {
+                                // Graceful SIGTERM -> SIGKILL stop via the supervisor
+                                // (hooks fire, reverse dependency order), then exit
+                                // like the shell does when killed by the signal.
+                                // Stop only the daemons still being polled (live):
+                                // already-finished targets are not running, so
+                                // stopping them is meaningless, and daemons that
+                                // were not running at snapshot time must not be
+                                // killed here either.
+                                let stop_ids: Vec<DaemonId> =
+                                    remaining.iter().map(|(id, _)| id.clone()).collect();
+                                let ipc = ipc.as_ref().expect("--kill connects IPC upfront");
+                                if let Err(e) = ipc.stop_daemons(&stop_ids).await {
+                                    warn!("failed to stop waited daemons on signal: {e}");
+                                }
+                                std::process::exit(128 + signo);
                             }
-                            std::process::exit(128 + signo);
-                        }
-                        None => {
-                            // Every signal listener closed without firing (e.g.
-                            // ctrl_c() failed at await time on Windows). Signal
-                            // handling is gone, so --kill can no longer act;
-                            // disable the branch and keep polling.
-                            warn!("--kill signal handling is no longer active; continuing to wait");
-                            signal_rx = None;
-                        }
-                    }
-                }
-                _ = interval.tick() => {
-                    let mut i = 0;
-                    while i < remaining.len() {
-                        let (_, pid) = &remaining[i];
-                        if !PROCS.is_running(*pid) {
-                            remaining.remove(i);
-                        } else {
-                            i += 1;
+                            None => {
+                                // Every signal listener closed without firing (e.g.
+                                // ctrl_c() failed at await time on Windows). Signal
+                                // handling is gone, so --kill can no longer act;
+                                // disable the branch and keep polling.
+                                warn!("--kill signal handling is no longer active; continuing to wait");
+                                signal_rx = None;
+                            }
                         }
                     }
-                    if remaining.is_empty() {
-                        break;
+                    _ = interval.tick() => {
+                        let mut i = 0;
+                        while i < remaining.len() {
+                            let (_, pid) = &remaining[i];
+                            if !PROCS.is_running(*pid) {
+                                remaining.remove(i);
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        if remaining.is_empty() {
+                            break;
+                        }
                     }
                 }
             }

@@ -130,11 +130,11 @@ EOF
 @test "wait propagates the first failing daemon's exit code in argument order" {
   create_pitchfork_toml <<EOF
 [daemons.wait_fail_first]
-run = "sleep 1 && exit 3"
+run = "sleep 2 && exit 3"
 ready_delay = 0
 
 [daemons.wait_fail_second]
-run = "sleep 2 && exit 7"
+run = "sleep 1 && exit 7"
 ready_delay = 0
 EOF
 
@@ -143,14 +143,43 @@ EOF
   wait_for_status wait_fail_first running
   wait_for_status wait_fail_second running
 
-  # Both daemons fail, but 'wait_fail_first' is listed first: its exit
-  # code wins even though 'wait_fail_second' stops later. A "last failed
-  # to stop" rule would return 7 here, so this pins the new semantics.
+  # 'wait_fail_second' is listed second but stops first with 7; only
+  # argument-order selection returns the first-listed daemon's 3, so a
+  # "first to finish" rule would return 7 here and fail this test.
   run pitchfork wait wait_fail_first wait_fail_second
   assert_failure 3
 
   wait_for_status wait_fail_first errored
   wait_for_status wait_fail_second errored
+}
+
+@test "wait includes already-finished daemons in exit-code evaluation" {
+  create_pitchfork_toml <<EOF
+[daemons.wait_preexited]
+run = "sleep 1 && exit 7"
+ready_delay = 0
+
+[daemons.wait_then_clean]
+run = "sleep 2"
+ready_delay = 0
+EOF
+
+  run pitchfork start wait_preexited wait_then_clean
+  assert_success
+  wait_for_status wait_preexited errored
+  wait_for_status wait_then_clean running
+
+  # 'wait_preexited' already failed with 7 before this wait runs: it is
+  # evaluated immediately and must not be swallowed by 'wait_then_clean'
+  # stopping cleanly.
+  run pitchfork wait wait_preexited wait_then_clean
+  assert_failure 7
+
+  wait_for_status wait_then_clean stopped
+
+  # A single already-failed daemon fails the wait on its own.
+  run pitchfork wait wait_preexited
+  assert_failure 7
 }
 
 @test "--kill stops waited daemons when a signal arrives" {
