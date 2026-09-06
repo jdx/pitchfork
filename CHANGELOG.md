@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.0](https://github.com/jdx/pitchfork/compare/v2.24.2...v2.25.0) - 2026-09-06
+
+### Added
+
+- *(wait)* support multiple daemons, --group, picker, and --kill on signal ([#820](https://github.com/jdx/pitchfork/pull/820))
+
+### Other
+
+- overhaul guides and redesign the documentation site ([#834](https://github.com/jdx/pitchfork/pull/834))
+
 ## [2.24.2](https://github.com/jdx/pitchfork/compare/v2.24.1...v2.24.2) - 2026-09-05
 
 ### Other
