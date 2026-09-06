@@ -129,8 +129,8 @@ When `api.auto_start = true` and a valid `api.bind_port` are set, the API endpoi
 
 The API uses token-based authentication when binding to non-loopback addresses.
 The web UI and standalone API serve plain HTTP: the token does not encrypt the
-connection. Keep their listeners on loopback, or use an HTTPS reverse proxy
-with a loopback HTTP backend for remote access. Sending `X-Pitchfork-Token`
+connection. Keep their listeners on loopback, or use an HTTPS reverse proxy on
+the same host with a loopback HTTP backend for remote access. Sending `X-Pitchfork-Token`
 directly over a network via HTTP lets anyone who can observe the traffic
 capture and reuse the token.
 
@@ -144,6 +144,13 @@ configure one explicitly:
 [settings.api]
 token = "replace-with-a-long-random-token"
 ```
+
+The proxy must forward `X-Pitchfork-Token` unchanged to the loopback API, which
+validates it. HTTPS protects the client-to-proxy connection; the HTTP hop to
+`127.0.0.1` stays on the same host. If the proxy runs on another host, use an
+authenticated encrypted tunnel to the API host instead of forwarding the
+token over a plain HTTP network connection. Pitchfork's API listener does not
+support TLS directly.
 
 Include the token in every request when one is configured. This example assumes
 you have configured an HTTPS reverse proxy at `pitchfork.example.com`:

@@ -15,7 +15,9 @@ The web UI and standalone API listeners serve plain HTTP. Direct non-loopback
 requests send `X-Pitchfork-Token` unencrypted, allowing anyone who can observe
 that traffic to capture the token and reuse it to control the supervisor.
 Keep the listener bound to loopback (`127.0.0.1` or `::1`). For remote access,
-place it behind an HTTPS reverse proxy and keep the HTTP backend on loopback.
+place it behind an HTTPS reverse proxy on the same host and keep the HTTP
+backend on loopback. See the [proxy authentication guidance](/guides/web-ui#authentication)
+for token forwarding and proxies on another host.
 :::
 
 The following REST endpoints are available on the web UI port (or the dedicated API port if configured). All endpoints accept and return JSON unless otherwise noted.
@@ -203,12 +205,24 @@ curl http://127.0.0.1:3120/api/processes/myproject%2Fapi/tree
   {
     "pid": 12345,
     "name": "node",
-    "cmdline": "node server.js",
+    "exe": "/usr/local/bin/node",
+    "cpu_percent": 2.3,
+    "memory_bytes": 67108864,
+    "virtual_memory_bytes": 268435456,
+    "uptime_secs": 3600,
+    "thread_count": 7,
+    "status": "Sleep",
     "children": [
       {
         "pid": 12346,
         "name": "node",
-        "cmdline": "node worker.js",
+        "exe": "/usr/local/bin/node",
+        "cpu_percent": 0.5,
+        "memory_bytes": 33554432,
+        "virtual_memory_bytes": 134217728,
+        "uptime_secs": 3590,
+        "thread_count": 7,
+        "status": "Sleep",
         "children": []
       }
     ]
