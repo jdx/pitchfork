@@ -128,23 +128,32 @@ When `api.auto_start = true` and a valid `api.bind_port` are set, the API endpoi
 ## Authentication
 
 The API uses token-based authentication when binding to non-loopback addresses.
+The web UI and standalone API serve plain HTTP: the token does not encrypt the
+connection. Keep their listeners on loopback, or use an HTTPS reverse proxy
+with a loopback HTTP backend for remote access. Sending `X-Pitchfork-Token`
+directly over a network via HTTP lets anyone who can observe the traffic
+capture and reuse the token.
 
-- **Loopback only** (`127.0.0.1`, `::1`): No authentication required. Requests from local clients can control the supervisor.
-- **Non-loopback** (e.g., `0.0.0.0`, LAN IP): A random 64-character hex token is auto-generated at startup. The token is printed to stderr and logged. Include it in every request:
+- **Loopback only** (`127.0.0.1`, `::1`): No token is required by default. If you configure a token, it is enforced for local requests too.
+- **Non-loopback** (e.g., `0.0.0.0`, LAN IP): If no token is configured, a random 64-character hex token is auto-generated at startup. The generated token is printed to stderr and logged.
 
-```bash
-curl -H "X-Pitchfork-Token: <token>" http://192.168.1.100:3120/api/daemons
-```
-
-You can also set a fixed token in config:
+To require a token on a loopback backend behind your HTTPS reverse proxy,
+configure one explicitly:
 
 ```toml
 [settings.api]
-token = "my-secret-token"
+token = "replace-with-a-long-random-token"
+```
+
+Include the token in every request when one is configured. This example assumes
+you have configured an HTTPS reverse proxy at `pitchfork.example.com`:
+
+```bash
+curl -H "X-Pitchfork-Token: <token>" https://pitchfork.example.com/api/daemons
 ```
 
 ::: warning
-Never expose the API to a public network without authentication. The bundled web page receives the API token so it can make requests. The token is not a login barrier for the web dashboard; restrict network access to trusted clients.
+Never expose the API to a public network without authentication. The bundled web page receives the API token so it can make requests. The token is not a login barrier for the web dashboard; restrict network access to trusted clients or enforce access control at the reverse proxy.
 :::
 
 ## API reference
