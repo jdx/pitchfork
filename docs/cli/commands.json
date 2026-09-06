@@ -476,6 +476,25 @@
                 }
               },
               {
+                "name": "ready-retry",
+                "usage": "--ready-retry <READY_RETRY>",
+                "help": "Number of retry attempts when startup fails before ready (use \\\"true\\\" for infinite)",
+                "help_first_line": "Number of retry attempts when startup fails before ready (use \\\"true\\\" for infinite)",
+                "short": [],
+                "long": [
+                  "ready-retry"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "READY_RETRY",
+                  "usage": "<READY_RETRY>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
                 "name": "watch",
                 "usage": "--watch <WATCH>",
                 "help": "Glob patterns to watch for changes (can be specified multiple times)",
@@ -2961,6 +2980,28 @@
             "arg": {
               "name": "RETRY",
               "usage": "<RETRY>",
+              "required": true,
+              "double_dash": "Optional",
+              "hide": false
+            },
+            "default": [
+              "0"
+            ]
+          },
+          {
+            "name": "ready-retry",
+            "usage": "--ready-retry <READY_RETRY>",
+            "help": "Number of times to retry starting when the process fails before becoming ready",
+            "help_first_line": "Number of times to retry starting when the process fails before becoming ready",
+            "short": [],
+            "long": [
+              "ready-retry"
+            ],
+            "hide": false,
+            "global": false,
+            "arg": {
+              "name": "READY_RETRY",
+              "usage": "<READY_RETRY>",
               "required": true,
               "double_dash": "Optional",
               "hide": false

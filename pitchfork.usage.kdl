@@ -193,6 +193,9 @@ Examples:
         flag --retry help="Number of retry attempts on failure (use \\\"true\\\" for infinite)" {
             arg <RETRY>
         }
+        flag --ready-retry help="Number of retry attempts when startup fails before ready (use \\\"true\\\" for infinite)" {
+            arg <READY_RETRY>
+        }
         flag --watch help="Glob patterns to watch for changes (can be specified multiple times)" var=#true {
             arg <WATCH>
         }
@@ -852,6 +855,9 @@ Examples:
     flag "-f --force" help="Stop the daemon if it is already running"
     flag --retry help="Number of times to retry on error exit" default="0" {
         arg <RETRY>
+    }
+    flag --ready-retry help="Number of times to retry starting when the process fails before becoming ready" default="0" {
+        arg <READY_RETRY>
     }
     flag "-d --delay" help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
         arg <DELAY>

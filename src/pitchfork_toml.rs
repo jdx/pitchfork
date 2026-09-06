@@ -170,6 +170,8 @@ struct PitchforkTomlDaemonRaw {
     pub cron: Option<PitchforkTomlCron>,
     #[serde(default)]
     pub retry: Retry,
+    #[serde(default)]
+    pub ready_retry: Retry,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ready_delay: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1284,6 +1286,7 @@ impl PitchforkToml {
                 auto: raw_daemon.auto,
                 cron: raw_daemon.cron,
                 retry: raw_daemon.retry,
+                ready_retry: raw_daemon.ready_retry,
                 ready_delay: raw_daemon.ready_delay,
                 ready_output: raw_daemon.ready_output,
                 ready_http: raw_daemon.ready_http,
@@ -1438,6 +1441,7 @@ impl PitchforkToml {
                     auto: daemon.auto.clone(),
                     cron: daemon.cron.clone(),
                     retry: daemon.retry,
+                    ready_retry: daemon.ready_retry,
                     ready_delay: daemon.ready_delay,
                     ready_output: daemon.ready_output.clone(),
                     ready_http: daemon.ready_http.clone(),
@@ -1813,10 +1817,16 @@ pub struct PitchforkTomlDaemon {
     pub auto: Vec<PitchforkTomlAuto>,
     /// Cron scheduling configuration for periodic execution
     pub cron: Option<PitchforkTomlCron>,
-    /// Number of times to retry if the daemon fails.
+    /// Number of times the supervisor restarts the daemon in the background after it exits with an error. Startup failures before the daemon becomes ready are governed by `ready_retry`.
     /// Can be a number (e.g., `3`) or `true` for infinite retries.
     #[schemars(default)]
     pub retry: Retry,
+    /// Number of times to retry starting the daemon when it fails before becoming ready.
+    /// Only applies to blocking starts (e.g. `pitchfork start` waiting for readiness);
+    /// background restarts are governed by `retry`.
+    /// Can be a number (e.g., `3`) or `true` for infinite retries.
+    #[schemars(default)]
+    pub ready_retry: Retry,
     /// Delay in seconds before considering the daemon ready
     pub ready_delay: Option<u64>,
     /// Regex pattern to match in ANSI-stripped stdout/stderr to determine readiness
@@ -1952,7 +1962,9 @@ impl PitchforkTomlDaemon {
             cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
             cron_immediate: self.cron.as_ref().map(|c| c.immediate),
             retry: self.retry,
+            ready_retry: self.ready_retry,
             retry_count: 0,
+            persist_retry_count: None,
             ready_delay: self.ready_delay,
             ready_output: self.ready_output.clone(),
             ready_http: self.ready_http.clone(),

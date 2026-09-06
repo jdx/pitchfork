@@ -368,8 +368,8 @@ run = 'bash "$fail_script" 0'
 retry = true
 EOF
 
-  # Infinite retry causes the start client to block forever, so run it in the
-  # background and observe several retry attempts.
+  # Infinite background retry keeps the supervisor restarting the daemon
+  # forever; run the start client in the background and observe attempts.
   pitchfork start retry_infinite &
   local start_pid=$!
   sleep 10
@@ -394,7 +394,7 @@ EOF
 [daemons.retry_ready_output]
 run = 'bash "$success_script"'
 ready_output = "READY"
-retry = 2
+ready_retry = 2
 
 [daemons.retry_ready_output.env]
 TEST_SUCCESS_ON_THIRD_TIMESTAMP = "$BATS_TEST_NAME"

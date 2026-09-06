@@ -35,9 +35,7 @@ use crate::{Result, env};
 use duct::cmd;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
-#[cfg(unix)]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -79,6 +77,12 @@ pub struct Supervisor {
     /// stop task is still in flight.
     pub(crate) in_flight_autostops:
         Mutex<HashMap<DaemonId, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    /// Refcount of daemon IDs whose `Supervisor::run` is in flight (including
+    /// inline ready-retry backoff sleeps). The background retry tick skips
+    /// these so it never starts a duplicate next to an active start/retry
+    /// loop; the count lets a second concurrent `run` for the same id exit
+    /// early without clearing the first run's in-flight protection.
+    pub(crate) in_flight_runs: Mutex<HashMap<DaemonId, usize>>,
     /// Handle for graceful IPC server shutdown
     pub(crate) ipc_shutdown: Mutex<Option<IpcServerHandle>>,
     /// Tracks in-flight hook tasks so shutdown can wait for them to complete
@@ -306,6 +310,7 @@ impl Supervisor {
             pending_notifications: Mutex::new(vec![]),
             pending_autostops: Mutex::new(HashMap::new()),
             in_flight_autostops: Mutex::new(HashMap::new()),
+            in_flight_runs: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
             hook_tasks: Mutex::new(Vec::new()),
             active_monitors: AtomicU32::new(0),

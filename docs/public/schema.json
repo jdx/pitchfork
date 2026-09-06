@@ -559,8 +559,13 @@
             }
           ]
         },
+        "ready_retry": {
+          "description": "Number of times to retry starting the daemon when it fails before becoming ready.\nOnly applies to blocking starts (e.g. `pitchfork start` waiting for readiness);\nbackground restarts are governed by `retry`.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
+          "$ref": "#/$defs/Retry",
+          "default": 0
+        },
         "retry": {
-          "description": "Number of times to retry if the daemon fails.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
+          "description": "Number of times the supervisor restarts the daemon in the background after it exits with an error. Startup failures before the daemon becomes ready are governed by `ready_retry`.\nCan be a number (e.g., `3`) or `true` for infinite retries.",
           "$ref": "#/$defs/Retry",
           "default": 0
         },

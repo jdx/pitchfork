@@ -261,8 +261,31 @@ fn delay_readiness_succeeded(
 const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 
 impl Supervisor {
-    /// Run a daemon, handling retries if configured
+    /// Run a daemon, keeping the id in `in_flight_runs` for the whole start
+    /// (including inline ready-retry backoffs) so the background retry tick
+    /// never races it with a duplicate start. The map refcounts concurrent
+    /// `run`s for the same id: each adds one and removes its own, so one
+    /// returning early does not clear another's protection.
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
+        let id = opts.id.clone();
+        *self
+            .in_flight_runs
+            .lock()
+            .await
+            .entry(id.clone())
+            .or_insert(0) += 1;
+        let result = self.run_inner(opts).await;
+        let mut in_flight = self.in_flight_runs.lock().await;
+        if let Some(count) = in_flight.get_mut(&id) {
+            *count -= 1;
+            if *count == 0 {
+                in_flight.remove(&id);
+            }
+        }
+        result
+    }
+
+    async fn run_inner(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
 
@@ -303,13 +326,20 @@ impl Supervisor {
             }
         }
 
-        // If wait_ready is true and retry is configured, implement retry loop
-        if opts.wait_ready && opts.retry.count() > 0 {
-            // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
-            let max_attempts = opts.retry.count().saturating_add(1);
+        // If wait_ready is true and the startup retry budget is configured,
+        // implement retry loop. `ready_retry` only applies here; the
+        // background `retry` budget is consumed by the periodic tick.
+        if opts.wait_ready && opts.ready_retry.count() > 0 {
+            // Use saturating_add to avoid overflow when ready_retry = u32::MAX (infinite)
+            let max_attempts = opts.ready_retry.count().saturating_add(1);
             for attempt in 0..max_attempts {
                 let mut retry_opts = opts.clone();
                 retry_opts.retry_count = attempt;
+                // Only the first attempt writes the persisted counter (an
+                // explicit start resets it); later attempts keep the previous
+                // value so `retry_count` only tracks tick-driven background
+                // restarts.
+                retry_opts.persist_retry_count = Some(attempt == 0);
                 retry_opts.cmd = cmd.clone();
 
                 // The first attempt starts under the guard held since the
@@ -329,7 +359,12 @@ impl Supervisor {
                         exit_code,
                         resolved_ports,
                     } => {
-                        if attempt < opts.retry.count() {
+                        // Snapshot this attempt's pid before the hook/sleep:
+                        // the monitor flips the record to Errored only after
+                        // draining output (up to ~5s), so during the backoff
+                        // the record may still show the just-failed pid.
+                        let failed_pid = self.get_daemon(id).await.and_then(|d| d.pid);
+                        if attempt < opts.ready_retry.count() {
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
                                 "daemon {id} failed (attempt {}/{}), retrying in {}s",
@@ -348,6 +383,23 @@ impl Supervisor {
                             )
                             .await;
                             time::sleep(Duration::from_secs(backoff_secs)).await;
+                            // Another owner (e.g. the background retry tick) may
+                            // have started the daemon while this loop slept; do
+                            // not spawn a duplicate. The monitor clears the
+                            // record only after draining output, so a record
+                            // still showing this attempt's pid is stale, not a
+                            // successor.
+                            if let Some(d) = self.get_daemon(id).await
+                                && !d.status.is_stopping()
+                                && !d.status.is_stopped()
+                                && d.pid.is_some()
+                                && d.pid != failed_pid
+                            {
+                                info!(
+                                    "daemon {id} already running (started outside this retry loop); ending inline retries"
+                                );
+                                return Ok(IpcResponse::DaemonReady { daemon: d });
+                            }
                             continue;
                         } else {
                             info!("daemon {id} failed after {max_attempts} attempts");
@@ -799,6 +851,15 @@ impl Supervisor {
         let daemon_dir = opts.dir.0.clone();
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
+        let hook_ready_retry = opts.ready_retry;
+        // Whether this daemon has any readiness gate configured. A run with
+        // no readiness gate has no startup phase: every exit is post-start
+        // and consumes the background `retry` budget.
+        let hook_has_readiness_gate = opts.ready_output.is_some()
+            || opts.ready_http.is_some()
+            || opts.ready_port.is_some()
+            || opts.ready_cmd.is_some()
+            || opts.ready_delay.is_some();
         let hook_daemon_env = opts.env.clone();
         // Ports of THIS attempt, snapshotted before the monitor starts: a retry
         // or restart may replace state.resolved_port before a hook task runs.
@@ -1784,8 +1845,20 @@ impl Supervisor {
             let hooks_to_fire: Vec<HookType> = match exit_reason {
                 "stop" => vec![HookType::OnStop, HookType::OnExit],
                 "exit" => vec![HookType::OnExit],
-                // "fail": fire on_fail + on_exit only when retries are exhausted
-                _ if hook_retry_count >= hook_retry.count() => {
+                // "fail": fire on_fail + on_exit once the applicable retry
+                // budget is exhausted. A daemon that became ready (flagged by
+                // `ready_notified`) is governed by the background `retry`
+                // budget; one that died before readiness falls under the
+                // startup `ready_retry` budget. A run with no readiness gate
+                // has no startup phase, so every exit is post-start and
+                // consumes the `retry` budget regardless.
+                _ if hook_retry_count
+                    >= if ready_notified || !hook_has_readiness_gate {
+                        hook_retry.count()
+                    } else {
+                        hook_ready_retry.count()
+                    } =>
+                {
                     vec![HookType::OnFail, HookType::OnExit]
                 }
                 _ => vec![],
@@ -1819,12 +1892,14 @@ impl Supervisor {
                     // write first. The in-process path got this ordering by
                     // flushing synchronously before signalling.
                     //
-                    // Only on the attempt that gives up: `run` retries inline,
-                    // and waiting after every attempt would both delay the
-                    // backoff and widen the window in which the daemon looks
-                    // errored and idle — long enough for the background retry
-                    // checker to start an attempt of its own alongside it.
-                    let last_attempt = opts.retry_count >= opts.retry.count();
+                    // Only on the attempt that gives up: `run` retries inline
+                    // within the startup budget, and waiting after every
+                    // attempt would both delay the backoff and widen the
+                    // window in which the daemon looks errored and idle. The
+                    // background retry checker is excluded from that window
+                    // via `in_flight_runs`, but the wait would still delay the
+                    // inline backoff.
+                    let last_attempt = opts.retry_count >= opts.ready_retry.count();
                     if using_sink && last_attempt {
                         super::log_sink::wait_for_output(id, spawn_time, SINK_OUTPUT_TIMEOUT).await;
                     }
