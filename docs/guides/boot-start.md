@@ -37,7 +37,7 @@ The registration mode is determined automatically based on whether the command r
 
 | | User-level | System-level (`sudo`) |
 |---|---|---|
-| macOS | `~/Library/LaunchDaemons/pitchfork.plist` | `/Library/LaunchDaemons/pitchfork.plist` |
+| macOS | `~/Library/LaunchAgents/pitchfork.plist` | `/Library/LaunchDaemons/pitchfork.plist` |
 | Linux | `~/.config/systemd/user/pitchfork.service` | `/etc/systemd/system/pitchfork.service` |
 
 ## Running the Supervisor as Root

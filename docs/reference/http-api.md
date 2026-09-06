@@ -12,6 +12,11 @@ The [API JSON Schema](/api-schema.json) describes the response types.
 
 The following REST endpoints are available on the web UI port (or the dedicated API port if configured). All endpoints accept and return JSON unless otherwise noted.
 
+For routes containing `{id}`, URL-encode the entire qualified daemon ID as one
+path segment: `myproject/api` becomes `myproject%2Fapi`. Keep the unencoded
+`namespace/name` form in JSON values. In JavaScript, use `encodeURIComponent(id)`
+when constructing these URLs.
+
 ## GET /api/stats
 
 Return system-level statistics.
@@ -69,7 +74,7 @@ curl http://127.0.0.1:3120/api/daemons
 Get a single daemon by qualified ID.
 
 ```bash
-curl http://127.0.0.1:3120/api/daemons/myproject/api
+curl http://127.0.0.1:3120/api/daemons/myproject%2Fapi
 ```
 
 Returns a single `ApiDaemonEntry` object (same shape as `/api/daemons` items).
@@ -79,13 +84,13 @@ Returns a single `ApiDaemonEntry` object (same shape as `/api/daemons` items).
 Start a daemon.
 
 ```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/start
+curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/start
 ```
 
 **Response:**
 
 ```json
-{ "ok": true, "error": null }
+{ "ok": true }
 ```
 
 ## POST /api/daemons/{id}/stop
@@ -93,7 +98,7 @@ curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/start
 Stop a running daemon.
 
 ```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/stop
+curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/stop
 ```
 
 ## POST /api/daemons/{id}/restart
@@ -101,7 +106,7 @@ curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/stop
 Restart a daemon.
 
 ```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/restart
+curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/restart
 ```
 
 ## POST /api/daemons/{id}/enable
@@ -109,7 +114,7 @@ curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/restart
 Enable a daemon so it can be started.
 
 ```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/enable
+curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/enable
 ```
 
 ## POST /api/daemons/{id}/disable
@@ -117,26 +122,29 @@ curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/enable
 Disable a daemon.
 
 ```bash
-curl -X POST http://127.0.0.1:3120/api/daemons/myproject/api/disable
+curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/disable
 ```
 
 ## GET /api/logs/{id}/tail
 
-Stream logs for a daemon via **Server-Sent Events**. Each line is a server-sent event:
+Stream logs for a daemon as **newline-delimited JSON**
+(`Content-Type: application/x-ndjson`). Each line is a JSON object. Use `curl -N`
+to display entries as they arrive, then press `Ctrl+C` to stop following.
 
 ```bash
-curl http://127.0.0.1:3120/api/logs/myproject/api/tail
+curl -N http://127.0.0.1:3120/api/logs/myproject%2Fapi/tail
 ```
 
-**Response format (SSE):**
+**Response format (NDJSON):**
 
-```text
-data: 2026-05-31 10:00:00 Hello from api daemon
-
-data: 2026-05-31 10:00:02 Another log line
-
-...
+```jsonl
+{"id":1,"timestamp":"2026-05-31 10:00:00","daemon_id":"myproject/api","message":"Hello from api daemon"}
+{"id":2,"timestamp":"2026-05-31 10:00:02","daemon_id":"myproject/api","message":"Another log line"}
 ```
+
+The stream can also emit a control object such as `{"_clear":true,"_gen":1}`
+when the daemon's logs are cleared. Consumers should discard their buffered
+history when they receive it.
 
 ## GET /api/namespaces
 
@@ -177,7 +185,7 @@ curl http://127.0.0.1:3120/api/proxies
 Get the process tree for a daemon, including all child processes.
 
 ```bash
-curl http://127.0.0.1:3120/api/processes/myproject/api/tree
+curl http://127.0.0.1:3120/api/processes/myproject%2Fapi/tree
 ```
 
 **Response:**
@@ -200,10 +208,10 @@ curl http://127.0.0.1:3120/api/processes/myproject/api/tree
 ]
 ```
 
-
-
 ## Request failures
 
-Inspect the HTTP status and response body when a request fails. Use qualified IDs
-(`namespace/name`) in daemon URLs. A missing daemon, invalid configuration, or
-failed startup should be investigated through its status and logs.
+Inspect the HTTP status and response body when a request fails. Use URL-encoded
+qualified IDs (`namespace%2Fname`) in daemon URLs. Control requests can return
+HTTP 200 with `"ok": false` and an `"error"` message, so check the response body
+as well. Investigate missing daemons, invalid configuration, or failed startup
+through the daemon's status and logs.
