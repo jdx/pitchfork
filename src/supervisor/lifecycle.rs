@@ -383,6 +383,14 @@ impl Supervisor {
     ) -> Result<IpcResponse> {
         let id = &opts.id;
         let original_cmd = opts.cmd.clone(); // Save original command for persistence
+        let linked_worktree =
+            match crate::linked_worktree::LinkedWorktree::discover(&opts.dir.0).await {
+                Ok(worktree) => worktree,
+                Err(error) => {
+                    warn!("could not identify worktree for {id}: {error}");
+                    None
+                }
+            };
 
         // Create channel for readiness notification if wait_ready is true
         let (ready_tx, ready_rx) = if opts.wait_ready {
@@ -762,6 +770,7 @@ impl Supervisor {
                 UpsertDaemonOpts::from_run_options(&opts, DaemonStatus::Running)
                     .set(|o| {
                         o.pid = Some(pid);
+                        o.linked_worktree = Some(linked_worktree);
                         o.cmd = Some(original_cmd);
                         o.ready_port = effective_ready_port.map(|p| ReadyPort {
                             port: Some(p),
@@ -1854,7 +1863,7 @@ impl Supervisor {
     }
 
     /// Stop implementation. Caller must hold the daemon's stop lock.
-    async fn stop_locked(&self, id: &DaemonId) -> Result<IpcResponse> {
+    pub(super) async fn stop_locked(&self, id: &DaemonId) -> Result<IpcResponse> {
         let pitchfork_id = DaemonId::pitchfork();
         if *id == pitchfork_id {
             return Ok(IpcResponse::Error(

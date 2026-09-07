@@ -845,6 +845,7 @@ impl Supervisor {
         // errored here is retried on this same tick.
         self.reconcile_unmonitored_daemons().await;
 
+        self.stop_removed_worktrees().await;
         self.check_retry().await?;
         self.process_pending_autostops().await?;
 

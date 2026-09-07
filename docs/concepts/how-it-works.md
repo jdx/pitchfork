@@ -52,6 +52,14 @@ The [shell hook](/guides/shell-hook) tracks project sessions. With
 stopping when the last session leaves. Without that configuration, moving
 between directories does not stop a manually started service.
 
+Daemons started inside a linked Git worktree are also stopped when that worktree
+is removed, independently of session activity and `auto`. The supervisor checks
+on its regular refresh interval and uses the normal graceful stop behavior.
+It remembers the worktree's Git metadata, so leftover build-cache directories do
+not keep the daemon alive. This tracking is recorded when a daemon starts;
+daemons already running when you upgrade need to be restarted to enable it.
+Main checkouts, submodules, and directories outside Git are unaffected.
+
 ## Choose what to automate
 
 Start with the commands you already run locally, then add only the behavior you

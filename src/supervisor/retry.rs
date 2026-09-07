@@ -5,6 +5,7 @@
 use super::Supervisor;
 use super::hooks::{HookType, fire_hook};
 use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 
@@ -45,6 +46,29 @@ impl Supervisor {
                     _ => continue, // Daemon was removed or no longer needs retry
                 }
             };
+            // A daemon may exit before the worktree-removal sweep observes
+            // it. Do not resurrect it from leftover cache directories.
+            if let Some(worktree) = daemon.linked_worktree.as_ref()
+                && worktree.is_removed().await.unwrap_or(false)
+            {
+                let lock = self.stop_lock(&id).await;
+                let _guard = lock.lock().await;
+                if let Some(current) = self.get_daemon(&id).await
+                    && current.status.is_errored()
+                    && current.pid.is_none()
+                    && current.linked_worktree == daemon.linked_worktree
+                    && worktree.is_removed().await.unwrap_or(false)
+                {
+                    info!("stopping {id}: its Git worktree was removed");
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| o.status = DaemonStatus::Stopped)
+                            .build(),
+                    )
+                    .await?;
+                }
+                continue;
+            }
             info!(
                 "retrying daemon {} ({}/{} attempts)",
                 id,

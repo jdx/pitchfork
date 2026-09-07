@@ -43,6 +43,59 @@ fn canonicalize_pair(a: &Path, b: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 impl Supervisor {
+    pub(crate) async fn stop_removed_worktrees(&self) {
+        for daemon in self.active_daemons().await {
+            if !daemon.status.is_running() {
+                continue;
+            }
+            let Some(worktree) = daemon.linked_worktree.as_ref() else {
+                continue;
+            };
+            match worktree.is_removed().await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    warn!("could not check worktree for {}: {error}", daemon.id);
+                    continue;
+                }
+            }
+            // Serialize with starts, then recheck the snapshot so deletion of
+            // an old checkout cannot stop a replacement process under this ID.
+            let lock = self.stop_lock(&daemon.id).await;
+            let Ok(guard) = lock.try_lock_owned() else {
+                continue;
+            };
+            // Stops can take the full stop budget. Keep the interval watcher
+            // responsive and hold the lock to avoid scheduling duplicate stops.
+            tokio::spawn(async move {
+                let _guard = guard;
+                let Some(current) = SUPERVISOR.get_daemon(&daemon.id).await else {
+                    return;
+                };
+                if !current.status.is_running()
+                    || current.pid != daemon.pid
+                    || current.start_time != daemon.start_time
+                    || current.linked_worktree != daemon.linked_worktree
+                {
+                    return;
+                }
+                let Some(worktree) = current.linked_worktree.as_ref() else {
+                    return;
+                };
+                if !worktree.is_removed().await.unwrap_or(false) {
+                    return;
+                }
+                info!("stopping {}: its Git worktree was removed", daemon.id);
+                if let Err(error) = SUPERVISOR.stop_locked(&daemon.id).await {
+                    error!(
+                        "failed to stop {} after worktree removal: {error}",
+                        daemon.id
+                    );
+                }
+            });
+        }
+    }
+
     /// Handle shell leaving a directory - schedule autostops for daemons
     pub(crate) async fn leave_dir(&self, dir: &Path) -> Result<()> {
         debug!("left dir {}", dir.display());

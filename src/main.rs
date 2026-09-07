@@ -12,6 +12,7 @@ mod deps;
 mod env;
 mod error;
 mod ipc;
+mod linked_worktree;
 mod log_jq;
 mod log_parse;
 mod log_store;

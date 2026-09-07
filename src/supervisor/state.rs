@@ -63,6 +63,7 @@ pub(crate) struct UpsertDaemonOpts {
     pub status: DaemonStatus,
     pub shell_pid: Option<u32>,
     pub dir: Option<PathBuf>,
+    pub linked_worktree: Option<Option<crate::linked_worktree::LinkedWorktree>>,
     pub cmd: Option<Vec<String>>,
     pub run: Option<String>,
     pub autostop: bool,
@@ -242,6 +243,9 @@ impl Supervisor {
             shell_pid: opts.shell_pid,
             autostop: opts.autostop || existing.is_some_and(|d| d.autostop),
             dir: opts.dir.or(existing.and_then(|d| d.dir.clone())),
+            linked_worktree: opts
+                .linked_worktree
+                .unwrap_or_else(|| existing.and_then(|d| d.linked_worktree.clone())),
             cmd: opts.cmd.or(existing.and_then(|d| d.cmd.clone())),
             run: opts.run.or(existing.and_then(|d| d.run.clone())),
             cron_schedule: opts

@@ -12,6 +12,7 @@ pub mod deps;
 pub mod env;
 pub mod error;
 pub mod ipc;
+pub mod linked_worktree;
 pub mod log_jq;
 pub mod log_parse;
 pub mod log_store;

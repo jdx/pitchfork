@@ -56,6 +56,8 @@ pub struct Daemon {
     pub status: DaemonStatus,
     pub dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub linked_worktree: Option<crate::linked_worktree::LinkedWorktree>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cmd: Option<Vec<String>>,
     /// Original shell command string, persisted for retry/watch restarts.
     #[serde(skip_serializing_if = "Option::is_none", default)]
