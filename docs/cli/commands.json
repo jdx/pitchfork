@@ -406,7 +406,7 @@
         "full_cmd": [
           "daemons"
         ],
-        "usage": "daemons [--json] <SUBCOMMAND>",
+        "usage": "daemons [--json] [SUBCOMMAND]",
         "subcommands": {
           "add": {
             "full_cmd": [
@@ -3254,7 +3254,7 @@
         "full_cmd": [
           "settings"
         ],
-        "usage": "settings [--json] <SUBCOMMAND>",
+        "usage": "settings [--json] [SUBCOMMAND]",
         "subcommands": {
           "list": {
             "full_cmd": [
