@@ -42,9 +42,13 @@ _common_setup() {
   # Ensure pitchfork binary is on PATH
   export PATH="$PROJECT_ROOT/target/debug:$PATH"
 
-  # Use sh as the daemon shell on all platforms. On Windows, the default
-  # (cmd) cannot parse Unix-style commands used in test scripts. Git Bash's
+  # Use sh as the daemon shell on all platforms. On Windows the default
+  # (general.windows_shell = "cmd /C") cannot parse the Unix-style commands
+  # used in test scripts; an explicit general.shell overrides it. Git Bash's
   # sh.exe is available in the CI environment.
+  #
+  # A test that wants the Windows default instead has to unset this; see
+  # "a daemon starts under the platform default shell" in settings.bats.
   export PITCHFORK_SHELL="sh -c"
 
   # Fast watcher/poll intervals for responsive tests (matches Rust e2e defaults)
@@ -110,6 +114,18 @@ kill_pid() {
     taskkill //F //PID "$pid" 2>/dev/null || true
   else
     kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
+# A long-running daemon command that runs under a POSIX shell *and* under
+# cmd.exe, for the one test that deliberately drops PITCHFORK_SHELL and so
+# runs under cmd on Windows. `sleep` does not exist in cmd; `ping -n` is not a
+# delay on Linux.
+default_shell_sleep_command() {
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    echo "ping -n 300 127.0.0.1"
+  else
+    echo "sleep 300"
   fi
 }
 

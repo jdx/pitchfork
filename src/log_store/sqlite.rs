@@ -271,9 +271,19 @@ impl SqliteLogStore {
             return Ok(());
         }
 
+        // The archive hook is a shell command like any other daemon script, so
+        // it runs under the same resolved shell rather than a hardcoded `sh`,
+        // which does not exist on a stock Windows machine. Resolve here rather
+        // than when the hook is built: a bad setting must skip the batch, not
+        // drop the hook, or retention would prune entries that were never
+        // archived.
+        let shell =
+            crate::settings::resolve_shell().map_err(|e| miette::miette!("archive hook: {e}"))?;
+        let (shell_program, shell_args) = shell.split_first().unwrap();
+
         for chunk in entries.chunks(archive_hook.batch_size.max(1)) {
-            let mut child = Command::new("sh")
-                .arg("-c")
+            let mut child = Command::new(shell_program)
+                .args(shell_args)
                 .arg(&archive_hook.command)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())

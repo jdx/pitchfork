@@ -36,9 +36,11 @@ Download the archive for your operating system and CPU architecture from
 place `pitchfork` (or `pitchfork.exe`) in a directory on `PATH`.
 
 Pitchfork has builds for macOS, Linux, and Windows. Most examples in these docs
-use a POSIX shell. On Windows, use a compatible shell such as Git Bash; the
-default daemon shell is `sh -c`. Unix-specific features include user switching,
-signals, and the macOS/Linux boot integrations.
+use a POSIX shell. The default daemon shell is `sh -c` on Unix and `cmd /C` on
+Windows; to run the POSIX examples on Windows, put Git for Windows' `sh.exe` on
+`PATH` and set [`general.shell`](/cli/configuration#general-shell) to `sh -c`.
+Unix-specific features include user switching, signals, and the macOS/Linux boot
+integrations.
 
 ## Verify the installation
 

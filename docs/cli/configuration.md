@@ -161,13 +161,16 @@ When a daemon has no other readiness check (output, HTTP, port, command), pitchf
 
 Shell command used to execute daemon run scripts
 
-Controls the shell used to execute daemon `run` commands.
+Controls the shell used to execute daemon `run` commands, as well as `ready_cmd` / `health_cmd` probes, lifecycle hooks and the log archive hook.
 
 The value is split with `shell_words::split` into a program and arguments, then the daemon's `run` string is appended verbatim as the final argument (passed to the shell's command flag, e.g. `sh -c "<run>"`).
 
 This means the `run` string is interpreted directly by the shell, so variable expansion (`$VAR`), globs (`*.txt`), pipes (`|`), and command chaining (`&&`) all work as expected.
 
-**Common configurations:** - `"sh -c"` — Default, POSIX shell - `"sh -o errexit -o pipefail -c"` — Exit on error, fail on pipe failure - `"bash -c"` — Use bash instead of sh
+**Common configurations:** - `"sh -c"` — Default, POSIX shell - `"sh -o errexit -c"` — Exit on the first failing command - `"bash -c"` — Use bash instead of sh - `"bash -o errexit -o pipefail -c"` — `pipefail` is not a POSIX option,
+  so name a shell that has it rather than relying on `sh`
+
+On Windows this setting applies only when it is set explicitly (in a config file or via `PITCHFORK_SHELL`); otherwise `general.windows_shell` is used. Setting it is the way to use one shell on every platform, e.g. `"sh -c"` with Git for Windows' `sh.exe` on `PATH`.
 
 When `mise = true` is enabled for a daemon, the shell wraps inside `mise x --`, e.g. `mise x -- sh -c "<run>"`.
 
@@ -182,6 +185,22 @@ Show timestamps in startup log output
 When enabled, pitchfork prefixes each startup log line and result line with a timestamp (e.g. `19:03:15`), making it easier to see how long each daemon took to start.
 
 When disabled (default), a dim bullet (`•`) is used instead to keep the output compact and aligned with the spinner / status icons.
+
+## `general.windows_shell`
+
+- **Type:** `string`
+- **Default:** `cmd /C`
+- **Set with:** `PITCHFORK_WINDOWS_SHELL`
+
+Shell command used to execute daemon run scripts on Windows
+
+Used in place of `general.shell` on Windows, unless `general.shell` is set explicitly. Split and used the same way: the program and arguments come from this value, and the `run` string is appended as the final argument, e.g. `cmd /C "<run>"`.
+
+The default is `cmd /C`, which is always available, so `run` strings are read by cmd.exe: use `%VAR%` rather than `$VAR`, and double quotes rather than single quotes.
+
+The split follows POSIX rules, so a path with spaces or backslashes has to be quoted: `"'C:\Program Files\Git\bin\sh.exe' -c"`.
+
+**Common configurations:** - `"cmd /C"` — Default - `"powershell -Command"` / `"pwsh -Command"` — PowerShell - `"sh -c"` — Git for Windows' sh, when `Git\bin` is on `PATH`
 
 ## `general.worktree`
 

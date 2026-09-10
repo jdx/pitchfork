@@ -1006,6 +1006,13 @@
             "null"
           ]
         },
+        "windows_shell": {
+          "description": "Shell command used to execute daemon run scripts on Windows",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "worktree": {
           "description": "Enable git worktree / jj workspace auto-discovery",
           "type": [

@@ -7,7 +7,7 @@
 use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
-use crate::settings::settings;
+use crate::settings::resolve_shell;
 use crate::shell::HideConsoleWindow;
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
@@ -57,28 +57,18 @@ async fn load_hook_config(daemon_dir: PathBuf) -> Result<PitchforkToml> {
         .into_diagnostic()?
 }
 
-/// Create a tokio Command for a hook using the configured `general.shell`
-/// setting (same shell used for daemon `run` commands). Returns an error
-/// if the shell setting is empty or unparseable, matching daemon startup
-/// validation — callers should log and skip the hook.
+/// Create a tokio Command for a hook using the resolved shell for this platform
+/// (the same shell used for daemon `run` commands). Returns an error if the
+/// configured shell cannot be parsed, matching daemon startup validation —
+/// callers should log and skip the hook.
 fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
-    let shell_setting = settings().general.shell.clone();
-    match shell_words::split(&shell_setting) {
-        Ok(parts) if !parts.is_empty() => {
-            let (program, args) = parts.split_first().unwrap();
-            let mut command = tokio::process::Command::new(program);
-            command.args(args);
-            command.arg(cmd);
-            command.hide_console_window();
-            Ok(command)
-        }
-        Ok(_) => Err(miette::miette!(
-            "general.shell setting is empty, cannot run hook"
-        )),
-        Err(e) => Err(miette::miette!(
-            "failed to parse general.shell setting {shell_setting:?}: {e}"
-        )),
-    }
+    let parts = resolve_shell().map_err(|e| miette::miette!(e))?;
+    let (program, args) = parts.split_first().unwrap();
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    command.arg(cmd);
+    command.hide_console_window();
+    Ok(command)
 }
 
 /// Inject port env vars (`PITCHFORK_PORT` / `PITCHFORK_PORT0..N`) for the
