@@ -1,13 +1,13 @@
 use crate::Result;
 #[cfg(unix)]
 use crate::settings::settings;
+#[cfg(windows)]
+use crate::shell::HideConsoleWindow;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::ProcessesToUpdate;
@@ -527,7 +527,7 @@ impl Procs {
             let output = std::process::Command::new("taskkill")
                 .args(["/F", "/T", "/PID"])
                 .arg(pid.to_string())
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .hide_console_window()
                 .output();
             let taskkill_succeeded = match output {
                 Ok(o) if o.status.success() => {

@@ -31,6 +31,7 @@ use crate::Result;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::log_store::LogStore;
+use crate::shell::HideConsoleWindow;
 use crate::supervisor::SUPERVISOR;
 use miette::IntoDiagnostic;
 use std::io::PipeReader;
@@ -472,6 +473,7 @@ impl SinkPipe {
         cmd.stdin(std::process::Stdio::from(reader))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .hide_console_window()
             .spawn()
             .into_diagnostic()
     }

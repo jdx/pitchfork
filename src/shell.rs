@@ -96,6 +96,103 @@ impl Shell {
     }
 }
 
+/// Prevents a spawned command from creating a console window on Windows.
+///
+/// The supervisor is created with `DETACHED_PROCESS | CREATE_NO_WINDOW`, so it
+/// has no console of its own. On Windows the loader gives every
+/// console-subsystem child of a console-less parent a brand new *visible*
+/// console. Redirecting the child's stdio to pipes or NUL does not suppress
+/// that, because the allocation is decided from the PE subsystem and the
+/// creation flags rather than from the handles, so anything spawned from
+/// inside the supervisor has to opt out explicitly.
+///
+/// Opting out does not leave the child without a console: `CREATE_NO_WINDOW`
+/// gives it one of its own that simply has no window, so console APIs keep
+/// working. Measured on Windows 11 — a child spawned with the flag reports
+/// `GetConsoleCP() = 932` and `GetConsoleProcessList() = 1`, both of which fail
+/// for a process with no console. What changes is only that the console is not
+/// drawn, and that `GetConsoleWindow` returns null for it.
+///
+/// Implemented for both `std::process::Command` and `tokio::process::Command`,
+/// and returns `&mut Self` so it drops into the existing fluent chains. The
+/// non-Windows impls are no-ops, which keeps the call sites free of `cfg`.
+///
+/// The flag is only applied when this process has no console, because that is
+/// the only case where a child would get one of its own. See
+/// `child_would_get_its_own_console`.
+///
+/// Note: `creation_flags` *replaces* a command's creation flags rather than
+/// OR-ing into them. Call this once per command, and after any other
+/// `creation_flags` call, or those flags are silently dropped.
+pub(crate) trait HideConsoleWindow {
+    fn hide_console_window(&mut self) -> &mut Self;
+}
+
+/// Whether a console-subsystem child of this process would be given a console
+/// of its own rather than inheriting one.
+///
+/// A child inherits the parent's console whenever the parent has one, and no
+/// new window appears, so `CREATE_NO_WINDOW` is unnecessary there. It would
+/// also be a behaviour change: the child would be put on a separate console
+/// instead of the shared one, so a console control event sent to the parent's
+/// console would no longer reach it. Detached processes such as the background
+/// supervisor have no console, and only there does a child get a new — and
+/// visible — one.
+///
+/// `GetConsoleWindow` reports the absence of a console *window*, which is not
+/// quite the same as the absence of a console: it also returns null for a
+/// console that has no window, such as a ConPTY session or a process started
+/// with `CREATE_NO_WINDOW` itself. Those cases are counted as "no console"
+/// here, and that costs nothing — the child is then given a console of its own
+/// instead of sharing a console nobody can see, which is what every one of
+/// these spawns did unconditionally before this check existed. What the check
+/// is for is the case it does detect precisely: a supervisor running in the
+/// foreground on a real console, whose children should keep sharing it.
+#[cfg(windows)]
+fn child_would_get_its_own_console() -> bool {
+    let console = unsafe { windows_sys::Win32::System::Console::GetConsoleWindow() };
+    console.is_null()
+}
+
+#[cfg(windows)]
+impl HideConsoleWindow for std::process::Command {
+    fn hide_console_window(&mut self) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        if child_would_get_its_own_console() {
+            self.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+        } else {
+            self
+        }
+    }
+}
+
+#[cfg(windows)]
+impl HideConsoleWindow for tokio::process::Command {
+    fn hide_console_window(&mut self) -> &mut Self {
+        // tokio exposes `creation_flags` as an inherent method on Windows;
+        // `CommandExt` is not implemented for this type.
+        if child_would_get_its_own_console() {
+            self.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+        } else {
+            self
+        }
+    }
+}
+
+#[cfg(not(windows))]
+impl HideConsoleWindow for std::process::Command {
+    fn hide_console_window(&mut self) -> &mut Self {
+        self
+    }
+}
+
+#[cfg(not(windows))]
+impl HideConsoleWindow for tokio::process::Command {
+    fn hide_console_window(&mut self) -> &mut Self {
+        self
+    }
+}
+
 impl std::fmt::Display for Shell {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -177,5 +274,33 @@ mod tests {
         assert_eq!(default, Shell::Sh);
         #[cfg(windows)]
         assert_eq!(default, Shell::Cmd);
+    }
+
+    /// Checks that `hide_console_window` is available for both command types,
+    /// chains inside a builder expression, and leaves spawning intact.
+    ///
+    /// This does not assert that no console window appears: the reliable
+    /// oracles for that are version-dependent Windows behaviour, so the
+    /// absence of a window is verified manually instead.
+    #[test]
+    fn test_hide_console_window() {
+        let program = if cfg!(windows) { "cmd" } else { "echo" };
+        let args: Vec<&str> = if cfg!(windows) {
+            vec!["/C", "echo hi"]
+        } else {
+            vec!["hi"]
+        };
+
+        let output = std::process::Command::new(program)
+            .args(&args)
+            .hide_console_window()
+            .output()
+            .expect("spawning the child should succeed");
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hi");
+
+        // Building a tokio command needs no runtime, so this pins the second
+        // impl without making the test async.
+        let mut async_command = tokio::process::Command::new(program);
+        async_command.args(&args).hide_console_window();
     }
 }

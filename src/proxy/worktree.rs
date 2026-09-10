@@ -4,6 +4,7 @@
 //! Each entry carries the path, branch/workspace name, and a sanitized
 //! name suitable for use as a URL subdomain prefix.
 
+use crate::shell::HideConsoleWindow;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -33,6 +34,7 @@ fn discover_jj_workspaces(project_dir: &Path) -> Vec<WorktreeEntry> {
     let output = match Command::new("jj")
         .args(["--ignore-working-copy", "workspace", "list"])
         .current_dir(project_dir)
+        .hide_console_window()
         .output()
     {
         Ok(o) if o.status.success() => o.stdout,
@@ -161,6 +163,7 @@ fn get_jj_workspace_root(project_dir: &Path, name: &str) -> Option<PathBuf> {
     let output = Command::new("jj")
         .args(["--ignore-working-copy", "workspace", "root", "--name", name])
         .current_dir(project_dir)
+        .hide_console_window()
         .output()
         .ok()?;
 
@@ -220,6 +223,7 @@ fn discover_git_worktrees(project_dir: &Path) -> Vec<WorktreeEntry> {
     let output = match Command::new("git")
         .args(["worktree", "list", "--porcelain"])
         .current_dir(project_dir)
+        .hide_console_window()
         .output()
     {
         Ok(o) if o.status.success() => o.stdout,
