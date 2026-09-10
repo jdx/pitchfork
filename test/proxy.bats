@@ -402,3 +402,53 @@ EOF
   rm -rf "$PITCHFORK_STATE_DIR"
   export PITCHFORK_STATE_DIR="$orig_state_dir"
 }
+
+# ============================================================================
+# Header handling tests
+# ============================================================================
+
+@test "proxy rejoins split cookie header fields before forwarding" {
+  local proj="$TEST_TEMP_DIR/split-cookie"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local echo_script daemon_port proxy_port
+  echo_script="$(to_shell_path "$(script_path cookie_echo_server.py)")"
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.cookie-echo]
+run = 'python3 -u $echo_script $daemon_port'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/"
+EOF
+
+  run pitchfork proxy add cookies --daemon cookie-echo
+  assert_success
+
+  # The supervisor owns the proxy listener, so it needs the settings in its own
+  # environment. The one common_setup started predates them. `supervisor start`
+  # returns once the socket accepts, and the supervisor binds the proxy before
+  # it opens the socket, so no sleep is needed.
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run pitchfork start cookie-echo
+  assert_success
+
+  # An HTTP/2 client is allowed to send each cookie as its own field, and
+  # browsers do. This sends the two fields over HTTP/1.1, which lands in the
+  # proxy's header map in the same shape; the HTTP/2 decoding itself is
+  # hyper's and is not exercised here.
+  run curl -s -H "Host: cookies.localhost" \
+    -H "Cookie: _session=abc123" \
+    -H "Cookie: theme=dark" \
+    "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "fields=1"
+  assert_output --partial "cookie=_session=abc123; theme=dark"
+}
