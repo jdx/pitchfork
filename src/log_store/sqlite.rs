@@ -264,6 +264,7 @@ impl SqliteLogStore {
         daemon_id: &DaemonId,
         reason: &str,
     ) -> Result<()> {
+        use crate::shell::HideConsoleWindow;
         use std::process::{Command, Stdio};
 
         if entries.is_empty() {
@@ -279,6 +280,7 @@ impl SqliteLogStore {
                 .stderr(Stdio::piped())
                 .env("PITCHFORK_DAEMON_ID", daemon_id.qualified())
                 .env("PITCHFORK_ARCHIVE_REASON", reason)
+                .hide_console_window()
                 .spawn()
                 .into_diagnostic()
                 .map_err(|e| miette::miette!("failed to spawn archive hook: {e}"))?;

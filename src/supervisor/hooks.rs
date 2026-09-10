@@ -8,6 +8,7 @@ use crate::Result;
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
+use crate::shell::HideConsoleWindow;
 use crate::supervisor::SUPERVISOR;
 use crate::{env, pitchfork_toml, template};
 use indexmap::IndexMap;
@@ -68,6 +69,7 @@ fn hook_command(cmd: &str) -> Result<tokio::process::Command> {
             let mut command = tokio::process::Command::new(program);
             command.args(args);
             command.arg(cmd);
+            command.hide_console_window();
             Ok(command)
         }
         Ok(_) => Err(miette::miette!(

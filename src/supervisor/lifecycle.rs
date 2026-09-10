@@ -14,7 +14,7 @@ use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
 use crate::procs::PROCS;
 use crate::settings::settings;
-use crate::shell::Shell;
+use crate::shell::{HideConsoleWindow, Shell};
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -159,7 +159,8 @@ pub(crate) fn spawn_cmd_probe(
         .current_dir(dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
+        .kill_on_drop(true)
+        .hide_console_window();
     apply_runtime_env(&mut command, id, retry_count, daemon_env, resolved_ports);
     let mut child = match command.spawn() {
         Ok(child) => child,
@@ -651,7 +652,7 @@ impl Supervisor {
                 .stderr(std::process::Stdio::piped());
         }
 
-        cmd.args(&args).current_dir(&opts.dir);
+        cmd.args(&args).current_dir(&opts.dir).hide_console_window();
 
         #[cfg(unix)]
         if pty_pair.is_none() {
