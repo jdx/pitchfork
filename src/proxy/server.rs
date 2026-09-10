@@ -13,9 +13,9 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use hyper::header::HOST;
+use hyper::header::{COOKIE, HOST};
 
 /// Response header used to identify a pitchfork proxy (for health checks and debugging).
 const PITCHFORK_HEADER: &str = "x-pitchfork";
@@ -1012,6 +1012,26 @@ fn get_request_host(req: &Request) -> Option<String> {
     })
 }
 
+/// Rejoin a `cookie` header that arrived split across several fields.
+///
+/// An HTTP/2 client may send each cookie as its own header field (RFC 9113
+/// §8.2.3). An HTTP/1.1 backend joins repeated fields with `", "`, which
+/// corrupts every cookie value, so they must be joined with `"; "` first.
+fn join_cookie_fields(headers: &mut HeaderMap) {
+    let fields: Vec<&[u8]> = headers
+        .get_all(COOKIE)
+        .iter()
+        .map(HeaderValue::as_bytes)
+        .collect();
+    if fields.len() < 2 {
+        return;
+    }
+
+    let joined = HeaderValue::from_bytes(&fields.join(b"; ".as_slice()))
+        .expect("valid header values joined with \"; \" form a valid header value");
+    headers.insert(COOKIE, joined);
+}
+
 /// Inject `X-Forwarded-*` headers into a proxied request.
 ///
 /// Because the proxy is a **first-hop** dev tool (not a mid-tier forwarder),
@@ -1219,6 +1239,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     for key in pseudo_headers {
         req.headers_mut().remove(&key);
     }
+
+    join_cookie_fields(req.headers_mut());
 
     // Downgrade the forwarded request to HTTP/1.1. TLS connections negotiate
     // HTTP/2 inbound via ALPN, but the upstream forward client speaks HTTP/1 to
@@ -1925,5 +1947,61 @@ mod tests {
             key_pem.contains("BEGIN") && key_pem.contains("PRIVATE KEY"),
             "should be PEM key"
         );
+    }
+
+    /// The raw `cookie` field values, in the order the map holds them.
+    fn cookie_fields(headers: &HeaderMap) -> Vec<&[u8]> {
+        headers
+            .get_all(COOKIE)
+            .iter()
+            .map(HeaderValue::as_bytes)
+            .collect()
+    }
+
+    /// Several fields become one, joined with `"; "`, and a comma inside a
+    /// value is left alone.
+    #[test]
+    fn test_join_cookie_fields_joins_with_semicolon_space() {
+        let mut headers = HeaderMap::new();
+        headers.append(COOKIE, HeaderValue::from_static("_session=abc123"));
+        headers.append(COOKIE, HeaderValue::from_static("consent=ads,stats"));
+        headers.append(COOKIE, HeaderValue::from_static("theme=dark"));
+
+        join_cookie_fields(&mut headers);
+
+        assert_eq!(
+            cookie_fields(&headers),
+            vec![&b"_session=abc123; consent=ads,stats; theme=dark"[..]]
+        );
+    }
+
+    /// A UTF-8 cookie value is joined like any other, since the join works on
+    /// bytes rather than on visible ASCII.
+    #[test]
+    fn test_join_cookie_fields_joins_bytes_outside_ascii() {
+        let mut headers = HeaderMap::new();
+        headers.append(COOKIE, HeaderValue::from_static("_session=abc123"));
+        headers.append(
+            COOKIE,
+            HeaderValue::from_bytes(b"name=Jos\xc3\xa9").unwrap(),
+        );
+
+        join_cookie_fields(&mut headers);
+
+        assert_eq!(
+            cookie_fields(&headers),
+            vec![&b"_session=abc123; name=Jos\xc3\xa9"[..]]
+        );
+    }
+
+    /// A request without cookies gains none.
+    #[test]
+    fn test_join_cookie_fields_without_cookies() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, HeaderValue::from_static("app.localhost"));
+
+        join_cookie_fields(&mut headers);
+
+        assert!(headers.get(COOKIE).is_none());
     }
 }
