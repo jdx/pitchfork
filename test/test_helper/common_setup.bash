@@ -89,13 +89,27 @@ skip_on_windows() {
 }
 
 # Kill a process by PID, working on both Unix and Windows.
-# On Windows Git Bash, `kill -9` may not terminate native Windows processes.
-# Use taskkill //F //PID as a fallback.
+#
+# Takes a PID reported by pitchfork — the state file or `pitchfork status` —
+# which on Windows is a *Windows* PID. A PID that came from the shell instead,
+# such as a `$!` job id, belongs to the MSYS namespace and must be signalled
+# with plain `kill`; see the foreground-supervisor tests in supervisor.bats.
+#
+# Git Bash resolves `kill`'s argument in the MSYS PID namespace, and the two are
+# disjoint — `ps` reports them side by side as separate `PID` and `WINPID`
+# columns. A Windows PID passed to `kill` therefore does not signal the intended
+# process, and when the number happens to match a live MSYS process it signals
+# that one instead. One of bats' own bash processes is a candidate, and
+# SIGKILLing it tears down the run: the TAP stream stops mid-suite with no
+# failing test and the job exits 2304, which is how MSYS reports a signal death
+# (`signal << 8`). Use taskkill, which speaks Windows PIDs, and do not call
+# `kill` there at all.
 kill_pid() {
   local pid="$1"
-  kill -9 "$pid" 2>/dev/null || true
   if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
     taskkill //F //PID "$pid" 2>/dev/null || true
+  else
+    kill -9 "$pid" 2>/dev/null || true
   fi
 }
 
