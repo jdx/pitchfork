@@ -778,7 +778,10 @@ EOF
   assert_output --partial "bootsvc"
   assert_output --partial "running"
 
-  kill_pid "$sup_pid"
+  # $sup_pid is a shell job id, not a PID reported by pitchfork, so signal it
+  # with `kill` the way the other foreground-supervisor tests do. `kill_pid` is
+  # for the Windows PIDs that come out of the state file or `pitchfork status`.
+  kill "$sup_pid" 2>/dev/null || true
   wait "$sup_pid" 2>/dev/null || true
 }
 
