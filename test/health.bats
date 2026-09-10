@@ -11,10 +11,16 @@ teardown() {
 }
 
 @test "health cmd failure kills daemon and retry restarts it" {
+  # ready_delay has to stay under the health grace period. Health checks begin
+  # as soon as the daemon is running, and `retries * interval` doubles as the
+  # grace a starting daemon gets (see `run_health_checks`), so at the default
+  # 3s delay the kill and the ready both land around the same moment and
+  # `pitchfork start` reports a failure to start whenever the kill wins.
   create_pitchfork_toml <<EOF
 [daemons.unhealthy]
 run = "echo started; sleep 300"
 retry = 1
+ready_delay = 1
 health_cmd = { run = "exit 1", interval = "1s", retries = 2 }
 EOF
 
@@ -93,10 +99,14 @@ EOF
   local http_script
   http_script="$(script_path http_server.py)"
 
+  # ready_delay under the health grace period, as in the health_cmd test above.
+  # An HTTP probe costs no process spawn, so the two failures land a second
+  # apart and the kill arrives earlier here than it does there.
   create_pitchfork_toml <<EOF
 [daemons.webhealth]
 run = "python3 -u $http_script 0 $port 500"
 retry = 1
+ready_delay = 1
 health_http = { url = "http://127.0.0.1:$port/health", interval = "1s", retries = 2 }
 EOF
 
