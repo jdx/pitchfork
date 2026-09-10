@@ -27,16 +27,18 @@ EOF
   # The daemon must be killed through the crash path (health check named as
   # the reason in the supervisor log), then restarted by the retry checker
   # ("started" once per run), then killed again. End state: errored with
-  # exactly two runs.
+  # exactly two runs. Observe both health-triggered kills before reading
+  # status, so the first run's transient error cannot end the wait early.
   while true; do
-    local sup_log status logs count
+    local sup_log failures status logs count
     sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
-    status=$(get_daemon_status unhealthy)
     logs=$(read_logs unhealthy)
+    failures=$(grep -c "killing daemon .* due to health check failure" "$sup_log" || true)
+    status=$(get_daemon_status unhealthy)
     count=$(grep -c "started" <<< "$logs" || true)
     if [[ "$status" == *"errored"* ]] \
       && [[ $count -ge 2 ]] \
-      && grep -q "health check failure" "$sup_log" 2>/dev/null; then
+      && [[ $failures -ge 2 ]]; then
       break
     fi
     if [[ $(date +%s) -ge $deadline ]]; then
@@ -104,12 +106,15 @@ EOF
   local deadline
   deadline=$(($(date +%s) + 40))
 
+  # Observe both health-triggered kills before checking the terminal status.
   while true; do
-    local status logs count
-    status=$(get_daemon_status webhealth)
+    local sup_log failures status logs count
+    sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
     logs=$(read_logs webhealth)
+    failures=$(grep -c "killing daemon .* due to health check failure" "$sup_log" || true)
+    status=$(get_daemon_status webhealth)
     count=$(grep -c "Server listening on" <<< "$logs" || true)
-    if [[ "$status" == *"errored"* ]] && [[ $count -ge 2 ]]; then
+    if [[ "$status" == *"errored"* ]] && [[ $count -ge 2 ]] && [[ $failures -ge 2 ]]; then
       break
     fi
     if [[ $(date +%s) -ge $deadline ]]; then
@@ -157,12 +162,15 @@ EOF
   # twice in a row, kill the daemon through the crash path, and the retry
   # checker starts it once more ("Listening on" per run). End state: errored
   # with exactly two runs.
+  # Observe both health-triggered kills before checking the terminal status.
   while true; do
-    local status logs count
-    status=$(get_daemon_status porthealth)
+    local sup_log failures status logs count
+    sup_log="$PITCHFORK_LOGS_DIR/pitchfork/pitchfork.log"
     logs=$(read_logs porthealth)
+    failures=$(grep -c "killing daemon .* due to health check failure" "$sup_log" || true)
+    status=$(get_daemon_status porthealth)
     count=$(grep -c "Listening on" <<< "$logs" || true)
-    if [[ "$status" == *"errored"* ]] && [[ $count -ge 2 ]]; then
+    if [[ "$status" == *"errored"* ]] && [[ $count -ge 2 ]] && [[ $failures -ge 2 ]]; then
       break
     fi
     if [[ $(date +%s) -ge $deadline ]]; then
