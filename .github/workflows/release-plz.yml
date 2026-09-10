@@ -80,7 +80,7 @@ jobs:
       # the packslip's signing and attestation permissions are granted here.
       id-token: write
       attestations: write
-    uses: ./.github/workflows/release.yml
+    uses: $/.github/workflows/release.yml
     with:
       tag: ${{ inputs.tag != '' && inputs.tag || needs.release-plz-release.outputs.tag }}
     secrets:
