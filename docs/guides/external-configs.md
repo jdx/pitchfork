@@ -41,7 +41,7 @@ PITCHFORK_CONFIG=/path/to/generated.toml pitchfork daemons
 ```
 
 `PITCHFORK_CONFIG` accepts a platform path list (`:` on Unix, `;` on Windows).
-Files are associated with the invocation's current directory and override registered
+Files are associated with the nearest ordinary project, falling back to the invocation's current directory, and override registered
 attachments. This does not register anything and is not inherited by an automatically
 started supervisor. Commands can consume these definitions immediately, but subsequent
 supervisor-side discovery requires `pitchfork config add`.

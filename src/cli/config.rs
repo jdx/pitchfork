@@ -46,7 +46,13 @@ struct List {
 }
 
 impl Config {
-    pub fn run(&self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
+        tokio::task::spawn_blocking(move || self.run_blocking())
+            .await
+            .into_diagnostic()?
+    }
+
+    fn run_blocking(&self) -> Result<()> {
         match &self.command {
             Some(Commands::Add(args)) => {
                 let file = env::expand_tilde(&args.file)

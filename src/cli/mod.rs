@@ -143,7 +143,7 @@ pub async fn run() -> Result<()> {
         Commands::Clean(clean) => clean.run().await,
         Commands::Daemons(daemons) => daemons.run().await,
         Commands::Completion(completion) => completion.run().await,
-        Commands::Config(config) => config.run(),
+        Commands::Config(config) => config.run().await,
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,
         Commands::List(list) => list.run().await,

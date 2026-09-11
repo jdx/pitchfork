@@ -92,4 +92,4 @@ To supply your own values, use top-level `[env]` or a daemon's `env` field in
 
 ## External configuration
 
-`PITCHFORK_CONFIG` is an invocation-scoped platform path list of additional config files, associated with the current directory. It overrides registered attachments and is not inherited by an automatically started supervisor. See [external configuration files](/guides/external-configs).
+`PITCHFORK_CONFIG` is an invocation-scoped platform path list of additional config files, associated with the nearest ordinary project (or the current directory when none exists). It overrides registered attachments and is not inherited by an automatically started supervisor. See [external configuration files](/guides/external-configs).

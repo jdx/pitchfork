@@ -109,10 +109,32 @@ pub fn entries() -> Vec<Entry> {
     let mut entries = cache.entries.clone();
     drop(cache);
     if let Some(value) = std::env::var_os("PITCHFORK_CONFIG") {
-        let dir = normalize(&env::CWD);
+        let cwd = normalize(&env::CWD);
+        let dir = xx::file::find_up_all(
+            &cwd,
+            &[
+                "pitchfork.local.toml",
+                "pitchfork.toml",
+                ".config/pitchfork.local.toml",
+                ".config/pitchfork.toml",
+            ],
+        )
+        .into_iter()
+        .next()
+        .and_then(|path| {
+            let parent = path.parent()?;
+            Some(
+                if parent.file_name().is_some_and(|name| name == ".config") {
+                    parent.parent()?.to_path_buf()
+                } else {
+                    parent.to_path_buf()
+                },
+            )
+        })
+        .unwrap_or_else(|| cwd.clone());
         let config = std::env::split_paths(&value)
             .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| resolve_path(&dir, &p.to_string_lossy()))
+            .map(|p| resolve_path(&cwd, &p.to_string_lossy()))
             .collect();
         // Avoid calling namespace_for_project_dir here: namespace discovery uses this registry.
         entries.push(Entry {

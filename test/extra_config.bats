@@ -25,17 +25,17 @@ teardown() {
   run pitchfork config list --json
   assert_success
   assert_output --partial '"namespace": "project"'
-  assert_output --partial "$EXTRA"
+  assert_equal "$(jq -r '.[0].config[0] | gsub("\\\\"; "/") | endswith("/generated/pitchfork.toml")' <<< "$output")" true
   cd sub
   run pitchfork daemons
   assert_success
   assert_output --partial "external"
   run pitchfork start external
   assert_success
-  wait_for_logs "project/external" "$TEST_TEMP_DIR/project" 10
+  wait_for_logs "project/external" "/project" 10
   run pitchfork config list --json
   assert_success
-  assert_output --partial "$EXTRA"
+  assert_equal "$(jq -r '.[0].config[0] | gsub("\\\\"; "/") | endswith("/generated/pitchfork.toml")' <<< "$output")" true
   cd "$TEST_TEMP_DIR/other"
   run pitchfork daemons
   assert_success
@@ -187,5 +187,24 @@ TOML
   run pitchfork status nested/external
   assert_success
   assert_output --partial "running"
-  wait_for_logs "nested/external" "$TEST_TEMP_DIR/project/sub" 10
+  wait_for_logs "nested/external" "/project/sub" 10
+  run pitchfork start project/external
+  assert_success
+  wait_for_logs "project/external" "/project" 10
+}
+
+@test "environment attachments inherit the nearest ordinary project from a subdirectory" {
+  cat > pitchfork.toml <<'TOML'
+namespace = "ordinary"
+[daemons.external]
+run = "false"
+TOML
+  cd sub
+  export PITCHFORK_CONFIG="$EXTRA"
+  run pitchfork start external
+  assert_success
+  run pitchfork status ordinary/external
+  assert_success
+  assert_output --partial "running"
+  wait_for_logs "ordinary/external" "/project" 10
 }
