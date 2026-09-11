@@ -845,3 +845,8 @@ api = { namespace = "my-app", daemon = "server" }
 A slug can reference a registered namespace instead of repeating `dir`.
 `pitchfork proxy add` manages slug registrations. See
 [namespaces](/concepts/namespaces) for daemon ID resolution and worktree isolation.
+
+## Attached configuration
+
+Generators can attach files outside a project through the namespace registry.
+See [external configuration files](/guides/external-configs) for registration, precedence, and project-relative paths.

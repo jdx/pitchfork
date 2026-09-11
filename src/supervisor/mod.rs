@@ -187,6 +187,7 @@ pub fn start_in_background() -> Result<()> {
             .open(log_file)
             .into_diagnostic()?;
         cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
+            .env_remove("PITCHFORK_CONFIG")
             .stdin_null()
             .stdout_null()
             .stderr_file(stderr_file)
@@ -208,7 +209,8 @@ pub fn start_in_background() -> Result<()> {
     {
         use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
         use windows_sys::Win32::System::Threading::{
-            CREATE_NO_WINDOW, CreateProcessW, DETACHED_PROCESS, PROCESS_INFORMATION, STARTUPINFOW,
+            CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
+            PROCESS_INFORMATION, STARTUPINFOW,
         };
 
         // With bInheritHandles=FALSE, the child inherits NO parent handles.
@@ -226,6 +228,19 @@ pub fn start_in_background() -> Result<()> {
             .encode_utf16()
             .collect();
 
+        use std::os::windows::ffi::OsStrExt;
+        let mut vars: Vec<_> = std::env::vars_os()
+            .filter(|(k, _)| !k.to_string_lossy().eq_ignore_ascii_case("PITCHFORK_CONFIG"))
+            .collect();
+        vars.sort_by_key(|(k, _)| k.to_string_lossy().to_uppercase());
+        let mut environment = Vec::<u16>::new();
+        for (key, value) in vars {
+            environment.extend(key.encode_wide());
+            environment.push(b'=' as u16);
+            environment.extend(value.encode_wide());
+            environment.push(0);
+        }
+        environment.extend([0, 0]);
         let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         let ok = unsafe {
             CreateProcessW(
@@ -234,8 +249,8 @@ pub fn start_in_background() -> Result<()> {
                 std::ptr::null(),
                 std::ptr::null(),
                 FALSE, // bInheritHandles = FALSE — the whole point
-                DETACHED_PROCESS | CREATE_NO_WINDOW,
-                std::ptr::null(),
+                DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                environment.as_ptr().cast(),
                 std::ptr::null(),
                 &si,
                 &mut pi,

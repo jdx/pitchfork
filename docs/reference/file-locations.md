@@ -73,3 +73,8 @@ values mean different state files and IPC sockets.
 
 Use `pitchfork boot status` to inspect registration and `pitchfork boot disable`
 to remove it. See [start at login or boot](/guides/boot-start).
+
+## Attached configuration
+
+Generators can attach files outside a project through the namespace registry.
+See [external configuration files](/guides/external-configs) for registration, precedence, and project-relative paths.

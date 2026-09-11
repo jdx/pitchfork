@@ -1268,6 +1268,11 @@ impl Settings {
         .into_iter()
         .map(|path| (path, FileScope::Project))
         .collect();
+        let extras = crate::extra_configs::paths_for(start_dir)
+            .into_iter()
+            .rev()
+            .map(|p| (p, FileScope::Project));
+        candidates.splice(0..0, extras);
         candidates.push((
             crate::env::PITCHFORK_GLOBAL_CONFIG_USER.clone(),
             FileScope::Global,

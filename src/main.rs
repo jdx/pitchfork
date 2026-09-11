@@ -11,6 +11,7 @@ mod daemon_status;
 mod deps;
 mod env;
 mod error;
+mod extra_configs;
 mod ipc;
 mod log_jq;
 mod log_parse;

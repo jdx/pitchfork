@@ -90,3 +90,8 @@ or an absolute command path when the supervisor's `PATH` is limited.
 
 See [boot registration](/guides/boot-start) and [cron scheduling](/guides/scheduling)
 for workflows that run outside your interactive shell.
+
+## Attached configuration
+
+Generators can attach files outside a project through the namespace registry.
+See [external configuration files](/guides/external-configs) for registration, precedence, and project-relative paths.

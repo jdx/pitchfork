@@ -99,6 +99,9 @@ pub struct GroupEntry {
 pub struct NamespaceEntryRaw {
     /// Project directory containing the pitchfork.toml
     pub dir: String,
+    /// Additional configuration files, relative to dir or absolute.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<String>,
 }
 
 /// Resolved namespace entry with PathBuf.
@@ -106,6 +109,7 @@ pub struct NamespaceEntryRaw {
 pub struct NamespaceEntry {
     /// Project directory containing the pitchfork.toml
     pub dir: PathBuf,
+    pub config: Vec<PathBuf>,
 }
 
 /// Internal structure for reading config files (uses String keys for short daemon names)
@@ -332,16 +336,18 @@ fn read_namespace_override_from_file(path: &Path) -> Result<Option<String>> {
     parse_namespace_override_from_content(path, &content)
 }
 
-fn project_config_dir(path: &Path) -> Option<&Path> {
-    if is_dot_config_pitchfork(path) {
-        path.parent().and_then(Path::parent)
-    } else {
-        path.parent()
-    }
+pub(crate) fn project_dir_for_config(path: &Path) -> Option<PathBuf> {
+    crate::extra_configs::project_dir(path).or_else(|| {
+        if is_dot_config_pitchfork(path) {
+            path.parent().and_then(Path::parent).map(Path::to_path_buf)
+        } else {
+            path.parent().map(Path::to_path_buf)
+        }
+    })
 }
 
 fn project_config_family(path: &Path) -> Vec<PathBuf> {
-    let Some(dir) = project_config_dir(path) else {
+    let Some(dir) = project_dir_for_config(path) else {
         return vec![path.to_path_buf()];
     };
     vec![
@@ -408,13 +414,15 @@ fn validate_namespace(path: &Path, namespace: &str) -> Result<String> {
 }
 
 fn derive_namespace_from_dir(path: &Path) -> Result<String> {
-    let dir_for_namespace = if is_dot_config_pitchfork(path) {
-        path.parent().and_then(|p| p.parent())
-    } else {
-        path.parent()
-    };
-
+    let dir_for_namespace = project_dir_for_config(path);
+    if let Some(namespace) = dir_for_namespace
+        .as_deref()
+        .and_then(crate::extra_configs::namespace_for_dir)
+    {
+        return validate_namespace(path, &namespace);
+    }
     let raw_namespace = dir_for_namespace
+        .as_deref()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .ok_or_else(|| miette::miette!("cannot derive namespace from path '{}'", path.display()))?
@@ -545,7 +553,7 @@ fn meta_matches(paths: &[PathBuf], snapshot: &[(PathBuf, Option<(SystemTime, u64
 }
 
 /// Best-effort (mtime, size) — `None` if the path doesn't exist or metadata fails.
-fn current_meta(path: &Path) -> Option<(SystemTime, u64)> {
+pub(crate) fn current_meta(path: &Path) -> Option<(SystemTime, u64)> {
     let md = std::fs::metadata(path).ok()?;
     Some((md.modified().ok()?, md.len()))
 }
@@ -572,6 +580,7 @@ fn snapshot_meta(paths: &[PathBuf]) -> Vec<(PathBuf, Option<(SystemTime, u64)>)>
 /// The `ReloadConfig` IPC handler is the one that matters — it clears the
 /// supervisor's cache.
 pub fn invalidate_config_cache() {
+    crate::extra_configs::invalidate();
     if let Ok(mut cache) = CONFIG_CACHE.lock() {
         cache.clear();
     }
@@ -800,8 +809,17 @@ impl PitchforkToml {
         .into())
     }
 
-    /// Returns the effective namespace for the given directory by finding
-    /// the nearest config file. Traverses the filesystem at most once per call.
+    /// Resolve a project's namespace even when it has no ordinary config file.
+    pub fn namespace_for_project_dir(dir: &Path) -> Result<String> {
+        namespace_from_path(&dir.join("pitchfork.toml"))
+    }
+
+    /// Return the explicit namespace shared by this project's own configuration files.
+    pub fn project_namespace_override(dir: &Path) -> Result<Option<String>> {
+        directory_namespace_override(&dir.join("pitchfork.toml"), None)
+    }
+
+    /// Find the effective namespace from the nearest configuration file.
     pub fn namespace_for_dir(dir: &Path) -> Result<String> {
         Ok(Self::list_paths_from(dir)
             .iter()
@@ -983,6 +1001,7 @@ impl PitchforkToml {
         );
         project_paths.reverse();
         paths.extend(project_paths);
+        paths.extend(crate::extra_configs::paths_for(cwd));
 
         paths
     }
@@ -1139,13 +1158,9 @@ impl PitchforkToml {
                     // directory to share a namespace, including siblings via .config subfolder
                     if p.exists() && !is_global_config(p) {
                         let ns = namespace_from_path(p)?;
-                        let origin_dir = if is_dot_config_pitchfork(p) {
-                            p.parent().and_then(|d| d.parent())
-                        } else {
-                            p.parent()
-                        }
-                        .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
-                        .unwrap_or_else(|| p.clone());
+                        let origin_dir = project_dir_for_config(p)
+                            .map(|dir| dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()))
+                            .unwrap_or_else(|| p.clone());
 
                         if let Some((other_path, other_dir)) = ns_to_origin.get(ns.as_str())
                             && *other_dir != origin_dir
@@ -1340,6 +1355,13 @@ impl PitchforkToml {
             pt.namespaces.insert(
                 name,
                 NamespaceEntry {
+                    config: entry
+                        .config
+                        .iter()
+                        .map(|p| {
+                            crate::extra_configs::resolve_path(&env::expand_tilde(&entry.dir), p)
+                        })
+                        .collect(),
                     dir: env::expand_tilde(entry.dir),
                 },
             );
@@ -1404,7 +1426,7 @@ impl PitchforkToml {
     /// The caller MUST hold the file lock (via `xx::fslock::get`) before
     /// calling this method. This is used by `register_slug` which needs to
     /// hold a single lock across a read-modify-write cycle.
-    fn write_unlocked(&self) -> Result<()> {
+    pub(crate) fn write_unlocked(&self) -> Result<()> {
         if let Some(path) = &self.path {
             // Determine the namespace for this config file
             let config_namespace = if path.exists() {
@@ -1528,6 +1550,11 @@ impl PitchforkToml {
                     name.clone(),
                     NamespaceEntryRaw {
                         dir: entry.dir.to_string_lossy().to_string(),
+                        config: entry
+                            .config
+                            .iter()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .collect(),
                     },
                 );
             }
@@ -1673,8 +1700,13 @@ impl PitchforkToml {
                 })
                 .or_else(|| env::CWD.as_path().canonicalize().ok());
             if let Some(ref d) = dir {
-                pt.namespaces
-                    .insert(ns.to_string(), NamespaceEntry { dir: d.clone() });
+                pt.namespaces.insert(
+                    ns.to_string(),
+                    NamespaceEntry {
+                        dir: d.clone(),
+                        config: Vec::new(),
+                    },
+                );
             }
         }
 
@@ -1766,12 +1798,26 @@ impl PitchforkToml {
             Self::new(global_path.to_path_buf())
         };
 
-        pt.namespaces.insert(
-            name.to_string(),
-            NamespaceEntry {
-                dir: env::expand_tilde(dir),
-            },
-        );
+        let dir = env::expand_tilde(dir);
+        if let Some(entry) = pt.namespaces.get_mut(name) {
+            if !entry.config.is_empty()
+                && crate::extra_configs::normalize(&entry.dir)
+                    != crate::extra_configs::normalize(&dir)
+            {
+                miette::bail!(
+                    "namespace '{name}' has external configuration attached to another directory"
+                );
+            }
+            entry.dir = dir;
+        } else {
+            pt.namespaces.insert(
+                name.to_string(),
+                NamespaceEntry {
+                    dir,
+                    config: Vec::new(),
+                },
+            );
+        }
         pt.write_unlocked()?;
         Ok(())
     }
@@ -2114,6 +2160,7 @@ dir = "~/projects/web"
             "myproject".to_string(),
             NamespaceEntry {
                 dir: PathBuf::from("/tmp/myproject"),
+                config: Vec::new(),
             },
         );
         pt.write().unwrap();

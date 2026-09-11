@@ -32,6 +32,10 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     // configuration or output is lost.
     ("clean", Write),
     ("completion", Read),
+    ("config", Read),
+    ("config list", Read),
+    ("config add", Write),
+    ("config remove", Destructive),
     ("daemons", Read),
     ("daemons add", Write),
     // Deletes a daemon the user wrote into a pitchfork config file.
