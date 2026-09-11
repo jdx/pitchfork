@@ -199,3 +199,8 @@ Daemons defined in `~/.config/pitchfork/config.toml` use the `global` namespace:
 pitchfork start global/postgres
 pitchfork logs global/redis
 ```
+
+## Attached configuration
+
+Generators can attach files outside a project through the namespace registry.
+See [external configuration files](/guides/external-configs) for registration, precedence, and project-relative paths.

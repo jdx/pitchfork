@@ -43,7 +43,7 @@ pub(crate) async fn resolve_project_config_path(
     let paths = PitchforkToml::list_paths();
     let mut project_paths = Vec::new();
     for p in &paths {
-        if !is_project_config_path(p) {
+        if !is_project_config_path(p) || crate::extra_configs::project_dir(p).is_some() {
             continue;
         }
         if exists_filter {

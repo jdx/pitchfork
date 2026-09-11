@@ -11,6 +11,7 @@ mod cd;
 mod clean;
 mod command_effects;
 mod completion;
+mod config;
 mod daemons;
 mod disable;
 mod enable;
@@ -64,6 +65,7 @@ enum Commands {
     #[usage(alias = "daemon")]
     Daemons(daemons::Daemons),
     Completion(completion::Completion),
+    Config(config::Config),
     #[usage(alias = "d")]
     Disable(disable::Disable),
     #[usage(alias = "e")]
@@ -141,6 +143,7 @@ pub async fn run() -> Result<()> {
         Commands::Clean(clean) => clean.run().await,
         Commands::Daemons(daemons) => daemons.run().await,
         Commands::Completion(completion) => completion.run().await,
+        Commands::Config(config) => config.run().await,
         Commands::Disable(disable) => disable.run().await,
         Commands::Enable(enable) => enable.run().await,
         Commands::List(list) => list.run().await,

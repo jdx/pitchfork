@@ -255,6 +255,13 @@
       "description": "Raw namespace entry as read from TOML.\n```toml\n[namespaces.myproject]\ndir = \"/home/user/projects/myproject\"\n```",
       "type": "object",
       "properties": {
+        "config": {
+          "description": "Additional configuration files, relative to dir or absolute.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "dir": {
           "description": "Project directory containing the pitchfork.toml",
           "type": "string"

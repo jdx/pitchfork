@@ -7,6 +7,9 @@ unknown_flags error
 external_subcommand #true
 arg_required_else_help #true
 subcommand_required #true
+flagset list {
+    flag --json
+}
 flag "-h --help" help="Print help" action=help builtin=#true
 flag "-V --version" help="Print version" action=version builtin=#true
 cmd activate help="Activate pitchfork in your shell session" effect=read {
@@ -305,6 +308,30 @@ Installation:
             choice zsh
             choice fish
         }
+    }
+}
+cmd config help="Attach externally generated configuration to a project." effect=read args_conflicts_with_subcommands=#true {
+    use list
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd add help="Register a configuration file for a project without copying it into the project." effect=write {
+        flag --dir {
+            arg <DIR>
+        }
+        flag --namespace {
+            arg <NAMESPACE>
+        }
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <FILE>
+    }
+    cmd remove help="Detach a configuration file, including a file that no longer exists." effect=destructive {
+        alias rm
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <FILE>
+    }
+    cmd list help="List registered and invocation-scoped configuration files." effect=read {
+        alias ls
+        flag --json
+        flag "-h --help" help="Print help" action=help builtin=#true
     }
 }
 cmd disable help="Prevent a daemon from restarting" effect=write {

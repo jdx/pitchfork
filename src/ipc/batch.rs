@@ -10,7 +10,7 @@ use crate::deps::{compute_reverse_stop_order, resolve_dependencies};
 use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::{
     HealthCmd, HealthHttp, HealthPort, PitchforkToml, PitchforkTomlDaemon, ReadyCmd, ReadyHttp,
-    ReadyOutput, ReadyPort, is_dot_config_pitchfork, is_global_config,
+    ReadyOutput, ReadyPort, project_dir_for_config,
 };
 use chrono::{DateTime, Local};
 use indexmap::IndexMap;
@@ -1192,17 +1192,7 @@ impl IpcClient {
 /// For all other config files, it is the parent directory.
 pub fn resolve_config_base_dir(config_path: Option<&Path>) -> PathBuf {
     config_path
-        .and_then(|p| {
-            if is_global_config(p) {
-                p.parent()
-            } else if is_dot_config_pitchfork(p) {
-                // .config/pitchfork.toml and .config/pitchfork.local.toml uses project directory (grandparent)
-                p.parent().and_then(|p| p.parent())
-            } else {
-                p.parent()
-            }
-        })
-        .map(|p| p.to_path_buf())
+        .and_then(project_dir_for_config)
         .unwrap_or_else(|| crate::env::CWD.to_path_buf())
 }
 

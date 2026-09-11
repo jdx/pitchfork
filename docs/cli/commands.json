@@ -1197,6 +1197,233 @@
         "examples": [],
         "headings": []
       },
+      "config": {
+        "full_cmd": [
+          "config"
+        ],
+        "usage": "config [--json] [SUBCOMMAND]",
+        "subcommands": {
+          "add": {
+            "full_cmd": [
+              "config",
+              "add"
+            ],
+            "usage": "config add [--dir <DIR>] [--namespace <NAMESPACE>] <FILE>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "FILE",
+                "usage": "<FILE>",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [
+              {
+                "name": "dir",
+                "usage": "--dir <DIR>",
+                "short": [],
+                "long": [
+                  "dir"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "DIR",
+                  "usage": "<DIR>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "namespace",
+                "usage": "--namespace <NAMESPACE>",
+                "short": [],
+                "long": [
+                  "namespace"
+                ],
+                "hide": false,
+                "global": false,
+                "arg": {
+                  "name": "NAMESPACE",
+                  "usage": "<NAMESPACE>",
+                  "required": true,
+                  "double_dash": "Optional",
+                  "hide": false
+                }
+              },
+              {
+                "name": "help",
+                "usage": "-h --help",
+                "help": "Print help",
+                "help_first_line": "Print help",
+                "short": [
+                  "h"
+                ],
+                "long": [
+                  "help"
+                ],
+                "hide": false,
+                "global": false,
+                "action": "help",
+                "builtin": true
+              }
+            ],
+            "mounts": [],
+            "effect": "write",
+            "unknown_flags": null,
+            "hide": false,
+            "args_override_self": true,
+            "help": "Register a configuration file for a project without copying it into the project.",
+            "name": "add",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": [],
+            "headings": []
+          },
+          "remove": {
+            "full_cmd": [
+              "config",
+              "remove"
+            ],
+            "usage": "config remove <FILE>",
+            "subcommands": {},
+            "args": [
+              {
+                "name": "FILE",
+                "usage": "<FILE>",
+                "required": true,
+                "double_dash": "Optional",
+                "hide": false
+              }
+            ],
+            "flags": [
+              {
+                "name": "help",
+                "usage": "-h --help",
+                "help": "Print help",
+                "help_first_line": "Print help",
+                "short": [
+                  "h"
+                ],
+                "long": [
+                  "help"
+                ],
+                "hide": false,
+                "global": false,
+                "action": "help",
+                "builtin": true
+              }
+            ],
+            "mounts": [],
+            "effect": "destructive",
+            "unknown_flags": null,
+            "hide": false,
+            "args_override_self": true,
+            "help": "Detach a configuration file, including a file that no longer exists.",
+            "name": "remove",
+            "aliases": [
+              "rm"
+            ],
+            "hidden_aliases": [],
+            "examples": [],
+            "headings": []
+          },
+          "list": {
+            "full_cmd": [
+              "config",
+              "list"
+            ],
+            "usage": "config list [--json]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "json",
+                "usage": "--json",
+                "short": [],
+                "long": [
+                  "json"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "help",
+                "usage": "-h --help",
+                "help": "Print help",
+                "help_first_line": "Print help",
+                "short": [
+                  "h"
+                ],
+                "long": [
+                  "help"
+                ],
+                "hide": false,
+                "global": false,
+                "action": "help",
+                "builtin": true
+              }
+            ],
+            "mounts": [],
+            "effect": "read",
+            "unknown_flags": null,
+            "hide": false,
+            "args_override_self": true,
+            "help": "List registered and invocation-scoped configuration files.",
+            "name": "list",
+            "aliases": [
+              "ls"
+            ],
+            "hidden_aliases": [],
+            "examples": [],
+            "headings": []
+          }
+        },
+        "args": [],
+        "flags": [
+          {
+            "name": "json",
+            "usage": "--json",
+            "short": [],
+            "long": [
+              "json"
+            ],
+            "hide": false,
+            "global": false
+          },
+          {
+            "name": "help",
+            "usage": "-h --help",
+            "help": "Print help",
+            "help_first_line": "Print help",
+            "short": [
+              "h"
+            ],
+            "long": [
+              "help"
+            ],
+            "hide": false,
+            "global": false,
+            "action": "help",
+            "builtin": true
+          }
+        ],
+        "mounts": [],
+        "effect": "read",
+        "unknown_flags": null,
+        "hide": false,
+        "args_override_self": true,
+        "args_conflicts_with_subcommands": true,
+        "help": "Attach externally generated configuration to a project.",
+        "name": "config",
+        "aliases": [],
+        "hidden_aliases": [],
+        "examples": [],
+        "headings": []
+      },
       "disable": {
         "full_cmd": [
           "disable"

@@ -96,6 +96,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "mise integration", link: "/guides/mise-integration" },
+          { text: "External configuration", link: "/guides/external-configs" },
           {
             text: "Configuration templates",
             link: "/guides/configuration-templates",

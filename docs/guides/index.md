@@ -42,3 +42,5 @@ the behavior your workflow needs.
 
 Looking up a field or flag? Use the [configuration reference](/reference/configuration),
 [settings reference](/reference/settings), or [CLI reference](/cli/).
+
+Generate configuration outside the repository with [external configuration files](/guides/external-configs).
