@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.25.1](https://github.com/jdx/pitchfork/compare/v2.25.0...v2.25.1) - 2026-09-11
+
+### Fixed
+
+- make clippy pass on windows and check it in ci ([#854](https://github.com/jdx/pitchfork/pull/854))
+- *(config)* add general.windows_shell defaulting to cmd /C ([#852](https://github.com/jdx/pitchfork/pull/852))
+
 ## [2.25.0](https://github.com/jdx/pitchfork/compare/v2.24.2...v2.25.0) - 2026-09-11
 
 ### Added
