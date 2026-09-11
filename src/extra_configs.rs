@@ -237,8 +237,9 @@ mod tests {
     #[test]
     fn registry_paths_are_relative_to_project_and_old_entries_are_compatible() {
         let tmp = tempfile::tempdir().unwrap();
-        let project = tmp.path().join("project");
-        let external = tmp.path().join("state/app.toml");
+        let root = normalize(tmp.path());
+        let project = root.join("project");
+        let external = root.join("state/app.toml");
         let project_str = project.to_string_lossy().into_owned();
         let external_str = external.to_string_lossy().into_owned();
         let doc = toml::toml! {
