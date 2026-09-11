@@ -823,7 +823,14 @@ impl PitchforkToml {
     pub fn namespace_for_dir(dir: &Path) -> Result<String> {
         Ok(Self::list_paths_from(dir)
             .iter()
-            .rfind(|p| p.exists()) // most specific (closest) config
+            .filter(|p| p.exists())
+            .max_by_key(|p| {
+                if is_global_config(p) {
+                    0
+                } else {
+                    project_dir_for_config(p).map_or(0, |dir| dir.components().count())
+                }
+            })
             .map(|p| namespace_from_path(p))
             .transpose()?
             .unwrap_or_else(|| "global".to_string()))

@@ -171,3 +171,21 @@ TOML
   assert_success
   assert_output --partial '"namespace": "native"'
 }
+
+@test "ancestor attachments do not replace a nested project's namespace" {
+  run pitchfork config add "$EXTRA"
+  assert_success
+  cat > sub/pitchfork.toml <<'TOML'
+namespace = "nested"
+[daemons.external]
+run = "pwd; exec sleep 60"
+ready_delay = 0
+TOML
+  cd sub
+  run pitchfork start external
+  assert_success
+  run pitchfork status nested/external
+  assert_success
+  assert_output --partial "running"
+  wait_for_logs "nested/external" "$TEST_TEMP_DIR/project/sub" 10
+}
