@@ -35,7 +35,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use usage_rs::config::{
-    Const, EnvLayer, FileLayer, FileScope, Layers, Resolved, Ty, Value, resolve,
+    Const, EnvLayer, FileLayer, FileScope, Layers, Resolved, SourceKind, Ty, Value, resolve,
 };
 
 /// The `api.*` settings: the standalone API server (JSON REST endpoints for
@@ -184,7 +184,9 @@ pub struct SettingsGeneral {
 
     /// Shell command used to execute daemon run scripts
     ///
-    /// Controls the shell used to execute daemon `run` commands.
+    /// Controls the shell used to execute daemon `run` commands, as well as
+    /// `ready_cmd` / `health_cmd` probes, lifecycle hooks and the log archive
+    /// hook.
     ///
     /// The value is split with `shell_words::split` into a program and arguments,
     /// then the daemon's `run` string is appended verbatim as the final argument
@@ -196,13 +198,42 @@ pub struct SettingsGeneral {
     ///
     /// **Common configurations:**
     /// - `"sh -c"` — Default, POSIX shell
-    /// - `"sh -o errexit -o pipefail -c"` — Exit on error, fail on pipe failure
+    /// - `"sh -o errexit -c"` — Exit on the first failing command
     /// - `"bash -c"` — Use bash instead of sh
+    /// - `"bash -o errexit -o pipefail -c"` — `pipefail` is not a POSIX option,
+    ///   so name a shell that has it rather than relying on `sh`
+    ///
+    /// On Windows this setting applies only when it is set explicitly (in a
+    /// config file or via `PITCHFORK_SHELL`); otherwise
+    /// `general.windows_shell` is used. Setting it is the way to use one shell
+    /// on every platform, e.g. `"sh -c"` with Git for Windows' `sh.exe` on
+    /// `PATH`.
     ///
     /// When `mise = true` is enabled for a daemon, the shell wraps inside
     /// `mise x --`, e.g. `mise x -- sh -c "<run>"`.
     #[usage(env = "PITCHFORK_SHELL", default = "sh -c")]
     pub shell: String,
+
+    /// Shell command used to execute daemon run scripts on Windows
+    ///
+    /// Used in place of `general.shell` on Windows, unless `general.shell` is
+    /// set explicitly. Split and used the same way: the program and arguments
+    /// come from this value, and the `run` string is appended as the final
+    /// argument, e.g. `cmd /C "<run>"`.
+    ///
+    /// The default is `cmd /C`, which is always available, so `run` strings are
+    /// read by cmd.exe: use `%VAR%` rather than `$VAR`, and double quotes
+    /// rather than single quotes.
+    ///
+    /// The split follows POSIX rules, so a path with spaces or backslashes has
+    /// to be quoted: `"'C:\Program Files\Git\bin\sh.exe' -c"`.
+    ///
+    /// **Common configurations:**
+    /// - `"cmd /C"` — Default
+    /// - `"powershell -Command"` / `"pwsh -Command"` — PowerShell
+    /// - `"sh -c"` — Git for Windows' sh, when `Git\bin` is on `PATH`
+    #[usage(env = "PITCHFORK_WINDOWS_SHELL", default = "cmd /C")]
+    pub windows_shell: String,
 
     /// Show timestamps in startup log output
     ///
@@ -1329,6 +1360,32 @@ impl Settings {
         candidates.into_iter().find(|p| p.is_file())
     }
 
+    /// Resolve the shell used for daemon `run` scripts, `ready_cmd` /
+    /// `health_cmd` probes, lifecycle hooks and the log archive hook, split
+    /// into a program and its arguments.
+    ///
+    /// `general.shell` applies everywhere. On Windows it applies only when it
+    /// was set explicitly (`shell_is_explicit`); a Windows machine that leaves
+    /// it at its default uses `general.windows_shell` instead, because the
+    /// `sh` that `general.shell` defaults to is not on a stock Windows `PATH`.
+    /// [`crate::settings::resolve_shell`] supplies that flag from the origin
+    /// of the merged value; it is a parameter here so the precedence can be
+    /// tested without a resolution.
+    ///
+    /// `Err` names the key whose value is empty or could not be split.
+    pub fn resolve_shell(&self, shell_is_explicit: bool) -> Result<Vec<String>, String> {
+        let (key, configured) = if cfg!(windows) && !shell_is_explicit {
+            ("general.windows_shell", &self.general.windows_shell)
+        } else {
+            ("general.shell", &self.general.shell)
+        };
+        match shell_words::split(configured) {
+            Ok(parts) if !parts.is_empty() => Ok(parts),
+            Ok(_) => Err(format!("{key} setting is empty")),
+            Err(e) => Err(format!("failed to parse {key} setting {configured:?}: {e}")),
+        }
+    }
+
     /// Return `supervisor.port_bump_attempts` as `u32`, clamping out-of-range
     /// values to the schema default (10) and zero to 1.
     ///
@@ -1491,6 +1548,24 @@ pub(crate) fn settings_resolved() -> Arc<Resolved> {
     settings_state().1
 }
 
+/// Whether `general.shell` was set by the user rather than left at its default.
+///
+/// Asked of the merge, not of the text, the same way `pitchfork settings`
+/// decides what to mark as default: `shell = "sh -c"` written in a config file
+/// is the same string as the default, and only its origin tells them apart.
+fn shell_is_explicit(resolved: &Resolved) -> bool {
+    resolved
+        .origin_key("general.shell")
+        .is_some_and(|origin| origin.kind != SourceKind::DEFAULTS)
+}
+
+/// Resolve the shell for daemon `run` scripts, command probes and hooks from
+/// the global settings. See [`Settings::resolve_shell`].
+pub fn resolve_shell() -> Result<Vec<String>, String> {
+    let (settings, resolved) = settings_state();
+    settings.resolve_shell(shell_is_explicit(&resolved))
+}
+
 /// Reload settings from config files.
 ///
 /// Called when the supervisor receives a ReloadConfig IPC request,
@@ -1619,6 +1694,8 @@ settings_partial! {
         mise_bin: String,
         /// Shell command used to execute daemon run scripts
         shell: String,
+        /// Shell command used to execute daemon run scripts on Windows
+        windows_shell: String,
         /// Show timestamps in startup log output
         startup_log_timestamps: bool,
         /// Default readiness delay in seconds when a daemon has no ready check configured
@@ -1836,6 +1913,66 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn shell_defaults() {
+        let settings = Settings::default();
+        assert_eq!(settings.general.shell, "sh -c");
+        assert_eq!(settings.general.windows_shell, "cmd /C");
+    }
+
+    #[test]
+    fn shell_precedence() {
+        let mut settings = Settings::default();
+        settings.general.shell = "unix-sh -c".to_string();
+        settings.general.windows_shell = "win-sh /C".to_string();
+        let unix = vec!["unix-sh".to_string(), "-c".to_string()];
+        let windows = vec!["win-sh".to_string(), "/C".to_string()];
+
+        // An explicit general.shell wins on every platform.
+        assert_eq!(settings.resolve_shell(true).unwrap(), unix);
+
+        // Left at its default, general.shell yields to windows_shell on
+        // Windows and is the only setting consulted elsewhere.
+        let expected = if cfg!(windows) { windows } else { unix };
+        assert_eq!(settings.resolve_shell(false).unwrap(), expected);
+    }
+
+    #[test]
+    fn shell_is_explicit_comes_from_the_origin_not_the_text() {
+        // `PITCHFORK_SHELL="sh -c"` is the same string as the default, and
+        // must still count as set: on Windows it decides whether
+        // windows_shell is consulted at all.
+        let untouched =
+            resolve(Settings::SETTINGS_REGISTRY, Layers::new()).expect("resolving defaults");
+        assert!(!shell_is_explicit(&untouched));
+
+        let layer = EnvLayer::new([("PITCHFORK_SHELL".to_string(), "sh -c".to_string())]);
+        let explicit = resolve(Settings::SETTINGS_REGISTRY, Layers::new().then(&layer))
+            .expect("resolving an override");
+        assert!(shell_is_explicit(&explicit));
+    }
+
+    #[test]
+    fn an_unusable_shell_names_the_key_it_came_from() {
+        let mut settings = Settings::default();
+        settings.general.shell = "sh -c 'unbalanced".to_string();
+        let err = settings.resolve_shell(true).unwrap_err();
+        assert!(err.contains("general.shell"), "{err}");
+
+        settings.general.shell = String::new();
+        let err = settings.resolve_shell(true).unwrap_err();
+        assert!(err.contains("general.shell setting is empty"), "{err}");
+
+        settings.general.windows_shell = String::new();
+        let key = if cfg!(windows) {
+            "general.windows_shell"
+        } else {
+            "general.shell"
+        };
+        let err = settings.resolve_shell(false).unwrap_err();
+        assert!(err.contains(key), "{err}");
+    }
+
+    #[test]
     fn test_default_settings() {
         let settings = Settings::default();
 
@@ -1925,7 +2062,7 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 74, "{keys:?}");
+        assert_eq!(keys.len(), 75, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"logs.archive_hook.command"));
         assert!(keys.contains(&"supervisor.health_check_interval"));

@@ -244,3 +244,44 @@ EOF
   assert_success
   assert_output --partial "json"
 }
+
+# ============================================================================
+# Group Z: platform shell selection
+# ============================================================================
+
+@test "the shell settings report their platform defaults" {
+  run pitchfork settings get general.shell
+  assert_success
+  assert_output --partial "sh -c"
+
+  run pitchfork settings get general.windows_shell
+  assert_success
+  assert_output --partial "cmd /C"
+}
+
+@test "a daemon starts under the platform default shell with PITCHFORK_SHELL unset" {
+  # _common_setup exports PITCHFORK_SHELL="sh -c" so the POSIX run strings in
+  # the rest of this suite work on Windows too. That also means nothing else
+  # here ever exercises general.windows_shell. Drop it before the first
+  # pitchfork call: the supervisor inherits this environment when it autostarts,
+  # and every test gets its own state dir.
+  unset PITCHFORK_SHELL
+  pitchfork supervisor stop 2>/dev/null || true
+
+  # A command both sh and cmd can run, so the assertions below say something
+  # about shell *selection* rather than about shell syntax.
+  create_pitchfork_toml <<EOF
+[daemons.platform_shell]
+run = "$(default_shell_sleep_command)"
+ready_delay = 1
+EOF
+
+  run pitchfork start platform_shell
+  # "program not found" is what a Windows box without sh on PATH reported
+  # before general.windows_shell existed, and is the exact failure it avoids.
+  refute_output --partial "program not found"
+  assert_success
+  wait_for_status platform_shell running 30
+
+  pitchfork stop platform_shell || true
+}

@@ -17,7 +17,8 @@ mise = true
 ```
 
 Pitchfork runs the command as `mise x -- sh -c "node server.js"` by default.
-If you configure `general.shell`, that shell is used inside `mise x --`.
+If you configure `general.shell` (or `general.windows_shell` on Windows), that
+shell is used inside `mise x --`.
 Shell expansion, pipes, and compound commands retain their normal behavior.
 
 ## Make it the default

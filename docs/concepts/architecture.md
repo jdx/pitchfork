@@ -38,7 +38,8 @@ See [file locations](/reference/file-locations) for path resolution.
 1. The client resolves daemon IDs and orders their dependencies.
 2. Templates use values from dependencies that have already started.
 3. The supervisor resolves the working directory, environment, and ports.
-4. The configured shell receives the `run` string verbatim (`sh -c` by default).
+4. The configured shell receives the `run` string verbatim (`sh -c` by default,
+   `cmd /C` on Windows).
 5. The supervisor records the process and monitors readiness and exit status.
 
 With `mise = true`, execution becomes `mise x -- sh -c "<run>"` (or the

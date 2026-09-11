@@ -13,7 +13,7 @@ use crate::log_store::LogStore;
 use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
 use crate::procs::PROCS;
-use crate::settings::settings;
+use crate::settings::{resolve_shell, settings};
 use crate::shell::{HideConsoleWindow, Shell};
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
@@ -139,21 +139,23 @@ pub(crate) fn spawn_cmd_probe(
     daemon_env: Option<&IndexMap<String, String>>,
     resolved_ports: &[u16],
 ) -> CmdProbe {
-    // Use the configured general.shell setting (same as daemon run and hooks)
-    // instead of default_for_platform(). On Windows, default_for_platform()
-    // returns Shell::Cmd which cannot parse Unix-style commands like
-    // "sleep 1; true". Falls back to default_for_platform() if the setting
-    // is empty or unparseable.
-    let shell_setting = settings().general.shell.clone();
-    let mut command = match shell_words::split(&shell_setting) {
-        Ok(parts) if !parts.is_empty() => {
+    // Use the same shell as daemon run and hooks. A probe is not worth failing
+    // the daemon over, so an unparseable setting degrades to the platform's own
+    // shell here rather than propagating; run_once has already rejected the
+    // start by then, so this only fires for a daemon whose settings changed
+    // under it.
+    let mut command = match resolve_shell() {
+        Ok(parts) => {
             let (program, args) = parts.split_first().unwrap();
             let mut c = tokio::process::Command::new(program);
             c.args(args);
             c.arg(cmd);
             c
         }
-        _ => Shell::default_for_platform().command(cmd),
+        Err(e) => {
+            warn!("daemon {id}: {e}; using the platform shell for this probe");
+            Shell::default_for_platform().command(cmd)
+        }
     };
     command
         .current_dir(dir)
@@ -481,22 +483,12 @@ impl Supervisor {
             )
         };
 
-        // Parse the configured shell (default "sh -c") into program + args.
-        // The run script is passed verbatim as the final argument, avoiding the
-        // lossy split->join round-trip that previously mangled $VAR/glob expansion.
-        let shell_setting = settings().general.shell.clone();
-        let shell_parts = match shell_words::split(&shell_setting) {
-            Ok(parts) if !parts.is_empty() => parts,
-            Ok(_) => {
-                return Ok(IpcResponse::DaemonFailed {
-                    error: "general.shell setting is empty".to_string(),
-                });
-            }
-            Err(e) => {
-                return Ok(IpcResponse::DaemonFailed {
-                    error: format!("failed to parse general.shell setting {shell_setting:?}: {e}"),
-                });
-            }
+        // Resolve the shell for this platform into program + args. The run
+        // script is passed verbatim as the final argument, avoiding the lossy
+        // split->join round-trip that previously mangled $VAR/glob expansion.
+        let shell_parts = match resolve_shell() {
+            Ok(parts) => parts,
+            Err(error) => return Ok(IpcResponse::DaemonFailed { error }),
         };
         let (shell_program, shell_args) = shell_parts.split_first().unwrap();
 
