@@ -32,7 +32,9 @@ use crate::procs::PROCS;
 use crate::settings::settings;
 use crate::state_file::StateFile;
 use crate::{Result, env};
+#[cfg(unix)]
 use duct::cmd;
+#[cfg(unix)]
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -282,6 +284,7 @@ pub fn start_in_background() -> Result<()> {
 /// PID/dir but a new title), we must skip removal to avoid deleting the new
 /// session. The host PID lives in the session key now, so there is no
 /// `liveness_pid` field to compare against.
+#[cfg(any(unix, test))]
 fn should_remove_liveness_session(
     session: &crate::state_file::ProjectSession,
     recorded_title: &Option<String>,
@@ -783,6 +786,7 @@ impl Supervisor {
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
 
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut dirs_to_leave: Vec<PathBuf> = Vec::new();
 
         // Prune shell PIDs that are no longer running. This is essential on

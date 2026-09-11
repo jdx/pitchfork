@@ -180,11 +180,10 @@ fn fallback_interface_ip() -> Option<Ipv4Addr> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn test_is_virtual_interface_loopback() {
         let iface = InterfaceInfo {
@@ -195,7 +194,6 @@ mod tests {
         assert!(is_virtual_interface(&iface));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_is_virtual_interface_docker() {
         for name in &["veth1234", "br-abc", "docker0"] {
@@ -211,7 +209,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_is_virtual_interface_normal() {
         let iface = InterfaceInfo {
@@ -222,7 +219,6 @@ mod tests {
         assert!(!is_virtual_interface(&iface));
     }
 
-    #[cfg(unix)]
     #[test]
     fn test_is_virtual_interface_link_local() {
         let iface = InterfaceInfo {

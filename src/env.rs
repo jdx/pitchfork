@@ -95,7 +95,10 @@ pub static PITCHFORK_LOG_FILE: Lazy<PathBuf> =
     Lazy::new(|| PITCHFORK_LOGS_DIR.join("pitchfork").join("pitchfork.log"));
 // pub static PITCHFORK_EXEC: Lazy<bool> = Lazy::new(|| var_true("PITCHFORK_EXEC"));
 
+// Unix domain sockets only; Windows IPC uses named pipes, see `ipc::fs_name`.
+#[cfg(unix)]
 pub static IPC_SOCK_DIR: Lazy<PathBuf> = Lazy::new(|| PITCHFORK_STATE_DIR.join("sock"));
+#[cfg(unix)]
 pub static IPC_SOCK_MAIN: Lazy<PathBuf> = Lazy::new(|| IPC_SOCK_DIR.join("main.sock"));
 
 // Capture the PATH at startup so daemons can find user tools

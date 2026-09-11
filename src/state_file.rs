@@ -318,6 +318,7 @@ impl StateFile {
 
     /// Remove a shell working directory and mark the state dirty.
     /// Returns true if the entry existed.
+    #[cfg(unix)]
     pub fn remove_shell_dir(&mut self, shell_pid: u32) -> bool {
         let removed = self.shell_dirs.remove(&shell_pid.to_string()).is_some();
         if removed {
@@ -362,6 +363,7 @@ impl StateFile {
     }
 
     /// Look up a project session for the given host PID and directory.
+    #[cfg(any(unix, test))]
     pub fn get_project_session(&self, pid: u32, dir: &Path) -> Option<&ProjectSession> {
         self.project_sessions
             .get(&pid.to_string())

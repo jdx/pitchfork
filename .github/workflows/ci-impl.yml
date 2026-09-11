@@ -108,6 +108,14 @@ jobs:
         run: |
           cargo build --all-features
           cargo nextest run --all-features
+      # Not a duplicate of the Linux lint: `#[cfg]` decides whether code exists,
+      # so an unused import or dead function can be real on Windows and absent
+      # on Linux. Nothing else in this workflow runs clippy on Windows.
+      - name: Install Rust components
+        run: rustup component add clippy
+      - name: Run clippy
+        shell: bash
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pitchfork-windows

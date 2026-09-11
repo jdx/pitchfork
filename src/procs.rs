@@ -98,7 +98,7 @@ impl Procs {
         process_start_token(pid)
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(not(windows))]
     fn start_time_matches(&self, pid: u32, expected: u64) -> bool {
         self.start_time(pid) == Some(expected)
     }
@@ -513,8 +513,6 @@ impl Procs {
         stop_signal: i32,
         stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
-        let sysinfo_pid = sysinfo::Pid::from_u32(pid);
-
         debug!("killing process {pid}");
 
         #[cfg(windows)]
@@ -561,6 +559,7 @@ impl Procs {
 
         #[cfg(unix)]
         {
+            let sysinfo_pid = sysinfo::Pid::from_u32(pid);
             let signal_name = signal_name(stop_signal);
             // Send stop signal for graceful shutdown using libc::kill directly
             // so we can distinguish EPERM (permission denied) from ESRCH

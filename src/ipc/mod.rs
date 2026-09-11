@@ -220,9 +220,9 @@ fn fs_name(name: &str) -> Result<Name<'_>> {
             hash = hash.wrapping_mul(0x100000001b3);
         }
         let pipe_name = format!("pitchfork-{hash:016x}-{name}");
-        Ok(pipe_name
+        pipe_name
             .to_ns_name::<GenericNamespaced>()
-            .into_diagnostic()?)
+            .into_diagnostic()
     }
 }
 
