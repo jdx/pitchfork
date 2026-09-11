@@ -2,7 +2,7 @@
 name = "pitchfork-cli"
 description = "Daemons with DX"
 license = "MIT"
-version = "2.24.2"
+version = "2.25.0"
 edition = "2024"
 resolver = "3"
 rust-version = "1.91"
