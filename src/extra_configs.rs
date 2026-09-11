@@ -236,13 +236,25 @@ mod tests {
     use super::*;
     #[test]
     fn registry_paths_are_relative_to_project_and_old_entries_are_compatible() {
-        let entries = parse_entries("[namespaces.old]\ndir = '/old'\n[namespaces.app]\ndir = '/project'\nconfig = ['generated.toml', '/state/app.toml']\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let external = tmp.path().join("state/app.toml");
+        let project_str = project.to_string_lossy().into_owned();
+        let external_str = external.to_string_lossy().into_owned();
+        let doc = toml::toml! {
+            [namespaces.old]
+            dir = "/old"
+            [namespaces.app]
+            dir = (project_str)
+            config = ["generated.toml", (external_str)]
+        };
+        let entries = parse_entries(&toml::to_string(&doc).unwrap()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].config,
             vec![
-                PathBuf::from("/project/generated.toml"),
-                PathBuf::from("/state/app.toml")
+                normalize(&project.join("generated.toml")),
+                normalize(&external)
             ]
         );
         let raw = NamespaceEntryRaw {
