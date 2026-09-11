@@ -400,6 +400,7 @@ impl Supervisor {
     }
 
     /// Remove a shell PID from tracking
+    #[cfg(unix)]
     pub(crate) async fn remove_shell_pid(&self, shell_pid: u32) -> Result<()> {
         let mut state_file = self.state_file.lock().await;
         state_file.remove_shell_dir(shell_pid);

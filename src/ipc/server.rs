@@ -1,6 +1,8 @@
+use crate::Result;
+#[cfg(unix)]
+use crate::env;
 use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
 use crate::settings::settings;
-use crate::{Result, env};
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
 use interprocess::local_socket::traits::tokio::Listener;
