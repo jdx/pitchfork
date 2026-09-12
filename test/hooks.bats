@@ -241,14 +241,14 @@ EOF
   create_pitchfork_toml <<EOF
 [daemons.fail_retry_hook]
 run = "exit 1"
-retry = 2
+ready_retry = 2
 
 [daemons.fail_retry_hook.hooks]
 on_fail = "touch $marker"
 EOF
 
   pitchfork supervisor start
-  PITCHFORK_INTERVAL=1s run pitchfork start fail_retry_hook
+  run pitchfork start fail_retry_hook
   assert_failure
 
   wait_for_file "$marker"
@@ -272,13 +272,19 @@ retry = 2
 on_retry = "echo retry >> \"$marker\""
 EOF
 
-  pitchfork supervisor start
-  PITCHFORK_INTERVAL=1s run pitchfork start retry_hook_test
+  # Background restarts come from the supervisor tick, so it needs a fast
+  # interval: restart the supervisor with PITCHFORK_INTERVAL exported.
+  export PITCHFORK_INTERVAL=1s
+  pitchfork supervisor start --force
+  run pitchfork start retry_hook_test
   assert_failure
 
-  wait_for_file "$marker"
-  local count
-  count=$(wc -l < "$marker" | tr -d ' ')
+  local count=0
+  for _ in $(seq 1 50); do
+    [[ -f "$marker" ]] && count=$(wc -l < "$marker" | tr -d ' ')
+    [[ "$count" -ge 2 ]] && break
+    sleep 0.2
+  done
   [[ "$count" -eq 2 ]]
 }
 
@@ -318,8 +324,11 @@ ready_delay = 1
 on_retry = "echo \$PITCHFORK_RETRY_COUNT >> $marker"
 EOF
 
-  pitchfork supervisor start
-  PITCHFORK_INTERVAL=1s run pitchfork start retry_count_test
+  # Background restarts come from the supervisor tick, so it needs a fast
+  # interval: restart the supervisor with PITCHFORK_INTERVAL exported.
+  export PITCHFORK_INTERVAL=1s
+  pitchfork supervisor start --force
+  run pitchfork start retry_count_test
   assert_failure
 
   wait_for_file "$marker"
@@ -498,14 +507,14 @@ EOF
   create_pitchfork_toml <<EOF
 [daemons.exit_retry_guard_test]
 run = "exit 1"
-retry = 2
+ready_retry = 2
 
 [daemons.exit_retry_guard_test.hooks]
 on_exit = "echo x >> $counter"
 EOF
 
   pitchfork supervisor start
-  PITCHFORK_INTERVAL=600s run pitchfork start exit_retry_guard_test
+  run pitchfork start exit_retry_guard_test
   assert_failure
 
   wait_for_file "$counter"

@@ -618,13 +618,18 @@ retry = 3
 ready_delay = 1
 EOF
 
-  run pitchfork supervisor start
+  run pitchfork supervisor start --force
   assert_success
 
+  # The start client fails on the first attempt (ready_retry defaults to 0);
+  # background retries then come from the supervisor tick. Stop after the
+  # first tick retry so budget remains for the post-restart phase.
   pitchfork start retry_persist &
   local start_pid=$!
+  wait_for_log_lines retry_persist 2
 
-  wait_for_log_lines retry_persist 3
+  local lines_before
+  lines_before=$(pitchfork logs retry_persist --raw | wc -l | tr -d ' ')
 
   run pitchfork supervisor stop
   assert_success
@@ -644,10 +649,42 @@ EOF
 
   # Wait for at least one more failure after restart — proves the retry
   # checker resumed from the persisted retry_count.
-  wait_for_logs retry_persist "Failed after 0!" 60
+  wait_for_log_lines retry_persist $((lines_before + 1))
 
   # Verify the daemon eventually stops retrying (reaches terminal state).
   wait_for_status retry_persist errored 60
+}
+
+@test "startup ready_retry loop and background retry never race" {
+  skip_on_windows "tick-interval retry timing is unreliable on Windows CI"
+  export PITCHFORK_INTERVAL=1s
+
+  create_pitchfork_toml <<EOF
+[daemons.retry_race]
+run = "echo \$PITCHFORK_RETRY_COUNT && exit 1"
+ready_delay = 1
+ready_retry = 2
+retry = 3
+EOF
+
+  run pitchfork supervisor start --force
+  assert_success
+
+  # The inline ready_retry loop (attempts 0,1,2) overlaps several supervisor
+  # ticks; the in-flight guard must keep the tick from spawning a second
+  # retry chain. Once the startup budget is exhausted the tick continues
+  # with its own persisted budget (attempts 1,2,3).
+  run pitchfork start retry_race
+  assert_failure
+
+  wait_for_logs retry_race "3" 15
+
+  # The two chains must not interleave: startup attempts 0,1,2, then
+  # background attempts 1,2,3 resumed from the persisted retry_count.
+  run pitchfork logs retry_race --raw
+  local attempts
+  attempts=$(grep -E '^[0-9]+$' <<< "$output" | tr '\n' ' ')
+  [[ "$attempts" == "0 1 2 1 2 3 " ]]
 }
 
 @test "stop daemon with stale PID is idempotent" {

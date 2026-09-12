@@ -35,6 +35,9 @@ Examples:
 - **`--retry <RETRY>`** — Number of times to retry on error exit
 
   **Default:** `0`
+- **`--ready-retry <READY_RETRY>`** — Number of times to retry starting when the process fails before becoming ready
+
+  **Default:** `0`
 - **`-d --delay <DELAY>`** — Delay in seconds before considering daemon ready (default: 3 seconds)
 - **`-o --output <OUTPUT>`** — Wait until output matches this regex pattern before considering daemon ready
 - **`--http <HTTP>`** — Wait until HTTP endpoint returns 2xx status before considering daemon ready

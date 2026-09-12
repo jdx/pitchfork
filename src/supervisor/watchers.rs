@@ -707,6 +707,9 @@ impl Supervisor {
                         let force =
                             matches!(retrigger, crate::pitchfork_toml::CronRetrigger::Always);
                         let mut opts = daemon.to_run_options(cmd);
+                        // A cron trigger is an intentional start and resets
+                        // the background retry budget.
+                        opts.retry_count = 0;
                         opts.dir = crate::config_types::Dir(dir);
                         opts.force = force;
                         opts.wait_ready = false;

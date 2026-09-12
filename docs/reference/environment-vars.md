@@ -55,7 +55,7 @@ Pitchfork supplies these to daemon commands and readiness/health command probes:
 | --- | --- |
 | `PITCHFORK_DAEMON_ID` | Qualified ID, such as `my-project/api` |
 | `PITCHFORK_DAEMON_NAMESPACE` | Namespace alone, such as `my-project` |
-| `PITCHFORK_RETRY_COUNT` | `0` on the initial run, `1` on the first retry, and so on |
+| `PITCHFORK_RETRY_COUNT` | `0` on the initial run, `1` on the first retry, and so on. Counts `ready_retry` attempts during a blocking start and `retry` restarts afterwards |
 | `PORT` / `PORT0` | First resolved port, when `port` is configured |
 | `PORT1`, `PORT2`, … | Additional resolved ports, indexed from zero |
 

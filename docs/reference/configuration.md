@@ -226,20 +226,34 @@ user = "501"
 
 ### `retry`
 
-Number of retry attempts on failure, or `true` for infinite retries. Default: `0`
+Number of times the supervisor restarts the daemon in the background after it exits with an error, or `true` for infinite restarts. Default: `0`
 
-- A number (e.g., `3`) means retry that many times
-- `true` means retry indefinitely
-- `false` or `0` means no retries
+- A number (e.g., `3`) means restart that many times
+- `true` means restart indefinitely
+- `false` or `0` means no background restarts
+
+Background restarts happen on the supervisor's interval tick and apply to any failed daemon, whether it crashed after running fine or failed during startup. The counter resets on each explicit start. Startup failures during a blocking `pitchfork start` are governed separately by `ready_retry`.
 
 ```toml
 [daemons.api]
 run = "npm run server"
-retry = 3  # Retry up to 3 times
+retry = 3  # Restart up to 3 times in the background
 
 [daemons.critical]
 run = "npm run worker"
-retry = true  # Retry forever
+retry = true  # Restart forever
+```
+
+### `ready_retry`
+
+Number of times to retry starting the daemon when it fails before becoming ready, or `true` for infinite retries. Default: `0`
+
+Only applies to blocking starts (e.g. `pitchfork start`, which waits for readiness): the start command retries synchronously with exponential backoff (1s, 2s, 4s, ..., capped at 3600s) until the daemon becomes ready or the budget is exhausted. Background restarts are governed by `retry`.
+
+```toml
+[daemons.api]
+run = "npm run server"
+ready_retry = 3  # Retry startup up to 3 times before giving up
 ```
 
 ### `auto`

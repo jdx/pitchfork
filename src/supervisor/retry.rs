@@ -1,6 +1,10 @@
-//! Retry logic with exponential backoff
+//! Background restart logic (tick-driven) with no backoff
 //!
-//! Handles automatic retrying of failed daemons based on retry configuration.
+//! This module only handles background restarts driven by the `retry`
+//! budget: the interval tick restarts errored daemons that still have budget
+//! left. Startup retries (the `ready_retry` budget) live in the inline loop
+//! inside `Supervisor::run`. The tick skips daemons with an in-flight
+//! `run`, so it never starts a duplicate next to an active start/retry loop.
 
 use super::Supervisor;
 use super::hooks::{HookType, fire_hook};
@@ -12,7 +16,7 @@ impl Supervisor {
     /// Check for daemons that need retrying and attempt to restart them
     pub(crate) async fn check_retry(&self) -> Result<()> {
         // Collect only IDs of daemons that need retrying (avoids cloning entire Daemon structs)
-        let ids_to_retry: Vec<DaemonId> = {
+        let mut ids_to_retry: Vec<DaemonId> = {
             let state_file = self.state_file.lock().await;
             state_file
                 .daemons
@@ -27,6 +31,14 @@ impl Supervisor {
                 .map(|(id, _d)| id.clone())
                 .collect()
         };
+
+        // Skip daemons whose start/retry loop is in flight: `run` holds a
+        // reference count on the id for its whole duration (including inline
+        // backoff sleeps) and re-checks state between attempts, so retrying
+        // here would race it. A concurrent run adds its own count, so it can
+        // exit early without clearing the first run's protection.
+        let in_flight = self.in_flight_runs.lock().await.clone();
+        ids_to_retry.retain(|id| !in_flight.contains_key(id));
 
         for id in ids_to_retry {
             // Look up daemon when needed and re-verify retry criteria
@@ -45,6 +57,11 @@ impl Supervisor {
                     _ => continue, // Daemon was removed or no longer needs retry
                 }
             };
+            // Re-verify under the current tick: an in-flight start/retry loop
+            // may have claimed this daemon since the collection pass.
+            if self.in_flight_runs.lock().await.contains_key(&id) {
+                continue; // an in-flight start/retry loop owns this daemon
+            }
             info!(
                 "retrying daemon {} ({}/{} attempts)",
                 id,

@@ -216,7 +216,7 @@ EOF
   [[ $count -eq 1 ]]
 }
 
-@test "retry three retries with exponential backoff" {
+@test "ready_retry three retries with exponential backoff" {
   local fail_script
   fail_script="$(script_path fail.sh)"
 
@@ -224,7 +224,7 @@ EOF
 [daemons.retry_three]
 run = 'bash $fail_script 0'
 ready_delay = 1
-retry = 3
+ready_retry = 3
 EOF
 
   local start_time elapsed
@@ -242,7 +242,7 @@ EOF
   [[ $count -eq 4 ]]
 }
 
-@test "retry succeeds on third attempt" {
+@test "ready_retry succeeds on third attempt" {
   local success_script
   success_script="$(script_path success_on_third.sh)"
 
@@ -250,7 +250,7 @@ EOF
 [daemons.retry_success]
 run = 'bash $success_script'
 ready_delay = 1
-retry = 2
+ready_retry = 2
 
 [daemons.retry_success.env]
 TEST_SUCCESS_ON_THIRD_TIMESTAMP = "$BATS_TEST_NAME"
