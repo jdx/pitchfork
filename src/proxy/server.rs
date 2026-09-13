@@ -188,7 +188,19 @@ fn wildcard_slug_lookup<'a>(
     entries: &'a std::collections::HashMap<String, CachedSlugEntry>,
     wildcard: bool,
 ) -> Option<&'a CachedSlugEntry> {
-    entries.get(subdomain).or_else(|| {
+    // Host names are case-insensitive (RFC 4343) and browsers lowercase the Host
+    // header before sending it, so a slug registered with capitals would be
+    // unreachable from the address bar if this compared exactly.
+    let get = |key: &str| -> Option<&'a CachedSlugEntry> {
+        entries.get(key).or_else(|| {
+            entries
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v)
+        })
+    };
+
+    get(subdomain).or_else(|| {
         if !wildcard {
             return None;
         }
@@ -196,8 +208,28 @@ fn wildcard_slug_lookup<'a>(
         subdomain
             .match_indices('.')
             .map(|(i, _)| &subdomain[i + 1..])
-            .find_map(|candidate| entries.get(candidate))
+            .find_map(get)
     })
+}
+
+/// Strip a trailing `.{suffix}` from `s`, ignoring ASCII case.
+///
+/// Returns the remaining prefix, or `None` when `s` does not end that way.
+fn strip_dot_suffix_ignore_case(s: &str, suffix: &str) -> Option<String> {
+    let needle_len = suffix.len() + 1;
+    if s.len() <= needle_len {
+        return None;
+    }
+    let split = s.len() - needle_len;
+    if !s.is_char_boundary(split) {
+        return None;
+    }
+    let (head, tail) = s.split_at(split);
+    if tail.starts_with('.') && tail[1..].eq_ignore_ascii_case(suffix) {
+        Some(head.to_string())
+    } else {
+        None
+    }
 }
 
 /// Look up a slug in the cached table.
@@ -1379,12 +1411,14 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
     // ─── Worktree prefix extraction ──────────────────────────────────────
     // When a wildcard subdomain like "feature-a.myapp" matched slug "myapp",
     // the prefix "feature-a" may correspond to a git worktree or jj workspace.
-    let (expected_namespace, worktree_dir) = if subdomain != cached.slug {
-        let prefix = subdomain
-            .strip_suffix(&format!(".{}", cached.slug))
-            .map(|s| s.to_string());
+    let (expected_namespace, worktree_dir) = if !subdomain.eq_ignore_ascii_case(&cached.slug) {
+        let prefix = strip_dot_suffix_ignore_case(&subdomain, &cached.slug);
         match prefix {
-            Some(ref p) => match cached.worktrees.iter().find(|w| w.sanitized_branch == *p) {
+            Some(ref p) => match cached
+                .worktrees
+                .iter()
+                .find(|w| w.sanitized_branch.eq_ignore_ascii_case(p))
+            {
                 Some(wt) => {
                     let ns = wt.namespace.clone().or_else(|| {
                         log::warn!(
@@ -1925,6 +1959,60 @@ mod tests {
         let result = wildcard_slug_lookup("tenant.myapp", &entries, true);
         assert!(result.is_some());
         assert_eq!(result.unwrap().daemon_name, "tenant-daemon");
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_ignores_case() {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("myapp".to_string(), make_entry("myapp"));
+        // Browsers lowercase the Host header, so every spelling must resolve.
+        for host in ["MyApp", "MYAPP", "myapp"] {
+            let result = wildcard_slug_lookup(host, &entries, true);
+            assert!(result.is_some(), "exact lookup failed for {host}");
+            assert_eq!(result.unwrap().daemon_name, "myapp");
+        }
+        // ...including through the wildcard fallback.
+        for host in ["Tenant.MyApp", "tenant.MYAPP", "A.B.MyApp"] {
+            let result = wildcard_slug_lookup(host, &entries, true);
+            assert!(result.is_some(), "wildcard lookup failed for {host}");
+            assert_eq!(result.unwrap().daemon_name, "myapp");
+        }
+    }
+
+    #[test]
+    fn test_wildcard_slug_lookup_case_insensitive_registration() {
+        let mut entries = std::collections::HashMap::new();
+        let mut entry = make_entry("upper");
+        entry.slug = "MyApp".to_string();
+        entries.insert("MyApp".to_string(), entry);
+        // A slug registered with capitals is reachable from a lowercased host.
+        let result = wildcard_slug_lookup("myapp", &entries, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().daemon_name, "upper");
+    }
+
+    #[test]
+    fn test_strip_dot_suffix_ignore_case() {
+        assert_eq!(
+            strip_dot_suffix_ignore_case("feature-a.myapp", "myapp"),
+            Some("feature-a".to_string())
+        );
+        assert_eq!(
+            strip_dot_suffix_ignore_case("Feature-A.MyApp", "myapp"),
+            Some("Feature-A".to_string())
+        );
+        assert_eq!(
+            strip_dot_suffix_ignore_case("feature-a.myapp", "MYAPP"),
+            Some("feature-a".to_string())
+        );
+        // No dot separator, no prefix left, and a non-matching suffix all fail.
+        assert_eq!(strip_dot_suffix_ignore_case("xmyapp", "myapp"), None);
+        assert_eq!(strip_dot_suffix_ignore_case(".myapp", "myapp"), None);
+        assert_eq!(strip_dot_suffix_ignore_case("myapp", "myapp"), None);
+        assert_eq!(strip_dot_suffix_ignore_case("feature-a.other", "myapp"), None);
+        // Multi-byte input must not panic on a mid-character split.
+        assert_eq!(strip_dot_suffix_ignore_case("café.myapp", "myapp"), Some("café".to_string()));
+        assert_eq!(strip_dot_suffix_ignore_case("café", "afé"), None);
     }
 
     #[cfg(feature = "proxy-tls")]
