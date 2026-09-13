@@ -144,7 +144,7 @@ export default defineConfig({
 
     socialLinks: [{ icon: "github", link: "https://github.com/jdx/pitchfork" }],
 
-    logo: "/img/android-chrome-192x192.png",
+    logo: "/favicon.svg",
 
     footer: false,
 
@@ -191,25 +191,7 @@ export default defineConfig({
   } catch (e) {}
 })();`,
     ],
-    ["link", { rel: "icon", href: "/img/favicon.ico", sizes: "any" }],
-    [
-      "link",
-      {
-        rel: "icon",
-        href: "/img/favicon-32x32.png",
-        type: "image/png",
-        sizes: "32x32",
-      },
-    ],
     ["link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }],
-    [
-      "link",
-      {
-        rel: "apple-touch-icon",
-        href: "/img/apple-touch-icon.png",
-        sizes: "180x180",
-      },
-    ],
     ["link", { rel: "manifest", href: "/site.webmanifest" }],
     ["meta", { name: "theme-color", content: "#dc2626" }],
     ["meta", { property: "og:type", content: "website" }],

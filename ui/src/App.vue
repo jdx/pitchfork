@@ -4,7 +4,7 @@ import { Toaster } from 'vue-sonner'
 
 const route = useRoute()
 const active = (name: string) => route.name === name ? 'active' : ''
-const logoUrl = '/img/logo.png'
+const logoUrl = '/favicon.svg'
 </script>
 
 <template>
@@ -62,7 +62,7 @@ const logoUrl = '/img/logo.png'
   gap: @space-md;
   text-decoration: none;
 
-  img { height: 24px; width: auto; filter: brightness(1.2); }
+  img { height: 24px; width: auto; }
 }
 
 .logo-text {

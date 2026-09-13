@@ -1,5 +1,5 @@
 <div align="center">
-  <a href="https://pitchfork.jdx.dev"><img src="docs/public/img/logo.png" alt="pitchfork" width="160" height="160" /></a>
+  <a href="https://pitchfork.jdx.dev"><img src="docs/public/favicon.svg" alt="pitchfork" width="160" height="160" /></a>
   <h1>pitchfork</h1>
   <p><strong>Your project's background services, under control.</strong></p>
   <p>Start once. Wait for readiness. Get back to work.</p>

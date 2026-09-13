@@ -106,7 +106,7 @@ const features = [
         </div>
         <img
           class="pf-mascot"
-          src="/img/logo.png"
+          src="/favicon.svg"
           width="116"
           height="116"
           alt=""
