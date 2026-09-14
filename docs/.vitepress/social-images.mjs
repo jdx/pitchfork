@@ -3,14 +3,18 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Resvg } from "@resvg/resvg-js";
+import sharp from "sharp";
 
 const fontFile = fileURLToPath(
   new URL("./fonts/SpaceGrotesk.ttf", import.meta.url),
 );
-const logo = readFileSync(
-  new URL("../public/favicon.svg", import.meta.url),
-  "utf8",
-);
+// Downsample once with a proper image filter before embedding at native size.
+const logo = await sharp(
+  readFileSync(new URL("../public/img/logo.png", import.meta.url)),
+)
+  .resize(280, 280)
+  .png()
+  .toBuffer();
 const escapeXml = (value) =>
   String(value).replace(
     /[<>&"']/g,
@@ -100,7 +104,7 @@ export function socialCard(title) {
       <text x="64" y="564" font-size="26" fill="#c2b6a4">pitchfork.jdx.dev</text>
       <text x="1136" y="564" text-anchor="end" font-size="26" fill="#ef4444">pitchfork</text>
     </g>
-    <image x="855" y="145" width="280" height="280" xlink:href="data:image/svg+xml;base64,${Buffer.from(logo).toString("base64")}"/>
+    <image x="855" y="145" width="280" height="280" xlink:href="data:image/png;base64,${logo.toString("base64")}"/>
   </svg>`;
   const png = new Resvg(svg, { font: fontOptions }).render().asPng();
   const hash = createHash("sha256").update(png).digest("hex").slice(0, 16);

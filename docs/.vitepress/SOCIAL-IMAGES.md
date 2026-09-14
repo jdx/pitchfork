@@ -1,8 +1,9 @@
 # Social previews
 
 The docs build generates a 1200×630 PNG per page from its title and pitchfork's
-existing logo. The homepage uses a short product description. Images are
-rendered locally with resvg and the bundled OFL-licensed Space Grotesk font;
+master logo at `docs/public/img/logo.png`. The homepage uses a short product
+description. The logo is downscaled with sharp; cards are rendered locally
+with resvg and the bundled OFL-licensed Space Grotesk font;
 no rendering service or system font is required. Image URLs include a content
 hash of the final PNG bytes so title, artwork, font, and renderer changes get a
 new URL.

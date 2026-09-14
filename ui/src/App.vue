@@ -62,7 +62,7 @@ const logoUrl = '/img/logo.png'
   gap: @space-md;
   text-decoration: none;
 
-  img { height: 24px; width: auto; filter: brightness(1.2); }
+  img { height: 24px; width: auto; }
 }
 
 .logo-text {

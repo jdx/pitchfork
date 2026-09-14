@@ -201,7 +201,6 @@ export default defineConfig({
         sizes: "32x32",
       },
     ],
-    ["link", { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" }],
     [
       "link",
       {
