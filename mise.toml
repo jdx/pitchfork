@@ -86,6 +86,11 @@ run = [
   "git add pitchfork.usage.kdl docs",
 ]
 
+[tasks."render:branding"]
+description = "Regenerate logo and icon exports from the approved master PNG"
+dir = "docs"
+run = "aube install && node .vitepress/render-branding.mjs"
+
 [tasks.install-dev]
 depends = ["build:ui"]
 env = { "PITCHFORK_LOG" = "debug" }
