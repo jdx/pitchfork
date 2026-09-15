@@ -41,7 +41,7 @@ clx = "3"
 comfy-table = { version = "8", features = ["custom_styling"] }
 console = "0.16"
 cron = "0.17"
-dirs = "6"
+dirs = "7"
 duct = "1"
 dunce = "1"
 exponential-backoff = "2"
