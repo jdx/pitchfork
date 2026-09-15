@@ -283,8 +283,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@iconify-json/simple-icons@1.2.95':
-    resolution: {integrity: sha512-QwWgcoiL+eNCD38QM0OStFVFoOgDvzeHrcwMAvATvcFl0VvMEtED92qp3K3juS0H6RZ9BGUlgq9mODPwNWkjJg==}
+  '@iconify-json/simple-icons@1.2.96':
+    resolution: {integrity: sha512-/FmCYo/H5rIywTLV/P6OYsr0rg/31vuc8jYq0QnkOZl6m7PWIs+h5oAnSTT2cqRhOsMaKqbXcdkka6tnZ1WiUA==}
 
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
@@ -1316,7 +1316,7 @@ snapshots:
   '@esbuild/win32-x64@0.21.5':
     optional: true
 
-  '@iconify-json/simple-icons@1.2.95':
+  '@iconify-json/simple-icons@1.2.96':
     dependencies:
       '@iconify/types': 2.0.0
 
@@ -2050,7 +2050,7 @@ snapshots:
     dependencies:
       '@docsearch/css': 3.8.2
       '@docsearch/js': 3.8.2
-      '@iconify-json/simple-icons': 1.2.95
+      '@iconify-json/simple-icons': 1.2.96
       '@shikijs/core': 2.5.0
       '@shikijs/transformers': 2.5.0
       '@shikijs/types': 2.5.0
