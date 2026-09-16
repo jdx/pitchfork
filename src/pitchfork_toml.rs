@@ -1623,7 +1623,24 @@ impl PitchforkToml {
         }
     }
 
+    /// Whether more than one registry key folds to `slug`'s ASCII-lowercased form.
+    ///
+    /// Host names are case-insensitive (RFC 4343), so the proxy refuses to route
+    /// such a slug at all rather than pick one of the spellings.  Callers that
+    /// turn a slug into a URL must not advertise an address the proxy will
+    /// reject, so they check this first.
+    pub fn slug_is_ambiguous(slug: &str, global_slugs: &IndexMap<String, SlugEntry>) -> bool {
+        global_slugs
+            .keys()
+            .filter(|k| k.eq_ignore_ascii_case(slug))
+            .count()
+            > 1
+    }
+
     /// Find the registered slug for a daemon using a pre-loaded slug registry.
+    ///
+    /// Returns `None` for a slug the proxy will not route — see
+    /// [`Self::slug_is_ambiguous`].
     pub fn find_slug_for_daemon_in_registry(
         daemon_id: &DaemonId,
         global_slugs: &IndexMap<String, SlugEntry>,
@@ -1633,6 +1650,12 @@ impl PitchforkToml {
             .find(|(slug, entry)| {
                 let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
                 if daemon_id.name() != daemon_name {
+                    return false;
+                }
+
+                // Skipped rather than returned and discarded: another alias for
+                // the same daemon may still be routable.
+                if Self::slug_is_ambiguous(slug, global_slugs) {
                     return false;
                 }
 
@@ -2144,6 +2167,61 @@ dir = "~/projects/web"
         let parsed = PitchforkToml::read(&path).unwrap();
         assert_eq!(parsed.settings.web.auto_start, Some(true));
         assert_eq!(parsed.settings.general.log_level.as_deref(), Some("debug"));
+    }
+
+    fn slug_entry(namespace: &str, daemon: Option<&str>) -> SlugEntry {
+        SlugEntry {
+            dir: None,
+            namespace: Some(namespace.to_string()),
+            daemon: daemon.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn test_slug_is_ambiguous() {
+        let mut slugs = IndexMap::new();
+        slugs.insert("api".to_string(), slug_entry("my-project", None));
+        assert!(!PitchforkToml::slug_is_ambiguous("api", &slugs));
+
+        slugs.insert("API".to_string(), slug_entry("other-project", None));
+        // Host names are case-insensitive, so both spellings are ambiguous.
+        assert!(PitchforkToml::slug_is_ambiguous("api", &slugs));
+        assert!(PitchforkToml::slug_is_ambiguous("API", &slugs));
+    }
+
+    #[test]
+    fn test_find_slug_for_daemon_skips_case_collisions() {
+        let id = DaemonId::new("my-project", "api");
+        let mut slugs = IndexMap::new();
+        slugs.insert("api".to_string(), slug_entry("my-project", None));
+        assert_eq!(
+            PitchforkToml::find_slug_for_daemon_in_registry(&id, &slugs),
+            Some("api".to_string())
+        );
+
+        // The proxy refuses to route either spelling, so no URL may be
+        // advertised for this daemon.
+        slugs.insert("API".to_string(), slug_entry("other-project", None));
+        assert_eq!(
+            PitchforkToml::find_slug_for_daemon_in_registry(&id, &slugs),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_slug_for_daemon_prefers_a_routable_alias() {
+        let id = DaemonId::new("my-project", "api");
+        let mut slugs = IndexMap::new();
+        // A colliding pair comes first in config order, then a routable alias
+        // for the same daemon.
+        slugs.insert("api".to_string(), slug_entry("my-project", None));
+        slugs.insert("API".to_string(), slug_entry("my-project", None));
+        slugs.insert("my-api".to_string(), slug_entry("my-project", Some("api")));
+
+        assert_eq!(
+            PitchforkToml::find_slug_for_daemon_in_registry(&id, &slugs),
+            Some("my-api".to_string())
+        );
     }
 
     #[test]
