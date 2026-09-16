@@ -265,11 +265,11 @@ impl Procs {
         // a proc, pgrp, or session) and hand the exact PGID to a new group
         // leader between the two syscalls, which is not reachable in practice.
         #[cfg(not(target_os = "linux"))]
-        if let Some(expected) = expected_start_time {
-            if !self.start_time_matches(pid, expected) {
-                debug!("process {pid} identity changed before killpg; refusing to signal it");
-                return Ok(false);
-            }
+        if let Some(expected) = expected_start_time
+            && !self.start_time_matches(pid, expected)
+        {
+            debug!("process {pid} identity changed before killpg; refusing to signal it");
+            return Ok(false);
         }
 
         debug!("killing process group {pgid} with {signal_name}");
