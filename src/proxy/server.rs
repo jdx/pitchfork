@@ -89,27 +89,93 @@ static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
         })
     });
 
+/// Lowercased keys that more than one spelling in `keys` maps to.
+///
+/// Host names are case-insensitive (RFC 4343), so such keys are ambiguous as
+/// routing targets no matter which spelling a request uses.
+fn ascii_case_collisions<'a>(
+    keys: impl Iterator<Item = &'a str>,
+) -> std::collections::HashSet<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut collisions = std::collections::HashSet::new();
+    for key in keys {
+        let folded = key.to_ascii_lowercase();
+        if !seen.insert(folded.clone()) {
+            collisions.insert(folded);
+        }
+    }
+    collisions
+}
+
+/// Drop every worktree whose sanitized branch is ambiguous under
+/// case-insensitive host matching, keeping the unambiguous ones.
+///
+/// Both sides of a collision are dropped rather than one being picked: the
+/// alternative routes a request to a worktree the user did not name, which is
+/// worse than not routing it at all.
+fn reject_case_colliding_worktrees(
+    wts: Vec<crate::proxy::worktree::WorktreeEntry>,
+) -> Vec<crate::proxy::worktree::WorktreeEntry> {
+    let collisions = ascii_case_collisions(wts.iter().map(|w| w.sanitized_branch.as_str()));
+    if collisions.is_empty() {
+        return wts;
+    }
+
+    let (dropped, kept): (Vec<_>, Vec<_>) = wts
+        .into_iter()
+        .partition(|w| collisions.contains(&w.sanitized_branch.to_ascii_lowercase()));
+
+    let mut folded: Vec<&String> = collisions.iter().collect();
+    folded.sort();
+    for key in folded {
+        let mut branches: Vec<&str> = dropped
+            .iter()
+            .filter(|w| w.sanitized_branch.eq_ignore_ascii_case(key))
+            .map(|w| w.branch.as_str())
+            .collect();
+        branches.sort();
+        log::warn!(
+            "Worktree slug collision: branches [{}] all route to '{key}' under \
+             case-insensitive host matching. None of them will be routed; \
+             rename a branch to disambiguate.",
+            branches.join(", "),
+        );
+    }
+
+    kept
+}
+
 /// Build the slug lookup table from disk (expensive — involves file I/O + subprocesses).
 /// Called outside the cache lock via `spawn_blocking` to avoid blocking the Tokio runtime.
+///
+/// Keys are ASCII-lowercased, and slugs that collide once folded are left out
+/// entirely — see [`reject_case_colliding_worktrees`] for why ambiguity is
+/// rejected rather than resolved.
 fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let collisions = ascii_case_collisions(global_slugs.keys().map(String::as_str));
+    let mut folded: Vec<&String> = collisions.iter().collect();
+    folded.sort();
+    for key in folded {
+        let mut spellings: Vec<&str> = global_slugs
+            .keys()
+            .filter(|s| s.eq_ignore_ascii_case(key))
+            .map(String::as_str)
+            .collect();
+        spellings.sort();
+        log::warn!(
+            "Slug collision: [{}] differ only by case and host names are case-insensitive. \
+             None of them will be routed; remove or rename all but one.",
+            spellings.join(", "),
+        );
+    }
+
     let mut entries: std::collections::HashMap<String, CachedSlugEntry> =
         std::collections::HashMap::with_capacity(global_slugs.len());
     let worktree_enabled = crate::settings::settings().general.worktree;
     for (slug, entry) in &global_slugs {
-        // Keys are stored ASCII-lowercased because host names are
-        // case-insensitive (RFC 4343).  Two slugs differing only by case would
-        // otherwise both be routable and the winner would depend on HashMap
-        // iteration order, so keep the first in config order and drop the rest.
         let key = slug.to_ascii_lowercase();
-        if let Some(existing) = entries.get(&key) {
-            log::warn!(
-                "Slug collision: '{}' and '{}' differ only by case and host names are \
-                 case-insensitive. Only '{}' (first in config order) will be routed.",
-                existing.slug,
-                slug,
-                existing.slug,
-            );
+        if collisions.contains(&key) {
             continue;
         }
         let ns = entry.resolve_namespace();
@@ -119,31 +185,15 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
                 Some(dir) => crate::proxy::worktree::discover_worktrees(&dir),
                 None => vec![],
             };
-            // Warn about sanitized-branch collisions and drop duplicates so that
-            // unreachable entries don't waste memory in the cache.
-            let mut seen = std::collections::HashMap::with_capacity(wts.len());
-            let mut deduped = Vec::with_capacity(wts.len());
-            for mut wt in wts {
-                let wt_ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&wt.path).ok();
-                wt.namespace = wt_ns;
-                match seen.entry(wt.sanitized_branch.to_ascii_lowercase()) {
-                    std::collections::hash_map::Entry::Occupied(e) => {
-                        log::warn!(
-                            "Worktree slug collision: '{}' and '{}' sanitize to '{}' under \
-                             case-insensitive host matching. \
-                             Only the first (in discovery order) will be routed.",
-                            e.get(),
-                            wt.branch,
-                            wt.sanitized_branch,
-                        );
-                    }
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(wt.branch.clone());
-                        deduped.push(wt);
-                    }
-                }
-            }
-            deduped
+            let wts = wts
+                .into_iter()
+                .map(|mut wt| {
+                    wt.namespace =
+                        crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&wt.path).ok();
+                    wt
+                })
+                .collect();
+            reject_case_colliding_worktrees(wts)
         } else {
             vec![]
         };
@@ -2003,6 +2053,68 @@ mod tests {
             assert!(result.is_some(), "lookup failed for {host}");
             assert_eq!(result.unwrap().daemon_name, "upper");
         }
+    }
+
+    fn make_worktree(branch: &str, sanitized: &str) -> crate::proxy::worktree::WorktreeEntry {
+        crate::proxy::worktree::WorktreeEntry {
+            path: std::path::PathBuf::from(format!("/tmp/{sanitized}")),
+            branch: branch.to_string(),
+            sanitized_branch: sanitized.to_string(),
+            namespace: Some(sanitized.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_ascii_case_collisions() {
+        let none = ascii_case_collisions(["myapp", "other", "third"].into_iter());
+        assert!(none.is_empty());
+
+        let folded = ascii_case_collisions(["MyApp", "myapp", "other"].into_iter());
+        assert_eq!(folded.len(), 1);
+        assert!(folded.contains("myapp"));
+
+        // Identical spellings collide too, not just case-only variants.
+        let exact = ascii_case_collisions(["dup", "dup"].into_iter());
+        assert!(exact.contains("dup"));
+
+        // Folding is ASCII-only: DNS does not case-fold non-ASCII labels.
+        let unicode = ascii_case_collisions(["café", "CAFÉ"].into_iter());
+        assert!(unicode.is_empty());
+    }
+
+    #[test]
+    fn test_reject_case_colliding_worktrees_drops_both_sides() {
+        let wts = vec![
+            make_worktree("Feature-A", "Feature-A"),
+            make_worktree("feature-a", "feature-a"),
+            make_worktree("main", "main"),
+        ];
+        let kept = reject_case_colliding_worktrees(wts);
+        // Neither spelling routes; picking one would send the request to a
+        // worktree the user did not name.
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].sanitized_branch, "main");
+    }
+
+    #[test]
+    fn test_reject_case_colliding_worktrees_keeps_unambiguous() {
+        let wts = vec![
+            make_worktree("main", "main"),
+            make_worktree("feature/a", "feature-a"),
+        ];
+        let kept = reject_case_colliding_worktrees(wts);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn test_reject_case_colliding_worktrees_drops_sanitize_duplicates() {
+        // Distinct branches can sanitize to the same string without any case
+        // difference; that is ambiguous for the same reason.
+        let wts = vec![
+            make_worktree("feature/a", "feature-a"),
+            make_worktree("feature.a", "feature-a"),
+        ];
+        assert!(reject_case_colliding_worktrees(wts).is_empty());
     }
 
     #[test]

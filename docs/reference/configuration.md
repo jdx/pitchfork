@@ -819,6 +819,12 @@ Each slug entry maps to:
 
 Slug and namespace `dir` values use the same `~` and `~/...` expansion.
 
+Slugs are matched case-insensitively, because host names are. Two slugs that
+differ only by case (`api` and `API`) are therefore ambiguous, and the proxy
+refuses to route either one rather than guess; the supervisor log names the
+colliding spellings. The same applies to worktree prefixes whose branch names
+sanitize to the same subdomain.
+
 Use `pitchfork proxy add` to manage slugs:
 
 ```bash
