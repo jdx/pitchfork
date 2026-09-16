@@ -89,24 +89,6 @@ static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
         })
     });
 
-/// Lowercased keys that more than one spelling in `keys` maps to.
-///
-/// Host names are case-insensitive (RFC 4343), so such keys are ambiguous as
-/// routing targets no matter which spelling a request uses.
-fn ascii_case_collisions<'a>(
-    keys: impl Iterator<Item = &'a str>,
-) -> std::collections::HashSet<String> {
-    let mut seen = std::collections::HashSet::new();
-    let mut collisions = std::collections::HashSet::new();
-    for key in keys {
-        let folded = key.to_ascii_lowercase();
-        if !seen.insert(folded.clone()) {
-            collisions.insert(folded);
-        }
-    }
-    collisions
-}
-
 /// Drop every worktree whose sanitized branch is ambiguous under
 /// case-insensitive host matching, keeping the unambiguous ones.
 ///
@@ -116,7 +98,8 @@ fn ascii_case_collisions<'a>(
 fn reject_case_colliding_worktrees(
     wts: Vec<crate::proxy::worktree::WorktreeEntry>,
 ) -> Vec<crate::proxy::worktree::WorktreeEntry> {
-    let collisions = ascii_case_collisions(wts.iter().map(|w| w.sanitized_branch.as_str()));
+    let collisions =
+        crate::proxy::ascii_case_collisions(wts.iter().map(|w| w.sanitized_branch.as_str()));
     if collisions.is_empty() {
         return wts;
     }
@@ -153,7 +136,7 @@ fn reject_case_colliding_worktrees(
 /// rejected rather than resolved.
 fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    let collisions = ascii_case_collisions(global_slugs.keys().map(String::as_str));
+    let collisions = crate::proxy::ascii_case_collisions(global_slugs.keys().map(String::as_str));
     let mut folded: Vec<&String> = collisions.iter().collect();
     folded.sort();
     for key in folded {
@@ -2062,24 +2045,6 @@ mod tests {
             sanitized_branch: sanitized.to_string(),
             namespace: Some(sanitized.to_string()),
         }
-    }
-
-    #[test]
-    fn test_ascii_case_collisions() {
-        let none = ascii_case_collisions(["myapp", "other", "third"].into_iter());
-        assert!(none.is_empty());
-
-        let folded = ascii_case_collisions(["MyApp", "myapp", "other"].into_iter());
-        assert_eq!(folded.len(), 1);
-        assert!(folded.contains("myapp"));
-
-        // Identical spellings collide too, not just case-only variants.
-        let exact = ascii_case_collisions(["dup", "dup"].into_iter());
-        assert!(exact.contains("dup"));
-
-        // Folding is ASCII-only: DNS does not case-fold non-ASCII labels.
-        let unicode = ascii_case_collisions(["café", "CAFÉ"].into_iter());
-        assert!(unicode.is_empty());
     }
 
     #[test]

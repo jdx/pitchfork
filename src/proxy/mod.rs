@@ -17,6 +17,24 @@ pub mod server;
 pub mod trust;
 pub mod worktree;
 
+/// Lowercased keys that more than one spelling in `keys` maps to.
+///
+/// Host names are case-insensitive (RFC 4343), so such keys are ambiguous as
+/// routing targets no matter which spelling a request uses.
+pub(crate) fn ascii_case_collisions<'a>(
+    keys: impl Iterator<Item = &'a str>,
+) -> std::collections::HashSet<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut collisions = std::collections::HashSet::new();
+    for key in keys {
+        let folded = key.to_ascii_lowercase();
+        if !seen.insert(folded.clone()) {
+            collisions.insert(folded);
+        }
+    }
+    collisions
+}
+
 /// Build a proxy URL from an optional slug and settings.
 ///
 /// Returns `None` if:
@@ -42,4 +60,27 @@ pub fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Opt
     } else {
         format!("{scheme}://{host}:{effective_port}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ascii_case_collisions() {
+        let none = ascii_case_collisions(["myapp", "other", "third"].into_iter());
+        assert!(none.is_empty());
+
+        let folded = ascii_case_collisions(["MyApp", "myapp", "other"].into_iter());
+        assert_eq!(folded.len(), 1);
+        assert!(folded.contains("myapp"));
+
+        // Identical spellings collide too, not just case-only variants.
+        let exact = ascii_case_collisions(["dup", "dup"].into_iter());
+        assert!(exact.contains("dup"));
+
+        // Folding is ASCII-only: DNS does not case-fold non-ASCII labels.
+        let unicode = ascii_case_collisions(["café", "CAFÉ"].into_iter());
+        assert!(unicode.is_empty());
+    }
 }

@@ -24,11 +24,21 @@ static BLANK_LINES_RE: OnceLock<regex::Regex> = OnceLock::new();
 /// Best-effort: logs a warning on failure (e.g. permission denied) and
 /// does not prevent proxy startup.
 fn sync_hosts_file_with_slugs(bind_ip: &str, tld: &str, slug_names: &[String]) {
-    let entries: Vec<String> = slug_names
+    write_hosts_block(&hosts_entries(bind_ip, tld, slug_names));
+}
+
+/// One `<ip> <slug>.<tld>` line per routable slug.
+///
+/// Slugs that collide with another by case are left out: host names are
+/// case-insensitive, so the proxy refuses to route them, and an entry here
+/// would point at an address it will not serve.
+fn hosts_entries(bind_ip: &str, tld: &str, slug_names: &[String]) -> Vec<String> {
+    let collisions = crate::proxy::ascii_case_collisions(slug_names.iter().map(String::as_str));
+    slug_names
         .iter()
+        .filter(|slug| !collisions.contains(&slug.to_ascii_lowercase()))
         .map(|slug| format!("{bind_ip} {slug}.{tld}"))
-        .collect();
-    write_hosts_block(&entries);
+        .collect()
 }
 
 /// Refresh `/etc/hosts` from the current settings if sync is enabled.
@@ -176,6 +186,14 @@ mod tests {
         assert!(block.ends_with("\n# pitchfork-end"));
         assert!(block.contains("127.0.0.1 myapp.localhost"));
         assert!(block.contains("127.0.0.1 api.myapp.localhost"));
+    }
+
+    #[test]
+    fn test_hosts_entries_omits_case_collisions() {
+        let slugs = ["myapp".to_string(), "API".to_string(), "api".to_string()];
+        let entries = hosts_entries("127.0.0.1", "localhost", &slugs);
+        // Neither spelling of the colliding slug is published.
+        assert_eq!(entries, vec!["127.0.0.1 myapp.localhost".to_string()]);
     }
 
     #[test]

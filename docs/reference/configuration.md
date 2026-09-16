@@ -825,6 +825,11 @@ refuses to route either one rather than guess; the supervisor log names the
 colliding spellings. The same applies to worktree prefixes whose branch names
 sanitize to the same subdomain.
 
+`pitchfork proxy status` still lists a colliding slug, with status `collision`
+and no URL, so the misconfiguration is visible. No `/etc/hosts` entry is written
+for it, and `pitchfork status`, `pitchfork list` and the daemon API omit its
+proxy URL.
+
 Use `pitchfork proxy add` to manage slugs:
 
 ```bash

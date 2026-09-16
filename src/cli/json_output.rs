@@ -108,7 +108,9 @@ pub struct JsonLanInfo {
 #[derive(Serialize)]
 pub struct JsonSlugEntry {
     pub slug: String,
-    pub url: String,
+    /// Absent when the slug is not routable (see `status`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     pub dir: String,
     pub daemon: String,
     pub status: String,

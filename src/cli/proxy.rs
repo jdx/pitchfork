@@ -264,11 +264,16 @@ impl ProxyStatus {
             .iter()
             .map(|(slug, entry)| {
                 let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
-                let url = if effective_port == standard_port {
-                    format!("{scheme}://{slug}.{tld}")
-                } else {
-                    format!("{scheme}://{slug}.{tld}:{effective_port}")
-                };
+                // Listed rather than hidden: this command is how a user finds
+                // out why a registered slug stopped resolving.
+                let ambiguous = PitchforkToml::slug_is_ambiguous(slug, &slugs);
+                let url = (!ambiguous).then(|| {
+                    if effective_port == standard_port {
+                        format!("{scheme}://{slug}.{tld}")
+                    } else {
+                        format!("{scheme}://{slug}.{tld}:{effective_port}")
+                    }
+                });
                 let expected_ns = entry.resolve_dir().and_then(|dir| {
                     crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&dir).ok()
                 });
@@ -312,6 +317,11 @@ impl ProxyStatus {
                     }
                 } else {
                     ("unknown".to_string(), None)
+                };
+                let status_str = if ambiguous {
+                    "collision".to_string()
+                } else {
+                    status_str
                 };
                 JsonSlugEntry {
                     slug: slug.clone(),
@@ -373,7 +383,13 @@ impl ProxyStatus {
             println!();
             for entry in &slug_entries {
                 println!("  {}", entry.slug);
-                println!("    URL:    {}", entry.url);
+                match &entry.url {
+                    Some(url) => println!("    URL:    {url}"),
+                    None => println!(
+                        "    URL:    (none — another slug differs only by case; \
+                         host names are case-insensitive, so neither is routed)"
+                    ),
+                }
                 println!("    Dir:    {}", entry.dir);
                 println!("    Daemon: {}", entry.daemon);
                 let port_str = entry
