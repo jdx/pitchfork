@@ -73,6 +73,10 @@ pub struct CachedSlugEntry {
     pub dir: std::path::PathBuf,
     /// Worktrees (git) / workspaces (jj) discovered under this slug's project directory.
     pub worktrees: Vec<crate::proxy::worktree::WorktreeEntry>,
+    /// Sanitized worktree prefixes (ASCII-lowercased) that were discovered but
+    /// are ambiguous, kept so a request naming one is refused rather than
+    /// falling through to the parent slug as an unknown wildcard prefix.
+    pub rejected_worktree_prefixes: std::collections::HashSet<String>,
 }
 
 /// In-memory cache for the global slug registry + derived namespaces.
@@ -97,11 +101,14 @@ static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
 /// worse than not routing it at all.
 fn reject_case_colliding_worktrees(
     wts: Vec<crate::proxy::worktree::WorktreeEntry>,
-) -> Vec<crate::proxy::worktree::WorktreeEntry> {
+) -> (
+    Vec<crate::proxy::worktree::WorktreeEntry>,
+    std::collections::HashSet<String>,
+) {
     let collisions =
         crate::proxy::ascii_case_collisions(wts.iter().map(|w| w.sanitized_branch.as_str()));
     if collisions.is_empty() {
-        return wts;
+        return (wts, collisions);
     }
 
     let (dropped, kept): (Vec<_>, Vec<_>) = wts
@@ -125,7 +132,7 @@ fn reject_case_colliding_worktrees(
         );
     }
 
-    kept
+    (kept, collisions)
 }
 
 /// Build the slug lookup table from disk (expensive — involves file I/O + subprocesses).
@@ -163,7 +170,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
         }
         let ns = entry.resolve_namespace();
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();
-        let worktrees = if worktree_enabled {
+        let (worktrees, rejected_worktree_prefixes) = if worktree_enabled {
             let wts = match entry.resolve_dir() {
                 Some(dir) => crate::proxy::worktree::discover_worktrees(&dir),
                 None => vec![],
@@ -178,7 +185,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
                 .collect();
             reject_case_colliding_worktrees(wts)
         } else {
-            vec![]
+            (vec![], std::collections::HashSet::new())
         };
         entries.insert(
             key,
@@ -188,6 +195,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
                 daemon_name,
                 dir: entry.resolve_dir().unwrap_or_default(),
                 worktrees,
+                rejected_worktree_prefixes,
             },
         );
     }
@@ -254,6 +262,38 @@ fn wildcard_slug_lookup<'a>(
             .map(|(i, _)| &subdomain[i + 1..])
             .find_map(|candidate| entries.get(candidate))
     })
+}
+
+/// What a wildcard subdomain prefix resolves to within a slug's worktrees.
+#[derive(Debug)]
+enum PrefixMatch<'a> {
+    /// The prefix names exactly one discovered worktree.
+    Worktree(&'a crate::proxy::worktree::WorktreeEntry),
+    /// The prefix names no worktree — an ordinary wildcard subdomain, served
+    /// by the slug's main checkout.
+    Unknown,
+    /// The prefix names worktrees that were rejected as ambiguous.  Serving the
+    /// main checkout here would answer successfully with the wrong content, so
+    /// the request is refused instead.
+    Ambiguous,
+}
+
+/// Resolve a wildcard subdomain prefix against a slug's cached worktrees.
+fn match_worktree_prefix<'a>(cached: &'a CachedSlugEntry, prefix: &str) -> PrefixMatch<'a> {
+    if let Some(wt) = cached
+        .worktrees
+        .iter()
+        .find(|w| w.sanitized_branch.eq_ignore_ascii_case(prefix))
+    {
+        return PrefixMatch::Worktree(wt);
+    }
+    if cached
+        .rejected_worktree_prefixes
+        .contains(&prefix.to_ascii_lowercase())
+    {
+        return PrefixMatch::Ambiguous;
+    }
+    PrefixMatch::Unknown
 }
 
 /// Strip a trailing `.{suffix}` from `s`, ignoring ASCII case.
@@ -1458,12 +1498,8 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
     let (expected_namespace, worktree_dir) = if !subdomain.eq_ignore_ascii_case(&cached.slug) {
         let prefix = strip_dot_suffix_ignore_case(&subdomain, &cached.slug);
         match prefix {
-            Some(ref p) => match cached
-                .worktrees
-                .iter()
-                .find(|w| w.sanitized_branch.eq_ignore_ascii_case(p))
-            {
-                Some(wt) => {
+            Some(ref p) => match match_worktree_prefix(&cached, p) {
+                PrefixMatch::Worktree(wt) => {
                     let ns = wt.namespace.clone().or_else(|| {
                         log::warn!(
                             "Worktree '{}' has no cached namespace; \
@@ -1474,7 +1510,17 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
                     });
                     (ns, Some(wt.path.clone()))
                 }
-                None => (cached.namespace.clone(), None),
+                PrefixMatch::Ambiguous => {
+                    return ResolveResult::Error(format!(
+                        "'{host}' is ambiguous: more than one branch or workspace of '{slug}' \
+                         sanitizes to the prefix '{p}', and host names are case-insensitive.\n\
+                         Rename one of them so the prefixes differ by more than case, then \
+                         reload.\n\
+                         The supervisor log lists the colliding branches.",
+                        slug = cached.slug,
+                    ));
+                }
+                PrefixMatch::Unknown => (cached.namespace.clone(), None),
             },
             None => (cached.namespace.clone(), None),
         }
@@ -1939,6 +1985,7 @@ mod tests {
             daemon_name: name.to_string(),
             dir: std::path::PathBuf::from(format!("/tmp/{name}")),
             worktrees: vec![],
+            rejected_worktree_prefixes: std::collections::HashSet::new(),
         }
     }
 
@@ -2054,11 +2101,14 @@ mod tests {
             make_worktree("feature-a", "feature-a"),
             make_worktree("main", "main"),
         ];
-        let kept = reject_case_colliding_worktrees(wts);
+        let (kept, rejected) = reject_case_colliding_worktrees(wts);
         // Neither spelling routes; picking one would send the request to a
         // worktree the user did not name.
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].sanitized_branch, "main");
+        // The prefix is remembered so it is refused rather than treated as an
+        // unknown wildcard prefix.
+        assert!(rejected.contains("feature-a"));
     }
 
     #[test]
@@ -2067,8 +2117,9 @@ mod tests {
             make_worktree("main", "main"),
             make_worktree("feature/a", "feature-a"),
         ];
-        let kept = reject_case_colliding_worktrees(wts);
+        let (kept, rejected) = reject_case_colliding_worktrees(wts);
         assert_eq!(kept.len(), 2);
+        assert!(rejected.is_empty());
     }
 
     #[test]
@@ -2079,7 +2130,42 @@ mod tests {
             make_worktree("feature/a", "feature-a"),
             make_worktree("feature.a", "feature-a"),
         ];
-        assert!(reject_case_colliding_worktrees(wts).is_empty());
+        let (kept, rejected) = reject_case_colliding_worktrees(wts);
+        assert!(kept.is_empty());
+        assert!(rejected.contains("feature-a"));
+    }
+
+    #[test]
+    fn test_match_worktree_prefix() {
+        let mut entry = make_entry("myapp");
+        entry.worktrees = vec![make_worktree("feature/b", "feature-b")];
+        entry
+            .rejected_worktree_prefixes
+            .insert("feature-a".to_string());
+
+        assert!(matches!(
+            match_worktree_prefix(&entry, "feature-b"),
+            PrefixMatch::Worktree(_)
+        ));
+        // Host case does not matter for either outcome.
+        assert!(matches!(
+            match_worktree_prefix(&entry, "Feature-B"),
+            PrefixMatch::Worktree(_)
+        ));
+        // A rejected prefix is refused, not served by the main checkout.
+        assert!(matches!(
+            match_worktree_prefix(&entry, "feature-a"),
+            PrefixMatch::Ambiguous
+        ));
+        assert!(matches!(
+            match_worktree_prefix(&entry, "FEATURE-A"),
+            PrefixMatch::Ambiguous
+        ));
+        // An unrelated prefix is still an ordinary wildcard subdomain.
+        assert!(matches!(
+            match_worktree_prefix(&entry, "tenant"),
+            PrefixMatch::Unknown
+        ));
     }
 
     #[test]
