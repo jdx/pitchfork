@@ -1653,13 +1653,18 @@ impl PitchforkToml {
                     return false;
                 }
 
+                // Skipped rather than returned and discarded: another alias for
+                // the same daemon may still be routable.
+                if Self::slug_is_ambiguous(slug, global_slugs) {
+                    return false;
+                }
+
                 match entry.resolve_namespace() {
                     Some(namespace) => daemon_id.namespace() == namespace,
                     None => false,
                 }
             })
             .map(|(slug, _)| slug.clone())
-            .filter(|slug| !Self::slug_is_ambiguous(slug, global_slugs))
     }
 
     /// Check if a slug is registered in the global config's `[slugs]` section.
@@ -2200,6 +2205,22 @@ dir = "~/projects/web"
         assert_eq!(
             PitchforkToml::find_slug_for_daemon_in_registry(&id, &slugs),
             None
+        );
+    }
+
+    #[test]
+    fn test_find_slug_for_daemon_prefers_a_routable_alias() {
+        let id = DaemonId::new("my-project", "api");
+        let mut slugs = IndexMap::new();
+        // A colliding pair comes first in config order, then a routable alias
+        // for the same daemon.
+        slugs.insert("api".to_string(), slug_entry("my-project", None));
+        slugs.insert("API".to_string(), slug_entry("my-project", None));
+        slugs.insert("my-api".to_string(), slug_entry("my-project", Some("api")));
+
+        assert_eq!(
+            PitchforkToml::find_slug_for_daemon_in_registry(&id, &slugs),
+            Some("my-api".to_string())
         );
     }
 
