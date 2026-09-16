@@ -93,9 +93,25 @@ static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
 /// Called outside the cache lock via `spawn_blocking` to avoid blocking the Tokio runtime.
 fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    let mut entries = std::collections::HashMap::with_capacity(global_slugs.len());
+    let mut entries: std::collections::HashMap<String, CachedSlugEntry> =
+        std::collections::HashMap::with_capacity(global_slugs.len());
     let worktree_enabled = crate::settings::settings().general.worktree;
     for (slug, entry) in &global_slugs {
+        // Keys are stored ASCII-lowercased because host names are
+        // case-insensitive (RFC 4343).  Two slugs differing only by case would
+        // otherwise both be routable and the winner would depend on HashMap
+        // iteration order, so keep the first in config order and drop the rest.
+        let key = slug.to_ascii_lowercase();
+        if let Some(existing) = entries.get(&key) {
+            log::warn!(
+                "Slug collision: '{}' and '{}' differ only by case and host names are \
+                 case-insensitive. Only '{}' (first in config order) will be routed.",
+                existing.slug,
+                slug,
+                existing.slug,
+            );
+            continue;
+        }
         let ns = entry.resolve_namespace();
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug).to_string();
         let worktrees = if worktree_enabled {
@@ -110,10 +126,11 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
             for mut wt in wts {
                 let wt_ns = crate::pitchfork_toml::PitchforkToml::namespace_for_dir(&wt.path).ok();
                 wt.namespace = wt_ns;
-                match seen.entry(wt.sanitized_branch.clone()) {
+                match seen.entry(wt.sanitized_branch.to_ascii_lowercase()) {
                     std::collections::hash_map::Entry::Occupied(e) => {
                         log::warn!(
-                            "Worktree slug collision: '{}' and '{}' both sanitize to '{}'. \
+                            "Worktree slug collision: '{}' and '{}' sanitize to '{}' under \
+                             case-insensitive host matching. \
                              Only the first (in discovery order) will be routed.",
                             e.get(),
                             wt.branch,
@@ -131,7 +148,7 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
             vec![]
         };
         entries.insert(
-            slug.clone(),
+            key,
             CachedSlugEntry {
                 slug: slug.clone(),
                 namespace: ns,
@@ -183,24 +200,18 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
 /// When `wildcard` is true and no exact match is found, progressively strips
 /// subdomain prefixes from the left until a match is found or no dots remain.
 /// For example, with slug "myapp" registered, `tenant.myapp` matches "myapp".
+///
+/// `entries` must be keyed by the ASCII-lowercased slug, as
+/// [`build_slug_entries`] produces: host names are case-insensitive (RFC 4343),
+/// so the subdomain is lowercased before every lookup.
 fn wildcard_slug_lookup<'a>(
     subdomain: &str,
     entries: &'a std::collections::HashMap<String, CachedSlugEntry>,
     wildcard: bool,
 ) -> Option<&'a CachedSlugEntry> {
-    // Host names are case-insensitive (RFC 4343) and browsers lowercase the Host
-    // header before sending it, so a slug registered with capitals would be
-    // unreachable from the address bar if this compared exactly.
-    let get = |key: &str| -> Option<&'a CachedSlugEntry> {
-        entries.get(key).or_else(|| {
-            entries
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(key))
-                .map(|(_, v)| v)
-        })
-    };
+    let subdomain = subdomain.to_ascii_lowercase();
 
-    get(subdomain).or_else(|| {
+    entries.get(&subdomain).or_else(|| {
         if !wildcard {
             return None;
         }
@@ -208,7 +219,7 @@ fn wildcard_slug_lookup<'a>(
         subdomain
             .match_indices('.')
             .map(|(i, _)| &subdomain[i + 1..])
-            .find_map(get)
+            .find_map(|candidate| entries.get(candidate))
     })
 }
 
@@ -1984,11 +1995,14 @@ mod tests {
         let mut entries = std::collections::HashMap::new();
         let mut entry = make_entry("upper");
         entry.slug = "MyApp".to_string();
-        entries.insert("MyApp".to_string(), entry);
-        // A slug registered with capitals is reachable from a lowercased host.
-        let result = wildcard_slug_lookup("myapp", &entries, true);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().daemon_name, "upper");
+        // build_slug_entries lowercases the key while keeping the configured
+        // spelling in `slug`, so a capitalized registration stays reachable.
+        entries.insert("myapp".to_string(), entry);
+        for host in ["myapp", "MyApp", "tenant.MYAPP"] {
+            let result = wildcard_slug_lookup(host, &entries, true);
+            assert!(result.is_some(), "lookup failed for {host}");
+            assert_eq!(result.unwrap().daemon_name, "upper");
+        }
     }
 
     #[test]
@@ -2009,9 +2023,15 @@ mod tests {
         assert_eq!(strip_dot_suffix_ignore_case("xmyapp", "myapp"), None);
         assert_eq!(strip_dot_suffix_ignore_case(".myapp", "myapp"), None);
         assert_eq!(strip_dot_suffix_ignore_case("myapp", "myapp"), None);
-        assert_eq!(strip_dot_suffix_ignore_case("feature-a.other", "myapp"), None);
+        assert_eq!(
+            strip_dot_suffix_ignore_case("feature-a.other", "myapp"),
+            None
+        );
         // Multi-byte input must not panic on a mid-character split.
-        assert_eq!(strip_dot_suffix_ignore_case("café.myapp", "myapp"), Some("café".to_string()));
+        assert_eq!(
+            strip_dot_suffix_ignore_case("café.myapp", "myapp"),
+            Some("café".to_string())
+        );
         assert_eq!(strip_dot_suffix_ignore_case("café", "afé"), None);
     }
 

@@ -53,7 +53,9 @@ pub async fn list() -> Json<Vec<ApiProxyWorktreeEntry>> {
 
     let mut entries = Vec::new();
 
-    for (slug, cached_entry) in cached.iter() {
+    for cached_entry in cached.values() {
+        // The map key is lowercased for host matching; show the configured spelling.
+        let slug = &cached_entry.slug;
         let ns_name = cached_entry.namespace.clone().unwrap_or_default();
         let is_registered = ns_name.is_empty() || all_namespaces.contains_key(&ns_name);
         let daemon_name = cached_entry.daemon_name.clone();
