@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M2RWV49ZSY9D5CE112P7MST4",
+  "session_id": "01a0b1c9-36cd-7922-b187-c6eed4bc9f80",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-17T23:57:14.750065Z",
+  "branch": "claude/optimistic-chaum-8d8550",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/.vitepress/config.mts",
+    "docs/cli/commands.json",
+    "docs/cli/configuration.md",
+    "docs/guides/index.md",
+    "docs/guides/lifecycle-hooks.md",
+    "docs/guides/oneshot-tasks.md",
+    "docs/guides/ready-checks.md",
+    "docs/reference/configuration.md",
+    "pitchfork.usage.kdl",
+    "src/settings.rs"
+  ],
+  "agent": "Codex",
+  "model": "gpt-6-astra",
+  "turn_id": "93395824a2e9",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 71709,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1256064,
+    "output_tokens": 5058,
+    "api_call_count": 23
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-17T23:57:14.729485Z",
+    "agent_lines": 312,
+    "agent_removed": 18,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 312,
+    "total_lines_changed": 330,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

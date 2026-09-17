@@ -1,0 +1,1 @@
+improve the docs content/structure/prose in [https://github.com/jdx/pitchfork/pull/876](https://github.com/jdx/pitchfork/pull/876), commit directly
