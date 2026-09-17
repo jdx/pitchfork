@@ -430,13 +430,27 @@ impl Supervisor {
                     return IpcResponse::DaemonReady { daemon };
                 }
                 DaemonStatus::Errored(code) => {
-                    // -1 records an unobservable exit code; the caller renders
-                    // `None` as a plain failure rather than "exit code -1".
-                    let exit_code = Some(*code).filter(|c| *c != -1);
-                    return IpcResponse::DaemonFailedWithCode {
-                        exit_code,
-                        resolved_ports: daemon.resolved_port.clone(),
-                    };
+                    // A failed attempt is persisted before the in-flight `run`
+                    // sleeps out its backoff, so an errored record with
+                    // attempts left is a gap between tries rather than the
+                    // result. Same condition `check_retry` uses to decide
+                    // whether another attempt is still owed.
+                    if daemon.retry.count() > 0 && daemon.retry_count < daemon.retry.count() {
+                        debug!(
+                            "daemon {id}: in-flight oneshot failed attempt {} of {}; still waiting",
+                            daemon.retry_count + 1,
+                            daemon.retry.count() + 1
+                        );
+                    } else {
+                        // -1 records an unobservable exit code; the caller
+                        // renders `None` as a plain failure rather than
+                        // "exit code -1".
+                        let exit_code = Some(*code).filter(|c| *c != -1);
+                        return IpcResponse::DaemonFailedWithCode {
+                            exit_code,
+                            resolved_ports: daemon.resolved_port.clone(),
+                        };
+                    }
                 }
                 DaemonStatus::Failed(error) => {
                     return IpcResponse::DaemonFailed {
@@ -1877,10 +1891,17 @@ impl Supervisor {
                 }
             }
 
-            // The completed state is now visible, so a caller that was waiting
-            // on this oneshot can return and see it.
+            // The terminal state is now visible, so a caller waiting on this
+            // oneshot can return and see it. A task that was stopped partway
+            // never did its work, so it does not satisfy anything waiting on
+            // it — even when the process caught the signal and exited 0.
             if oneshot_completion_pending && let Some(tx) = ready_tx.take() {
-                let _ = tx.send(Ok(()));
+                if exit_reason == "exit" {
+                    let _ = tx.send(Ok(()));
+                } else {
+                    warn!("daemon {id}: oneshot was stopped before completing");
+                    let _ = tx.send(Err(None));
+                }
             }
 
             // --- Phase 2: Fire hooks ---

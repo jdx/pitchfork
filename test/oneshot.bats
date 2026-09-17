@@ -283,3 +283,76 @@ TOML
 
   wait_for_logs migrate "task done" 5
 }
+
+@test "a stopped oneshot that exits 0 is not reported as ready" {
+  # The trap has to live in the daemon's own process. Running a script through
+  # a second shell would leave the daemon process itself dying from the signal,
+  # which is the ordinary case and not the one under test.
+  create_pitchfork_toml <<TOML
+[daemons.slow]
+run = 'trap "echo trapped; exit 0" TERM; echo task started; while true; do sleep 0.2; done'
+oneshot = true
+TOML
+
+  pitchfork start slow >/dev/null 2>&1 &
+  local start_job=$!
+  wait_for_logs slow "task started" 10
+
+  run pitchfork stop slow
+  assert_success
+
+  # The process catches the signal and exits 0, but it was interrupted rather
+  # than finished, so the waiting start must report failure instead of telling
+  # dependents to proceed.
+  local start_status=0
+  wait "$start_job" || start_status=$?
+  [[ $start_status -ne 0 ]]
+
+  wait_for_logs slow "trapped" 5
+  run pitchfork status slow
+  assert_output --partial "stopped"
+  refute_output --partial "completed"
+}
+
+@test "waiting on an in-flight oneshot survives its retry backoff" {
+  local retry_script
+  retry_script="$(script_path fail_then_succeed.sh)"
+  local key
+  key="$(date +%s%N)"
+
+  # The task runs for a few seconds before failing, so the dependent below is
+  # already waiting on the running daemon when the attempt fails and the
+  # backoff begins. That gap is persisted as errored but is not the result.
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = 'bash $retry_script $key 3'
+oneshot = true
+retry = 2
+
+[daemons.api]
+run = "echo api started && $(default_shell_sleep_command)"
+depends = ["migrate"]
+ready_delay = 1
+TOML
+
+  pitchfork start migrate >/dev/null 2>&1 &
+  local migrate_job=$!
+  wait_for_logs migrate "attempt 1 started" 10
+
+  run pitchfork start api
+  assert_success
+
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  wait "$migrate_job" || true
+
+  run pitchfork logs migrate --raw
+  assert_output --partial "failing attempt 1"
+  assert_output --partial "succeeded on attempt 2"
+
+  run pitchfork logs api --raw
+  assert_output --partial "api started"
+
+  pitchfork stop --all
+}
