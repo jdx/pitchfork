@@ -28,7 +28,7 @@ impl DaemonStatus {
             DaemonStatus::Running => console::style(s).green().to_string(),
             DaemonStatus::Stopping => console::style(s).yellow().to_string(),
             DaemonStatus::Stopped => console::style(s).dim().to_string(),
-            DaemonStatus::Completed => console::style(s).cyan().to_string(),
+            DaemonStatus::Completed => console::style(s).green().dim().to_string(),
             DaemonStatus::Errored(_) => console::style(s).red().to_string(),
         }
     }

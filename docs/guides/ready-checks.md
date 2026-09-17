@@ -179,8 +179,15 @@ twice is harmless, for example by using a migration tool that skips applied
 migrations.
 :::
 
-The command must terminate on its own. `pitchfork start` waits for it with no
-deadline, so a oneshot that never exits blocks the daemons that depend on it.
+Starting a daemon whose oneshot dependency is already running waits for that
+in-flight run rather than starting a second copy, so two shells entering the
+project at once still see the task finish before its dependents start.
+
+The command must terminate on its own. `pitchfork start` waits up to one hour,
+the same ceiling it applies to any unbounded readiness check. A oneshot that
+runs longer keeps going and is still recorded as `completed` when it finishes,
+but the command that was waiting reports a timeout and does not start the
+dependents.
 
 ## Timeouts and failures
 

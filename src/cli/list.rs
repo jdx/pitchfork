@@ -196,7 +196,7 @@ impl List {
                     DaemonStatus::Running => Color::Green,
                     DaemonStatus::Stopping => Color::Yellow,
                     DaemonStatus::Stopped => Color::DarkGrey,
-                    DaemonStatus::Completed => Color::Cyan,
+                    DaemonStatus::Completed => Color::DarkGreen,
                     DaemonStatus::Errored(_) => Color::Red,
                 }
             };

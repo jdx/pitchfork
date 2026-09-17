@@ -126,6 +126,7 @@ function openProxy(e: Event) {
 
   &.running { .status-running(); }
   &.stopped { .status-stopped(); }
+  &.completed { .status-completed(); }
   &.waiting, &.stopping { .status-waiting(); }
   &.failed, &.errored { .status-failed(); }
   &.available { .status-available(); }

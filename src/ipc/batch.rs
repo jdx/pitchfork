@@ -571,6 +571,15 @@ impl IpcClient {
             .filter(|d| d.status.is_running() || d.status.is_waiting())
             .map(|d| d.id.clone())
             .collect();
+        // A oneshot that is still running has not finished its work, so its
+        // dependents must keep waiting for it. Letting the start request
+        // through makes the supervisor await the in-flight run instead of
+        // skipping it as "already running".
+        let running_oneshots: HashSet<DaemonId> = active_daemons
+            .iter()
+            .filter(|d| d.oneshot && (d.status.is_running() || d.status.is_waiting()))
+            .map(|d| d.id.clone())
+            .collect();
         let running_ports_map: HashMap<DaemonId, Vec<u16>> = active_daemons
             .into_iter()
             .filter(|d| {
@@ -616,6 +625,9 @@ impl IpcClient {
                             if opts.force && explicitly_requested.contains(id) {
                                 debug!("Force restarting explicitly requested daemon: {id}");
                                 true // Allow restart if force is set AND explicitly requested
+                            } else if running_oneshots.contains(id) {
+                                debug!("Waiting for in-flight oneshot {id} to complete");
+                                true
                             } else {
                                 if explicitly_requested.contains(id) {
                                     info!("Daemon {id} is already running, use --force to restart");

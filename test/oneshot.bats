@@ -216,3 +216,70 @@ EOF
   assert_output --partial "oneshot"
   assert_output --partial "ready_port"
 }
+
+@test "a dependent waits for an already in-flight oneshot" {
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = "sleep 4 && echo migration done"
+oneshot = true
+
+[daemons.api]
+run = "echo api started && $(default_shell_sleep_command)"
+depends = ["migrate"]
+ready_delay = 1
+TOML
+
+  # Get the oneshot under way on its own, then ask for a dependent. The
+  # dependent must wait for the run already in flight rather than treating a
+  # running oneshot as satisfied.
+  pitchfork start migrate >/dev/null 2>&1 &
+  local migrate_job=$!
+  wait_for_status migrate running 10
+
+  run pitchfork start api
+  assert_success
+
+  # Assert before reaping the background start: waiting on it first would let
+  # migrate finish on its own and the assertion could never fail. Had the
+  # in-flight run been skipped, api would be up after its 1s ready_delay with
+  # migrate still sleeping.
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  wait "$migrate_job" || true
+
+  run pitchfork logs api --raw
+  assert_output --partial "api started"
+
+  pitchfork stop --all
+}
+
+@test "a listening oneshot is not marked ready by the implicit port check" {
+  local bind_script
+  bind_script="$(script_path bind_then_exit.py)"
+
+  # An expected port normally becomes an implicit TCP readiness check. This
+  # task binds that port and holds it for several seconds before exiting 0, so
+  # an implicit check would report it ready long before its work is done.
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = 'python3 $bind_script 18233 4'
+oneshot = true
+port = { expect = [18233] }
+TOML
+
+  local start_time elapsed
+  start_time=$(date +%s)
+  run pitchfork start migrate
+  elapsed=$(($(date +%s) - start_time))
+  assert_success
+
+  # Readiness is the exit, not the socket: the port is listening almost
+  # immediately, so an implicit check would return well under the 4s runtime.
+  [[ $elapsed -ge 3 ]]
+
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  wait_for_logs migrate "task done" 5
+}

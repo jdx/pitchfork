@@ -321,6 +321,20 @@ impl Supervisor {
                 if opts.force {
                     self.stop_locked(id).await?;
                     info!("run: stop completed for daemon {id}");
+                } else if daemon.oneshot && opts.wait_ready {
+                    // An in-flight oneshot has not done its work yet, so
+                    // reporting "already running" would let dependents start
+                    // against the state the task is still establishing. Wait
+                    // for the run that is already under way instead.
+                    //
+                    // Release the stop lock first: this wait lasts as long as
+                    // the task does, and holding it would block a stop of the
+                    // very run being waited on.
+                    info!(
+                        "daemon {id} is an in-flight oneshot (pid {pid}); waiting for it to finish"
+                    );
+                    drop(stop_guard.take());
+                    return Ok(self.await_running_oneshot(id).await);
                 } else {
                     warn!("daemon {id} already running with pid {pid}");
                     return Ok(IpcResponse::DaemonAlreadyRunning);
@@ -393,6 +407,59 @@ impl Supervisor {
             None => self.stop_lock(id).await.lock_owned().await,
         };
         self.run_once(opts, guard).await
+    }
+
+    /// Wait for a oneshot that is already running to reach a terminal state,
+    /// and report it as if this call had started the task itself.
+    ///
+    /// Polls the state file because the terminal state is written by the
+    /// monitoring task of the *other* run; this call has no readiness channel
+    /// of its own to await.
+    async fn await_running_oneshot(&self, id: &DaemonId) -> IpcResponse {
+        let interval = settings().supervisor_ready_check_interval();
+        // Matches the client's own ceiling for an unbounded wait, so a record
+        // wedged in a non-terminal state cannot pin this task indefinitely.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3600);
+        loop {
+            let Some(daemon) = self.get_daemon(id).await else {
+                return IpcResponse::DaemonNotFound;
+            };
+            match &daemon.status {
+                DaemonStatus::Completed => {
+                    info!("daemon {id}: the in-flight oneshot completed");
+                    return IpcResponse::DaemonReady { daemon };
+                }
+                DaemonStatus::Errored(code) => {
+                    // -1 records an unobservable exit code; the caller renders
+                    // `None` as a plain failure rather than "exit code -1".
+                    let exit_code = Some(*code).filter(|c| *c != -1);
+                    return IpcResponse::DaemonFailedWithCode {
+                        exit_code,
+                        resolved_ports: daemon.resolved_port.clone(),
+                    };
+                }
+                DaemonStatus::Failed(error) => {
+                    return IpcResponse::DaemonFailed {
+                        error: error.clone(),
+                    };
+                }
+                DaemonStatus::Stopped => {
+                    // Stopped, not completed: the task was interrupted, so it
+                    // never established what its dependents are waiting for.
+                    warn!("daemon {id}: the in-flight oneshot was stopped before completing");
+                    return IpcResponse::DaemonFailedWithCode {
+                        exit_code: None,
+                        resolved_ports: daemon.resolved_port.clone(),
+                    };
+                }
+                DaemonStatus::Running | DaemonStatus::Waiting | DaemonStatus::Stopping => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                warn!("daemon {id}: gave up waiting for the in-flight oneshot to finish");
+                return IpcResponse::DaemonAlreadyRunning;
+            }
+            time::sleep(interval).await;
+        }
     }
 
     /// Run a daemon once (single attempt).
@@ -800,17 +867,27 @@ impl Supervisor {
         drop(stop_guard);
 
         let id_clone = id.clone();
-        let ready_delay = opts.ready_delay;
-        let ready_output = opts.ready_output.clone();
-        let ready_http = opts.ready_http.clone();
-        let ready_port = effective_ready_port;
+        // A oneshot is ready only when its process exits 0, so no readiness
+        // check may run alongside it — one that fired first would report the
+        // task ready before it had done its work, and would suppress the
+        // completion notification entirely. Config load rejects explicit
+        // `ready_*` fields and the client clears CLI overrides, but the
+        // implicit port check is derived here from `port.expect`, so the
+        // suppression has to happen here rather than being trusted to callers.
+        let ready_delay = (!opts.oneshot).then_some(opts.ready_delay).flatten();
+        let ready_output = (!opts.oneshot).then(|| opts.ready_output.clone()).flatten();
+        let ready_http = (!opts.oneshot).then(|| opts.ready_http.clone()).flatten();
+        let ready_port = (!opts.oneshot).then_some(effective_ready_port).flatten();
         let implicit_ready_port = ready_port.map(|p| ReadyPort {
             port: Some(p),
             template: None,
             timeout: None,
         });
-        let ready_port_config = opts.ready_port.clone().or(implicit_ready_port);
-        let ready_cmd = opts.ready_cmd.clone();
+        let ready_port_config = (!opts.oneshot)
+            .then(|| opts.ready_port.clone())
+            .flatten()
+            .or(implicit_ready_port);
+        let ready_cmd = (!opts.oneshot).then(|| opts.ready_cmd.clone()).flatten();
         let daemon_dir = opts.dir.0.clone();
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
@@ -1842,6 +1919,11 @@ impl Supervisor {
             match ready_rx.await {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
+                    // Re-read rather than returning the snapshot taken at
+                    // spawn: a completed oneshot has since been finalized, and
+                    // the snapshot would tell the caller it is still running
+                    // under a PID that has exited.
+                    let daemon = self.get_daemon(id).await.unwrap_or(daemon);
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
                 Ok(Err(exit_code)) => {

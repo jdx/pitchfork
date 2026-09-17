@@ -106,6 +106,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
 
   &.running   { background: @sf-success-12; color: @c-success; border-color: @sf-success-20; }
   &.stopped   { background: @sf-3; color: @sf-30; border-color: @sf-8; }
+  &.completed { background: @sf-3; color: @c-success; border-color: @sf-success-20; }
   &.waiting,
   &.stopping  { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
   &.failed,
