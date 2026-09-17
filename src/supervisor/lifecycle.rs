@@ -4,6 +4,7 @@
 
 use super::hooks::{self, HookType, fire_hook};
 use super::{SUPERVISOR, Supervisor};
+use crate::config_types::OneshotWait;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
@@ -415,7 +416,7 @@ impl Supervisor {
     /// Polls the state file because the terminal state is written by the
     /// monitoring task of the *other* run; this call has no readiness channel
     /// of its own to await.
-    async fn await_running_oneshot(&self, id: &DaemonId, wait: Option<Duration>) -> IpcResponse {
+    async fn await_running_oneshot(&self, id: &DaemonId, wait: Option<OneshotWait>) -> IpcResponse {
         let interval = settings().supervisor_ready_check_interval();
         // The caller resolved this from the project's settings and sent it, so
         // both processes wait exactly as long. Falling back to this process's
@@ -423,8 +424,13 @@ impl Supervisor {
         // started in, where a project's `oneshot_timeout` is not visible — and
         // the shorter of the two deadlines would silently win, releasing
         // dependents while the task was still running.
-        let wait = wait.unwrap_or_else(|| settings().supervisor_oneshot_wait());
-        let deadline = tokio::time::Instant::now() + wait;
+        //
+        // `None` here means the setting asked for no limit, so there is no
+        // deadline to reach rather than a distant one.
+        let deadline = wait
+            .unwrap_or_else(|| settings().supervisor_oneshot_wait())
+            .duration()
+            .map(|d| tokio::time::Instant::now() + d);
         loop {
             let Some(daemon) = self.get_daemon(id).await else {
                 return IpcResponse::DaemonNotFound;
@@ -473,7 +479,7 @@ impl Supervisor {
                 }
                 DaemonStatus::Running | DaemonStatus::Waiting | DaemonStatus::Stopping => {}
             }
-            if tokio::time::Instant::now() >= deadline {
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                 warn!("daemon {id}: gave up waiting for the in-flight oneshot to finish");
                 return IpcResponse::DaemonAlreadyRunning;
             }

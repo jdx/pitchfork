@@ -227,19 +227,29 @@ impl IpcClient {
         Ok(())
     }
 
-    async fn read(&self, timeout: Duration) -> Result<IpcResponse> {
+    /// Read one response. `timeout` of `None` waits indefinitely, which only a
+    /// oneshot configured for an unlimited wait asks for — a substitute
+    /// duration there would cap a wait the user asked not to be capped.
+    async fn read(&self, timeout: Option<Duration>) -> Result<IpcResponse> {
         let mut recv = self.recv.lock().await;
         let mut bytes = Vec::new();
-        match tokio::time::timeout(timeout, recv.read_until(0, &mut bytes)).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(err)) => {
-                return Err(IpcError::ReadFailed { source: err }.into());
-            }
-            Err(_) => {
-                return Err(IpcError::Timeout {
-                    seconds: timeout.as_secs(),
+        let read = recv.read_until(0, &mut bytes);
+        let result = match timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, read).await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(IpcError::Timeout {
+                        seconds: timeout.as_secs(),
+                    }
+                    .into());
                 }
-                .into());
+            },
+            None => read.await,
+        };
+        match result {
+            Ok(_) => {}
+            Err(err) => {
+                return Err(IpcError::ReadFailed { source: err }.into());
             }
         }
         if bytes.is_empty() {
@@ -249,7 +259,7 @@ impl IpcClient {
     }
 
     pub(crate) async fn request(&self, msg: IpcRequest) -> Result<IpcResponse> {
-        self.request_with_timeout(msg, settings().ipc_request_timeout())
+        self.request_with_timeout(msg, Some(settings().ipc_request_timeout()))
             .await
     }
 
@@ -263,7 +273,7 @@ impl IpcClient {
     pub(crate) async fn request_with_timeout(
         &self,
         msg: IpcRequest,
-        timeout: Duration,
+        timeout: Option<Duration>,
     ) -> Result<IpcResponse> {
         use std::sync::atomic::Ordering;
         let _exchange = self.exchange.lock().await;
@@ -343,13 +353,10 @@ impl IpcClient {
         // does not disconnect prematurely — e.g. when a bounded ready_cmd
         // is paired with an unbounded ready_port. When all checks are bounded,
         // wait through the longest deadline plus a response buffer.
-        // A oneshot finishes when its command finishes; there is no check to
-        // bound it, and a migration can legitimately outlast any default.
-        let has_unbounded_check = opts.oneshot
-            || opts
-                .ready_output
-                .as_ref()
-                .is_some_and(|o| o.timeout.is_none())
+        let has_unbounded_check = opts
+            .ready_output
+            .as_ref()
+            .is_some_and(|o| o.timeout.is_none())
             || opts
                 .ready_port
                 .as_ref()
@@ -359,13 +366,17 @@ impl IpcClient {
                 .as_ref()
                 .is_some_and(|h| h.timeout.is_none())
             || opts.ready_cmd.as_ref().is_some_and(|c| c.timeout.is_none());
-        let timeout = if opts.oneshot {
+        // `None` waits without a deadline, which only an unlimited oneshot asks
+        // for.
+        let timeout: Option<Duration> = if opts.oneshot {
             // A oneshot's runtime is the task's runtime, which the user
-            // controls through `supervisor.oneshot_timeout` (`0` for no limit).
+            // controls through `supervisor.oneshot_timeout`. `0` there means
+            // no deadline at all, not a distant one.
             opts.oneshot_wait
                 .unwrap_or_else(|| crate::settings::settings().supervisor_oneshot_wait())
+                .duration()
         } else if has_unbounded_check {
-            Duration::from_secs(3600)
+            Some(Duration::from_secs(3600))
         } else {
             let max_deadline = opts
                 .ready_output
@@ -395,7 +406,7 @@ impl IpcClient {
                         .unwrap_or(0),
                 )
                 .max(ready_delay);
-            Duration::from_secs(max_deadline + 60)
+            Some(Duration::from_secs(max_deadline + 60))
         };
         let rsp = self
             .request_with_timeout(IpcRequest::Run(opts.clone()), timeout)
@@ -701,7 +712,7 @@ impl IpcClient {
             .unwrap_or_else(|| settings().supervisor_stop_timeout());
         let timeout = stop_budget + Duration::from_secs(2) + settings().ipc_request_timeout();
         let rsp = self
-            .request_with_timeout(IpcRequest::Stop { id: id.clone() }, timeout)
+            .request_with_timeout(IpcRequest::Stop { id: id.clone() }, Some(timeout))
             .await?;
         match rsp {
             IpcResponse::Ok => {

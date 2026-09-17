@@ -1201,15 +1201,15 @@ impl Settings {
     ///
     /// `supervisor.oneshot_timeout = "0"` means no limit: a task's natural end
     /// is its exit, and a long migration should not be called failed merely for
-    /// outlasting a default. That is expressed as a duration longer than any
-    /// real task rather than as an absent deadline, so callers that need a
-    /// `Duration` do not each have to special-case it.
-    pub fn supervisor_oneshot_wait(&self) -> std::time::Duration {
+    /// outlasting a default. That is an absent deadline, not a very large one,
+    /// so no task can outlive the substitute and be reported as timed out
+    /// despite the setting promising otherwise.
+    pub fn supervisor_oneshot_wait(&self) -> crate::config_types::OneshotWait {
         let configured = self.supervisor_oneshot_timeout();
         if configured.is_zero() {
-            std::time::Duration::from_secs(60 * 60 * 24 * 365)
+            crate::config_types::OneshotWait::Unlimited
         } else {
-            configured
+            crate::config_types::OneshotWait::For(configured)
         }
     }
 
@@ -2311,6 +2311,7 @@ mod tests {
 
     #[test]
     fn oneshot_wait_defaults_to_an_hour() {
+        use crate::config_types::OneshotWait;
         let settings = Settings::default();
         assert_eq!(
             settings.supervisor_oneshot_timeout(),
@@ -2318,32 +2319,41 @@ mod tests {
         );
         assert_eq!(
             settings.supervisor_oneshot_wait(),
-            Duration::from_secs(3600)
+            OneshotWait::For(Duration::from_secs(3600))
         );
     }
 
     #[test]
-    fn oneshot_wait_of_zero_means_no_limit() {
+    fn oneshot_wait_of_zero_means_no_deadline_at_all() {
         // A task's natural end is its exit, so `0` has to read as "wait",
-        // never as "give up immediately".
+        // never as "give up immediately" — and never as a distant substitute
+        // deadline that a long enough task could still outlive.
+        use crate::config_types::OneshotWait;
         let mut settings = Settings::default();
         for value in ["0", "0s"] {
             settings.supervisor.oneshot_timeout = value.to_string();
             assert!(settings.supervisor_oneshot_timeout().is_zero());
-            assert!(
-                settings.supervisor_oneshot_wait() > Duration::from_secs(60 * 60 * 24 * 300),
-                "{value} should wait effectively forever"
+            assert_eq!(
+                settings.supervisor_oneshot_wait(),
+                OneshotWait::Unlimited,
+                "{value} should wait without a deadline"
             );
+            assert_eq!(settings.supervisor_oneshot_wait().duration(), None);
         }
     }
 
     #[test]
     fn oneshot_wait_honours_a_configured_value() {
+        use crate::config_types::OneshotWait;
         let mut settings = Settings::default();
         settings.supervisor.oneshot_timeout = "6h".to_string();
         assert_eq!(
             settings.supervisor_oneshot_wait(),
-            Duration::from_secs(6 * 3600)
+            OneshotWait::For(Duration::from_secs(6 * 3600))
+        );
+        assert_eq!(
+            settings.supervisor_oneshot_wait().duration(),
+            Some(Duration::from_secs(6 * 3600))
         );
     }
 

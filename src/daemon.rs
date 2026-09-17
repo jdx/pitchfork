@@ -1,3 +1,4 @@
+use crate::config_types::OneshotWait;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{
@@ -7,7 +8,6 @@ use crate::pitchfork_toml::{
 use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::time::Duration;
 
 /// Validates a daemon ID to ensure it's safe for use in file paths and IPC.
 ///
@@ -184,7 +184,7 @@ pub struct RunOptions {
     /// its own `settings()` would not see the project's value. `None` leaves
     /// the supervisor to fall back to whatever it can resolve.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub oneshot_wait: Option<Duration>,
+    pub oneshot_wait: Option<OneshotWait>,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,

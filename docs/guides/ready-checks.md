@@ -187,7 +187,7 @@ The command must terminate on its own. `pitchfork start` waits up to
 `supervisor.oneshot_timeout`, one hour by default. A task that runs longer keeps
 going and is still recorded as `completed` when it finishes, but the command that
 was waiting reports a timeout and does not start the dependents. Raise it for a
-long migration or backfill, or set `0` to wait indefinitely:
+long migration or backfill, or set `0` to wait with no deadline at all:
 
 ```toml
 [settings.supervisor]
