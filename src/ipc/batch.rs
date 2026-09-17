@@ -169,7 +169,7 @@ pub async fn build_run_options(
     // Resolve project-scoped defaults in the client process after all readiness
     // overrides are merged. The supervisor is long-lived and may have been
     // started from a different directory.
-    if run_opts.mise.is_none() || should_inject_default_ready_delay(&run_opts) {
+    if run_opts.mise.is_none() || run_opts.oneshot || should_inject_default_ready_delay(&run_opts) {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
         let project_settings = tokio::task::spawn_blocking(move || {
             crate::settings::Settings::load_from_dir(&project_dir)
@@ -181,6 +181,13 @@ pub async fn build_run_options(
         }
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
+        }
+        if run_opts.oneshot {
+            // Carried on the request so the supervisor waits exactly as long
+            // as the client does. Resolving it there instead would read the
+            // supervisor's own directory, where the project's setting is not
+            // visible, and the shorter of the two deadlines would win.
+            run_opts.oneshot_wait = Some(project_settings.supervisor_oneshot_wait());
         }
     }
 

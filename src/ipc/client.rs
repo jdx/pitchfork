@@ -362,7 +362,8 @@ impl IpcClient {
         let timeout = if opts.oneshot {
             // A oneshot's runtime is the task's runtime, which the user
             // controls through `supervisor.oneshot_timeout` (`0` for no limit).
-            crate::settings::settings().supervisor_oneshot_wait()
+            opts.oneshot_wait
+                .unwrap_or_else(|| crate::settings::settings().supervisor_oneshot_wait())
         } else if has_unbounded_check {
             Duration::from_secs(3600)
         } else {

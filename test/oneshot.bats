@@ -362,3 +362,45 @@ TOML
 
   pitchfork stop --all
 }
+
+@test "a project-level oneshot_timeout beats the supervisor's own" {
+  # Give the supervisor a one-second budget of its own, then let the project
+  # ask for a longer one. The supervisor cannot see the project's config from
+  # wherever it was started, so the client resolves the wait and sends it; if
+  # each side used its own value the shorter one would decide.
+  # Scoped to this one command, not exported: the client must keep resolving
+  # the project's value, or both sides would read the same env var and the
+  # test could not tell the two apart.
+  PITCHFORK_ONESHOT_TIMEOUT=1s pitchfork supervisor start --force >/dev/null 2>&1
+
+  create_pitchfork_toml <<TOML
+[settings.supervisor]
+oneshot_timeout = "60s"
+
+[daemons.migrate]
+run = "sleep 5 && echo migration done"
+oneshot = true
+
+[daemons.api]
+run = "echo api started && $(default_shell_sleep_command)"
+depends = ["migrate"]
+ready_delay = 1
+TOML
+
+  # Get the oneshot in flight so the dependent takes the waiting path, which
+  # is the one with a supervisor-side deadline.
+  pitchfork start migrate >/dev/null 2>&1 &
+  local migrate_job=$!
+  wait_for_status migrate running 10
+
+  run pitchfork start api
+  assert_success
+
+  # On the supervisor's own 1s budget the wait would have given up long before
+  # the 5s task finished, releasing api against an unmigrated database.
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  wait "$migrate_job" || true
+  pitchfork stop --all || true
+}

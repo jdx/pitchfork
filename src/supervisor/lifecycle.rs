@@ -334,7 +334,7 @@ impl Supervisor {
                         "daemon {id} is an in-flight oneshot (pid {pid}); waiting for it to finish"
                     );
                     drop(stop_guard.take());
-                    return Ok(self.await_running_oneshot(id).await);
+                    return Ok(self.await_running_oneshot(id, opts.oneshot_wait).await);
                 } else {
                     warn!("daemon {id} already running with pid {pid}");
                     return Ok(IpcResponse::DaemonAlreadyRunning);
@@ -415,12 +415,16 @@ impl Supervisor {
     /// Polls the state file because the terminal state is written by the
     /// monitoring task of the *other* run; this call has no readiness channel
     /// of its own to await.
-    async fn await_running_oneshot(&self, id: &DaemonId) -> IpcResponse {
+    async fn await_running_oneshot(&self, id: &DaemonId, wait: Option<Duration>) -> IpcResponse {
         let interval = settings().supervisor_ready_check_interval();
-        // Same ceiling the client applies, so the two never disagree about
-        // when one task has gone on too long, and a record wedged in a
-        // non-terminal state cannot pin this task indefinitely.
-        let deadline = tokio::time::Instant::now() + settings().supervisor_oneshot_wait();
+        // The caller resolved this from the project's settings and sent it, so
+        // both processes wait exactly as long. Falling back to this process's
+        // own settings would read the directory the supervisor happens to have
+        // started in, where a project's `oneshot_timeout` is not visible — and
+        // the shorter of the two deadlines would silently win, releasing
+        // dependents while the task was still running.
+        let wait = wait.unwrap_or_else(|| settings().supervisor_oneshot_wait());
+        let deadline = tokio::time::Instant::now() + wait;
         loop {
             let Some(daemon) = self.get_daemon(id).await else {
                 return IpcResponse::DaemonNotFound;

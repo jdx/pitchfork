@@ -7,6 +7,7 @@ use crate::pitchfork_toml::{
 use indexmap::IndexMap;
 use std::fmt::Display;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Validates a daemon ID to ensure it's safe for use in file paths and IPC.
 ///
@@ -175,6 +176,15 @@ pub struct RunOptions {
     /// Run-to-completion task rather than a long-running service.
     #[serde(default)]
     pub oneshot: bool,
+    /// How long to wait for a oneshot to finish, already resolved from the
+    /// project's `supervisor.oneshot_timeout`.
+    ///
+    /// Resolved by the client and carried on the request because the
+    /// supervisor is long-lived and may have started in another directory, so
+    /// its own `settings()` would not see the project's value. `None` leaves
+    /// the supervisor to fall back to whatever it can resolve.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub oneshot_wait: Option<Duration>,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
@@ -269,6 +279,10 @@ impl Daemon {
             dir: Dir(self.dir.clone().unwrap_or_else(|| crate::env::CWD.clone())),
             autostop: self.autostop,
             oneshot: self.oneshot,
+            // Re-resolved by the client on the paths that have a project to
+            // resolve it from; a supervisor-internal restart keeps None and
+            // falls back.
+            oneshot_wait: None,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

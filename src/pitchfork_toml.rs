@@ -2070,6 +2070,10 @@ impl PitchforkTomlDaemon {
             dir: Dir(dir),
             autostop: self.auto.contains(&PitchforkTomlAuto::Stop),
             oneshot: self.is_oneshot(),
+            // Filled in by `build_run_options`, which resolves it against the
+            // daemon's own project rather than whatever directory this process
+            // happens to be in.
+            oneshot_wait: None,
             cron_schedule: self.cron.as_ref().map(|c| c.schedule.clone()),
             cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
             cron_immediate: self.cron.as_ref().map(|c| c.immediate),
