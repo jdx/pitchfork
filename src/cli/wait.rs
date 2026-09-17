@@ -294,6 +294,7 @@ fn daemon_exit_code(id: &DaemonId, statuses: &[(DaemonId, DaemonStatus)]) -> i32
 fn status_exit_code(status: &DaemonStatus) -> i32 {
     match status {
         DaemonStatus::Stopped => 0,
+        DaemonStatus::Completed => 0,
         DaemonStatus::Errored(code) if *code != -1 => *code,
         // -1 means the exit code is unknown.
         DaemonStatus::Errored(_) => 1,

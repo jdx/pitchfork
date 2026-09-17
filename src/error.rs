@@ -232,6 +232,24 @@ pub enum ConfigParseError {
     },
 
     #[error(
+        "daemon '{daemon}' in {} sets oneshot = true together with {}",
+        path.display(),
+        conflicts.join(", ")
+    )]
+    #[diagnostic(
+        code(pitchfork::config::oneshot_conflict),
+        url("https://pitchfork.jdx.dev/guides/ready-checks#oneshot-tasks"),
+        help(
+            "a oneshot daemon is ready when its process exits 0, so readiness and health checks do not apply; remove them or drop oneshot = true"
+        )
+    )]
+    OneshotConflict {
+        daemon: String,
+        path: PathBuf,
+        conflicts: Vec<String>,
+    },
+
+    #[error(
         "namespace collision: '{}' and '{}' both resolve to namespace '{ns}'",
         path_a.display(),
         path_b.display()

@@ -11,6 +11,7 @@ export type DaemonStatus =
   | { type: 'stopping' }
   | { type: 'errored'; code: number }
   | { type: 'stopped' }
+  | { type: 'completed' }
   | { type: 'available' }
 
 export interface DaemonEntry {

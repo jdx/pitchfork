@@ -1560,7 +1560,7 @@
             "name": "status",
             "usage": "--status <STATUS>",
             "help": "Filter daemons by status (repeatable for OR logic)",
-            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, available, disabled",
+            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, completed, available, disabled",
             "help_first_line": "Filter daemons by status (repeatable for OR logic)",
             "short": [],
             "long": [
@@ -1583,6 +1583,7 @@
                   "stopping",
                   "failed",
                   "errored",
+                  "completed",
                   "available",
                   "disabled"
                 ],
@@ -1604,6 +1605,9 @@
                   },
                   {
                     "value": "errored"
+                  },
+                  {
+                    "value": "completed"
                   },
                   {
                     "value": "available"

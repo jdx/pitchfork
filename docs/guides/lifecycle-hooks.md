@@ -172,6 +172,26 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 - If the process does not exit within the timeout, `SIGKILL` is sent as a last resort
 - The default signal is `SIGTERM`, and the default timeout comes from `settings.supervisor.stop_timeout`
 
+### Compose-backed daemons
+
+The default stop timeout is `5s`, but a foreground `docker compose up` needs
+longer: on `SIGTERM` it stops the containers it started, and Compose gives each
+one its own 10-second grace period before killing it. With the default, pitchfork
+sends `SIGKILL` to the process group while Compose is still shutting containers
+down, leaving them running. Raise the timeout past Compose's own grace period:
+
+```toml
+[daemons.infra]
+run = "docker compose up"
+stop_signal = { signal = "SIGTERM", timeout = "20s" }
+
+[daemons.infra.hooks]
+on_exit = "docker compose down --remove-orphans"
+```
+
+Increase it further if any service sets a longer `stop_grace_period` in
+`docker-compose.yml`.
+
 ## Behavior
 
 Hooks run asynchronously, so do not use `on_ready` to acquire a lock or perform
@@ -229,10 +249,14 @@ on_ready = "./scripts/acquire-locks.sh"
 ```toml
 [daemons.infra]
 run = "docker compose up"
+stop_signal = { signal = "SIGTERM", timeout = "20s" }
 
 [daemons.infra.hooks]
 on_exit = "docker compose down --remove-orphans"
 ```
+
+See [compose-backed daemons](#compose-backed-daemons) for why the timeout is
+raised above the default `5s`.
 
 **Distinguish stop reason in a shared cleanup script:**
 

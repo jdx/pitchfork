@@ -54,6 +54,11 @@ pub struct Daemon {
     pub boot_time: Option<u64>,
     pub shell_pid: Option<u32>,
     pub status: DaemonStatus,
+    /// Run-to-completion task rather than a long-running service. Readiness is
+    /// a zero exit code, and the terminal state is `completed` instead of
+    /// `stopped`. See `DaemonStatus::Completed`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub oneshot: bool,
     pub dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cmd: Option<Vec<String>>,
@@ -167,6 +172,9 @@ pub struct RunOptions {
     pub shell_pid: Option<u32>,
     pub dir: Dir,
     pub autostop: bool,
+    /// Run-to-completion task rather than a long-running service.
+    #[serde(default)]
+    pub oneshot: bool,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
@@ -260,6 +268,7 @@ impl Daemon {
             shell_pid: self.shell_pid,
             dir: Dir(self.dir.clone().unwrap_or_else(|| crate::env::CWD.clone())),
             autostop: self.autostop,
+            oneshot: self.oneshot,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

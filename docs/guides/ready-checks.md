@@ -16,6 +16,7 @@ can do useful work, such as an HTTP health endpoint or a database query.
 | `ready_port` | A TCP connection succeeds on `127.0.0.1` | Services without an application-level probe |
 | `ready_output` | A regex matches stdout or stderr | Services with a reliable startup message |
 | `ready_delay` | The process stays running for a fixed delay | A fallback when no other check is available |
+| `oneshot` | The process exits with code `0` | Setup tasks that must finish, such as migrations |
 
 ::: tip More than one check means “any,” not “all”
 The first successful output, HTTP, TCP, or command check marks the daemon ready.
@@ -126,6 +127,60 @@ ready_delay = "5s"
 
 Use `pitchfork start worker --delay 5` for a one-time override. Raising the delay
 does not extend the timeout of an HTTP, TCP, output, or command check.
+
+## Oneshot tasks {#oneshot-tasks}
+
+Every other check assumes the daemon keeps running. A step that has to finish
+before the services that need it — running migrations once the database is up,
+creating message-bus streams, seeding a fixture — is the opposite: it is ready
+precisely because it exited. Set `oneshot = true` for that:
+
+```toml
+[daemons.db]
+run = "postgres -D ./data"
+ready_cmd = { run = "pg_isready -h 127.0.0.1", timeout = "30s" }
+
+[daemons.migrate]
+run = "npm run migrate"
+oneshot = true
+depends = ["db"]
+
+[daemons.api]
+run = "node server.js"
+depends = ["migrate"]
+```
+
+`pitchfork start api` starts `db`, waits for `pg_isready` to succeed, runs
+`migrate` to completion, and only then starts `api`. Without `oneshot`, the
+usual workaround is `run = "npm run migrate && exec sleep infinity"`, which
+keeps a pointless process alive and still tells dependents nothing about
+whether the migration succeeded.
+
+A oneshot daemon:
+
+- **Is ready when its process exits `0`.** A nonzero exit is a failure, never
+  readiness, and is subject to [`retry`](/guides/auto-restart) like any other
+  failed daemon.
+- **Reports the `completed` status** instead of `stopped`, in `pitchfork list`,
+  `pitchfork status`, `--json` output, the TUI, and the web UI. `depends` on a
+  oneshot is satisfied by `completed`.
+- **Has no readiness or health checks.** Combining `oneshot` with any
+  `ready_*` or `health_*` field is a configuration error, because its readiness
+  is already defined.
+- **Can be stopped while running.** `pitchfork stop` sends the configured
+  [stop signal](/guides/lifecycle-hooks#stop-signal) as it would for any
+  daemon; an interrupted task is recorded as `stopped`, not `completed`.
+
+::: warning Oneshot commands must be idempotent
+`pitchfork start`, `pitchfork restart`, and `auto = ["start"]` on directory
+entry all re-run a oneshot that has already completed — including when it is
+reached as another daemon's dependency. Write the command so that running it
+twice is harmless, for example by using a migration tool that skips applied
+migrations.
+:::
+
+The command must terminate on its own. `pitchfork start` waits for it with no
+deadline, so a oneshot that never exits blocks the daemons that depend on it.
 
 ## Timeouts and failures
 

@@ -343,10 +343,13 @@ impl IpcClient {
         // does not disconnect prematurely — e.g. when a bounded ready_cmd
         // is paired with an unbounded ready_port. When all checks are bounded,
         // wait through the longest deadline plus a response buffer.
-        let has_unbounded_check = opts
-            .ready_output
-            .as_ref()
-            .is_some_and(|o| o.timeout.is_none())
+        // A oneshot finishes when its command finishes; there is no check to
+        // bound it, and a migration can legitimately outlast any default.
+        let has_unbounded_check = opts.oneshot
+            || opts
+                .ready_output
+                .as_ref()
+                .is_some_and(|o| o.timeout.is_none())
             || opts
                 .ready_port
                 .as_ref()
@@ -397,6 +400,7 @@ impl IpcClient {
             IpcResponse::DaemonStart { daemon } => {
                 debug!("Started {}", daemon.id);
                 Ok(RunResult {
+                    oneshot: opts.oneshot,
                     started: true,
                     exit_code: None,
                     start_time,
@@ -407,6 +411,7 @@ impl IpcClient {
             IpcResponse::DaemonReady { daemon } => {
                 debug!("Started {}", daemon.id);
                 Ok(RunResult {
+                    oneshot: opts.oneshot,
                     started: true,
                     exit_code: None,
                     start_time,
@@ -417,6 +422,7 @@ impl IpcClient {
             IpcResponse::DaemonFailedWithCode { exit_code, .. } => {
                 let code = exit_code.unwrap_or(1);
                 Ok(RunResult {
+                    oneshot: opts.oneshot,
                     started: false,
                     exit_code: Some(code),
                     start_time,
@@ -430,6 +436,7 @@ impl IpcClient {
             IpcResponse::DaemonAlreadyRunning => {
                 warn!("Daemon {} already running", opts.id);
                 Ok(RunResult {
+                    oneshot: opts.oneshot,
                     started: false,
                     exit_code: None,
                     start_time,
@@ -438,6 +445,7 @@ impl IpcClient {
                 })
             }
             IpcResponse::DaemonFailed { error } => Ok(RunResult {
+                oneshot: opts.oneshot,
                 started: false,
                 exit_code: Some(1),
                 start_time,
@@ -445,6 +453,7 @@ impl IpcClient {
                 error_message: Some(format!("Failed to start daemon {}: {}", opts.id, error)),
             }),
             IpcResponse::PortConflict { port, process, pid } => Ok(RunResult {
+                oneshot: opts.oneshot,
                 started: false,
                 exit_code: Some(1),
                 start_time,
@@ -458,6 +467,7 @@ impl IpcClient {
                 start_port,
                 attempts,
             } => Ok(RunResult {
+                oneshot: opts.oneshot,
                 started: false,
                 exit_code: Some(1),
                 start_time,

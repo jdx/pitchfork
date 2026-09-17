@@ -406,7 +406,7 @@ Output:
         long_help #"""
 Filter daemons by status (repeatable for OR logic)
 
-Values: running, stopped, waiting, stopping, failed, errored, available, disabled
+Values: running, stopped, waiting, stopping, failed, errored, completed, available, disabled
 """#
         arg <STATUS> {
             choices {
@@ -416,6 +416,7 @@ Values: running, stopped, waiting, stopping, failed, errored, available, disable
                 choice stopping
                 choice failed
                 choice errored
+                choice completed
                 choice available
                 choice disabled
             }

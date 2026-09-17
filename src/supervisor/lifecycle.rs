@@ -257,6 +257,27 @@ fn delay_readiness_succeeded(
     !ready_notified && !has_other_ready_check && !process_exited && process_running
 }
 
+/// Terminal state recorded for a daemon run that has ended, and whether that
+/// ending counts as a successful exit.
+///
+/// A `oneshot` daemon's whole job is to finish, so a clean exit of its own
+/// accord is `Completed` rather than `Stopped` — that is what makes it
+/// distinguishable from a service that is merely not running, and what lets
+/// `depends` treat it as satisfied. An explicit stop is still a stop: the task
+/// was interrupted, not completed.
+fn terminal_exit_state(
+    exit_reason: &str,
+    oneshot: bool,
+    exit_code: i32,
+    exited_cleanly: bool,
+) -> (DaemonStatus, bool) {
+    match exit_reason {
+        "exit" if oneshot => (DaemonStatus::Completed, true),
+        "stop" | "exit" => (DaemonStatus::Stopped, exited_cleanly),
+        _ => (DaemonStatus::Errored(exit_code), false),
+    }
+}
+
 /// How long a failed start waits for the daemon's output to become queryable
 /// before reporting. Typically satisfied in a few dozen milliseconds; a daemon
 /// that failed without printing anything waits the whole of it, so keep it
@@ -294,6 +315,7 @@ impl Supervisor {
             // Only check for Running state with a valid PID
             if !daemon.status.is_stopping()
                 && !daemon.status.is_stopped()
+                && !daemon.status.is_completed()
                 && let Some(pid) = daemon.pid
             {
                 if opts.force {
@@ -962,6 +984,11 @@ impl Supervisor {
 
             // Setup readiness checking
             let mut ready_notified = false;
+            // Set when a oneshot's process exits 0. Its readiness *is* its
+            // completion, so the notification is held back until the
+            // `completed` state has been persisted — a caller that returns
+            // from `pitchfork start` must not still see the daemon running.
+            let mut oneshot_completion_pending = false;
             let mut ready_tx = ready_tx;
             let ready_pattern = ready_output
                 .as_ref()
@@ -1146,13 +1173,15 @@ impl Supervisor {
                         exit_status = Some(result);
                         debug!("daemon {id} process exited, exit_status: {exit_status:?}");
                         if !ready_notified {
-                            if let Some(tx) = ready_tx.take() {
-                                // Check if process exited successfully
-                                let is_success = exit_status.as_ref()
-                                    .and_then(|r| r.as_ref().ok())
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-
+                            // Check if process exited successfully
+                            let is_success = exit_status.as_ref()
+                                .and_then(|r| r.as_ref().ok())
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if is_success && opts.oneshot {
+                                debug!("daemon {id} completed, deferring success notification until the completed state is persisted");
+                                oneshot_completion_pending = true;
+                            } else if let Some(tx) = ready_tx.take() {
                                 if is_success {
                                     debug!("daemon {id} exited successfully before ready check, sending success notification");
                                     let _ = tx.send(Ok(()));
@@ -1699,7 +1728,12 @@ impl Supervisor {
                         d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
                     }))
             {
-                // Another process has taken over, don't update status
+                // Another process has taken over, don't update status. The
+                // task itself did finish, so a caller waiting on it is still
+                // told so rather than left to time out.
+                if oneshot_completion_pending && let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Ok(()));
+                }
                 return;
             }
             // Capture the intentional-stop flag. Combine pre-drain and
@@ -1741,13 +1775,12 @@ impl Supervisor {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
-                let (new_status, last_exit_success) = match exit_reason {
-                    "stop" | "exit" => (
-                        DaemonStatus::Stopped,
-                        exit_status.as_ref().map(|s| s.success()).unwrap_or(true),
-                    ),
-                    _ => (DaemonStatus::Errored(exit_code), false),
-                };
+                let (new_status, last_exit_success) = terminal_exit_state(
+                    exit_reason,
+                    opts.oneshot,
+                    exit_code,
+                    exit_status.as_ref().map(|s| s.success()).unwrap_or(true),
+                );
                 // Revalidate ownership inside the same state-lock section that
                 // performs the write. The snapshot above was taken without
                 // holding the lock, so a restart running on another thread can
@@ -1765,6 +1798,12 @@ impl Supervisor {
                 {
                     debug!("daemon {id} exit state was not written; a successor owns the record");
                 }
+            }
+
+            // The completed state is now visible, so a caller that was waiting
+            // on this oneshot can return and see it.
+            if oneshot_completion_pending && let Some(tx) = ready_tx.take() {
+                let _ = tx.send(Ok(()));
             }
 
             // --- Phase 2: Fire hooks ---
@@ -2581,6 +2620,40 @@ fn is_daemon_slug_target(id: &DaemonId) -> bool {
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
         id.name() == daemon_name
     })
+}
+
+#[cfg(test)]
+mod oneshot_tests {
+    use super::*;
+
+    #[test]
+    fn oneshot_clean_exit_is_completed() {
+        let (status, success) = terminal_exit_state("exit", true, 0, true);
+        assert!(matches!(status, DaemonStatus::Completed));
+        assert!(success);
+    }
+
+    #[test]
+    fn service_clean_exit_is_still_stopped() {
+        let (status, success) = terminal_exit_state("exit", false, 0, true);
+        assert!(matches!(status, DaemonStatus::Stopped));
+        assert!(success);
+    }
+
+    #[test]
+    fn oneshot_failure_is_errored_so_retry_applies() {
+        // check_retry() only picks up errored daemons, so a non-zero exit must
+        // not be recorded as completed.
+        let (status, success) = terminal_exit_state("fail", true, 3, false);
+        assert!(matches!(status, DaemonStatus::Errored(3)));
+        assert!(!success);
+    }
+
+    #[test]
+    fn stopped_oneshot_did_not_complete() {
+        let (status, _) = terminal_exit_state("stop", true, 0, true);
+        assert!(matches!(status, DaemonStatus::Stopped));
+    }
 }
 
 #[cfg(all(test, unix))]

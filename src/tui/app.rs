@@ -1140,9 +1140,10 @@ impl App {
                         crate::daemon_status::DaemonStatus::Running => 0,
                         crate::daemon_status::DaemonStatus::Waiting => 1,
                         crate::daemon_status::DaemonStatus::Stopping => 2,
-                        crate::daemon_status::DaemonStatus::Stopped => 3,
-                        crate::daemon_status::DaemonStatus::Errored(_) => 4,
-                        crate::daemon_status::DaemonStatus::Failed(_) => 5,
+                        crate::daemon_status::DaemonStatus::Completed => 3,
+                        crate::daemon_status::DaemonStatus::Stopped => 4,
+                        crate::daemon_status::DaemonStatus::Errored(_) => 5,
+                        crate::daemon_status::DaemonStatus::Failed(_) => 6,
                     };
                     status_order(a).cmp(&status_order(b))
                 }

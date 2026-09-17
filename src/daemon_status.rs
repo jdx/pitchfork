@@ -11,6 +11,10 @@ pub enum DaemonStatus {
     Stopping,
     /// Exit code of the process, or -1 if unknown.
     Errored(i32),
+    /// A `oneshot = true` daemon whose process ran to completion with exit
+    /// code 0. Distinct from `Stopped` so `depends` can treat it as satisfied
+    /// and so the CLI can tell "finished its work" from "not running".
+    Completed,
     #[default]
     Stopped,
 }
@@ -24,6 +28,7 @@ impl DaemonStatus {
             DaemonStatus::Running => console::style(s).green().to_string(),
             DaemonStatus::Stopping => console::style(s).yellow().to_string(),
             DaemonStatus::Stopped => console::style(s).dim().to_string(),
+            DaemonStatus::Completed => console::style(s).cyan().to_string(),
             DaemonStatus::Errored(_) => console::style(s).red().to_string(),
         }
     }
@@ -51,7 +56,24 @@ mod tests {
             ("failed", DaemonStatus::Failed("some error".to_string())),
             ("errored", DaemonStatus::Errored(1)),
             ("errored_unknown", DaemonStatus::Errored(-1)),
+            ("completed", DaemonStatus::Completed),
         ]
+    }
+
+    #[test]
+    fn test_completed_serializes_as_completed() {
+        // `mise daemons ls` and other consumers read this string; keep it
+        // stable and distinct from "stopped".
+        assert_eq!(DaemonStatus::Completed.to_string(), "completed");
+        assert_eq!(
+            serde_json::to_string(&DaemonStatus::Completed).unwrap(),
+            "\"completed\""
+        );
+    }
+
+    #[test]
+    fn test_completed_has_no_error_message() {
+        assert!(DaemonStatus::Completed.error_message().is_none());
     }
 
     #[test]

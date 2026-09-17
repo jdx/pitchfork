@@ -429,6 +429,7 @@ fn status_display(status: &DaemonStatus) -> (String, Color) {
     match status {
         DaemonStatus::Running => ("running".to_string(), GREEN),
         DaemonStatus::Stopped => ("stopped".to_string(), GRAY),
+        DaemonStatus::Completed => ("completed".to_string(), CYAN),
         DaemonStatus::Waiting => ("waiting".to_string(), YELLOW),
         DaemonStatus::Stopping => ("stopping".to_string(), YELLOW),
         DaemonStatus::Failed(_) => ("failed".to_string(), RED),
@@ -1554,6 +1555,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                 Style::default().fg(match &d.status {
                     crate::daemon_status::DaemonStatus::Running => GREEN,
                     crate::daemon_status::DaemonStatus::Stopped => GRAY,
+                    crate::daemon_status::DaemonStatus::Completed => CYAN,
                     crate::daemon_status::DaemonStatus::Waiting => YELLOW,
                     crate::daemon_status::DaemonStatus::Stopping => YELLOW,
                     _ => RED,

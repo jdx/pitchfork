@@ -88,7 +88,8 @@ async function onToggle() {
         </div>
         <div class="detail-actions">
           <button
-            v-if="daemon.status.type === 'stopped' || daemon.status.type === 'failed'
+            v-if="daemon.status.type === 'stopped' || daemon.status.type === 'completed'
+              || daemon.status.type === 'failed'
               || daemon.status.type === 'errored' || daemon.status.type === 'available'"
             class="act-btn act-start"
             :disabled="isActing"

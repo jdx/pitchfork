@@ -23,6 +23,8 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct RunResult {
     pub started: bool,
+    /// The daemon ran to completion rather than starting a service.
+    pub oneshot: bool,
     pub exit_code: Option<i32>,
     pub start_time: DateTime<Local>,
     pub resolved_ports: Vec<u16>,
@@ -149,6 +151,21 @@ pub async fn build_run_options(
         }
     }
 
+    // A oneshot is ready when its process exits 0. Config load rejects
+    // `ready_*`/`health_*` on such a daemon, but the CLI's --delay/--port/etc.
+    // overrides are applied above and would otherwise install a check that
+    // races the process it is meant to describe.
+    if run_opts.oneshot {
+        run_opts.ready_delay = None;
+        run_opts.ready_output = None;
+        run_opts.ready_http = None;
+        run_opts.ready_port = None;
+        run_opts.ready_cmd = None;
+        run_opts.health_cmd = None;
+        run_opts.health_http = None;
+        run_opts.health_port = None;
+    }
+
     // Resolve project-scoped defaults in the client process after all readiness
     // overrides are merged. The supervisor is long-lived and may have been
     // started from a different directory.
@@ -171,7 +188,10 @@ pub async fn build_run_options(
 }
 
 fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
-    opts.ready_delay.is_none()
+    // A oneshot's readiness is its exit, so a delay would only be a second,
+    // conflicting answer to the same question.
+    !opts.oneshot
+        && opts.ready_delay.is_none()
         && opts.ready_output.is_none()
         && opts.ready_http.is_none()
         && opts.ready_port.is_none()
@@ -299,7 +319,9 @@ fn merge_ready_output_override(
 
 /// Determine the effective ready check type from merged RunOptions.
 fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
-    if let Some(ref output) = opts.ready_output {
+    if opts.oneshot {
+        ReadyCheckType::Completion
+    } else if let Some(ref output) = opts.ready_output {
         ReadyCheckType::Output(output.pattern.clone())
     } else if let Some(ref http) = opts.ready_http {
         ReadyCheckType::Http(http.url.clone())
@@ -350,7 +372,9 @@ pub fn update_job_with_result(
     if let Some(job) = job {
         match result {
             Ok(run_result) if run_result.started => {
-                let body = if run_result.resolved_ports.is_empty() {
+                let body = if run_result.oneshot {
+                    format!("{prefix} {id_label} completed")
+                } else if run_result.resolved_ports.is_empty() {
                     format!("{prefix} {id_label} started")
                 } else {
                     let port_str = run_result
