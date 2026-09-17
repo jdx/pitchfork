@@ -6773,7 +6773,7 @@
         "cli": [],
         "bindings": {},
         "help": "Maximum time to wait for a oneshot daemon to finish",
-        "long_help": "Maximum time to wait for a oneshot daemon to finish\n\nA `oneshot = true` daemon is ready when its process exits `0`, so there is no readiness check to bound the wait. `pitchfork start` gives up after this long and reports a timeout; the task itself keeps running and is still recorded as `completed` when it ends.\n\nSet to `0` for no limit. Raise it for long migrations, backfills, or seeds.",
+        "long_help": "Maximum time to wait for a oneshot daemon to finish\n\nA `oneshot = true` daemon is ready when its process exits `0`, so there is no readiness check to bound the wait. `pitchfork start` gives up after this long and reports a timeout; the task itself keeps running and is still recorded as `completed` if it later exits successfully. A nonzero exit remains a failure.\n\nSet to `0` for no limit. Raise it for long migrations, backfills, or seeds.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",

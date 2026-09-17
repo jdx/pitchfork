@@ -254,34 +254,31 @@ auto = ["start", "stop"]  # Both auto-start and auto-stop
 
 ### `oneshot`
 
-Marks a daemon as a task that runs to completion rather than a long-running
-service. Readiness means the process exited with code `0`; the daemon then
-reports the [`completed`](/guides/ready-checks#oneshot-tasks) status, and
-daemons that `depends` on it wait for that completion. A nonzero exit is a
-failure and is subject to [`retry`](#retry).
+**Default:** `false`.
+
+Set to `true` for a task that runs to completion. An exit code of `0` marks it
+`completed` and allows dependent daemons to start. A nonzero exit is a failure
+and follows the configured [`retry`](#retry) policy.
 
 ```toml
-[daemons.migrate]
-run = "npm run migrate"
+[daemons.seed]
+run = "npm run seed"
 oneshot = true
-depends = ["db"]
 
 [daemons.api]
 run = "node server.js"
-depends = ["migrate"]
+depends = ["seed"]
 ```
 
-`oneshot` cannot be combined with any `ready_*` or `health_*` field; doing so
-fails config parsing, because the daemon's readiness is already defined by its
-exit code.
+- Cannot be combined with any `ready_*` or `health_*` field.
+- Runs again on subsequent starts, including when started as a dependency.
+  The command must be safe to repeat.
+- Reports `stopped` if interrupted by `pitchfork stop`.
+- Uses `settings.supervisor.oneshot_timeout` to limit how long startup waits
+  (default `"1h"`; `"0"` disables the deadline). A timeout does not stop the task.
 
-`pitchfork start`, `pitchfork restart`, and `auto = ["start"]` re-run a oneshot
-that has already completed, so the command must be idempotent. `pitchfork stop`
-on a running oneshot sends the configured [`stop_signal`](#stop-signal) and
-records the daemon as `stopped` rather than `completed`.
-
-The command must exit on its own. `pitchfork start` waits up to
-`settings.supervisor.oneshot_timeout` (default `1h`, `0` for no limit).
+See [Oneshot tasks](/guides/oneshot-tasks) for startup ordering, reruns, and
+failure handling.
 
 ### `ready_delay`
 
@@ -439,8 +436,8 @@ depends = ["postgres", "redis"]
 - **Auto-start**: Running `pitchfork start api` will automatically start `postgres` and `redis` first
 - **Transitive dependencies**: If `postgres` depends on `storage`, that will be started too
 - **Parallel starting**: Dependencies at the same level start in parallel for faster startup
-- **Skip running**: Already-running dependencies are skipped (not restarted)
-- **Oneshot dependencies**: A [`oneshot`](#oneshot) dependency must run to completion before its dependents start; because it is not "running" once it finishes, it is re-run each time a dependent starts
+- **Skip running**: Already-running services are skipped (not restarted)
+- **Oneshot dependencies**: A [`oneshot`](#oneshot) dependency must complete successfully before its dependents start. Startup waits for an already-running task; a completed task runs again
 - **Circular detection**: Circular dependencies are detected and reported as errors
 - **Strict validation**: Invalid dependency IDs fail config parsing (they are not skipped)
 - **Force flag**: Using `-f` only restarts the explicitly requested daemon, not its dependencies
