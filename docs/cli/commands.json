@@ -6758,6 +6758,38 @@
         "default_list": [],
         "extensions": []
       },
+      "supervisor.oneshot_timeout": {
+        "default": "1h",
+        "default_note": null,
+        "data_type": "null",
+        "value_type": {
+          "kind": "base",
+          "of": "duration"
+        },
+        "env": "PITCHFORK_ONESHOT_TIMEOUT",
+        "envs": [
+          "PITCHFORK_ONESHOT_TIMEOUT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Maximum time to wait for a oneshot daemon to finish",
+        "long_help": "Maximum time to wait for a oneshot daemon to finish\n\nA `oneshot = true` daemon is ready when its process exits `0`, so there is no readiness check to bound the wait. `pitchfork start` gives up after this long and reports a timeout; the task itself keeps running and is still recorded as `completed` when it ends.\n\nSet to `0` for no limit. Raise it for long migrations, backfills, or seeds.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "supervisor.orphan_policy": {
         "default": "adopt",
         "default_note": null,

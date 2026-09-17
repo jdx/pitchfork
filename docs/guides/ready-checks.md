@@ -183,11 +183,16 @@ Starting a daemon whose oneshot dependency is already running waits for that
 in-flight run rather than starting a second copy, so two shells entering the
 project at once still see the task finish before its dependents start.
 
-The command must terminate on its own. `pitchfork start` waits up to one hour,
-the same ceiling it applies to any unbounded readiness check. A oneshot that
-runs longer keeps going and is still recorded as `completed` when it finishes,
-but the command that was waiting reports a timeout and does not start the
-dependents.
+The command must terminate on its own. `pitchfork start` waits up to
+`supervisor.oneshot_timeout`, one hour by default. A task that runs longer keeps
+going and is still recorded as `completed` when it finishes, but the command that
+was waiting reports a timeout and does not start the dependents. Raise it for a
+long migration or backfill, or set `0` to wait indefinitely:
+
+```toml
+[settings.supervisor]
+oneshot_timeout = "6h"
+```
 
 ## Timeouts and failures
 

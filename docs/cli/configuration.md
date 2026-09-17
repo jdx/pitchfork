@@ -735,6 +735,18 @@ Daemon log buffer flush interval
 
 How often daemon log output is flushed to disk. Lower values mean logs appear faster in the UI but may impact performance.
 
+## `supervisor.oneshot_timeout`
+
+- **Type:** `duration`
+- **Default:** `1h`
+- **Set with:** `PITCHFORK_ONESHOT_TIMEOUT`
+
+Maximum time to wait for a oneshot daemon to finish
+
+A `oneshot = true` daemon is ready when its process exits `0`, so there is no readiness check to bound the wait. `pitchfork start` gives up after this long and reports a timeout; the task itself keeps running and is still recorded as `completed` when it ends.
+
+Set to `0` for no limit. Raise it for long migrations, backfills, or seeds.
+
 ## `supervisor.orphan_policy`
 
 - **Type:** `string`

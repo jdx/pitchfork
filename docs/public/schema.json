@@ -1384,6 +1384,13 @@
             "null"
           ]
         },
+        "oneshot_timeout": {
+          "description": "Maximum time to wait for a oneshot daemon to finish",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "orphan_policy": {
           "description": "What to do with live orphaned daemons on supervisor startup: adopt or kill",
           "type": [

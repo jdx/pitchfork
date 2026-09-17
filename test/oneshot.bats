@@ -285,12 +285,16 @@ TOML
 }
 
 @test "a stopped oneshot that exits 0 is not reported as ready" {
-  # The trap has to live in the daemon's own process. Running a script through
-  # a second shell would leave the daemon process itself dying from the signal,
+  # The trap has to live in the daemon's own process. A script run through a
+  # second shell would leave the daemon process itself dying from the signal,
   # which is the ordinary case and not the one under test.
+  #
+  # The trap records that it ran by writing a file rather than by printing:
+  # a line printed on the way out races the pipe teardown that follows the
+  # process group's exit, and is not reliably in the log store afterwards.
   create_pitchfork_toml <<TOML
 [daemons.slow]
-run = 'trap "echo trapped; exit 0" TERM; echo task started; while true; do sleep 0.2; done'
+run = 'trap "echo yes > trapped.txt; exit 0" TERM; echo task started; while true; do sleep 0.2; done'
 oneshot = true
 TOML
 
@@ -301,14 +305,16 @@ TOML
   run pitchfork stop slow
   assert_success
 
-  # The process catches the signal and exits 0, but it was interrupted rather
-  # than finished, so the waiting start must report failure instead of telling
-  # dependents to proceed.
+  # stop waits for the whole process group, so the trap has already run and
+  # the daemon exited 0 rather than dying from the signal.
+  assert_file_exists "$TEST_TEMP_DIR/trapped.txt"
+
+  # It was interrupted rather than finished, so the waiting start must report
+  # failure instead of telling dependents to proceed.
   local start_status=0
   wait "$start_job" || start_status=$?
   [[ $start_status -ne 0 ]]
 
-  wait_for_logs slow "trapped" 5
   run pitchfork status slow
   assert_output --partial "stopped"
   refute_output --partial "completed"

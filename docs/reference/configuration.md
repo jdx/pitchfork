@@ -280,6 +280,9 @@ that has already completed, so the command must be idempotent. `pitchfork stop`
 on a running oneshot sends the configured [`stop_signal`](#stop-signal) and
 records the daemon as `stopped` rather than `completed`.
 
+The command must exit on its own. `pitchfork start` waits up to
+`settings.supervisor.oneshot_timeout` (default `1h`, `0` for no limit).
+
 ### `ready_delay`
 
 Seconds to wait before considering the daemon ready. When started via `pitchfork start` or `pitchfork run`, defaults to `3` seconds if no other ready check is configured. The default can be changed globally via `[settings.general] ready_delay` (or the `PITCHFORK_READY_DELAY` environment variable); a daemon-level `ready_delay` always takes precedence. The global setting is a duration string and must be a whole number of seconds; subsecond values (e.g. `"500ms"`) are rejected with an error rather than silently truncated.

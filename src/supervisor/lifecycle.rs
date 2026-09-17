@@ -417,9 +417,10 @@ impl Supervisor {
     /// of its own to await.
     async fn await_running_oneshot(&self, id: &DaemonId) -> IpcResponse {
         let interval = settings().supervisor_ready_check_interval();
-        // Matches the client's own ceiling for an unbounded wait, so a record
-        // wedged in a non-terminal state cannot pin this task indefinitely.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3600);
+        // Same ceiling the client applies, so the two never disagree about
+        // when one task has gone on too long, and a record wedged in a
+        // non-terminal state cannot pin this task indefinitely.
+        let deadline = tokio::time::Instant::now() + settings().supervisor_oneshot_wait();
         loop {
             let Some(daemon) = self.get_daemon(id).await else {
                 return IpcResponse::DaemonNotFound;
