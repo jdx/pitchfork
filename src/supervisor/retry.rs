@@ -42,7 +42,11 @@ impl Supervisor {
                         if d.status.is_errored()
                             && d.pid.is_none()
                             && d.retry.count() > 0
-                            && d.retry_count < d.retry.count() =>
+                            && d.retry_count < d.retry.count()
+                            // Re-checked here as well: a foreground run can
+                            // claim these retries while this loop is awaiting
+                            // `run` for an earlier daemon.
+                            && !self.is_retrying(&id) =>
                     {
                         d.clone()
                     }
