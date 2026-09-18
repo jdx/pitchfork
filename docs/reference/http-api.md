@@ -225,10 +225,11 @@ case-insensitively.
 
 `disk_usage_bytes` is omitted from a worktree whenever pitchfork does not track
 a data directory for its daemons, which is the case today.
-`namespace_registered` is `false` when the worktree's namespace is missing from
-the namespace registry. Its daemons are still listed, but the supervisor
-resolves daemon configs through that registry, so starting one fails until the
-namespace is registered.
+`can_start` is `false` when the supervisor has neither a config nor a saved
+command for some of the worktree's daemons, which happens for a worktree
+outside both its own project and the namespace registry. Those daemons are
+still listed, and the stack response names them in `unresolvable_daemons`;
+starting one fails until the worktree is registered.
 
 ```bash
 curl http://127.0.0.1:3120/api/projects/shop
@@ -249,7 +250,7 @@ curl http://127.0.0.1:3120/api/projects/shop
       "path": "/home/user/shop",
       "namespace": "shop",
       "is_primary": true,
-      "namespace_registered": true,
+      "can_start": true,
       "group_count": 2,
       "daemons": { "total": 3, "running": 2, "stopped": 1, "failed": 0, "available": 0 },
       "last_activity": "2026-05-31T10:00:00+02:00",
@@ -267,7 +268,9 @@ Show one worktree's stack: the groups declared by the config loaded for that
 worktree, each with its member daemons in full daemon-entry form. The `default`
 group comes first. `missing` lists qualified ids a group declares that no known
 daemon matches, and `ungrouped` lists the worktree's daemons that no group
-names. The worktree segment accepts either the URL name or the branch name.
+names. The worktree segment accepts either the URL name or the branch name. When two
+branches sanitize to the same URL name, the later one gets a numeric suffix
+(`feature-api`, `feature-api-2`) rather than being dropped.
 
 ```bash
 curl http://127.0.0.1:3120/api/projects/shop/main
@@ -283,7 +286,8 @@ curl http://127.0.0.1:3120/api/projects/shop/main
   "namespace": "shop",
   "dir": "/home/user/shop",
   "is_primary": true,
-  "namespace_registered": true,
+  "can_start": true,
+  "unresolvable_daemons": [],
   "groups": [
     {
       "name": "default",

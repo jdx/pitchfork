@@ -64,7 +64,7 @@ const showDisk = computed(() =>
                   {{ w.name }}
                 </router-link>
                 <span v-if="w.is_primary" class="tag">primary</span>
-                <span v-if="!w.namespace_registered" class="tag tag-warn" title="Register this namespace before its daemons can start">unregistered</span>
+                <span v-if="!w.can_start" class="tag tag-warn" title="The supervisor has no config for some of these daemons; register this worktree to start them">not startable</span>
                 <div class="cell-dir">{{ w.path }}</div>
               </td>
               <td class="cell-ns">{{ w.namespace }}</td>

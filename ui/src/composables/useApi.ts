@@ -495,7 +495,13 @@ export function useProcessTree(id: Ref<string>, pollInterval = 3000) {
   return { tree, loading, error, refresh: fetchTree }
 }
 
-/** Poll a JSON endpoint, keeping the last good value on transient errors. */
+/**
+ * Poll a JSON endpoint, keeping the last good value on transient errors.
+ *
+ * Requests are serialized: a tick that fires while one is still in flight is
+ * skipped rather than overlapping it, so an endpoint slower than the interval
+ * still delivers its responses instead of having every one superseded.
+ */
 function usePolledResource<T>(
   path: Ref<string | null>,
   pollInterval = 3000,
@@ -503,22 +509,27 @@ function usePolledResource<T>(
   const data = shallowRef<T | null>(null)
   const loading = ref(true)
   const error = ref<string | null>(null)
-  let nonce = 0
+  // Bumped when the polled path changes, so a response for the previous
+  // target is dropped instead of rendering under the new one.
+  let generation = 0
+  let inFlight = false
 
   async function refresh() {
-    const current = ++nonce
     const target = path.value
-    if (!target) return
+    if (!target || inFlight) return
+    const current = generation
+    inFlight = true
     try {
       const value = await api<T>(target)
-      if (current !== nonce) return
+      if (current !== generation) return
       data.value = value
       error.value = null
     } catch (e: any) {
-      if (current !== nonce) return
+      if (current !== generation) return
       error.value = e.message ?? 'Unknown error'
     } finally {
-      if (current === nonce) loading.value = false
+      inFlight = false
+      if (current === generation) loading.value = false
     }
   }
 
@@ -528,6 +539,8 @@ function usePolledResource<T>(
     // payload before fetching the new one. Otherwise the old project's
     // worktrees stay on screen under the new title, and a 404 renders the
     // previous page next to the error.
+    generation++
+    inFlight = false
     data.value = null
     error.value = null
     loading.value = true
@@ -588,8 +601,20 @@ export function useGroupActions() {
     key: string,
     verb: 'Start' | 'Stop' | 'Restart',
     ids: string[],
+    /** Group members with no matching daemon, which cannot be acted on. */
+    missing: string[] = [],
   ): Promise<void> {
-    if (acting.value.has(key) || ids.length === 0) return
+    if (acting.value.has(key)) return
+    const completed = { Start: 'started', Stop: 'stopped', Restart: 'restarted' }[verb]
+    if (ids.length === 0) {
+      toast.error(`${verb} ${key} failed`, {
+        duration: 4000,
+        description: missing.length
+          ? `no daemon matches ${missing.join(', ')}`
+          : 'the group has no daemons',
+      })
+      return
+    }
     acting.value = new Set(acting.value).add(key)
     const endpoint = verb.toLowerCase()
     // Stop tears the stack down in reverse declaration order so dependents
@@ -609,15 +634,17 @@ export function useGroupActions() {
         }
       }
       toast.dismiss(toastId)
-      if (failures.length === 0) {
-        toast.success(`${key} ${verb.toLowerCase()}ed`, { duration: 2000 })
+      const skipped = missing.map(id => `${daemonName(id)}: no matching daemon`)
+      const problems = [...failures, ...skipped]
+      if (problems.length === 0) {
+        toast.success(`${key} ${completed}`, { duration: 2000 })
       } else if (failures.length < ids.length) {
-        toast.warning(`${key} partially ${verb.toLowerCase()}ed`, {
+        toast.warning(`${key} partially ${completed}`, {
           duration: 4000,
-          description: failures.join('\n'),
+          description: problems.join('\n'),
         })
       } else {
-        toast.error(`${verb} ${key} failed`, { duration: 4000, description: failures.join('\n') })
+        toast.error(`${verb} ${key} failed`, { duration: 4000, description: problems.join('\n') })
       }
     } finally {
       const next = new Set(acting.value)
@@ -628,8 +655,9 @@ export function useGroupActions() {
 
   return {
     acting,
-    start: (key: string, ids: string[]) => run(key, 'Start', ids),
-    stop: (key: string, ids: string[]) => run(key, 'Stop', ids),
-    restart: (key: string, ids: string[]) => run(key, 'Restart', ids),
+    start: (key: string, ids: string[], missing?: string[]) => run(key, 'Start', ids, missing),
+    stop: (key: string, ids: string[], missing?: string[]) => run(key, 'Stop', ids, missing),
+    restart: (key: string, ids: string[], missing?: string[]) =>
+      run(key, 'Restart', ids, missing),
   }
 }

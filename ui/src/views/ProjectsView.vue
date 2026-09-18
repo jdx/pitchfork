@@ -43,9 +43,9 @@ const { projects, loading, error, refresh } = useProjects()
       </tbody>
     </table>
 
-    <div v-else-if="!loading" class="empty-state">
+    <div v-else-if="!loading && !error" class="empty-state">
       <h3>No projects registered</h3>
-      <p>Register one with <code>pitchfork supervisor namespace add &lt;name&gt; &lt;dir&gt;</code>.</p>
+      <p>Register one with <code>pitchfork proxy add</code>, or add it under <code>[namespaces]</code> in your user config.</p>
     </div>
   </div>
 </template>

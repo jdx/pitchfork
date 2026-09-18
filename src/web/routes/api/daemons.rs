@@ -105,6 +105,12 @@ impl ApiDaemonEntry {
         }
     }
 
+    /// True for a daemon that only exists in config: the supervisor has no
+    /// state for it, so starting it needs a config it can resolve.
+    pub(crate) fn is_available(&self) -> bool {
+        self.is_available
+    }
+
     /// Seconds the daemon's process has been up, when it is running.
     pub(crate) fn uptime_secs(&self) -> Option<u64> {
         self.uptime_secs
@@ -257,6 +263,8 @@ fn entry_to_api(
 pub(crate) fn config_daemon_entry(
     id: &crate::daemon_id::DaemonId,
     daemon_config: &crate::pitchfork_toml::PitchforkTomlDaemon,
+    global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
+    settings: &crate::settings::Settings,
 ) -> ApiDaemonEntry {
     let entry = DaemonListEntry {
         id: id.clone(),
@@ -267,8 +275,8 @@ pub(crate) fn config_daemon_entry(
     entry_to_api(
         &entry,
         &std::collections::HashMap::new(),
-        &crate::pitchfork_toml::PitchforkToml::read_global_slugs(),
-        &crate::settings::settings(),
+        global_slugs,
+        settings,
     )
 }
 

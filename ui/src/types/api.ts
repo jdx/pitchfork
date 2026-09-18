@@ -142,8 +142,8 @@ export interface WorktreeSummary {
   path: string
   namespace: string
   is_primary: boolean
-  /** False when the namespace is not registered, so its daemons cannot start yet. */
-  namespace_registered: boolean
+  /** False when the supervisor cannot resolve config for some of its daemons. */
+  can_start: boolean
   group_count: number
   daemons: DaemonCounts
   last_activity: string | null
@@ -169,8 +169,10 @@ export interface Stack {
   namespace: string
   dir: string
   is_primary: boolean
-  /** False when the namespace is not registered, so its daemons cannot start yet. */
-  namespace_registered: boolean
+  /** False when `unresolvable_daemons` is non-empty. */
+  can_start: boolean
+  /** Listed daemons the supervisor has no config or saved command for. */
+  unresolvable_daemons: string[]
   groups: StackGroup[]
   ungrouped: DaemonEntry[]
   daemons: DaemonCounts

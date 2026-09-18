@@ -41,11 +41,6 @@ pub struct WorktreeView {
     pub path: PathBuf,
     pub namespace: String,
     pub is_primary: bool,
-    /// Whether the worktree's namespace is in the global namespace registry.
-    /// The supervisor resolves daemon configs through that registry, so
-    /// daemons of an unregistered worktree are visible here but cannot be
-    /// started until the namespace is registered.
-    pub namespace_registered: bool,
     pub groups: IndexMap<String, Vec<DaemonId>>,
 }
 
@@ -87,9 +82,9 @@ pub struct ApiWorktreeSummary {
     path: String,
     namespace: String,
     is_primary: bool,
-    /// False when the worktree's namespace is not registered, which means the
-    /// supervisor cannot start its daemons yet.
-    namespace_registered: bool,
+    /// False when the supervisor cannot resolve config for some of this
+    /// worktree's daemons, so starting them would fail.
+    can_start: bool,
     group_count: usize,
     daemons: ApiDaemonCounts,
     last_activity: Option<String>,
@@ -133,9 +128,13 @@ pub struct ApiStack {
     namespace: String,
     dir: String,
     is_primary: bool,
-    /// False when the worktree's namespace is not registered, which means the
-    /// supervisor cannot start its daemons yet.
-    namespace_registered: bool,
+    /// False when `unresolvable_daemons` is non-empty.
+    can_start: bool,
+    /// Daemons listed here that the supervisor cannot resolve a config for.
+    /// It loads configs from its own project and from the namespace registry,
+    /// so a worktree that is in neither is visible but not startable until its
+    /// namespace is registered.
+    unresolvable_daemons: Vec<String>,
     groups: Vec<ApiGroup>,
     /// Daemons in the worktree's namespace that no group lists.
     ungrouped: Vec<ApiDaemonEntry>,
@@ -147,6 +146,24 @@ pub struct ApiStack {
 
 /// Daemon entries indexed by qualified id, in listing order.
 pub type DaemonIndex = IndexMap<String, ApiDaemonEntry>;
+
+/// Qualified ids the supervisor can resolve a config for, which is what its
+/// start path requires. Daemons already tracked in the state file can be
+/// restarted from their saved command, so they count as resolvable too.
+pub type Resolvable = HashSet<String>;
+
+/// Daemons of this worktree the supervisor could not start, because it has
+/// neither a config nor a saved command for them.
+fn unresolvable_for(
+    daemons: &DaemonIndex,
+    namespace: &str,
+    resolvable: &Resolvable,
+) -> Vec<String> {
+    namespace_entries(daemons, namespace)
+        .filter(|e| e.is_available() && !resolvable.contains(e.qualified()))
+        .map(|e| e.qualified().to_string())
+        .collect()
+}
 
 fn counts_for<'a>(entries: impl Iterator<Item = &'a ApiDaemonEntry>) -> ApiDaemonCounts {
     let mut c = ApiDaemonCounts::default();
@@ -230,6 +247,7 @@ fn build_worktree_summary(
     project: &ProjectView,
     wt: &WorktreeView,
     daemons: &DaemonIndex,
+    resolvable: &Resolvable,
 ) -> ApiWorktreeSummary {
     ApiWorktreeSummary {
         name: wt.name.clone(),
@@ -237,7 +255,7 @@ fn build_worktree_summary(
         path: wt.path.to_string_lossy().to_string(),
         namespace: wt.namespace.clone(),
         is_primary: wt.is_primary,
-        namespace_registered: wt.namespace_registered,
+        can_start: unresolvable_for(daemons, &wt.namespace, resolvable).is_empty(),
         group_count: wt.groups.len(),
         daemons: counts_for(namespace_entries(daemons, &wt.namespace)),
         last_activity: last_activity_for(namespace_entries(daemons, &wt.namespace)),
@@ -256,7 +274,12 @@ fn ordered_groups(wt: &WorktreeView) -> Vec<(&String, &Vec<DaemonId>)> {
     groups
 }
 
-pub fn build_stack(project: &ProjectView, wt: &WorktreeView, daemons: &DaemonIndex) -> ApiStack {
+pub fn build_stack(
+    project: &ProjectView,
+    wt: &WorktreeView,
+    daemons: &DaemonIndex,
+    resolvable: &Resolvable,
+) -> ApiStack {
     let mut grouped: HashSet<String> = HashSet::new();
     let mut groups = Vec::new();
 
@@ -284,6 +307,8 @@ pub fn build_stack(project: &ProjectView, wt: &WorktreeView, daemons: &DaemonInd
         });
     }
 
+    let unresolvable = unresolvable_for(daemons, &wt.namespace, resolvable);
+
     let ungrouped: Vec<ApiDaemonEntry> = namespace_entries(daemons, &wt.namespace)
         .filter(|e| !grouped.contains(e.qualified()))
         .cloned()
@@ -296,7 +321,8 @@ pub fn build_stack(project: &ProjectView, wt: &WorktreeView, daemons: &DaemonInd
         namespace: wt.namespace.clone(),
         dir: wt.path.to_string_lossy().to_string(),
         is_primary: wt.is_primary,
-        namespace_registered: wt.namespace_registered,
+        can_start: unresolvable.is_empty(),
+        unresolvable_daemons: unresolvable,
         groups,
         ungrouped,
         daemons: counts_for(namespace_entries(daemons, &wt.namespace)),
@@ -304,7 +330,11 @@ pub fn build_stack(project: &ProjectView, wt: &WorktreeView, daemons: &DaemonInd
     }
 }
 
-pub fn build_project(project: &ProjectView, daemons: &DaemonIndex) -> ApiProject {
+pub fn build_project(
+    project: &ProjectView,
+    daemons: &DaemonIndex,
+    resolvable: &Resolvable,
+) -> ApiProject {
     let entries = project_entries(daemons, project);
     let primary = project.worktrees.iter().find(|w| w.is_primary);
     ApiProject {
@@ -315,9 +345,9 @@ pub fn build_project(project: &ProjectView, daemons: &DaemonIndex) -> ApiProject
         worktrees: project
             .worktrees
             .iter()
-            .map(|w| build_worktree_summary(project, w, daemons))
+            .map(|w| build_worktree_summary(project, w, daemons, resolvable))
             .collect(),
-        stack: primary.map(|w| build_stack(project, w, daemons)),
+        stack: primary.map(|w| build_stack(project, w, daemons, resolvable)),
     }
 }
 
@@ -377,52 +407,85 @@ fn groups_for_dir(dir: &StdPath) -> IndexMap<String, Vec<DaemonId>> {
     }
 }
 
-fn worktree_views(
+/// A URL name for a worktree that no other worktree of this project uses.
+///
+/// Distinct branches can sanitize to the same name (`feature/api` and
+/// `feature-api` both give `feature-api`), so later collisions get a numeric
+/// suffix instead of being dropped. Discovery order is stable, so the names
+/// are too.
+fn unique_name(base: &str, taken: &mut HashSet<String>) -> String {
+    let base = if base.is_empty() {
+        DEFAULT_WORKTREE
+    } else {
+        base
+    };
+    let mut candidate = base.to_string();
+    let mut n = 2;
+    while !taken.insert(candidate.to_ascii_lowercase()) {
+        candidate = format!("{base}-{n}");
+        n += 1;
+    }
+    candidate
+}
+
+fn worktree_view_for(
     project_name: &str,
-    project_dir: &StdPath,
-    registered: &HashSet<String>,
-) -> Vec<WorktreeView> {
+    path: PathBuf,
+    branch: String,
+    name: String,
+    project_canonical: &StdPath,
+) -> WorktreeView {
+    let namespace =
+        PitchforkToml::namespace_for_dir(&path).unwrap_or_else(|_| project_name.to_string());
+    WorktreeView {
+        is_primary: canonical(&path) == project_canonical,
+        groups: groups_for_dir(&path),
+        namespace,
+        name,
+        branch,
+        path,
+    }
+}
+
+fn worktree_views(project_name: &str, project_dir: &StdPath) -> Vec<WorktreeView> {
     let project_canonical = canonical(project_dir);
-    let discovered = discover_cached(project_dir);
-    let is_registered = |namespace: &str| registered.contains(&namespace.to_ascii_lowercase());
+    // Discover from the main checkout: `jj workspace list` resolved from a
+    // secondary workspace reports `default` as the directory it ran in, which
+    // would hide the real main workspace.
+    let discovery_dir =
+        main_checkout_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf());
+    let discovered = discover_cached(&discovery_dir);
 
-    if discovered.is_empty() {
-        let namespace = PitchforkToml::namespace_for_dir(project_dir)
-            .unwrap_or_else(|_| project_name.to_string());
-        return vec![WorktreeView {
-            name: DEFAULT_WORKTREE.to_string(),
-            branch: DEFAULT_WORKTREE.to_string(),
-            namespace_registered: is_registered(&namespace),
-            namespace,
-            groups: groups_for_dir(project_dir),
-            path: project_dir.to_path_buf(),
-            is_primary: true,
-        }];
-    }
-
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut views = Vec::with_capacity(discovered.len());
+    let mut taken: HashSet<String> = HashSet::new();
+    let mut views = Vec::with_capacity(discovered.len() + 1);
     for wt in discovered {
-        let key = wt.sanitized_branch.to_ascii_lowercase();
-        if !seen.insert(key) {
-            log::warn!(
-                "Skipping worktree '{}' of project '{project_name}': its URL name collides with another worktree",
-                wt.branch
-            );
-            continue;
-        }
-        let namespace =
-            PitchforkToml::namespace_for_dir(&wt.path).unwrap_or_else(|_| project_name.to_string());
-        views.push(WorktreeView {
-            name: wt.sanitized_branch.clone(),
-            branch: wt.branch.clone(),
-            is_primary: canonical(&wt.path) == project_canonical,
-            groups: groups_for_dir(&wt.path),
-            namespace_registered: is_registered(&namespace),
-            namespace,
-            path: wt.path,
-        });
+        let name = unique_name(&wt.sanitized_branch, &mut taken);
+        views.push(worktree_view_for(
+            project_name,
+            wt.path,
+            wt.branch,
+            name,
+            &project_canonical,
+        ));
     }
+
+    // Discovery only reports checkouts that are on a branch, so a detached
+    // HEAD checkout is missing from it. The project's own directory must still
+    // appear, otherwise the project has no primary worktree and no stack.
+    if !views.iter().any(|w| w.is_primary) {
+        let name = unique_name(DEFAULT_WORKTREE, &mut taken);
+        views.insert(
+            0,
+            worktree_view_for(
+                project_name,
+                project_dir.to_path_buf(),
+                DEFAULT_WORKTREE.to_string(),
+                name,
+                &project_canonical,
+            ),
+        );
+    }
+
     views
 }
 
@@ -442,6 +505,50 @@ fn is_main_checkout(dir: &StdPath) -> bool {
     true
 }
 
+/// The main checkout of the repository `dir` belongs to, when `dir` is a
+/// linked git worktree or a secondary jj workspace.
+///
+/// Both record where the real repository lives: `.git` is a file reading
+/// `gitdir: <main>/.git/worktrees/<name>`, and `.jj/repo` is a file holding the
+/// path of `<main>/.jj/repo`.
+fn main_checkout_root(dir: &StdPath) -> Option<PathBuf> {
+    let jj_repo = dir.join(".jj").join("repo");
+    if jj_repo.is_file() {
+        let target = std::fs::read_to_string(&jj_repo).ok()?;
+        let target = PathBuf::from(target.trim());
+        let target = if target.is_absolute() {
+            target
+        } else {
+            dir.join(".jj").join(target)
+        };
+        // <main>/.jj/repo → <main>
+        return target.parent()?.parent().map(StdPath::to_path_buf);
+    }
+
+    let git = dir.join(".git");
+    if git.is_file() {
+        let content = std::fs::read_to_string(&git).ok()?;
+        let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
+        let gitdir = PathBuf::from(gitdir);
+        let gitdir = if gitdir.is_absolute() {
+            gitdir
+        } else {
+            dir.join(gitdir)
+        };
+        // <main>/.git/worktrees/<name> → <main>
+        let mut current = gitdir.as_path();
+        loop {
+            let parent = current.parent()?;
+            if current.file_name().is_some_and(|name| name == ".git") {
+                return Some(parent.to_path_buf());
+            }
+            current = parent;
+        }
+    }
+
+    None
+}
+
 /// Build the project views from the global namespace registry.
 ///
 /// A namespace registered on a linked worktree whose main checkout is also
@@ -449,20 +556,21 @@ fn is_main_checkout(dir: &StdPath) -> bool {
 /// its own. Registering only the worktree keeps it a project in its own right.
 fn collect_project_views_blocking() -> Vec<ProjectView> {
     let registry = PitchforkToml::read_global_namespaces();
-    // Namespaces the supervisor can resolve daemon configs for, lowercased.
-    let registered: HashSet<String> = registry
-        .keys()
-        .map(|name| name.to_ascii_lowercase())
-        .collect();
 
     let mut projects: Vec<(ProjectView, Option<PathBuf>)> = registry
         .iter()
         .map(|(name, entry)| {
-            let worktrees = worktree_views(name, &entry.dir, &registered);
-            let main = worktrees
-                .iter()
-                .find(|w| is_main_checkout(&w.path))
-                .map(|w| canonical(&w.path));
+            let worktrees = worktree_views(name, &entry.dir);
+            // Where this project's repository really lives, so a registration
+            // that points at a linked worktree is folded into its checkout.
+            let main = main_checkout_root(&entry.dir)
+                .map(|r| canonical(&r))
+                .or_else(|| {
+                    worktrees
+                        .iter()
+                        .find(|w| is_main_checkout(&w.path))
+                        .map(|w| canonical(&w.path))
+                });
             (
                 ProjectView {
                     name: name.clone(),
@@ -495,12 +603,14 @@ async fn collect_project_views() -> Vec<ProjectView> {
         })
 }
 
-/// Live daemon state, indexed by qualified id.
+/// Live daemon state indexed by qualified id, plus the ids the supervisor can
+/// resolve a config for.
 ///
 /// Daemons declared by a worktree's config but unknown to the supervisor are
 /// added as available entries, so a worktree that has never run still shows its
-/// stack.
-async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<DaemonIndex, StatusCode> {
+/// stack. Every config read here happens on a blocking worker: parsing takes
+/// the global config lock, which must not run on the async executor.
+async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<(DaemonIndex, Resolvable), StatusCode> {
     let mut index: DaemonIndex = build_api_daemons()
         .await
         .map_err(|e| {
@@ -511,29 +621,68 @@ async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<DaemonIndex, StatusCode>
         .map(|e| (e.qualified().to_string(), e))
         .collect();
 
-    for dir in extra_dirs {
-        let dir = dir.clone();
-        let configured =
-            tokio::task::spawn_blocking(move || match PitchforkToml::all_merged_from(&dir) {
-                Ok(config) => config.daemons.into_iter().collect::<Vec<_>>(),
-                Err(e) => {
-                    log::warn!("Failed to load config for {}: {e}", dir.display());
-                    Vec::new()
-                }
-            })
-            .await
-            .unwrap_or_default();
+    let dirs = extra_dirs.to_vec();
+    let (extra, resolvable) = tokio::task::spawn_blocking(move || config_entries_blocking(&dirs))
+        .await
+        .map_err(|e| {
+            log::error!("Failed to load worktree configs: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-        for (id, daemon_config) in configured {
-            let qualified = id.qualified();
-            if index.contains_key(&qualified) {
-                continue;
-            }
-            index.insert(qualified, config_daemon_entry(&id, &daemon_config));
+    for (qualified, entry) in extra {
+        index.entry(qualified).or_insert(entry);
+    }
+
+    // A daemon the supervisor already tracks can be restarted from its saved
+    // command, so it needs no config lookup.
+    let mut resolvable = resolvable;
+    for entry in index.values() {
+        if !entry.is_available() {
+            resolvable.insert(entry.qualified().to_string());
         }
     }
 
-    Ok(index)
+    Ok((index, resolvable))
+}
+
+/// Read every worktree config and the supervisor's own resolvable set.
+///
+/// Runs entirely on a blocking worker: it parses config files and reads the
+/// global slug registry, which lock and hit the filesystem.
+fn config_entries_blocking(dirs: &[PathBuf]) -> (Vec<(String, ApiDaemonEntry)>, Resolvable) {
+    // The same view the supervisor's start path builds, so "resolvable" here
+    // means exactly "a start request would find a config".
+    let resolvable: Resolvable = match PitchforkToml::all_merged_all_namespaces() {
+        Ok(config) => config.daemons.keys().map(|id| id.qualified()).collect(),
+        Err(e) => {
+            log::warn!("Failed to load merged config: {e}");
+            Resolvable::new()
+        }
+    };
+
+    let slugs = PitchforkToml::read_global_slugs();
+    let settings = crate::settings::settings();
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+
+    for dir in dirs {
+        match PitchforkToml::all_merged_from(dir) {
+            Ok(config) => {
+                for (id, daemon_config) in &config.daemons {
+                    let qualified = id.qualified();
+                    if seen.insert(qualified.clone()) {
+                        entries.push((
+                            qualified,
+                            config_daemon_entry(id, daemon_config, &slugs, &settings),
+                        ));
+                    }
+                }
+            }
+            Err(e) => log::warn!("Failed to load config for {}: {e}", dir.display()),
+        }
+    }
+
+    (entries, resolvable)
 }
 
 // ─── handlers ────────────────────────────────────────────────────────────────
@@ -546,7 +695,7 @@ pub async fn list() -> Result<Json<Vec<ApiProjectSummary>>, StatusCode> {
         .iter()
         .flat_map(|p| p.worktrees.iter().map(|w| w.path.clone()))
         .collect();
-    let daemons = daemon_index(&dirs).await?;
+    let (daemons, _) = daemon_index(&dirs).await?;
     Ok(Json(build_project_summaries(&projects, &daemons)))
 }
 
@@ -556,8 +705,8 @@ pub async fn show(Path(name): Path<String>) -> Result<Json<ApiProject>, StatusCo
         .ok_or(StatusCode::NOT_FOUND)?
         .clone();
     let dirs: Vec<PathBuf> = project.worktrees.iter().map(|w| w.path.clone()).collect();
-    let daemons = daemon_index(&dirs).await?;
-    Ok(Json(build_project(&project, &daemons)))
+    let (daemons, resolvable) = daemon_index(&dirs).await?;
+    Ok(Json(build_project(&project, &daemons, &resolvable)))
 }
 
 pub async fn stack(
@@ -566,8 +715,8 @@ pub async fn stack(
     let projects = collect_project_views().await;
     let project = find_project(&projects, &name).ok_or(StatusCode::NOT_FOUND)?;
     let wt = find_worktree(project, &worktree).ok_or(StatusCode::NOT_FOUND)?;
-    let daemons = daemon_index(std::slice::from_ref(&wt.path)).await?;
-    Ok(Json(build_stack(project, wt, &daemons)))
+    let (daemons, resolvable) = daemon_index(std::slice::from_ref(&wt.path)).await?;
+    Ok(Json(build_stack(project, wt, &daemons, &resolvable)))
 }
 
 #[cfg(test)]
@@ -584,6 +733,11 @@ mod tests {
             .into_iter()
             .map(|e| (e.qualified().to_string(), e))
             .collect()
+    }
+
+    /// Every daemon in the fixture is resolvable unless a test says otherwise.
+    fn all_resolvable(daemons: &DaemonIndex) -> Resolvable {
+        daemons.keys().cloned().collect()
     }
 
     fn group(members: &[&str]) -> Vec<DaemonId> {
@@ -603,7 +757,6 @@ mod tests {
             path: PathBuf::from("/src/shop"),
             namespace: "shop".into(),
             is_primary: true,
-            namespace_registered: true,
             groups: IndexMap::from([("web".to_string(), group(&["shop/api", "shop/frontend"]))]),
         };
         let shop_feature = WorktreeView {
@@ -612,8 +765,6 @@ mod tests {
             path: PathBuf::from("/src/shop-feature-a"),
             namespace: "shop-feature-a".into(),
             is_primary: false,
-            // Registered nowhere: the supervisor cannot start these daemons.
-            namespace_registered: false,
             groups: IndexMap::from([
                 ("workers".to_string(), group(&["shop-feature-a/worker"])),
                 (
@@ -628,7 +779,6 @@ mod tests {
             path: PathBuf::from("/src/blog"),
             namespace: "blog".into(),
             is_primary: true,
-            namespace_registered: true,
             groups: IndexMap::new(),
         };
         vec![
@@ -689,7 +839,10 @@ mod tests {
     fn project_endpoint_lists_worktrees_and_primary_stack() {
         let projects = fixture_projects();
         let project = find_project(&projects, "shop").unwrap();
-        let json = serde_json::to_value(build_project(project, &fixture_daemons())).unwrap();
+        let daemons = fixture_daemons();
+        let json =
+            serde_json::to_value(build_project(project, &daemons, &all_resolvable(&daemons)))
+                .unwrap();
 
         let worktrees = json["worktrees"].as_array().unwrap();
         assert_eq!(worktrees.len(), 2);
@@ -728,7 +881,14 @@ mod tests {
         let projects = fixture_projects();
         let project = find_project(&projects, "shop").unwrap();
         let wt = find_worktree(project, "feature-a").unwrap();
-        let json = serde_json::to_value(build_stack(project, wt, &fixture_daemons())).unwrap();
+        let daemons = fixture_daemons();
+        let json = serde_json::to_value(build_stack(
+            project,
+            wt,
+            &daemons,
+            &all_resolvable(&daemons),
+        ))
+        .unwrap();
 
         assert_eq!(json["project"], "shop");
         assert_eq!(json["worktree"], "feature-a");
@@ -755,20 +915,121 @@ mod tests {
         assert_eq!(ungrouped[0]["id"]["qualified"], "shop-feature-a/extra");
     }
 
-    /// A worktree whose namespace is not registered is still listed with its
-    /// daemons, but flagged so the UI does not offer an action the supervisor
-    /// would reject with "Daemon config not found".
+    /// Daemons the supervisor has neither a config nor a saved command for are
+    /// listed, but the stack reports that it cannot start them, so the UI does
+    /// not offer an action that would fail with "Daemon config not found".
     #[test]
-    fn unregistered_worktree_namespace_is_flagged() {
+    fn stack_reports_daemons_the_supervisor_cannot_resolve() {
         let projects = fixture_projects();
         let project = find_project(&projects, "shop").unwrap();
-        let json = serde_json::to_value(build_project(project, &fixture_daemons())).unwrap();
-        assert_eq!(json["worktrees"][0]["namespace_registered"], true);
-        assert_eq!(json["worktrees"][1]["namespace_registered"], false);
+        let daemons = fixture_daemons();
+
+        // Only the primary worktree's namespace is resolvable here.
+        let resolvable: Resolvable = daemons
+            .keys()
+            .filter(|id| id.starts_with("shop/"))
+            .cloned()
+            .collect();
+
+        let json = serde_json::to_value(build_project(project, &daemons, &resolvable)).unwrap();
+        assert_eq!(json["worktrees"][0]["can_start"], true);
+        assert_eq!(json["worktrees"][1]["can_start"], false);
 
         let wt = find_worktree(project, "feature-a").unwrap();
-        let stack = serde_json::to_value(build_stack(project, wt, &fixture_daemons())).unwrap();
-        assert_eq!(stack["namespace_registered"], false);
+        let stack = serde_json::to_value(build_stack(project, wt, &daemons, &resolvable)).unwrap();
+        assert_eq!(stack["can_start"], false);
+        let unresolvable = stack["unresolvable_daemons"].as_array().unwrap();
+        // The running daemon is startable from its saved command; only the
+        // config-only ones are reported.
+        assert!(unresolvable.contains(&serde_json::json!("shop-feature-a/worker")));
+        assert!(!unresolvable.contains(&serde_json::json!("shop-feature-a/api")));
+    }
+
+    #[test]
+    fn colliding_branch_names_get_distinct_urls() {
+        let mut taken = HashSet::new();
+        // `feature/api` and `feature-api` both sanitize to `feature-api`.
+        assert_eq!(unique_name("feature-api", &mut taken), "feature-api");
+        assert_eq!(unique_name("feature-api", &mut taken), "feature-api-2");
+        assert_eq!(unique_name("feature-api", &mut taken), "feature-api-3");
+        // Matching is case-insensitive, like host names, so this collides too
+        // and continues the sequence.
+        assert_eq!(unique_name("Feature-Api", &mut taken), "Feature-Api-4");
+    }
+
+    /// A detached HEAD checkout is missing from worktree discovery, which
+    /// reports only branches. The project directory must still be listed, or
+    /// the project would have no primary worktree and no stack.
+    #[test]
+    fn detached_primary_checkout_is_still_listed() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(
+            repo.join(".git").join("HEAD"),
+            "0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+
+        let views = worktree_views("repo", &repo);
+        assert_eq!(views.len(), 1);
+        assert!(views[0].is_primary);
+        assert_eq!(views[0].name, DEFAULT_WORKTREE);
+    }
+
+    #[test]
+    fn main_checkout_root_reads_linked_git_worktrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("repo");
+        let linked = temp.path().join("repo-feature");
+        std::fs::create_dir_all(main.join(".git").join("worktrees").join("feature")).unwrap();
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main.join(".git/worktrees/feature").display()
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(main_checkout_root(&linked), Some(main.clone()));
+        // The main checkout itself is not a linked worktree.
+        assert_eq!(main_checkout_root(&main), None);
+        assert!(is_main_checkout(&main));
+        assert!(!is_main_checkout(&linked));
+    }
+
+    #[test]
+    fn main_checkout_root_reads_secondary_jj_workspaces() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("repo");
+        let secondary = temp.path().join("repo-ws");
+        std::fs::create_dir_all(main.join(".jj").join("repo")).unwrap();
+        std::fs::create_dir_all(secondary.join(".jj")).unwrap();
+        std::fs::write(
+            secondary.join(".jj").join("repo"),
+            main.join(".jj/repo").display().to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(main_checkout_root(&secondary), Some(main.clone()));
+        assert_eq!(main_checkout_root(&main), None);
+        assert!(!is_main_checkout(&secondary));
+    }
+
+    /// A daemon already tracked by the supervisor can be restarted from its
+    /// saved command, so it never counts as unresolvable.
+    #[test]
+    fn tracked_daemons_stay_startable_without_a_config() {
+        let projects = fixture_projects();
+        let project = find_project(&projects, "blog").unwrap();
+        let wt = find_worktree(project, "default").unwrap();
+        let daemons = index(vec![daemon("blog/site", ApiDaemonStatus::Running, Some(5))]);
+
+        let stack = build_stack(project, wt, &daemons, &Resolvable::new());
+        assert!(stack.unresolvable_daemons.is_empty());
+        assert!(stack.can_start);
     }
 
     #[test]
@@ -776,7 +1037,8 @@ mod tests {
         let projects = fixture_projects();
         let project = find_project(&projects, "blog").unwrap();
         let wt = find_worktree(project, "default").unwrap();
-        let stack = build_stack(project, wt, &fixture_daemons());
+        let daemons = fixture_daemons();
+        let stack = build_stack(project, wt, &daemons, &all_resolvable(&daemons));
 
         assert!(stack.groups.is_empty());
         assert_eq!(stack.ungrouped.len(), 1);

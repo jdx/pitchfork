@@ -6,6 +6,11 @@ import DaemonCard from './DaemonCard.vue'
 const props = defineProps<{
   daemons: DaemonEntry[]
   prefersCard: boolean
+  /**
+   * Reason the supervisor would reject start/restart for these daemons, e.g.
+   * a worktree whose config it cannot resolve. Undefined means actions work.
+   */
+  actionsDisabledReason?: string
 }>()
 
 defineEmits<{ refresh: [] }>()
@@ -28,6 +33,7 @@ defineEmits<{ refresh: [] }>()
         v-for="d in daemons"
         :key="d.id.qualified"
         :daemon="d"
+        :actions-disabled-reason="actionsDisabledReason"
         @refresh="$emit('refresh')"
       />
     </tbody>
@@ -37,6 +43,7 @@ defineEmits<{ refresh: [] }>()
       v-for="d in daemons"
       :key="d.id.qualified"
       :daemon="d"
+      :actions-disabled-reason="actionsDisabledReason"
       @refresh="$emit('refresh')"
     />
   </div>
