@@ -215,7 +215,9 @@ daemons are disabled, because they would fail with "Daemon config not found";
 a restart would stop a running one and then fail to bring it back. Stopping
 needs no config, so it stays available. To register the worktree, add it under
 `[namespaces]` in the user config or run `pitchfork proxy add` from it, then
-reload the page.
+reload the page. A group can also name a daemon from another namespace; when
+that one is unresolvable, the page says so separately, because registering this
+worktree would not fix it.
 
 A stack page shows the groups declared by the config loaded for that worktree,
 in the order they appear, except that a group named `default` comes first and

@@ -18,12 +18,26 @@ const groups = computed(() => props.stack.groups)
 // daemons would fail, so its actions stay disabled until it is registered.
 const unresolvable = computed(() => props.stack.unresolvable_daemons)
 
-const NO_CONFIG =
+const NO_CONFIG_HERE =
   'The supervisor has no config for this daemon, so it cannot be started or '
   + 'restarted. Register this worktree first.'
+const NO_CONFIG_ELSEWHERE =
+  'The supervisor has no config for this daemon, which belongs to another '
+  + 'namespace, so it cannot be started or restarted. Restore or register that '
+  + "namespace's directory."
 const NO_DIRECTORY =
   'This worktree directory no longer exists, so its daemons cannot be started or '
   + 'restarted.'
+
+/** Whether a qualified id belongs to this worktree's own namespace. */
+function isOwnNamespace(qualified: string): boolean {
+  const ns = props.stack.namespace?.toLowerCase()
+  return !!ns && qualified.split('/')[0].toLowerCase() === ns
+}
+
+/** Unresolvable daemons this worktree owns, versus ones a group borrows. */
+const unresolvableHere = computed(() => unresolvable.value.filter(isOwnNamespace))
+const unresolvableElsewhere = computed(() => unresolvable.value.filter(id => !isOwnNamespace(id)))
 
 /** Every daemon the page renders, grouped or not. */
 const renderedDaemons = computed(() => [
@@ -40,7 +54,9 @@ const renderedDaemons = computed(() => [
  */
 const blockedReasons = computed(() => {
   const reasons: Record<string, string> = {}
-  for (const id of unresolvable.value) reasons[id] = NO_CONFIG
+  for (const id of unresolvable.value) {
+    reasons[id] = isOwnNamespace(id) ? NO_CONFIG_HERE : NO_CONFIG_ELSEWHERE
+  }
   if (!props.stack.dir_exists && props.stack.namespace) {
     // Namespaces compare case-insensitively, as they do on the API side.
     const ns = props.stack.namespace.toLowerCase()
@@ -109,12 +125,20 @@ async function onRestart(groupName: string) {
       <code>pitchfork.toml</code> here to give it one.
     </p>
 
-    <p v-else-if="stack.dir_exists && unresolvable.length" class="notice">
+    <p v-else-if="stack.dir_exists && unresolvableHere.length" class="notice">
       The supervisor has no config for
-      <code>{{ unresolvable.join(', ') }}</code>, so starting or restarting them would
-      fail; stopping still works. Register <code>{{ stack.dir }}</code> as namespace
-      <code>{{ stack.namespace }}</code> under <code>[namespaces]</code> in your user
-      config, or run <code>pitchfork proxy add</code> from it, then reload.
+      <code>{{ unresolvableHere.join(', ') }}</code>, so starting or restarting them
+      would fail; stopping still works. Register <code>{{ stack.dir }}</code> as
+      namespace <code>{{ stack.namespace }}</code> under <code>[namespaces]</code> in
+      your user config, or run <code>pitchfork proxy add</code> from it, then reload.
+    </p>
+
+    <p v-if="stack.dir_exists && unresolvableElsewhere.length" class="notice">
+      <code>{{ unresolvableElsewhere.join(', ') }}</code>
+      {{ unresolvableElsewhere.length === 1 ? 'is named by a group here but belongs' : 'are named by groups here but belong' }}
+      to another namespace the supervisor has no config for. Restore or register that
+      namespace's own directory to start
+      {{ unresolvableElsewhere.length === 1 ? 'it' : 'them' }}.
     </p>
 
     <section v-for="group in groups" :key="group.name" class="group" :class="{ primary: group.is_default }">
