@@ -301,6 +301,16 @@ const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 /// long as this value lives, so the background checker does not start an
 /// attempt out from under it. Released on every exit from the retry loop,
 /// including the early returns.
+/// Counts a stop of this daemon once the stop is done, while its lock is
+/// still held. See `Supervisor::stop_epochs`.
+struct StopEpochGuard(DaemonId);
+
+impl Drop for StopEpochGuard {
+    fn drop(&mut self) {
+        SUPERVISOR.bump_stop_epoch(&self.0);
+    }
+}
+
 pub(crate) struct RetryingGuard {
     id: DaemonId,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -2351,9 +2361,13 @@ impl Supervisor {
         // returned.
         self.cancel_retrying(id);
         // ...and the retry checker may already have decided on an attempt it
-        // has not started yet. Bumping the epoch makes it stand down when it
-        // reaches the daemon's lock.
-        self.bump_stop_epoch(id);
+        // has not started yet. The count is raised when this stop is done
+        // rather than now, and while its lock is still held, so a checker that
+        // reads the count while the stop is still recording itself reads the
+        // old value and stands down when it reaches the lock. Raising it up
+        // front would hand that reader a value that still matches once the
+        // stop has finished.
+        let _stop_epoch_bump = StopEpochGuard(id.clone());
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
