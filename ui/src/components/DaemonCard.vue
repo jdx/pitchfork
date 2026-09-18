@@ -58,7 +58,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
       </div>
     </div>
     <div class="card-actions" @click.stop>
-      <button v-if="daemon.status.type === 'stopped' || daemon.status.type === 'failed' || daemon.status.type === 'errored' || daemon.status.type === 'available'" class="act-btn act-start" :disabled="isActing()" @click="onStart">
+      <button v-if="daemon.status.type === 'stopped' || daemon.status.type === 'completed' || daemon.status.type === 'failed' || daemon.status.type === 'errored' || daemon.status.type === 'available'" class="act-btn act-start" :disabled="isActing()" @click="onStart">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start
       </button>
@@ -106,6 +106,7 @@ const isActing = () => acting.value.has(props.daemon.id.qualified)
 
   &.running   { background: @sf-success-12; color: @c-success; border-color: @sf-success-20; }
   &.stopped   { background: @sf-3; color: @sf-30; border-color: @sf-8; }
+  &.completed { background: @sf-3; color: @c-success; border-color: @sf-success-20; }
   &.waiting,
   &.stopping  { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
   &.failed,

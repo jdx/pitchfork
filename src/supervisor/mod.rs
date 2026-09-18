@@ -73,6 +73,23 @@ pub struct Supervisor {
     pub(crate) state_file: Mutex<StateFile>,
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
+    /// Daemons whose retry sequence a foreground `run` is already working
+    /// through, each with the flag that asks it to stop. The backoff between
+    /// its attempts leaves the record errored with no PID, which is exactly
+    /// what `check_retry` looks for, so without this the background checker
+    /// would start the next attempt itself and the foreground call would be
+    /// left reporting on a run it does not own. `stop` raises the flag, so the
+    /// sequence ends rather than starting another attempt behind the user's
+    /// back.
+    /// One flag per claim: two starts can be working through the same
+    /// daemon's retries at once, and a stop has to reach all of them.
+    pub(crate) retrying:
+        std::sync::Mutex<HashMap<DaemonId, Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+    /// How many times each daemon has been stopped. The retry checker reads
+    /// this when it decides to run an attempt and again when it is about to
+    /// start one, holding the daemon's lock: a stop in between means the
+    /// attempt it approved is one the user has since called off.
+    pub(crate) stop_epochs: std::sync::Mutex<HashMap<DaemonId, u64>>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Autostop stops that have been spawned as detached tasks but have not
@@ -410,6 +427,8 @@ impl Supervisor {
             )),
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
+            retrying: std::sync::Mutex::new(HashMap::new()),
+            stop_epochs: std::sync::Mutex::new(HashMap::new()),
             pending_autostops: Mutex::new(HashMap::new()),
             in_flight_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
@@ -1558,7 +1577,13 @@ async fn cleanup_orphaned_daemon(
         // PID already dead — the daemon exited while unsupervised, so
         // record a terminal status that reflects whether it died under a
         // crashed supervisor (retryable) or with the machine.
-        let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
+        let status = unobserved_exit_status(
+            &daemon.status,
+            daemon.boot_time,
+            boot_time,
+            unclean,
+            daemon.oneshot,
+        );
         reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
         return;
     }
@@ -1588,7 +1613,13 @@ async fn cleanup_orphaned_daemon(
         );
         // The daemon died at some unknown point and the OS handed its PID
         // to something else — same unobserved exit as a dead PID.
-        let status = unobserved_exit_status(&daemon.status, daemon.boot_time, boot_time, unclean);
+        let status = unobserved_exit_status(
+            &daemon.status,
+            daemon.boot_time,
+            boot_time,
+            unclean,
+            daemon.oneshot,
+        );
         reset_daemon_state(supervisor, &daemon.id, status, ExitObservation::Unobserved).await;
         return;
     }
@@ -1809,10 +1840,16 @@ pub(crate) fn unobserved_exit_status(
     recorded_boot_time: Option<u64>,
     current_boot_time: u64,
     supervisor_exited_uncleanly: bool,
+    oneshot: bool,
 ) -> DaemonStatus {
     let same_boot = recorded_boot_time
         .is_some_and(|recorded| recorded.abs_diff(current_boot_time) <= BOOT_TIME_TOLERANCE_SECS);
-    if status.is_running() && same_boot && supervisor_exited_uncleanly {
+    // A task gets `stopped` rather than `errored` for the same reason the
+    // adopted path does: `errored` is what `check_retry` looks for, and
+    // nobody saw how this run ended, so retrying it would re-run a migration
+    // or a seed that may well have succeeded. Leave re-running to an explicit
+    // start.
+    if status.is_running() && same_boot && supervisor_exited_uncleanly && !oneshot {
         DaemonStatus::Errored(-1)
     } else {
         DaemonStatus::Stopped
@@ -1875,8 +1912,19 @@ mod tests {
         // Died under a crashed supervisor during this boot: Errored(-1) makes
         // the daemon eligible for its configured retries.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, true),
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, true, false),
             DaemonStatus::Errored(-1)
+        ));
+    }
+
+    #[test]
+    fn unobserved_task_death_is_stopped_not_retried() {
+        // Nobody saw how the run ended, so `errored` would hand a migration or
+        // a seed to check_retry on a guess. Matches what the adopted path
+        // records, and what the guide promises.
+        assert!(matches!(
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, true, true),
+            DaemonStatus::Stopped
         ));
     }
 
@@ -1885,7 +1933,13 @@ mod tests {
         // The process died with the machine; reviving every retry-configured
         // daemon after a reboot is what boot_start is for.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - 86_400), BOOT, true),
+            unobserved_exit_status(
+                &DaemonStatus::Running,
+                Some(BOOT - 86_400),
+                BOOT,
+                true,
+                false
+            ),
             DaemonStatus::Stopped
         ));
     }
@@ -1896,12 +1950,12 @@ mod tests {
         // drift about a second between samples within one boot.
         let within = BOOT + BOOT_TIME_TOLERANCE_SECS;
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(within), BOOT, true),
+            unobserved_exit_status(&DaemonStatus::Running, Some(within), BOOT, true, false),
             DaemonStatus::Errored(-1)
         ));
         let beyond = BOOT + BOOT_TIME_TOLERANCE_SECS + 1;
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(beyond), BOOT, true),
+            unobserved_exit_status(&DaemonStatus::Running, Some(beyond), BOOT, true, false),
             DaemonStatus::Stopped
         ));
     }
@@ -1913,7 +1967,7 @@ mod tests {
         // daemons were stopped on purpose, so they must not be reported as
         // failures or resurrected by the retry checker.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, false),
+            unobserved_exit_status(&DaemonStatus::Running, Some(BOOT), BOOT, false, false),
             DaemonStatus::Stopped
         ));
     }
@@ -1926,7 +1980,13 @@ mod tests {
         for gap in [5, 30, 59, 60] {
             assert!(
                 matches!(
-                    unobserved_exit_status(&DaemonStatus::Running, Some(BOOT - gap), BOOT, true),
+                    unobserved_exit_status(
+                        &DaemonStatus::Running,
+                        Some(BOOT - gap),
+                        BOOT,
+                        true,
+                        false
+                    ),
                     DaemonStatus::Stopped
                 ),
                 "boot {gap}s earlier should be treated as a previous boot"
@@ -1939,7 +1999,7 @@ mod tests {
         // Legacy state files predating the field fail closed to today's
         // behavior rather than triggering surprise retries.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Running, None, BOOT, true),
+            unobserved_exit_status(&DaemonStatus::Running, None, BOOT, true, false),
             DaemonStatus::Stopped
         ));
     }
@@ -2051,7 +2111,7 @@ mod tests {
         // An intentional stop that completed while the supervisor was gone is
         // not a failure, even within the same boot.
         assert!(matches!(
-            unobserved_exit_status(&DaemonStatus::Stopping, Some(BOOT), BOOT, true),
+            unobserved_exit_status(&DaemonStatus::Stopping, Some(BOOT), BOOT, true, false),
             DaemonStatus::Stopped
         ));
     }

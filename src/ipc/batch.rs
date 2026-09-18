@@ -23,6 +23,8 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct RunResult {
     pub started: bool,
+    /// The daemon ran to completion rather than starting a service.
+    pub oneshot: bool,
     pub exit_code: Option<i32>,
     pub start_time: DateTime<Local>,
     pub resolved_ports: Vec<u16>,
@@ -73,6 +75,11 @@ pub struct SpawnTaskResult {
 pub struct StartOptions {
     /// Force restart if already running
     pub force: bool,
+    /// This start came from entering a directory rather than from a person
+    /// asking for it, so a `oneshot` task that has already completed is left
+    /// alone — including when it is reached as a dependency, which is how the
+    /// migrate-then-api layout reaches it.
+    pub on_directory_enter: bool,
     /// Shell PID for autostop tracking
     pub shell_pid: Option<u32>,
     /// Override ready delay
@@ -118,6 +125,7 @@ pub async fn build_run_options(
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
     run_opts.wait_ready = true;
+    run_opts.on_directory_enter = overrides.is_some_and(|o| o.on_directory_enter);
 
     if let Some(opts) = overrides {
         run_opts.shell_pid = opts.shell_pid;
@@ -149,10 +157,25 @@ pub async fn build_run_options(
         }
     }
 
+    // A oneshot is ready when its process exits 0. Config load rejects
+    // `ready_*`/`health_*` on such a daemon, but the CLI's --delay/--port/etc.
+    // overrides are applied above and would otherwise install a check that
+    // races the process it is meant to describe.
+    if run_opts.oneshot {
+        run_opts.ready_delay = None;
+        run_opts.ready_output = None;
+        run_opts.ready_http = None;
+        run_opts.ready_port = None;
+        run_opts.ready_cmd = None;
+        run_opts.health_cmd = None;
+        run_opts.health_http = None;
+        run_opts.health_port = None;
+    }
+
     // Resolve project-scoped defaults in the client process after all readiness
     // overrides are merged. The supervisor is long-lived and may have been
     // started from a different directory.
-    if run_opts.mise.is_none() || should_inject_default_ready_delay(&run_opts) {
+    if run_opts.mise.is_none() || run_opts.oneshot || should_inject_default_ready_delay(&run_opts) {
         let project_dir = resolve_config_base_dir(daemon_config.path.as_deref());
         let project_settings = tokio::task::spawn_blocking(move || {
             crate::settings::Settings::load_from_dir(&project_dir)
@@ -165,13 +188,23 @@ pub async fn build_run_options(
         if should_inject_default_ready_delay(&run_opts) {
             run_opts.ready_delay = Some(project_settings.general_ready_delay_secs()?);
         }
+        if run_opts.oneshot {
+            // Carried on the request so the supervisor waits exactly as long
+            // as the client does. Resolving it there instead would read the
+            // supervisor's own directory, where the project's setting is not
+            // visible, and the shorter of the two deadlines would win.
+            run_opts.oneshot_wait = Some(project_settings.supervisor_oneshot_wait());
+        }
     }
 
     Ok(run_opts)
 }
 
 fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
-    opts.ready_delay.is_none()
+    // A oneshot's readiness is its exit, so a delay would only be a second,
+    // conflicting answer to the same question.
+    !opts.oneshot
+        && opts.ready_delay.is_none()
         && opts.ready_output.is_none()
         && opts.ready_http.is_none()
         && opts.ready_port.is_none()
@@ -299,7 +332,9 @@ fn merge_ready_output_override(
 
 /// Determine the effective ready check type from merged RunOptions.
 fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
-    if let Some(ref output) = opts.ready_output {
+    if opts.oneshot {
+        ReadyCheckType::Completion
+    } else if let Some(ref output) = opts.ready_output {
         ReadyCheckType::Output(output.pattern.clone())
     } else if let Some(ref http) = opts.ready_http {
         ReadyCheckType::Http(http.url.clone())
@@ -350,7 +385,9 @@ pub fn update_job_with_result(
     if let Some(job) = job {
         match result {
             Ok(run_result) if run_result.started => {
-                let body = if run_result.resolved_ports.is_empty() {
+                let body = if run_result.oneshot {
+                    format!("{prefix} {id_label} completed")
+                } else if run_result.resolved_ports.is_empty() {
                     format!("{prefix} {id_label} started")
                 } else {
                     let port_str = run_result
@@ -547,6 +584,16 @@ impl IpcClient {
             .filter(|d| d.status.is_running() || d.status.is_waiting())
             .map(|d| d.id.clone())
             .collect();
+        // A oneshot that is still running has not finished its work, so its
+        // dependents must keep waiting for it. Letting the start request
+        // through makes the supervisor await the in-flight run instead of
+        // skipping it as "already running".
+        let running_oneshots: HashSet<DaemonId> = active_daemons
+            .iter()
+            .filter(|d| d.oneshot && (d.status.is_running() || d.status.is_waiting()))
+            .map(|d| d.id.clone())
+            .collect();
+
         let running_ports_map: HashMap<DaemonId, Vec<u16>> = active_daemons
             .into_iter()
             .filter(|d| {
@@ -592,6 +639,9 @@ impl IpcClient {
                             if opts.force && explicitly_requested.contains(id) {
                                 debug!("Force restarting explicitly requested daemon: {id}");
                                 true // Allow restart if force is set AND explicitly requested
+                            } else if running_oneshots.contains(id) {
+                                debug!("Waiting for in-flight oneshot {id} to complete");
+                                true
                             } else {
                                 if explicitly_requested.contains(id) {
                                     info!("Daemon {id} is already running, use --force to restart");
@@ -1068,14 +1118,27 @@ impl IpcClient {
     /// - Ad-hoc daemon handling (no dependencies)
     /// - Parallel execution within dependency levels
     pub async fn stop_daemons(self: &Arc<Self>, ids: &[DaemonId]) -> Result<StopResult> {
-        // Get currently running daemons
-        let running_daemons: HashSet<DaemonId> = self
+        // Daemons a stop has something to do for.
+        let mut running_daemons: HashSet<DaemonId> = self
             .active_daemons()
             .await?
             .iter()
             .filter(|d| d.status.is_running() || d.status.is_waiting())
             .map(|d| d.id.clone())
             .collect();
+        // A daemon between retries has no PID, so it is not in the list above,
+        // but an attempt may still be started for it — by the start that is
+        // waiting on it or by the retry checker. Stopping it has to end those
+        // rather than report that there is nothing running.
+        running_daemons.extend(
+            crate::state_file::StateFile::get()
+                .daemons
+                .iter()
+                .filter(|(_, d)| {
+                    d.pid.is_none() && d.status.is_errored() && d.retry_count < d.retry.count()
+                })
+                .map(|(id, _)| id.clone()),
+        );
 
         // Filter to only running daemons
         let requested_ids: Vec<DaemonId> = ids

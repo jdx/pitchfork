@@ -4,6 +4,7 @@
 
 use super::hooks::{self, HookType, fire_hook};
 use super::{SUPERVISOR, Supervisor};
+use crate::config_types::OneshotWait;
 use crate::daemon::RunOptions;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
@@ -257,15 +258,169 @@ fn delay_readiness_succeeded(
     !ready_notified && !has_other_ready_check && !process_exited && process_running
 }
 
+/// Terminal state recorded for a daemon run that has ended, and whether that
+/// ending counts as a successful exit.
+///
+/// A `oneshot` daemon's whole job is to finish, so a clean exit of its own
+/// accord is `Completed` rather than `Stopped` — that is what makes it
+/// distinguishable from a service that is merely not running, and what lets
+/// `depends` treat it as satisfied. An explicit stop is still a stop: the task
+/// was interrupted, not completed.
+fn terminal_exit_state(
+    exit_reason: &str,
+    oneshot: bool,
+    exit_code: i32,
+    exited_cleanly: bool,
+) -> (DaemonStatus, bool) {
+    match exit_reason {
+        "exit" if oneshot => (DaemonStatus::Completed, true),
+        "stop" | "exit" => (DaemonStatus::Stopped, exited_cleanly),
+        _ => (DaemonStatus::Errored(exit_code), false),
+    }
+}
+
+/// Whether a stop that arrived after a run's process was already gone should
+/// leave the status its monitor settled on alone.
+///
+/// Only a completed task is left alone: it had already done its work, so there
+/// was nothing for the stop to interrupt, and overwriting it would report a
+/// failure to anyone waiting on it. Anything else — a failure above all — is
+/// replaced by the stop, so the retry checker does not carry on with a task
+/// the user has stopped.
+fn stop_keeps_finalized_status(status: &DaemonStatus) -> bool {
+    status.is_completed()
+}
+
 /// How long a failed start waits for the daemon's output to become queryable
 /// before reporting. Typically satisfied in a few dozen milliseconds; a daemon
 /// that failed without printing anything waits the whole of it, so keep it
 /// short.
 const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 
+/// Marks a daemon as having its retries managed by a foreground `run` for as
+/// long as this value lives, so the background checker does not start an
+/// attempt out from under it. Released on every exit from the retry loop,
+/// including the early returns.
+/// Counts a stop of this daemon once the stop is done, while its lock is
+/// still held. See `Supervisor::stop_epochs`.
+struct StopEpochGuard(DaemonId);
+
+impl Drop for StopEpochGuard {
+    fn drop(&mut self) {
+        SUPERVISOR.bump_stop_epoch(&self.0);
+    }
+}
+
+pub(crate) struct RetryingGuard {
+    id: DaemonId,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RetryingGuard {
+    /// Whether a `stop` has asked this retry sequence to end.
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+impl Drop for RetryingGuard {
+    fn drop(&mut self) {
+        let mut retrying = SUPERVISOR
+            .retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // Drop this claim's flag only. Another sequence for the same daemon
+        // may still be running, and it has to stay both protected from the
+        // retry checker and reachable by a stop.
+        if let Some(claims) = retrying.get_mut(&self.id) {
+            claims.retain(|flag| !std::sync::Arc::ptr_eq(flag, &self.cancel));
+            if claims.is_empty() {
+                retrying.remove(&self.id);
+            }
+        }
+    }
+}
+
 impl Supervisor {
+    /// Whether a foreground `run` is already working through this daemon's
+    /// retries.
+    pub(crate) fn is_retrying(&self, id: &DaemonId) -> bool {
+        self.retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .is_some_and(|claims| !claims.is_empty())
+    }
+
+    /// How many times this daemon has been stopped so far.
+    pub(crate) fn stop_epoch(&self, id: &DaemonId) -> u64 {
+        self.stop_epochs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn bump_stop_epoch(&self, id: &DaemonId) {
+        *self
+            .stop_epochs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(id.clone())
+            .or_default() += 1;
+    }
+
+    fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(id.clone())
+            .or_default()
+            .push(cancel.clone());
+        RetryingGuard {
+            id: id.clone(),
+            cancel,
+        }
+    }
+
+    /// Ask a foreground retry sequence for this daemon, if there is one, to
+    /// end. A stop is a decision about the daemon, not about one of its
+    /// attempts, so the attempts left must not go ahead behind it.
+    pub(crate) fn cancel_retrying(&self, id: &DaemonId) {
+        if let Some(claims) = self
+            .retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+        {
+            // Every claim, not just the newest: a start that is sleeping out a
+            // backoff is as much a sequence the stop has to end as the one that
+            // claimed the daemon last.
+            for cancel in claims {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
+        self.run_inner(opts, None).await
+    }
+
+    /// Run an attempt the retry checker decided on while `stop_epoch` read
+    /// `approved_at`. If the daemon has been stopped since, the attempt is
+    /// abandoned instead of started.
+    pub(crate) async fn run_retry(
+        &self,
+        opts: RunOptions,
+        approved_at: u64,
+    ) -> Result<IpcResponse> {
+        self.run_inner(opts, Some(approved_at)).await
+    }
+
+    async fn run_inner(&self, opts: RunOptions, approved_at: Option<u64>) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
 
@@ -288,26 +443,27 @@ impl Supervisor {
         // concurrent run pass this same check (duplicate processes) or let a
         // concurrent stop see no PID and return without stopping anything.
         let mut stop_guard = Some(self.stop_lock(id).await.lock_owned().await);
-        let daemon = self.get_daemon(id).await;
-        if let Some(daemon) = daemon {
-            // Stopping state is treated as "not running" - the monitoring task will clean it up
-            // Only check for Running state with a valid PID
-            if !daemon.status.is_stopping()
-                && !daemon.status.is_stopped()
-                && let Some(pid) = daemon.pid
-            {
-                if opts.force {
-                    self.stop_locked(id).await?;
-                    info!("run: stop completed for daemon {id}");
-                } else {
-                    warn!("daemon {id} already running with pid {pid}");
-                    return Ok(IpcResponse::DaemonAlreadyRunning);
-                }
-            }
+        // Checked here, under the daemon's lock, because that is what a stop
+        // takes too: an approval from before the stop cannot slip past it.
+        // Writing `stopped` over the record is not enough on its own, since an
+        // attempt already approved would read that as a daemon free to start.
+        if let Some(approved_at) = approved_at
+            && self.stop_epoch(id) != approved_at
+        {
+            info!("daemon {id} was stopped after this retry was decided on; not starting it");
+            return Ok(IpcResponse::DaemonNotRunning);
+        }
+        if let Some(response) = self.claim_or_defer(&opts, &mut stop_guard).await? {
+            return Ok(response);
         }
 
         // If wait_ready is true and retry is configured, implement retry loop
         if opts.wait_ready && opts.retry.count() > 0 {
+            // Claim this daemon's retries for the duration of the loop. The
+            // backoff between attempts leaves the record errored with no PID,
+            // which is what `check_retry` scans for, and an attempt started
+            // there would leave this call reporting on a run it does not own.
+            let retrying_claim = self.mark_retrying(id);
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
             for attempt in 0..max_attempts {
@@ -318,9 +474,50 @@ impl Supervisor {
                 // The first attempt starts under the guard held since the
                 // running check above; later attempts re-acquire it so stops
                 // are not locked out during the backoff sleeps.
-                let guard = match stop_guard.take() {
+                let mut guard = Some(match stop_guard.take() {
                     Some(guard) => guard,
                     None => self.stop_lock(id).await.lock_owned().await,
+                });
+                // Ownership has to be re-checked on every attempt, not just
+                // the first. The backoff leaves the daemon errored with no PID,
+                // which is exactly what `check_retry` looks for, so the
+                // background checker can start the next attempt during the
+                // sleep. Spawning another process here would replace that
+                // attempt's monitor registration and leave its process running
+                // unmonitored.
+                if let Some(response) = self.claim_or_defer(&retry_opts, &mut guard).await? {
+                    return Ok(response);
+                }
+                // The background retry checker may have run this attempt for
+                // us and seen it succeed while we slept. Starting again would
+                // repeat a task that has already done its work — for a
+                // migration or a seed, repeating its side effects.
+                //
+                // Only after a backoff, though. A completed record on the first
+                // attempt is the previous run's, and a start is defined to
+                // re-run a completed oneshot; short-circuiting here would make
+                // that true only for oneshots without `retry`.
+                if attempt > 0
+                    && let Some(daemon) = self.get_daemon(id).await
+                    && daemon.status.is_completed()
+                {
+                    info!("daemon {id} completed while waiting to retry; not running it again");
+                    return Ok(IpcResponse::DaemonReady { daemon });
+                }
+                // A stop that arrived during the backoff ends the sequence.
+                // Without this the loop would start the next attempt on a
+                // daemon the user has just stopped, and the stop would look
+                // like it had done nothing.
+                if retrying_claim.is_cancelled() {
+                    info!("daemon {id} was stopped while waiting to retry; abandoning its retries");
+                    return Ok(IpcResponse::DaemonFailed {
+                        error: "stopped while retrying".to_string(),
+                    });
+                }
+                let Some(guard) = guard else {
+                    // Only the deferring paths take the guard, and each of
+                    // those returned above.
+                    return Ok(IpcResponse::DaemonAlreadyRunning);
                 };
                 let result = self.run_once(retry_opts, guard).await?;
 
@@ -333,6 +530,15 @@ impl Supervisor {
                         resolved_ports,
                     } => {
                         if attempt < opts.retry.count() {
+                            // `run_once` reports failure the moment the process
+                            // exits, but its monitor finalizes the record only
+                            // after draining the process's remaining output.
+                            // Until then the record still names this attempt's
+                            // PID, and the next attempt's ownership check would
+                            // read its own dead predecessor as a competing run
+                            // and abandon the retries that are left.
+                            let attempt_pid = self.get_daemon(id).await.and_then(|d| d.pid);
+                            self.wait_for_exit_finalized(id, attempt_pid).await;
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
                                 "daemon {id} failed (attempt {}/{}), retrying in {}s",
@@ -350,7 +556,18 @@ impl Supervisor {
                                 vec![],
                             )
                             .await;
-                            time::sleep(Duration::from_secs(backoff_secs)).await;
+                            // Slept in slices so a stop arriving during a
+                            // long backoff — they grow to an hour — is acted
+                            // on when it arrives rather than when the sleep
+                            // happens to end.
+                            let backoff_deadline =
+                                tokio::time::Instant::now() + Duration::from_secs(backoff_secs);
+                            while tokio::time::Instant::now() < backoff_deadline
+                                && !retrying_claim.is_cancelled()
+                            {
+                                let remaining = backoff_deadline - tokio::time::Instant::now();
+                                time::sleep(remaining.min(Duration::from_millis(200))).await;
+                            }
                             continue;
                         } else {
                             info!("daemon {id} failed after {max_attempts} attempts");
@@ -371,6 +588,221 @@ impl Supervisor {
             None => self.stop_lock(id).await.lock_owned().await,
         };
         self.run_once(opts, guard).await
+    }
+
+    /// Wait for a just-failed attempt's monitor to write its terminal state,
+    /// clearing the PID from the record.
+    ///
+    /// Bounded a little beyond the monitor's own five-second output drain, the
+    /// longest it can hold the record after the process has gone. Giving up
+    /// early is safe: the ownership check that follows simply sees a PID and
+    /// defers, which is what it would have done anyway.
+    ///
+    /// `pid` names the run being waited for, so a record that has moved on to
+    /// another run is not mistaken for this one still finishing.
+    async fn wait_for_exit_finalized(&self, id: &DaemonId, pid: Option<u32>) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            match self.get_daemon(id).await {
+                Some(daemon) if pid.map_or(daemon.pid.is_some(), |pid| daemon.pid == Some(pid)) => {
+                }
+                _ => return,
+            }
+            if tokio::time::Instant::now() >= deadline {
+                debug!("daemon {id}: previous attempt has not finalized yet; continuing anyway");
+                return;
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Decide whether this start may take the daemon's record, or must stand
+    /// down because a live run already owns it.
+    ///
+    /// Returns `Some(response)` when the caller must report that run's outcome
+    /// instead of spawning a second process, and `None` when the record is free
+    /// (including after a forced stop of the previous instance).
+    ///
+    /// `stop_guard` is released before an in-flight oneshot is awaited: that
+    /// wait lasts as long as the task does, and holding the lock would block a
+    /// stop of the very run being waited on.
+    async fn claim_or_defer(
+        &self,
+        opts: &RunOptions,
+        stop_guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) -> Result<Option<IpcResponse>> {
+        let id = &opts.id;
+        let Some(daemon) = self.get_daemon(id).await else {
+            return Ok(None);
+        };
+        // Entering a directory does not re-run a finished task, at any level of
+        // the dependency graph — the layout this exists for reaches the task
+        // through a service's `depends`, not by naming it. Decided here rather
+        // than in the client because this is the authoritative state: the state
+        // file lags it by up to the flush interval, which is exactly the window
+        // a second entry lands in after the task completes.
+        // `opts.oneshot` rather than the record's: the request carries what
+        // config says now, while the stored flag is only refreshed by a run, so
+        // a daemon that used to be a task would otherwise stay skipped forever
+        // after being turned into a service.
+        if opts.on_directory_enter && opts.oneshot && daemon.status.is_completed() {
+            debug!("daemon {id} already completed; directory entry leaves it alone");
+            return Ok(Some(IpcResponse::DaemonReady { daemon }));
+        }
+        // Stopping is treated as "not running": the monitoring task will clean
+        // it up. Only a live PID under a non-terminal status blocks a start.
+        if daemon.status.is_stopping() || daemon.status.is_stopped() || daemon.status.is_completed()
+        {
+            return Ok(None);
+        }
+        let Some(pid) = daemon.pid else {
+            return Ok(None);
+        };
+        if opts.force {
+            self.stop_locked(id).await?;
+            info!("run: stop completed for daemon {id}");
+            return Ok(None);
+        }
+        if daemon.oneshot && opts.wait_ready {
+            // An in-flight oneshot has not done its work yet, so reporting
+            // "already running" would let dependents start against the state
+            // the task is still establishing. Wait for the run already under
+            // way instead.
+            info!("daemon {id} is an in-flight oneshot (pid {pid}); waiting for it to finish");
+            drop(stop_guard.take());
+            return Ok(Some(
+                self.await_running_oneshot(id, opts.oneshot_wait, pid).await,
+            ));
+        }
+        // A record can name a PID that has already exited: `stop` leaves the
+        // terminal state to a monitor that still owns the daemon, and that
+        // monitor writes it only after draining the process's output. Rejecting
+        // a start against a dead PID would fail an ordinary stop-then-start for
+        // the length of that drain, so confirm the process is really there
+        // before refusing. The oneshot branch above deliberately comes first: a
+        // task whose process has exited is about to be recorded as completed,
+        // and starting a second copy of it is exactly what waiting prevents.
+        PROCS.refresh_pids(&[pid]);
+        if !PROCS.is_running(pid) {
+            debug!(
+                "daemon {id}: record still names pid {pid}, which has exited; its monitor has not finalized yet"
+            );
+            return Ok(None);
+        }
+        warn!("daemon {id} already running with pid {pid}");
+        Ok(Some(IpcResponse::DaemonAlreadyRunning))
+    }
+
+    /// Wait for a oneshot that is already running to reach a terminal state,
+    /// and report it as if this call had started the task itself.
+    ///
+    /// Polls the state file because the terminal state is written by the
+    /// monitoring task of the *other* run; this call has no readiness channel
+    /// of its own to await.
+    async fn await_running_oneshot(
+        &self,
+        id: &DaemonId,
+        wait: Option<OneshotWait>,
+        watched_pid: u32,
+    ) -> IpcResponse {
+        let interval = settings().supervisor_ready_check_interval();
+        // The caller resolved this from the project's settings and sent it, so
+        // both processes wait exactly as long. Falling back to this process's
+        // own settings would read the directory the supervisor happens to have
+        // started in, where a project's `oneshot_timeout` is not visible — and
+        // the shorter of the two deadlines would silently win, releasing
+        // dependents while the task was still running.
+        //
+        // `None` here means the setting asked for no limit, so there is no
+        // deadline to reach rather than a distant one.
+        // One deadline for the whole wait, retries and backoffs included.
+        // `oneshot_timeout` is documented as the longest `pitchfork start` will
+        // wait, and the client bounds its own request by the same value without
+        // restarting it, so a per-attempt budget here would both break that
+        // promise — unboundedly, with infinite retries — and put the two sides
+        // back to disagreeing about when one task has gone on too long.
+        let deadline = wait
+            .unwrap_or_else(|| settings().supervisor_oneshot_wait())
+            .duration()
+            .map(|d| tokio::time::Instant::now() + d);
+        // Which run this wait is reporting on. A terminal state is only that
+        // run's while the record still names its PID or names none at all; once
+        // another PID appears, something else has started the task and the
+        // outcome that follows belongs to that run, not this one. Following the
+        // handoff keeps the answer useful to a dependent — it still learns
+        // whether the task succeeded — without quietly attributing an unrelated
+        // run's failure to the one it asked about.
+        let mut watched_pid = watched_pid;
+        loop {
+            let Some(daemon) = self.get_daemon(id).await else {
+                return IpcResponse::DaemonNotFound;
+            };
+            if let Some(current) = daemon.pid
+                && current != watched_pid
+            {
+                info!(
+                    "daemon {id}: the run being waited on (pid {watched_pid}) was replaced by pid {current}; following it"
+                );
+                watched_pid = current;
+            }
+            match &daemon.status {
+                DaemonStatus::Completed => {
+                    info!("daemon {id}: the in-flight oneshot completed");
+                    return IpcResponse::DaemonReady { daemon };
+                }
+                DaemonStatus::Errored(code) => {
+                    // A failed attempt is persisted before the in-flight `run`
+                    // sleeps out its backoff, so an errored record with
+                    // attempts left is a gap between tries rather than the
+                    // result. Same condition `check_retry` uses to decide
+                    // whether another attempt is still owed.
+                    if daemon.retry.count() > 0 && daemon.retry_count < daemon.retry.count() {
+                        debug!(
+                            "daemon {id}: in-flight oneshot failed attempt {} of {}; still waiting",
+                            daemon.retry_count + 1,
+                            daemon.retry.count() + 1
+                        );
+                    } else {
+                        // -1 records an unobservable exit code; the caller
+                        // renders `None` as a plain failure rather than
+                        // "exit code -1".
+                        let exit_code = Some(*code).filter(|c| *c != -1);
+                        return IpcResponse::DaemonFailedWithCode {
+                            exit_code,
+                            resolved_ports: daemon.resolved_port.clone(),
+                        };
+                    }
+                }
+                DaemonStatus::Failed(error) => {
+                    return IpcResponse::DaemonFailed {
+                        error: error.clone(),
+                    };
+                }
+                DaemonStatus::Stopped => {
+                    // Stopped, not completed: the task was interrupted, so it
+                    // never established what its dependents are waiting for.
+                    warn!("daemon {id}: the in-flight oneshot was stopped before completing");
+                    return IpcResponse::DaemonFailedWithCode {
+                        exit_code: None,
+                        resolved_ports: daemon.resolved_port.clone(),
+                    };
+                }
+                DaemonStatus::Running | DaemonStatus::Waiting | DaemonStatus::Stopping => {}
+            }
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                warn!("daemon {id}: gave up waiting for the in-flight oneshot to finish");
+                // Reported as a failure rather than as "already running": the
+                // batch start path only counts a result carrying an exit code
+                // as failed, so anything else would let dependents start
+                // against a task that never finished. 124 is the code a
+                // readiness timeout already uses.
+                return IpcResponse::DaemonFailedWithCode {
+                    exit_code: Some(124),
+                    resolved_ports: Vec::new(),
+                };
+            }
+            time::sleep(interval).await;
+        }
     }
 
     /// Run a daemon once (single attempt).
@@ -778,17 +1210,27 @@ impl Supervisor {
         drop(stop_guard);
 
         let id_clone = id.clone();
-        let ready_delay = opts.ready_delay;
-        let ready_output = opts.ready_output.clone();
-        let ready_http = opts.ready_http.clone();
-        let ready_port = effective_ready_port;
+        // A oneshot is ready only when its process exits 0, so no readiness
+        // check may run alongside it — one that fired first would report the
+        // task ready before it had done its work, and would suppress the
+        // completion notification entirely. Config load rejects explicit
+        // `ready_*` fields and the client clears CLI overrides, but the
+        // implicit port check is derived here from `port.expect`, so the
+        // suppression has to happen here rather than being trusted to callers.
+        let ready_delay = (!opts.oneshot).then_some(opts.ready_delay).flatten();
+        let ready_output = (!opts.oneshot).then(|| opts.ready_output.clone()).flatten();
+        let ready_http = (!opts.oneshot).then(|| opts.ready_http.clone()).flatten();
+        let ready_port = (!opts.oneshot).then_some(effective_ready_port).flatten();
         let implicit_ready_port = ready_port.map(|p| ReadyPort {
             port: Some(p),
             template: None,
             timeout: None,
         });
-        let ready_port_config = opts.ready_port.clone().or(implicit_ready_port);
-        let ready_cmd = opts.ready_cmd.clone();
+        let ready_port_config = (!opts.oneshot)
+            .then(|| opts.ready_port.clone())
+            .flatten()
+            .or(implicit_ready_port);
+        let ready_cmd = (!opts.oneshot).then(|| opts.ready_cmd.clone()).flatten();
         let daemon_dir = opts.dir.0.clone();
         let hook_retry_count = opts.retry_count;
         let hook_retry = opts.retry;
@@ -962,6 +1404,11 @@ impl Supervisor {
 
             // Setup readiness checking
             let mut ready_notified = false;
+            // Set when a oneshot's process exits 0. Its readiness *is* its
+            // completion, so the notification is held back until the
+            // `completed` state has been persisted — a caller that returns
+            // from `pitchfork start` must not still see the daemon running.
+            let mut oneshot_completion_pending = false;
             let mut ready_tx = ready_tx;
             let ready_pattern = ready_output
                 .as_ref()
@@ -1146,13 +1593,15 @@ impl Supervisor {
                         exit_status = Some(result);
                         debug!("daemon {id} process exited, exit_status: {exit_status:?}");
                         if !ready_notified {
-                            if let Some(tx) = ready_tx.take() {
-                                // Check if process exited successfully
-                                let is_success = exit_status.as_ref()
-                                    .and_then(|r| r.as_ref().ok())
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-
+                            // Check if process exited successfully
+                            let is_success = exit_status.as_ref()
+                                .and_then(|r| r.as_ref().ok())
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if is_success && opts.oneshot {
+                                debug!("daemon {id} completed, deferring success notification until the completed state is persisted");
+                                oneshot_completion_pending = true;
+                            } else if let Some(tx) = ready_tx.take() {
                                 if is_success {
                                     debug!("daemon {id} exited successfully before ready check, sending success notification");
                                     let _ = tx.send(Ok(()));
@@ -1699,7 +2148,12 @@ impl Supervisor {
                         d.pid != Some(pid) && !d.status.is_stopped() && !d.status.is_stopping()
                     }))
             {
-                // Another process has taken over, don't update status
+                // Another process has taken over, don't update status. The
+                // task itself did finish, so a caller waiting on it is still
+                // told so rather than left to time out.
+                if oneshot_completion_pending && let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Ok(()));
+                }
                 return;
             }
             // Capture the intentional-stop flag. Combine pre-drain and
@@ -1731,6 +2185,11 @@ impl Supervisor {
                 }
                 (Err(_), false) => (-1, "fail"),
             };
+            // A stop that arrived while this monitor was draining did not get
+            // to write anything, so it is applied here. A run that had already
+            // succeeded keeps that outcome — there was nothing left to
+            // interrupt — but a failed one is recorded as stopped, so the
+            // retry checker leaves it alone.
 
             // Update daemon state unless stop() already did it (won the race),
             // OR the daemon was intentionally stopped before the drain
@@ -1741,13 +2200,12 @@ impl Supervisor {
                 if let Ok(status) = &exit_status {
                     info!("daemon {id} exited with status {status}");
                 }
-                let (new_status, last_exit_success) = match exit_reason {
-                    "stop" | "exit" => (
-                        DaemonStatus::Stopped,
-                        exit_status.as_ref().map(|s| s.success()).unwrap_or(true),
-                    ),
-                    _ => (DaemonStatus::Errored(exit_code), false),
-                };
+                let (new_status, last_exit_success) = terminal_exit_state(
+                    exit_reason,
+                    opts.oneshot,
+                    exit_code,
+                    exit_status.as_ref().map(|s| s.success()).unwrap_or(true),
+                );
                 // Revalidate ownership inside the same state-lock section that
                 // performs the write. The snapshot above was taken without
                 // holding the lock, so a restart running on another thread can
@@ -1764,6 +2222,19 @@ impl Supervisor {
                     .await
                 {
                     debug!("daemon {id} exit state was not written; a successor owns the record");
+                }
+            }
+
+            // The terminal state is now visible, so a caller waiting on this
+            // oneshot can return and see it. A task that was stopped partway
+            // never did its work, so it does not satisfy anything waiting on
+            // it — even when the process caught the signal and exited 0.
+            if oneshot_completion_pending && let Some(tx) = ready_tx.take() {
+                if exit_reason == "exit" {
+                    let _ = tx.send(Ok(()));
+                } else {
+                    warn!("daemon {id}: oneshot was stopped before completing");
+                    let _ = tx.send(Err(None));
                 }
             }
 
@@ -1803,6 +2274,35 @@ impl Supervisor {
             match ready_rx.await {
                 Ok(Ok(())) => {
                     info!("daemon {id} is ready");
+                    // Re-read rather than returning the snapshot taken at
+                    // spawn: a completed oneshot has since been finalized, and
+                    // the snapshot would tell the caller it is still running
+                    // under a PID that has exited.
+                    //
+                    // Only when the record still describes this run, though. A
+                    // successor that claimed it carries its own PID and start
+                    // time, and reporting those as the outcome of the process
+                    // this call spawned would misattribute them.
+                    let daemon = match self.get_daemon(id).await {
+                        Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
+                            current
+                        }
+                        // A successor owns the record, so neither it nor the
+                        // spawn snapshot describes this run: one carries
+                        // another process's identity, the other still says
+                        // running under a PID that has exited. A oneshot that
+                        // reported ready did finish, so report that outcome
+                        // directly rather than either misleading record.
+                        _ if opts.oneshot => crate::daemon::Daemon {
+                            status: DaemonStatus::Completed,
+                            pid: None,
+                            start_time: None,
+                            boot_time: None,
+                            last_exit_success: Some(true),
+                            ..daemon
+                        },
+                        _ => daemon,
+                    };
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
                 Ok(Err(exit_code)) => {
@@ -1855,6 +2355,19 @@ impl Supervisor {
             ));
         }
         info!("stopping daemon: {id}");
+        // A foreground `start` may be working through this daemon's retries,
+        // sleeping out a backoff with no process of its own to kill. Tell it to
+        // give up, or it would start the next attempt once the stop has
+        // returned.
+        self.cancel_retrying(id);
+        // ...and the retry checker may already have decided on an attempt it
+        // has not started yet. The count is raised when this stop is done
+        // rather than now, and while its lock is still held, so a checker that
+        // reads the count while the stop is still recording itself reads the
+        // old value and stands down when it reaches the lock. Raising it up
+        // front would hand that reader a value that still matches once the
+        // stop has finished.
+        let _stop_epoch_bump = StopEpochGuard(id.clone());
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
@@ -1948,9 +2461,54 @@ impl Supervisor {
                             .build(),
                     )
                     .await?;
+                } else if daemon.oneshot && self.is_monitored(id, pid) {
+                    // The task's process is gone but its monitor is still
+                    // running, so the run's real outcome has not been written
+                    // yet — and for a task that finished on its own that
+                    // outcome is `completed`. Writing `stopped` straight over
+                    // it would discard a success the task actually achieved
+                    // and report failure to anyone waiting on it, purely
+                    // because a stop arrived a moment late.
+                    //
+                    // So wait for whoever is monitoring this run — the native
+                    // monitor or an adopted one — to finish, then decide from
+                    // what it wrote. Waiting rather than leaving a note for
+                    // the monitor to find means there is no window in which
+                    // the note lands too late to be read, and nothing left
+                    // behind if it is never read at all. The wait is bounded,
+                    // as is the monitor's own five-second output drain.
+                    //
+                    // Only oneshots take this path. A service has no
+                    // successful exit to preserve, so it falls through to the
+                    // arm below, which records the stop immediately.
+                    debug!(
+                        "pid {pid} not running but daemon {id} is still monitored; waiting for its monitor to settle the outcome"
+                    );
+                    self.wait_for_exit_finalized(id, Some(pid)).await;
+                    let finished = self.get_daemon(id).await;
+                    if finished
+                        .as_ref()
+                        .is_some_and(|d| stop_keeps_finalized_status(&d.status))
+                    {
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
+                    // The run did not finish its work, so record the stop. A
+                    // failure left in place would be picked up by the retry
+                    // checker, which would start a task the user just stopped.
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                            })
+                            .build(),
+                    )
+                    .await?;
+                    return Ok(IpcResponse::DaemonWasNotRunning);
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
-                    // Process already dead — transition to Stopped so the
+                    // Process already dead and unmonitored, so nothing else
+                    // will record an outcome — transition to Stopped so the
                     // retry checker sees a terminal state and stops
                     // scheduling new attempts. This is important for an
                     // explicit `pitchfork stop` on an Errored daemon: the
@@ -1969,6 +2527,22 @@ impl Supervisor {
                 Ok(IpcResponse::Ok)
             } else {
                 debug!("daemon {id} not running");
+                // No process to signal, but a failed record with retries left
+                // is not inert: `check_retry` starts the next attempt from it,
+                // whether or not a foreground start is also working through
+                // them. Record the stop so nothing picks the daemon back up.
+                if daemon.status.is_errored() && daemon.retry_count < daemon.retry.count() {
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                            })
+                            .build(),
+                    )
+                    .await?;
+                    return Ok(IpcResponse::DaemonWasNotRunning);
+                }
                 Ok(IpcResponse::DaemonNotRunning)
             }
         } else {
@@ -2581,6 +3155,109 @@ fn is_daemon_slug_target(id: &DaemonId) -> bool {
         let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
         id.name() == daemon_name
     })
+}
+
+#[cfg(test)]
+mod oneshot_tests {
+    use super::*;
+
+    #[test]
+    fn oneshot_clean_exit_is_completed() {
+        let (status, success) = terminal_exit_state("exit", true, 0, true);
+        assert!(matches!(status, DaemonStatus::Completed));
+        assert!(success);
+    }
+
+    #[test]
+    fn service_clean_exit_is_still_stopped() {
+        let (status, success) = terminal_exit_state("exit", false, 0, true);
+        assert!(matches!(status, DaemonStatus::Stopped));
+        assert!(success);
+    }
+
+    #[test]
+    fn oneshot_failure_is_errored_so_retry_applies() {
+        // check_retry() only picks up errored daemons, so a non-zero exit must
+        // not be recorded as completed.
+        let (status, success) = terminal_exit_state("fail", true, 3, false);
+        assert!(matches!(status, DaemonStatus::Errored(3)));
+        assert!(!success);
+    }
+
+    #[test]
+    fn a_stop_cancels_the_retry_sequence_it_finds() {
+        let id = DaemonId::new("retry-cancel-test", "task");
+        let claim = SUPERVISOR.mark_retrying(&id);
+        assert!(!claim.is_cancelled());
+        assert!(SUPERVISOR.is_retrying(&id));
+        SUPERVISOR.cancel_retrying(&id);
+        assert!(claim.is_cancelled());
+        drop(claim);
+        assert!(!SUPERVISOR.is_retrying(&id));
+    }
+
+    #[test]
+    fn a_stop_cancels_every_sequence_for_the_daemon() {
+        // Two starts can be working through the same daemon's retries: the
+        // first releases the daemon's lock while it sleeps out a backoff. A
+        // stop has to end both, not just whichever claimed it last.
+        let id = DaemonId::new("retry-cancel-test", "concurrent");
+        let first = SUPERVISOR.mark_retrying(&id);
+        let second = SUPERVISOR.mark_retrying(&id);
+        SUPERVISOR.cancel_retrying(&id);
+        assert!(first.is_cancelled());
+        assert!(second.is_cancelled());
+        drop(second);
+        // The first is still going, so the retry checker must still stand off.
+        assert!(SUPERVISOR.is_retrying(&id));
+        drop(first);
+        assert!(!SUPERVISOR.is_retrying(&id));
+    }
+
+    #[test]
+    fn a_stop_invalidates_an_attempt_decided_on_before_it() {
+        // The retry checker reads the epoch when it decides on an attempt and
+        // `run_retry` compares it under the daemon's lock, so an approval from
+        // before a stop cannot slip past that stop.
+        let id = DaemonId::new("stop-epoch-test", "task");
+        let approved_at = SUPERVISOR.stop_epoch(&id);
+        assert_eq!(SUPERVISOR.stop_epoch(&id), approved_at);
+        SUPERVISOR.bump_stop_epoch(&id);
+        assert_ne!(SUPERVISOR.stop_epoch(&id), approved_at);
+        // An attempt decided on after the stop is still fine to start.
+        let approved_after = SUPERVISOR.stop_epoch(&id);
+        assert_eq!(SUPERVISOR.stop_epoch(&id), approved_after);
+    }
+
+    #[test]
+    fn stop_epochs_are_tracked_per_daemon() {
+        let stopped = DaemonId::new("stop-epoch-test", "stopped");
+        let untouched = DaemonId::new("stop-epoch-test", "untouched");
+        let approved_at = SUPERVISOR.stop_epoch(&untouched);
+        SUPERVISOR.bump_stop_epoch(&stopped);
+        assert_eq!(SUPERVISOR.stop_epoch(&untouched), approved_at);
+    }
+
+    #[test]
+    fn a_stop_leaves_a_completed_task_alone() {
+        // It had already done its work, so the stop had nothing to interrupt.
+        assert!(stop_keeps_finalized_status(&DaemonStatus::Completed));
+    }
+
+    #[test]
+    fn a_stop_replaces_a_failure_so_retries_do_not_resume() {
+        // check_retry() picks up errored daemons, so a stop has to overwrite
+        // one or it will start the task again.
+        assert!(!stop_keeps_finalized_status(&DaemonStatus::Errored(1)));
+        assert!(!stop_keeps_finalized_status(&DaemonStatus::Running));
+        assert!(!stop_keeps_finalized_status(&DaemonStatus::Stopped));
+    }
+
+    #[test]
+    fn stopped_oneshot_did_not_complete() {
+        let (status, _) = terminal_exit_state("stop", true, 0, true);
+        assert!(matches!(status, DaemonStatus::Stopped));
+    }
 }
 
 #[cfg(all(test, unix))]

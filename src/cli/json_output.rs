@@ -8,6 +8,10 @@ pub struct JsonListEntry {
     pub name: String,
     pub pid: Option<u32>,
     pub status: String,
+    /// True for a `oneshot = true` daemon. Present so a consumer can tell a
+    /// task from a service rather than inferring it from `completed`, which a
+    /// task only reaches once it has run.
+    pub oneshot: bool,
     pub disabled: bool,
     pub available: bool,
     pub proxy_url: Option<String>,
@@ -24,6 +28,8 @@ pub struct JsonStatusEntry {
     pub name: String,
     pub pid: Option<u32>,
     pub status: String,
+    /// True for a `oneshot = true` daemon. See `JsonListEntry::oneshot`.
+    pub oneshot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_port: Option<u16>,
     pub port: Vec<u16>,

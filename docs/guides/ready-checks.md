@@ -16,6 +16,7 @@ can do useful work, such as an HTTP health endpoint or a database query.
 | `ready_port` | A TCP connection succeeds on `127.0.0.1` | Services without an application-level probe |
 | `ready_output` | A regex matches stdout or stderr | Services with a reliable startup message |
 | `ready_delay` | The process stays running for a fixed delay | A fallback when no other check is available |
+| [`oneshot`](/guides/oneshot-tasks) | The process exits with code `0` | Setup tasks that must finish, such as migrations |
 
 ::: tip More than one check means “any,” not “all”
 The first successful output, HTTP, TCP, or command check marks the daemon ready.
@@ -126,6 +127,16 @@ ready_delay = "5s"
 
 Use `pitchfork start worker --delay 5` for a one-time override. Raising the delay
 does not extend the timeout of an HTTP, TCP, output, or command check.
+
+## Oneshot tasks {#oneshot-tasks}
+
+For migrations, seeds, and other setup that must finish before a service starts,
+use `oneshot = true`. A oneshot task becomes ready when it exits with code `0`;
+its dependents wait for that successful completion. It cannot use `ready_*` or
+`health_*` fields.
+
+See [Oneshot tasks](/guides/oneshot-tasks) for a complete example, rerun behavior,
+and the separate timeout for waiting on a task.
 
 ## Timeouts and failures
 
