@@ -308,7 +308,7 @@ pub struct PitchforkToml {
     pub path: Option<PathBuf>,
 }
 
-pub(crate) fn is_global_config(path: &Path) -> bool {
+pub fn is_global_config(path: &Path) -> bool {
     path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
 }
 
@@ -825,14 +825,19 @@ impl PitchforkToml {
         namespace_from_path(&dir.join("pitchfork.toml"))
     }
 
-    /// Return the `worktree_label` declared by this project's own configuration
-    /// files, ignoring configs inherited from parent directories.
+    /// Return the `worktree_label` declared for this project, ignoring configs
+    /// inherited from parent directories.
     ///
-    /// Later files in the project's config family win, matching the ordinary
-    /// configuration precedence.
+    /// This covers the project's own four config files and any external file
+    /// registered to this directory with `pitchfork config add --dir`, which is
+    /// where a generator such as mise writes its configuration. Later files win,
+    /// matching the ordinary configuration precedence.
     pub fn project_worktree_label(dir: &Path) -> Option<String> {
         let mut label = None;
-        for candidate in project_config_family(&dir.join("pitchfork.toml")) {
+        let candidates = project_config_family(&dir.join("pitchfork.toml"))
+            .into_iter()
+            .chain(crate::extra_configs::configs_for_dir(dir));
+        for candidate in candidates {
             if !candidate.exists() {
                 continue;
             }

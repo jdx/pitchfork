@@ -1039,7 +1039,16 @@ impl IpcClient {
             .ok_or_else(|| miette::miette!("Daemon config not found for {id}"))?;
 
         // Render Tera templates and merge top-level env (per-daemon wins).
-        render_daemon_config(id, &mut daemon_config, &pt)?;
+        // Building the context reads configuration and derives hostnames, so it
+        // runs on a blocking worker rather than on the caller's runtime.
+        daemon_config = {
+            let id = id.clone();
+            tokio::task::spawn_blocking(move || {
+                render_daemon_config(&id, &mut daemon_config, &pt).map(|()| daemon_config)
+            })
+            .await
+            .map_err(|e| miette::miette!("template rendering task failed: {e}"))??
+        };
 
         let run_opts = build_run_options(id, &daemon_config, overrides)
             .await

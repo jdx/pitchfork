@@ -1327,6 +1327,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         );
     }
 
+    let local_client = is_local_client(&req);
+
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
         if subdomain == "pitchfork" {
@@ -1354,27 +1356,41 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 return page_placeholder_response(
                     &project,
                     worktree.as_deref(),
-                    &daemons,
+                    if local_client { &daemons } else { &[] },
                     &state.tld,
                     &host_port_suffix(&raw_host),
                 );
             }
             ResolveResult::Unknown { heading, known } => {
-                return unknown_host_response(&host, &heading, &known);
+                return unknown_host_response(
+                    &host,
+                    &heading,
+                    if local_client { &known } else { &[] },
+                );
             }
             ResolveResult::NotFound => {
                 return error_response(
                     StatusCode::BAD_GATEWAY,
                     &format!(
                         "No daemon found for host '{host}'.\n\
-                         Make sure the daemon has a slug, is running, and has a port configured.\n\
-                         Expected format: <slug>.{tld}",
+                         A daemon is reachable once it configures a `port` and its project is \
+                         known to pitchfork; run `pitchfork proxy status` to see the hostnames \
+                         it serves.\n\
+                         Expected format: <daemon>.<project>.{tld}",
                         tld = state.tld
                     ),
                 );
             }
             ResolveResult::Error(msg) => {
-                return error_response(StatusCode::BAD_GATEWAY, &msg);
+                if local_client {
+                    return error_response(StatusCode::BAD_GATEWAY, &msg);
+                }
+                // The message names directories on this machine.
+                log::warn!("Refused '{host}' for a non-local client: {msg}");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("'{host}' is not available."),
+                );
             }
         }
     };
@@ -2021,6 +2037,18 @@ async fn resolve_registry_daemon(
     }
 
     result
+}
+
+/// Whether the request came from this machine.
+///
+/// Names of other people's projects, daemon labels and absolute paths are
+/// details of the developer's machine. They help whoever is sitting at it and
+/// tell a device on the LAN things it has no business knowing, so pages spell
+/// them out for loopback clients only.
+fn is_local_client(req: &Request) -> bool {
+    req.extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .is_none_or(|ci| ci.0.ip().is_loopback())
 }
 
 /// Whether a daemon is running from this checkout.

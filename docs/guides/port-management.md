@@ -161,15 +161,39 @@ Two names that reduce to the same label are a configuration error, and pitchfork
 routes neither of them rather than guess which one you meant. This applies to
 two projects claiming one project label, two worktrees of a project claiming one
 worktree label, and two daemons in a checkout claiming one daemon label, such as
-`foo_bar` beside `foo-bar`. The supervisor log names both sides, no URL is
-advertised for either, and the fix is to rename one or set an explicit
-`namespace`, `worktree_label` or `proxy` label.
+`foo_bar` beside `foo-bar`. No URL is advertised for either side, `pitchfork
+status` says the daemon is not routed, and `pitchfork proxy status` lists the
+clash under **Conflicts** with both directories or daemon names. The fix is to
+rename one, or set an explicit `namespace`, `worktree_label` or `proxy` label.
 
-To pin a worktree's label, set it in that worktree's own `pitchfork.toml`:
+To pin a worktree's label, set it in that worktree's own configuration:
 
 ```toml
 worktree_label = "fix-login"
 ```
+
+Prefer `pitchfork.local.toml`, or a file registered for that directory with
+`pitchfork config add --dir`, which is where a generator such as mise writes
+one. A `worktree_label` committed to `pitchfork.toml` travels to every worktree
+created from that branch, where they all claim the same label and none is
+routed.
+
+### Which projects are routable
+
+Hostnames resolve against the projects pitchfork knows about: those in the
+namespace registry, those with a registered slug, and those with a daemon in the
+state file. Starting a daemon once, or registering the project with `pitchfork
+config add --dir --namespace`, is enough.
+
+Membership deliberately ignores the current directory, so the supervisor and
+every command agree on which hostnames exist no matter where each was started.
+
+Two kinds of daemon are outside this scheme and keep using slugs:
+
+- A daemon declared in a global config (`~/.config/pitchfork/config.toml` or
+  `/etc/pitchfork/config.toml`) belongs to no project.
+- A linked worktree of a bare repository has no primary checkout to name the
+  project, so it is treated as a project of its own.
 
 ### Opting out and renaming
 
@@ -190,6 +214,12 @@ proxy = "web"          # https://web.myproject.localhost
 ```
 
 A daemon without a `port` is never routed.
+
+When the proxy is enabled, a routed daemon is started with `HOST=127.0.0.1`, so
+a server that honours `HOST` binds to the loopback interface and is reached
+through the proxy rather than directly. Before hostnames existed this applied
+only to daemons with a registered slug. `proxy = false` opts out of both the
+hostname and this variable, and LAN mode never sets it.
 
 ### Reserved addresses
 

@@ -106,6 +106,10 @@ pub struct JsonProxyStatus {
     /// Automatic hostnames, grouped by project and worktree.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<JsonProxyProject>,
+    /// Labels claimed by more than one project, worktree or daemon. Nothing is
+    /// routed under them until the clash is resolved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
 }
 
 #[derive(Serialize)]

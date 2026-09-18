@@ -192,6 +192,7 @@ impl ProxyStatus {
                     trusted: None,
                     slugs: vec![],
                     projects: vec![],
+                    conflicts: vec![],
                 });
             }
             println!("Proxy: disabled");
@@ -214,6 +215,7 @@ impl ProxyStatus {
                     trusted: None,
                     slugs: vec![],
                     projects: vec![],
+                    conflicts: vec![],
                 });
             }
             println!("Proxy: enabled");
@@ -347,7 +349,8 @@ impl ProxyStatus {
             })
             .collect();
 
-        let projects = collect_projects(scheme, tld, effective_port, standard_port, &state_file);
+        let (projects, conflicts) =
+            collect_projects(scheme, tld, effective_port, standard_port, &state_file);
 
         if self.json {
             return print_json(&JsonProxyStatus {
@@ -360,6 +363,7 @@ impl ProxyStatus {
                 trusted,
                 slugs: slug_entries,
                 projects,
+                conflicts,
             });
         }
 
@@ -414,6 +418,15 @@ impl ProxyStatus {
             }
         }
 
+        if !conflicts.is_empty() {
+            println!();
+            println!("Conflicts:");
+            println!();
+            for conflict in &conflicts {
+                println!("  {conflict}");
+            }
+        }
+
         println!();
         if projects.is_empty() {
             println!("No project hostnames.");
@@ -465,7 +478,7 @@ fn collect_projects(
     effective_port: u16,
     standard_port: u16,
     state_file: &Option<crate::state_file::StateFile>,
-) -> Vec<JsonProxyProject> {
+) -> (Vec<JsonProxyProject>, Vec<String>) {
     let url = |host: &str| {
         if effective_port == standard_port {
             format!("{scheme}://{host}.{tld}")
@@ -521,10 +534,8 @@ fn collect_projects(
     };
 
     let registry = crate::proxy::hostname::HostRegistry::build();
-    for err in &registry.errors {
-        eprintln!("warning: {err}");
-    }
-    registry
+    let conflicts = registry.errors.clone();
+    let projects = registry
         .project_labels()
         .into_iter()
         .filter_map(|label| {
@@ -551,7 +562,8 @@ fn collect_projects(
                 worktrees,
             })
         })
-        .collect()
+        .collect();
+    (projects, conflicts)
 }
 
 // ─── proxy add ───────────────────────────────────────────────────────────────

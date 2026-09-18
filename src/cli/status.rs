@@ -119,12 +119,13 @@ impl Status {
             println!("Port: {ports}");
         }
         let s = settings();
-        if s.proxy.enable
-            && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
-            && let Some(url) =
-                build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s)
-        {
-            println!("Proxy: {url}");
+        if s.proxy.enable && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty()) {
+            match build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s) {
+                Some(url) => println!("Proxy: {url}"),
+                // A daemon with a port but no hostname either opted out or lost
+                // a label to a clash, which `proxy status` spells out.
+                None => println!("Proxy: not routed (see `pitchfork proxy status`)"),
+            }
         }
         Ok(())
     }

@@ -161,6 +161,13 @@ fn primary_from_worktree_gitdir(gitdir: &Path) -> Option<PathBuf> {
         return None;
     }
     let common = worktrees_dir.parent()?;
+    // A bare repository has no primary checkout: its common directory is the
+    // repository itself (`repo.git`), not a `.git` inside a working tree.
+    // Treating its parent as the project would group every bare repository in
+    // that directory under one label, so such a worktree stands on its own.
+    if common.file_name()? != ".git" {
+        return None;
+    }
     // The pointer is whatever git wrote, so it needs the same resolution as a
     // path the caller supplied before it can be compared with one.
     common.parent().map(canonicalize_best_effort)
@@ -276,10 +283,14 @@ fn join_labels(daemon: &str, worktree: Option<&str>, project: &str) -> String {
 pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Option<String> {
     config.port.as_ref()?;
     let daemon = daemon_label(id.name(), config.proxy.as_ref())?;
-    let base = config
-        .path
-        .as_deref()
-        .and_then(crate::pitchfork_toml::project_dir_for_config)?;
+    let path = config.path.as_deref()?;
+    // A daemon declared in a global config belongs to no project, and the
+    // config's own directory is not one: it would put daemons under a label
+    // like `pitchfork`. Those daemons are reachable through a legacy slug.
+    if crate::pitchfork_toml::is_global_config(path) {
+        return None;
+    }
+    let base = crate::pitchfork_toml::project_dir_for_config(path)?;
     let checkout = detect_checkout(&base);
     let project_label = project_label(&checkout.primary)?;
     if project_label_is_ambiguous(&project_label, &checkout.primary) {
@@ -534,10 +545,13 @@ fn cached_worktree_dirs(primary: &Path) -> std::sync::Arc<Vec<PathBuf>> {
 
 /// Directories that may contain a project pitchfork knows about.
 ///
-/// The current directory comes first so a project is routable from its own
-/// checkout before any of its daemons has ever been started.
+/// Only persisted knowledge counts: the namespace registry, the legacy slug
+/// registry, and the directories of daemons in the state file. The current
+/// directory is deliberately absent, because it differs between the supervisor
+/// and each CLI invocation, and a registry that depended on it would let the
+/// CLI advertise a hostname the proxy does not route — or refuse one it does.
 fn candidate_dirs() -> Vec<PathBuf> {
-    let mut candidates: Vec<PathBuf> = vec![crate::env::CWD.clone()];
+    let mut candidates: Vec<PathBuf> = Vec::new();
     for (_, entry) in PitchforkToml::read_global_namespaces() {
         candidates.push(entry.dir);
     }
@@ -723,6 +737,12 @@ impl HostRegistry {
                 continue;
             };
             registry.errors.extend(errors);
+            // A directory with no routable daemon anywhere in it is not a
+            // project worth a hostname; an ad-hoc daemon's working directory
+            // would otherwise become an empty one.
+            if project.checkouts().all(|c| c.daemons.is_empty()) {
+                continue;
+            }
             registry.projects.insert(label, project);
         }
         for label in colliding {
@@ -949,6 +969,73 @@ mod tests {
 
         assert_eq!(detect_checkout(&wt).primary, detect_checkout(&repo).primary);
         assert_eq!(detect_checkout(&wt).primary, canonical(&repo));
+    }
+
+    /// A bare repository has no working tree to be the project, so its linked
+    /// worktrees stand alone rather than being grouped under the directory that
+    /// happens to hold the bare repositories.
+    #[test]
+    fn test_detect_checkout_bare_repository_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let bare = temp.path().join("my-repo.git");
+        let admin = bare.join("worktrees/fix-1");
+        std::fs::create_dir_all(&admin).unwrap();
+        let wt = temp.path().join("fix-1");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+
+        let found = detect_checkout(&wt);
+        assert_eq!(found.primary, canonical(&wt));
+        assert_eq!(found.worktree, None);
+    }
+
+    /// A daemon declared in a global config has no project, so it gets no
+    /// automatic hostname; the config directory is not one.
+    #[test]
+    fn test_auto_host_skips_global_config_daemons() {
+        let config = PitchforkTomlDaemon {
+            run: "server".to_string(),
+            port: Some(crate::config_types::PortConfig {
+                expect: vec![3000],
+                ..Default::default()
+            }),
+            path: Some(crate::env::PITCHFORK_GLOBAL_CONFIG_USER.clone()),
+            ..PitchforkTomlDaemon::default()
+        };
+        let id = DaemonId::try_new("global", "api").unwrap();
+        assert_eq!(auto_host_for_daemon(&id, &config), None);
+    }
+
+    /// A registered slug wins over the automatic hostname, because the proxy
+    /// resolves slugs first.
+    #[test]
+    fn test_host_for_daemon_prefers_a_registered_slug() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("slug-repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        write_config(&repo, &[("api", "")]);
+        let (id, config) = daemon_config(&repo, "api");
+
+        let empty = indexmap::IndexMap::new();
+        assert_eq!(
+            host_for_daemon(&id, Some(&config), &empty).as_deref(),
+            Some("api.slug-repo")
+        );
+
+        // A slug registered for the same daemon replaces it, dots and all.
+        let mut slugs = indexmap::IndexMap::new();
+        slugs.insert(
+            "myapp".to_string(),
+            crate::pitchfork_toml::SlugEntry {
+                dir: Some(repo.clone()),
+                namespace: Some(id.namespace().to_string()),
+                daemon: Some("api".to_string()),
+            },
+        );
+        assert_eq!(
+            host_for_daemon(&id, Some(&config), &slugs).as_deref(),
+            Some("myapp")
+        );
     }
 
     /// A `.git` file that is not a worktree pointer (a submodule) is its own
