@@ -218,6 +218,7 @@ impl Supervisor {
                     daemon.boot_time,
                     boot_time,
                     true,
+                    daemon.oneshot,
                 );
                 warn!(
                     "daemon {} (pid {pid}) died while unmonitored; marking {status}",
@@ -253,6 +254,7 @@ impl Supervisor {
                     daemon.boot_time,
                     boot_time,
                     true,
+                    daemon.oneshot,
                 );
                 warn!(
                     "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking {status}",
@@ -614,9 +616,18 @@ impl Supervisor {
                 // read the exit code of a non-child), so unlike the unobserved
                 // startup/reconciler cases it is meaningful to record whether
                 // the run ended intentionally.
-                let last_exit_success = exit_reason == "stop";
+                // For a task recorded as stopped above, the run's outcome is
+                // genuinely unknown: `Some(false)` would fabricate a failure
+                // and break a `cron.retrigger = "success"` chain whose run may
+                // well have succeeded. `None` says unknown, as the unobserved
+                // paths do.
+                let last_exit_success = match exit_reason {
+                    "stop" => Some(true),
+                    _ if is_oneshot => None,
+                    _ => Some(false),
+                };
                 if !SUPERVISOR
-                    .finalize_monitored_exit(&id, pid, token, new_status, Some(last_exit_success))
+                    .finalize_monitored_exit(&id, pid, token, new_status, last_exit_success)
                     .await
                 {
                     return;
