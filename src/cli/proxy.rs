@@ -479,6 +479,10 @@ fn collect_projects(
         checkout
             .labels()
             .into_iter()
+            .filter(|label| {
+                // The listing shows only what the proxy will route.
+                crate::proxy::hostname::hostname_fits(&format!("{label}.{suffix}"))
+            })
             .map(|label| {
                 let name = checkout.daemons.get(&label).cloned().unwrap_or_default();
                 let daemon = state_file.as_ref().and_then(|sf| {

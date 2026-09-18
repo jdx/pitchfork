@@ -28,23 +28,15 @@ const MAX_LABEL_LEN: usize = 63;
 /// the configured TLD.
 const MAX_HOSTNAME_LEN: usize = 253;
 
-/// Whether the generated labels still leave room for the configured TLD.
+/// Whether a hostname's labels still leave room for the configured TLD.
 ///
 /// Three maximum-length labels plus a long `proxy.tld` can exceed what DNS
-/// accepts, and a name nothing can resolve is worse than no name at all.
-fn fits_with_tld(host: &str) -> bool {
+/// accepts, and a name nothing can resolve is worse than no name at all. Every
+/// surface asks this — generation, listing and routing — so they agree on
+/// whether such a hostname exists.
+pub fn hostname_fits(host: &str) -> bool {
     let s = crate::settings::settings();
-    let tld = crate::proxy::effective_tld(&s);
-    let total = host.len() + 1 + tld.len();
-    if total > MAX_HOSTNAME_LEN {
-        log::warn!(
-            "'{host}.{tld}' is {total} bytes, over the {MAX_HOSTNAME_LEN}-byte DNS limit; \
-             no hostname is assigned. Shorten the project, worktree or daemon name, or \
-             use a shorter proxy.tld."
-        );
-        return false;
-    }
-    true
+    host.len() + 1 + crate::proxy::effective_tld(&s).len() <= MAX_HOSTNAME_LEN
 }
 
 /// Convert an arbitrary name into a DNS-safe lowercase label.
@@ -277,7 +269,15 @@ pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Opti
     }
 
     let host = join_labels(&daemon, worktree.as_deref(), &project_label);
-    fits_with_tld(&host).then_some(host)
+    if !hostname_fits(&host) {
+        log::warn!(
+            "'{host}' plus the configured proxy.tld is over the {MAX_HOSTNAME_LEN}-byte DNS \
+             limit, so no hostname is assigned. Shorten the project, worktree or daemon name, \
+             or use a shorter proxy.tld."
+        );
+        return None;
+    }
+    Some(host)
 }
 
 /// The hostname to advertise for a daemon: a legacy `[slugs]` entry when one
@@ -1183,6 +1183,20 @@ mod tests {
             auto_host_for_daemon(&id, &config).as_deref(),
             Some("other.dupe-repo")
         );
+    }
+
+    /// A name that cannot fit alongside the configured TLD is refused by every
+    /// surface, so nothing advertises an address DNS would reject.
+    #[test]
+    fn test_hostname_fits() {
+        // The default TLD leaves room for three maximum-length labels.
+        assert!(hostname_fits(&format!(
+            "{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63)
+        )));
+        assert!(!hostname_fits(&"a".repeat(MAX_HOSTNAME_LEN)));
     }
 
     /// Two worktrees whose labels collide are dropped from the project, and

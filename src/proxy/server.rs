@@ -1847,6 +1847,13 @@ async fn try_auto_start_inner(
 /// keeps precedence over an automatic hostname that spells the same thing.
 async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
     let registry = get_cached_host_registry().await;
+    if !crate::proxy::hostname::hostname_fits(subdomain) {
+        // Nothing advertises a name this long, so nothing answers to one.
+        return ResolveResult::Unknown {
+            heading: "Host name too long".to_string(),
+            known: registry.project_labels(),
+        };
+    }
     match registry.resolve(subdomain, settings().proxy.wildcard) {
         crate::proxy::hostname::HostTarget::Daemon {
             ref project,
