@@ -42,8 +42,10 @@ const blockedReasons = computed(() => {
   const reasons: Record<string, string> = {}
   for (const id of unresolvable.value) reasons[id] = NO_CONFIG
   if (!props.stack.dir_exists && props.stack.namespace) {
+    // Namespaces compare case-insensitively, as they do on the API side.
+    const ns = props.stack.namespace.toLowerCase()
     for (const d of renderedDaemons.value) {
-      if (d.id.namespace === props.stack.namespace) reasons[d.id.qualified] = NO_DIRECTORY
+      if (d.id.namespace.toLowerCase() === ns) reasons[d.id.qualified] = NO_DIRECTORY
     }
   }
   return reasons
