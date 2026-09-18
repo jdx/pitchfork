@@ -1980,17 +1980,27 @@ pub struct PitchforkTomlDaemon {
     ///   ClientHello and splices the raw TCP stream to the daemon, which
     ///   presents its own certificate and can require client certificates.
     ///   Requires `port`.
+    #[schemars(
+        description = "`terminate` (default) or `passthrough`: whether the proxy \
+                              terminates TLS for this daemon's hostname or splices the \
+                              stream to the daemon, which then needs `port`."
+    )]
     pub proxy_tls: Option<ProxyTlsMode>,
     /// Which of the daemon's ports the proxy hostname maps to.
     ///
     /// Must name one of the ports in `port`. Defaults to the daemon's first
     /// port. `proxy_port` is the shorter spelling of the same setting.
+    #[schemars(
+        description = "Which of the daemon's `port` entries its proxy hostname maps \
+                              to. Defaults to the first."
+    )]
     pub proxy_tls_port: Option<u16>,
     /// Shorter spelling of `proxy_tls_port`. Set one or the other, not both.
     ///
     /// Kept separate rather than folded so that a config keeps the spelling
     /// its author chose when pitchfork rewrites it. Read
     /// [`Self::effective_proxy_tls_port`] rather than either field.
+    #[schemars(description = "Shorter spelling of `proxy_tls_port`; set one or the other.")]
     pub proxy_port: Option<u16>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
