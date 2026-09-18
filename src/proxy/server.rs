@@ -1337,7 +1337,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
-        if subdomain == "pitchfork" {
+        if subdomain.eq_ignore_ascii_case("pitchfork") {
             crate::web::port()
         } else {
             None
@@ -2260,14 +2260,16 @@ fn unknown_host_response(host: &str, heading: &str, known: &[String]) -> Respons
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
 ///
+/// Host names are case-insensitive (RFC 4343) and a browser passes on whatever
+/// the user typed, so `API.MyProject.LOCALHOST` has to lose its TLD like any
+/// other spelling.
+///
 /// Examples:
 /// - `api.myproject.localhost` with tld `localhost` → `api.myproject`
-/// - `api.localhost` with tld `localhost` → `api`
+/// - `api.LOCALHOST` with tld `localhost` → `api`
 /// - `localhost` with tld `localhost` → `None` (no subdomain)
 fn strip_tld(host: &str, tld: &str) -> Option<String> {
-    host.strip_suffix(&format!(".{tld}"))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    strip_dot_suffix_ignore_case(host, tld)
 }
 
 /// Build a human-friendly error message for port binding failures.
@@ -2459,6 +2461,15 @@ mod tests {
         assert_eq!(
             strip_tld("api.myproject.localhost", "localhost"),
             Some("api.myproject".to_string())
+        );
+        // Host names are case-insensitive, and browsers pass on what was typed.
+        assert_eq!(
+            strip_tld("API.MyProject.LOCALHOST", "localhost"),
+            Some("API.MyProject".to_string())
+        );
+        assert_eq!(
+            strip_tld("api.localhost", "LOCALHOST"),
+            Some("api".to_string())
         );
         assert_eq!(
             strip_tld("api.localhost", "localhost"),
