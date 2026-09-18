@@ -2097,19 +2097,12 @@ fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> 
         // port, which is what routes daemons that declare no ports at all.
         // Port 0 is what a daemon carries when it asked the operating system
         // to choose and nothing has been detected yet; it is not connectable.
+        let detected = daemon.active_port.filter(|&p| p != 0);
+        let first_declared = daemon.resolved_port.iter().copied().find(|&p| p != 0);
         return if route.mode.is_passthrough() {
-            daemon
-                .resolved_port
-                .iter()
-                .copied()
-                .find(|&p| p != 0)
-                .or(daemon.active_port)
-                .filter(|&p| p != 0)
+            first_declared.or(detected)
         } else {
-            daemon
-                .active_port
-                .or_else(|| daemon.resolved_port.iter().copied().find(|&p| p != 0))
-                .filter(|&p| p != 0)
+            detected.or(first_declared)
         };
     };
 
@@ -2622,6 +2615,14 @@ mod tests {
             // A later real port is used in place of the placeholder.
             let mixed = make_daemon(&[0, 8443], &[0, 8443], None);
             assert_eq!(select_daemon_port(&route, &mixed), Some(8443));
+
+            // A placeholder in the detected port must not shadow a real one
+            // further down: it is skipped, not treated as the answer.
+            let detected_placeholder = make_daemon(&[0, 8443], &[0, 8443], Some(0));
+            assert_eq!(
+                select_daemon_port(&route, &detected_placeholder),
+                Some(8443)
+            );
 
             // With nothing but placeholders there is no route.
             let unresolved = make_daemon(&[0], &[0], Some(0));
