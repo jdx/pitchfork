@@ -153,3 +153,39 @@ EOF
   count=$(grep -c "Failed after 5!" <<< "$output" || true)
   [[ $count -eq 4 ]]
 }
+
+@test "stop ends retries the interval watcher owns" {
+  local fail_script
+  fail_script="$(script_path fail.sh)"
+
+  # The daemon becomes ready and only then fails, so the start returns and the
+  # interval watcher is the one carrying the retries. A stop has to end those
+  # too: there is no foreground loop to tell, only an errored record the
+  # watcher would pick back up.
+  create_pitchfork_toml <<EOF
+[daemons.watcher_retry]
+run = "bash $fail_script 3"
+retry = 5
+ready_delay = 1
+EOF
+
+  run pitchfork start watcher_retry
+  assert_success
+
+  wait_for_logs watcher_retry "Failed after 3!" 15
+  run pitchfork stop watcher_retry
+  assert_success
+
+  local before
+  before=$(pitchfork logs watcher_retry --raw 2>/dev/null | grep -c "Failed after 3!" || true)
+
+  # Several watcher ticks and a backoff later, nothing new can have started.
+  sleep 10
+
+  local after
+  after=$(pitchfork logs watcher_retry --raw 2>/dev/null | grep -c "Failed after 3!" || true)
+  [[ "$after" -eq "$before" ]]
+
+  run pitchfork status watcher_retry
+  refute_output --partial "running"
+}

@@ -80,8 +80,10 @@ pub struct Supervisor {
     /// left reporting on a run it does not own. `stop` raises the flag, so the
     /// sequence ends rather than starting another attempt behind the user's
     /// back.
+    /// One flag per claim: two starts can be working through the same
+    /// daemon's retries at once, and a stop has to reach all of them.
     pub(crate) retrying:
-        std::sync::Mutex<HashMap<DaemonId, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+        std::sync::Mutex<HashMap<DaemonId, Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Autostop stops that have been spawned as detached tasks but have not

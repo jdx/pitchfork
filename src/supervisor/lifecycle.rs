@@ -319,14 +319,14 @@ impl Drop for RetryingGuard {
             .retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        // Only if it is still ours: a later sequence for the same daemon has
-        // its own flag, and dropping this guard must not take that one out of
-        // the registry.
-        if retrying
-            .get(&self.id)
-            .is_some_and(|flag| std::sync::Arc::ptr_eq(flag, &self.cancel))
-        {
-            retrying.remove(&self.id);
+        // Drop this claim's flag only. Another sequence for the same daemon
+        // may still be running, and it has to stay both protected from the
+        // retry checker and reachable by a stop.
+        if let Some(claims) = retrying.get_mut(&self.id) {
+            claims.retain(|flag| !std::sync::Arc::ptr_eq(flag, &self.cancel));
+            if claims.is_empty() {
+                retrying.remove(&self.id);
+            }
         }
     }
 }
@@ -338,7 +338,8 @@ impl Supervisor {
         self.retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains_key(id)
+            .get(id)
+            .is_some_and(|claims| !claims.is_empty())
     }
 
     fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
@@ -346,7 +347,9 @@ impl Supervisor {
         self.retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone(), cancel.clone());
+            .entry(id.clone())
+            .or_default()
+            .push(cancel.clone());
         RetryingGuard {
             id: id.clone(),
             cancel,
@@ -357,13 +360,18 @@ impl Supervisor {
     /// end. A stop is a decision about the daemon, not about one of its
     /// attempts, so the attempts left must not go ahead behind it.
     pub(crate) fn cancel_retrying(&self, id: &DaemonId) {
-        if let Some(cancel) = self
+        if let Some(claims) = self
             .retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .get(id)
         {
-            cancel.store(true, std::sync::atomic::Ordering::Release);
+            // Every claim, not just the newest: a start that is sleeping out a
+            // backoff is as much a sequence the stop has to end as the one that
+            // claimed the daemon last.
+            for cancel in claims {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
         }
     }
 
@@ -2457,6 +2465,22 @@ impl Supervisor {
                 Ok(IpcResponse::Ok)
             } else {
                 debug!("daemon {id} not running");
+                // No process to signal, but a failed record with retries left
+                // is not inert: `check_retry` starts the next attempt from it,
+                // whether or not a foreground start is also working through
+                // them. Record the stop so nothing picks the daemon back up.
+                if daemon.status.is_errored() && daemon.retry_count < daemon.retry.count() {
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                            })
+                            .build(),
+                    )
+                    .await?;
+                    return Ok(IpcResponse::DaemonWasNotRunning);
+                }
                 Ok(IpcResponse::DaemonNotRunning)
             }
         } else {
@@ -3111,18 +3135,20 @@ mod oneshot_tests {
     }
 
     #[test]
-    fn a_dropped_claim_does_not_unregister_its_successor() {
-        // Each sequence has its own flag, so the first one going away must not
-        // leave the second unprotected from the retry checker.
-        let id = DaemonId::new("retry-cancel-test", "successor");
+    fn a_stop_cancels_every_sequence_for_the_daemon() {
+        // Two starts can be working through the same daemon's retries: the
+        // first releases the daemon's lock while it sleeps out a backoff. A
+        // stop has to end both, not just whichever claimed it last.
+        let id = DaemonId::new("retry-cancel-test", "concurrent");
         let first = SUPERVISOR.mark_retrying(&id);
         let second = SUPERVISOR.mark_retrying(&id);
-        drop(first);
-        assert!(SUPERVISOR.is_retrying(&id));
-        // ...and cancelling now reaches the sequence that is actually running.
         SUPERVISOR.cancel_retrying(&id);
+        assert!(first.is_cancelled());
         assert!(second.is_cancelled());
         drop(second);
+        // The first is still going, so the retry checker must still stand off.
+        assert!(SUPERVISOR.is_retrying(&id));
+        drop(first);
         assert!(!SUPERVISOR.is_retrying(&id));
     }
 
