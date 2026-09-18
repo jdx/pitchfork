@@ -218,6 +218,7 @@ curl http://127.0.0.1:3120/api/projects
   {
     "name": "shop",
     "dir": "/home/user/shop",
+    "dir_exists": true,
     "worktree_count": 2,
     "daemons": { "total": 5, "running": 2, "stopped": 2, "transitioning": 0, "failed": 0, "available": 1 },
     "last_activity": "2026-05-31T10:00:00+02:00",
@@ -254,6 +255,7 @@ curl http://127.0.0.1:3120/api/projects/shop
 {
   "name": "shop",
   "dir": "/home/user/shop",
+  "dir_exists": true,
   "daemons": { "total": 5, "running": 2, "stopped": 2, "transitioning": 0, "failed": 0, "available": 1 },
   "last_activity": "2026-05-31T10:00:00+02:00",
   "worktrees": [
@@ -264,6 +266,7 @@ curl http://127.0.0.1:3120/api/projects/shop
       "namespace": "shop",
       "is_primary": true,
       "can_start": true,
+      "dir_exists": true,
       "group_count": 2,
       "daemons": { "total": 3, "running": 2, "stopped": 1, "transitioning": 0, "failed": 0, "available": 0 },
       "last_activity": "2026-05-31T10:00:00+02:00",
@@ -301,6 +304,7 @@ curl http://127.0.0.1:3120/api/projects/shop/main
   "is_primary": true,
   "can_start": true,
   "unresolvable_daemons": [],
+  "dir_exists": true,
   "groups": [
     {
       "name": "default",

@@ -17,9 +17,25 @@ const groups = computed(() => props.stack.groups)
 // namespace registry. A worktree in neither is listed, but starting its
 // daemons would fail, so its actions stay disabled until it is registered.
 const unresolvable = computed(() => props.stack.unresolvable_daemons)
-const blockedReason =
-  'The supervisor has no config for this daemon, so it cannot be started or restarted. '
-  + 'Register this worktree first.'
+
+// A worktree whose directory is gone cannot start anything, whatever its
+// registration still claims, so every row is blocked rather than just the
+// daemons with no resolvable config.
+const blockedIds = computed(() =>
+  props.stack.dir_exists
+    ? unresolvable.value
+    : [
+        ...props.stack.groups.flatMap(g => g.daemons.map(d => d.id.qualified)),
+        ...props.stack.ungrouped.map(d => d.id.qualified),
+      ],
+)
+const blockedReason = computed(() =>
+  props.stack.dir_exists
+    ? 'The supervisor has no config for this daemon, so it cannot be started or '
+      + 'restarted. Register this worktree first.'
+    : 'This worktree directory no longer exists, so its daemons cannot be started '
+      + 'or restarted.',
+)
 
 // Only the members the supervisor cannot resolve lose their group action; a
 // group of resolvable daemons stays usable even when the stack has others.
@@ -115,7 +131,7 @@ async function onRestart(groupName: string) {
         v-if="group.daemons.length"
         :daemons="group.daemons"
         :prefers-card="prefersCard"
-        :disabled-ids="unresolvable"
+        :disabled-ids="blockedIds"
         :disabled-reason="blockedReason"
         @refresh="emit('refresh')"
       />
@@ -131,7 +147,7 @@ async function onRestart(groupName: string) {
       <DaemonTable
         :daemons="stack.ungrouped"
         :prefers-card="prefersCard"
-        :disabled-ids="unresolvable"
+        :disabled-ids="blockedIds"
         :disabled-reason="blockedReason"
         @refresh="emit('refresh')"
       />
