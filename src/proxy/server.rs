@@ -104,9 +104,6 @@ pub struct CachedSlugEntry {
 struct SlugCache {
     entries: Arc<std::collections::HashMap<String, CachedSlugEntry>>,
     expires_at: std::time::Instant,
-    /// When the build that produced `entries` started reading config, used to
-    /// keep an older build from overwriting a newer one.
-    built_from: Option<std::time::Instant>,
 }
 
 /// The cached slug table.
@@ -123,7 +120,6 @@ static SLUG_CACHE: once_cell::sync::Lazy<std::sync::RwLock<SlugCache>> =
         std::sync::RwLock::new(SlugCache {
             entries: Arc::new(std::collections::HashMap::new()),
             expires_at: std::time::Instant::now(), // expired → will be populated on first access
-            built_from: None,
         })
     });
 
@@ -139,19 +135,23 @@ fn slug_snapshot() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
     Arc::clone(&guard.entries)
 }
 
-/// Whether a table built starting at `build_start` is newer than what the cache
-/// holds, and so should replace it.
+/// Serializes refreshes of [`SLUG_CACHE`], so at most one build is in flight.
 ///
-/// Two refreshes can overlap, and the one that finishes last is not
-/// necessarily the one that read the newer config. Publishing by build start
-/// keeps a slow older build from reinstating config that has since changed,
-/// which for a hostname that just became `passthrough` would mean the
-/// certificate resolver issuing for it.
-fn should_publish_slugs(
-    stored_built_from: Option<std::time::Instant>,
-    build_start: std::time::Instant,
-) -> bool {
-    stored_built_from.is_none_or(|stored| build_start >= stored)
+/// Without it, every request arriving on an expired cache builds its own table
+/// and publishes it, which both duplicates the work — the build runs
+/// subprocesses to discover worktrees — and leaves each caller holding a
+/// different generation than the one the certificate resolver reads. With it,
+/// the first arrival builds and the rest wait and take that table, so one
+/// generation is live at a time.
+static SLUG_REFRESH: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// The cached table if it has not expired.
+fn fresh_slugs() -> Option<Arc<std::collections::HashMap<String, CachedSlugEntry>>> {
+    let cache = SLUG_CACHE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (std::time::Instant::now() < cache.expires_at).then(|| Arc::clone(&cache.entries))
 }
 
 /// Drop every worktree whose sanitized branch is ambiguous under
@@ -321,23 +321,28 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
 
 /// Return the cached slug table, refreshing from disk if expired.
 ///
-/// The disk I/O happens *outside* the lock so a refresh does not block
-/// concurrent requests. Two callers may therefore refresh at once; the table
-/// published is the one whose build read config last, and both callers return
-/// their own build, which is at most one TTL stale either way.
+/// The disk I/O happens *outside* the cache lock so a refresh does not block
+/// readers, and refreshes are serialized against each other so only one build
+/// runs at a time. Every caller therefore returns the one table that is
+/// published, which is what keeps routing and the certificate resolver from
+/// disagreeing about a hostname: a caller holding its own build could route a
+/// hostname as terminating while the resolver, reading the published table,
+/// refuses to issue for it and the handshake is dropped rather than spliced.
 pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
     // Fast path: cache still valid — just clone the Arc.
-    {
-        let cache = SLUG_CACHE
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if std::time::Instant::now() < cache.expires_at {
-            return Arc::clone(&cache.entries);
-        }
-    } // lock released before disk I/O
+    if let Some(entries) = fresh_slugs() {
+        return entries;
+    }
 
-    // Slow path: refresh from disk on a blocking thread (involves subprocess calls).
-    let build_start = std::time::Instant::now();
+    // Slow path: one refresh at a time.
+    let _refreshing = SLUG_REFRESH.lock().await;
+
+    // Another caller may have refreshed while this one waited for the lock.
+    if let Some(entries) = fresh_slugs() {
+        return entries;
+    }
+
+    // Build from disk on a blocking thread (involves subprocess calls).
     let new_entries = Arc::new(
         tokio::task::spawn_blocking(build_slug_entries)
             .await
@@ -347,18 +352,11 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
             }),
     );
 
-    // Publish, unless a build that read newer config got there first.
-    {
-        let mut cache = SLUG_CACHE
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if should_publish_slugs(cache.built_from, build_start) {
-            cache.entries = Arc::clone(&new_entries);
-            cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
-            cache.built_from = Some(build_start);
-        }
-    }
-
+    let mut cache = SLUG_CACHE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.entries = Arc::clone(&new_entries);
+    cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
     new_entries
 }
 
@@ -2944,23 +2942,23 @@ mod tests {
         );
     }
 
-    /// An overlapping refresh that read older config does not reinstate it:
-    /// for a hostname that just became passthrough, that would put the
-    /// certificate resolver back to issuing for it.
-    #[test]
-    fn test_should_publish_slugs_keeps_the_newest_build() {
-        let first = std::time::Instant::now();
-        let second = first + std::time::Duration::from_millis(50);
-
-        // Nothing published yet: anything is an improvement.
-        assert!(should_publish_slugs(None, first));
-        // A build that started later replaces one that started earlier.
-        assert!(should_publish_slugs(Some(first), second));
-        // A slower build that started earlier does not.
-        assert!(!should_publish_slugs(Some(second), first));
-        // A rebuild from the same instant may publish, so an equal timestamp
-        // never wedges the cache.
-        assert!(should_publish_slugs(Some(first), first));
+    /// Callers arriving together on an expired cache share one table rather
+    /// than each building and holding its own. A caller holding its own build
+    /// would route a hostname by a table the certificate resolver does not
+    /// read.
+    #[tokio::test]
+    async fn test_concurrent_refresh_returns_the_published_table() {
+        // The cache starts expired, so both calls take the refresh path; the
+        // second waits for the first rather than building a second table.
+        let (first, second) = tokio::join!(get_cached_slugs(), get_cached_slugs());
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "overlapping refreshes must agree on one table"
+        );
+        assert!(
+            Arc::ptr_eq(&first, &slug_snapshot()),
+            "and it must be the published one"
+        );
     }
 
     /// The synchronous mode lookup the certificate resolver uses agrees with
