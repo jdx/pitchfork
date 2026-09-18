@@ -90,6 +90,11 @@ oneshot_timeout = "6h"
 
 Use `oneshot_timeout = "0"` to wait without a deadline.
 
+The budget covers the whole wait, including any [`retry`](/guides/auto-restart)
+attempts and the backoff between them. A task that retries several times spends
+that time against the same clock, so raise the timeout rather than expecting
+each attempt to get its own.
+
 This timeout limits the wait, not the task's runtime. When it expires, startup
 reports a timeout and does not start the dependents, but the task keeps running.
 If it later exits with code `0`, it reports `completed`; a nonzero exit still

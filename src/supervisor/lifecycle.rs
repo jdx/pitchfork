@@ -507,23 +507,20 @@ impl Supervisor {
         //
         // `None` here means the setting asked for no limit, so there is no
         // deadline to reach rather than a distant one.
-        let budget = wait
+        // One deadline for the whole wait, retries and backoffs included.
+        // `oneshot_timeout` is documented as the longest `pitchfork start` will
+        // wait, and the client bounds its own request by the same value without
+        // restarting it, so a per-attempt budget here would both break that
+        // promise — unboundedly, with infinite retries — and put the two sides
+        // back to disagreeing about when one task has gone on too long.
+        let deadline = wait
             .unwrap_or_else(|| settings().supervisor_oneshot_wait())
-            .duration();
-        let mut deadline = budget.map(|d| tokio::time::Instant::now() + d);
-        // The budget bounds one attempt rather than a whole retry sequence.
-        // Backoffs alone can outlast any sane deadline (2^n seconds per
-        // attempt), so charging them to a single clock would time out a run
-        // that is progressing exactly as configured.
-        let mut watched_pid: Option<u32> = None;
+            .duration()
+            .map(|d| tokio::time::Instant::now() + d);
         loop {
             let Some(daemon) = self.get_daemon(id).await else {
                 return IpcResponse::DaemonNotFound;
             };
-            if daemon.pid.is_some() && daemon.pid != watched_pid {
-                watched_pid = daemon.pid;
-                deadline = budget.map(|d| tokio::time::Instant::now() + d);
-            }
             match &daemon.status {
                 DaemonStatus::Completed => {
                     info!("daemon {id}: the in-flight oneshot completed");
@@ -541,15 +538,6 @@ impl Supervisor {
                             daemon.retry_count + 1,
                             daemon.retry.count() + 1
                         );
-                        // The backoff between attempts clears the PID, so the
-                        // per-attempt reset below cannot fire and the previous
-                        // attempt's clock would run through the sleep. A run
-                        // that is still owed an attempt has not stalled, so
-                        // hold the deadline open across the gap — this also
-                        // covers an attempt that happens to reuse the last
-                        // PID, which a PID comparison alone would miss.
-                        deadline = budget.map(|d| tokio::time::Instant::now() + d);
-                        watched_pid = None;
                     } else {
                         // -1 records an unobservable exit code; the caller
                         // renders `None` as a plain failure rather than
