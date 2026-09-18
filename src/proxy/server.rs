@@ -1593,7 +1593,20 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
         return ResolveResult::NotFound;
     };
 
-    let Some(cached) = cached_slug_lookup(&subdomain).await else {
+    let cached = cached_slug_lookup(&subdomain).await.filter(|cached| {
+        // A slug too long for the configured TLD is not advertised as a URL, so
+        // it does not take precedence over the daemon's automatic hostname
+        // here either.
+        if crate::proxy::hostname::hostname_fits(&cached.slug) {
+            return true;
+        }
+        crate::proxy::hostname::warn_once(&format!(
+            "Slug '{}' plus the configured proxy.tld is over the DNS length limit, so it is              not routed.",
+            cached.slug
+        ));
+        false
+    });
+    let Some(cached) = cached else {
         // No legacy slug matched; fall through to the automatic
         // `<daemon>.<worktree>.<project>` hostnames.
         return resolve_registry_target(&subdomain).await;
