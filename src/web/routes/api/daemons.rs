@@ -7,7 +7,7 @@ use crate::procs::PROCS;
 use crate::supervisor::SUPERVISOR;
 
 /// Serializable daemon entry for the API
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Default)]
 pub struct ApiDaemonEntry {
     id: ApiDaemonId,
     title: Option<String>,
@@ -53,7 +53,7 @@ pub struct ApiDaemonEntry {
     proxy: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Default)]
 pub struct ApiDaemonId {
     namespace: String,
     name: String,
@@ -61,7 +61,7 @@ pub struct ApiDaemonId {
     safe_path: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Default)]
 #[serde(tag = "type")]
 pub enum ApiDaemonStatus {
     #[serde(rename = "failed")]
@@ -75,9 +75,52 @@ pub enum ApiDaemonStatus {
     #[serde(rename = "errored")]
     Errored { code: i32 },
     #[serde(rename = "stopped")]
+    #[default]
     Stopped,
     #[serde(rename = "available")]
     Available,
+}
+
+impl ApiDaemonEntry {
+    /// Namespace of the daemon, as used to scope a worktree's stack.
+    pub(crate) fn namespace(&self) -> &str {
+        &self.id.namespace
+    }
+
+    /// Fully qualified `namespace/name` id.
+    pub(crate) fn qualified(&self) -> &str {
+        &self.id.qualified
+    }
+
+    /// Status discriminant, for counting daemons by state.
+    pub(crate) fn status_kind(&self) -> &'static str {
+        match self.status {
+            ApiDaemonStatus::Failed { .. } => "failed",
+            ApiDaemonStatus::Waiting => "waiting",
+            ApiDaemonStatus::Running => "running",
+            ApiDaemonStatus::Stopping => "stopping",
+            ApiDaemonStatus::Errored { .. } => "errored",
+            ApiDaemonStatus::Stopped => "stopped",
+            ApiDaemonStatus::Available => "available",
+        }
+    }
+
+    /// Seconds the daemon's process has been up, when it is running.
+    pub(crate) fn uptime_secs(&self) -> Option<u64> {
+        self.uptime_secs
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stub(qualified: &str, status: ApiDaemonStatus, uptime_secs: Option<u64>) -> Self {
+        let id = crate::daemon_id::DaemonId::parse(qualified).expect("valid daemon id");
+        Self {
+            is_available: matches!(status, ApiDaemonStatus::Available),
+            id: api_id(&id),
+            status,
+            uptime_secs,
+            ..Default::default()
+        }
+    }
 }
 
 fn api_id(id: &crate::daemon_id::DaemonId) -> ApiDaemonId {
@@ -208,6 +251,30 @@ fn entry_to_api(
         pty: d.pty,
         proxy: d.proxy,
     }
+}
+
+/// Build an API entry for a daemon that only exists in config, never started.
+pub(crate) fn config_daemon_entry(
+    id: &crate::daemon_id::DaemonId,
+    daemon_config: &crate::pitchfork_toml::PitchforkTomlDaemon,
+) -> ApiDaemonEntry {
+    let entry = DaemonListEntry {
+        id: id.clone(),
+        daemon: crate::daemon_list::build_placeholder_daemon(id, daemon_config),
+        is_disabled: false,
+        is_available: true,
+    };
+    entry_to_api(
+        &entry,
+        &std::collections::HashMap::new(),
+        &crate::pitchfork_toml::PitchforkToml::read_global_slugs(),
+        &crate::settings::settings(),
+    )
+}
+
+/// Live state of every daemon the supervisor knows about, as API entries.
+pub(crate) async fn build_api_daemons() -> crate::Result<Vec<ApiDaemonEntry>> {
+    build_daemon_entries().await
 }
 
 async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {

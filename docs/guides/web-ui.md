@@ -166,7 +166,9 @@ Never expose the API to a public network without authentication. The bundled web
 ## API reference
 
 See the [HTTP API reference](/reference/http-api) for daemon control, log streaming,
-namespace management, and response examples.
+namespace management, project and stack data, and response examples. The
+`/api/projects` endpoints return the same data the project and stack pages
+show, so mise and other tools can consume it.
 
 ## Features
 
@@ -184,6 +186,52 @@ Control daemons directly from the browser:
 - **Stop** — Gracefully stop a running daemon
 - **Restart** — Stop and start a daemon
 - **Enable/Disable** — Control whether a daemon can be started
+
+### Projects and stacks
+
+The **Projects** tab lists every project registered in the namespace registry.
+A project is one registered namespace; its worktrees are the git worktrees or
+jj workspaces found under the project directory.
+
+Opening a project shows each worktree with its namespace, running and stopped
+daemon counts, last activity, and a link to that worktree's stack. Worktrees
+that pitchfork knows about but has never started are listed too, with their
+daemons marked available. The primary checkout's stack is shown on the same
+page under "Stack · primary checkout". Per-worktree disk usage is only shown
+when pitchfork tracks a data directory for the daemons, which it does not do
+today, so the column stays hidden rather than reporting a guess.
+
+A stack page shows the groups declared by the config loaded for that worktree,
+in the order they appear, except that a group named `default` comes first and
+is presented as the stack's primary action:
+
+```toml
+# shop/pitchfork.toml
+[daemons.api]
+run = "npm run api"
+
+[daemons.worker]
+run = "npm run worker"
+
+[groups.default]
+daemons = ["api", "worker"]
+```
+
+With that config, the stack page for the `shop` project's main worktree offers
+**Start stack**, **Stop stack**, and **Restart stack**, which act on
+`shop/api` and `shop/worker` through the ordinary daemon control endpoints.
+Stopping walks the group in reverse order. Each group also has its own
+start, stop, and restart buttons, and every member row links to that daemon's
+logs. Daemons in the worktree that no group names are listed under
+"ungrouped". See [daemon groups](/reference/configuration#daemon-groups) for
+the config format.
+
+### Starting is always a click
+
+A request to a daemon's proxy hostname starts that daemon if it is not already
+running. Project and stack pages behave the opposite way: loading one, or
+polling the JSON endpoints behind it, never starts anything. A daemon in a
+stack starts only when someone clicks Start, Restart, or Start stack.
 
 ### Live Logs
 

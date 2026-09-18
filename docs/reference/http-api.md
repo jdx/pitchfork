@@ -190,6 +190,114 @@ List all configured proxy slugs.
 curl http://127.0.0.1:3120/api/proxies
 ```
 
+## GET /api/projects
+
+List every registered project with its worktree count and daemon totals.
+`last_activity` is the start time of the most recently started daemon in the
+project, or `null` when none of its daemons are running.
+
+```bash
+curl http://127.0.0.1:3120/api/projects
+```
+
+**Response:**
+
+```json
+[
+  {
+    "name": "shop",
+    "dir": "/home/user/shop",
+    "worktree_count": 2,
+    "daemons": { "total": 5, "running": 2, "stopped": 2, "failed": 0, "available": 1 },
+    "last_activity": "2026-05-31T10:00:00+02:00",
+    "url": "/projects/shop",
+    "api_url": "/api/projects/shop"
+  }
+]
+```
+
+## GET /api/projects/{project}
+
+Show one project: every worktree the supervisor knows about, including ones
+that have never started a daemon, plus the primary checkout's stack under
+`stack`. Returns HTTP 404 for an unknown project. Project names match
+case-insensitively.
+
+`disk_usage_bytes` is omitted from a worktree whenever pitchfork does not track
+a data directory for its daemons, which is the case today.
+
+```bash
+curl http://127.0.0.1:3120/api/projects/shop
+```
+
+**Response:**
+
+```json
+{
+  "name": "shop",
+  "dir": "/home/user/shop",
+  "daemons": { "total": 5, "running": 2, "stopped": 2, "failed": 0, "available": 1 },
+  "last_activity": "2026-05-31T10:00:00+02:00",
+  "worktrees": [
+    {
+      "name": "main",
+      "branch": "main",
+      "path": "/home/user/shop",
+      "namespace": "shop",
+      "is_primary": true,
+      "group_count": 2,
+      "daemons": { "total": 3, "running": 2, "stopped": 1, "failed": 0, "available": 0 },
+      "last_activity": "2026-05-31T10:00:00+02:00",
+      "url": "/projects/shop/main",
+      "api_url": "/api/projects/shop/main"
+    }
+  ],
+  "stack": { "project": "shop", "worktree": "main", "groups": [] }
+}
+```
+
+## GET /api/projects/{project}/{worktree}
+
+Show one worktree's stack: the groups declared by the config loaded for that
+worktree, each with its member daemons in full daemon-entry form. The `default`
+group comes first. `missing` lists qualified ids a group declares that no known
+daemon matches, and `ungrouped` lists the worktree's daemons that no group
+names. The worktree segment accepts either the URL name or the branch name.
+
+```bash
+curl http://127.0.0.1:3120/api/projects/shop/main
+```
+
+**Response:**
+
+```json
+{
+  "project": "shop",
+  "worktree": "main",
+  "branch": "main",
+  "namespace": "shop",
+  "dir": "/home/user/shop",
+  "is_primary": true,
+  "groups": [
+    {
+      "name": "default",
+      "is_default": true,
+      "daemons": [{ "id": { "qualified": "shop/api" }, "status": { "type": "running" } }],
+      "missing": [],
+      "running": 1,
+      "total": 2
+    }
+  ],
+  "ungrouped": [],
+  "daemons": { "total": 3, "running": 1, "stopped": 2, "failed": 0, "available": 0 },
+  "url": "/projects/shop/main"
+}
+```
+
+These three endpoints are read-only and never start a daemon. To act on a
+group, POST to the daemon control endpoints above with each of the group's
+qualified ids.
+
 ## GET /api/processes/{id}/tree
 
 Get the process tree for a daemon, including all child processes.

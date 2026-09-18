@@ -1,6 +1,15 @@
-import { ref, shallowRef, watchEffect, type Ref } from 'vue'
+import { computed, ref, shallowRef, watchEffect, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
-import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree, StructuredLogEntry } from '@/types/api'
+import type {
+  DaemonEntry,
+  DaemonStats,
+  NamespaceEntry,
+  ProcessTree,
+  Project,
+  ProjectSummary,
+  Stack,
+  StructuredLogEntry,
+} from '@/types/api'
 
 const API_BASE = (() => {
   const base = (window as any).__PITCHFORK_BASE__ as string | undefined
@@ -484,4 +493,120 @@ export function useProcessTree(id: Ref<string>, pollInterval = 3000) {
   })
 
   return { tree, loading, error, refresh: fetchTree }
+}
+
+/** Poll a JSON endpoint, keeping the last good value on transient errors. */
+function usePolledResource<T>(
+  path: Ref<string | null>,
+  pollInterval = 3000,
+) {
+  const data = shallowRef<T | null>(null)
+  const loading = ref(true)
+  const error = ref<string | null>(null)
+  let nonce = 0
+
+  async function refresh() {
+    const current = ++nonce
+    const target = path.value
+    if (!target) return
+    try {
+      const value = await api<T>(target)
+      if (current !== nonce) return
+      data.value = value
+      error.value = null
+    } catch (e: any) {
+      if (current !== nonce) return
+      error.value = e.message ?? 'Unknown error'
+    } finally {
+      if (current === nonce) loading.value = false
+    }
+  }
+
+  watchEffect((onCleanup) => {
+    if (!path.value) return
+    loading.value = true
+    refresh()
+    const timer = setInterval(refresh, pollInterval)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  return { data, loading, error, refresh }
+}
+
+export function useProjects(pollInterval = 5000) {
+  const { data, loading, error, refresh } = usePolledResource<ProjectSummary[]>(
+    ref('/projects'),
+    pollInterval,
+  )
+  const projects = computed(() => data.value ?? [])
+  return { projects, loading, error, refresh }
+}
+
+export function useProject(name: Ref<string>, pollInterval = 3000) {
+  const path = computed(() => `/projects/${encodeURIComponent(name.value)}`)
+  const { data, loading, error, refresh } = usePolledResource<Project>(path, pollInterval)
+  return { project: data, loading, error, refresh }
+}
+
+export function useStack(project: Ref<string>, worktree: Ref<string>, pollInterval = 3000) {
+  const path = computed(
+    () => `/projects/${encodeURIComponent(project.value)}/${encodeURIComponent(worktree.value)}`,
+  )
+  const { data, loading, error, refresh } = usePolledResource<Stack>(path, pollInterval)
+  return { stack: data, loading, error, refresh }
+}
+
+/**
+ * Group actions, run as ordinary per-daemon start/stop/restart requests
+ * against the group's qualified ids. Nothing starts on its own: a stack only
+ * changes state when one of these is clicked.
+ */
+export function useGroupActions() {
+  const acting = ref<Set<string>>(new Set())
+
+  async function run(
+    key: string,
+    verb: 'Start' | 'Stop' | 'Restart',
+    ids: string[],
+  ): Promise<void> {
+    if (acting.value.has(key) || ids.length === 0) return
+    acting.value = new Set(acting.value).add(key)
+    const endpoint = verb.toLowerCase()
+    // Stop tears the stack down in reverse declaration order so dependents
+    // go away before what they depend on.
+    const order = verb === 'Stop' ? [...ids].reverse() : ids
+    const toastId = toast.loading(`${verb} ${key}...`)
+    const failures: string[] = []
+    try {
+      for (const id of order) {
+        try {
+          await api(`/daemons/${encodeURIComponent(id)}/${endpoint}`, { method: 'POST' })
+        } catch (e: any) {
+          failures.push(`${daemonName(id)}: ${e.message ?? 'unknown error'}`)
+        }
+      }
+      toast.dismiss(toastId)
+      if (failures.length === 0) {
+        toast.success(`${key} ${verb.toLowerCase()}ed`, { duration: 2000 })
+      } else if (failures.length < ids.length) {
+        toast.warning(`${key} partially ${verb.toLowerCase()}ed`, {
+          duration: 4000,
+          description: failures.join('\n'),
+        })
+      } else {
+        toast.error(`${verb} ${key} failed`, { duration: 4000, description: failures.join('\n') })
+      }
+    } finally {
+      const next = new Set(acting.value)
+      next.delete(key)
+      acting.value = next
+    }
+  }
+
+  return {
+    acting,
+    start: (key: string, ids: string[]) => run(key, 'Start', ids),
+    stop: (key: string, ids: string[]) => run(key, 'Stop', ids),
+    restart: (key: string, ids: string[]) => run(key, 'Restart', ids),
+  }
 }

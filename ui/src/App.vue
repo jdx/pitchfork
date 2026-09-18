@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Toaster } from 'vue-sonner'
 
 const route = useRoute()
 const active = (name: string) => route.name === name ? 'active' : ''
+// The project list, a project page, and a stack page are one nav section.
+const projectsActive = computed(() =>
+  ['projects', 'project', 'stack'].includes(String(route.name)) ? 'active' : '',
+)
 const logoUrl = '/img/logo.png'
 </script>
 
@@ -18,6 +23,10 @@ const logoUrl = '/img/logo.png'
         <router-link to="/" :class="['link', active('home')]" title="Dashboard">
           <span class="icon">◈</span>
           <span class="label">Daemons</span>
+        </router-link>
+        <router-link to="/projects" :class="['link', projectsActive]" title="Projects">
+          <span class="icon">▤</span>
+          <span class="label">Projects</span>
         </router-link>
         <router-link to="/proxies" :class="['link', active('proxies')]" title="Proxies">
           <span class="icon">⧉</span>

@@ -117,3 +117,67 @@ export interface ProcessTree {
   status: string
   children: ProcessTree[]
 }
+
+export interface DaemonCounts {
+  total: number
+  running: number
+  stopped: number
+  failed: number
+  available: number
+}
+
+export interface ProjectSummary {
+  name: string
+  dir: string
+  worktree_count: number
+  daemons: DaemonCounts
+  last_activity: string | null
+  url: string
+  api_url: string
+}
+
+export interface WorktreeSummary {
+  name: string
+  branch: string
+  path: string
+  namespace: string
+  is_primary: boolean
+  group_count: number
+  daemons: DaemonCounts
+  last_activity: string | null
+  url: string
+  api_url: string
+  /** Absent when pitchfork does not track data directories for the daemons. */
+  disk_usage_bytes?: number
+}
+
+export interface StackGroup {
+  name: string
+  is_default: boolean
+  daemons: DaemonEntry[]
+  missing: string[]
+  running: number
+  total: number
+}
+
+export interface Stack {
+  project: string
+  worktree: string
+  branch: string
+  namespace: string
+  dir: string
+  is_primary: boolean
+  groups: StackGroup[]
+  ungrouped: DaemonEntry[]
+  daemons: DaemonCounts
+  url: string
+}
+
+export interface Project {
+  name: string
+  dir: string
+  daemons: DaemonCounts
+  last_activity: string | null
+  worktrees: WorktreeSummary[]
+  stack?: Stack
+}
