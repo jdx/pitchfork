@@ -206,9 +206,12 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_tls: Option<ProxyTlsMode>,
     /// Which of the daemon's ports the proxy hostname maps to.
-    /// Also accepted under the shorter key `proxy_port`.
-    #[serde(skip_serializing_if = "Option::is_none", default, alias = "proxy_port")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_tls_port: Option<u16>,
+    /// Shorter spelling of `proxy_tls_port`. Never written back out, so a
+    /// config that used it keeps one spelling rather than gaining both.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -1308,6 +1311,33 @@ impl PitchforkToml {
                 None
             };
 
+            // `proxy_port` is the shorter spelling of the same setting.
+            if let (Some(explicit), Some(short)) =
+                (raw_daemon.proxy_tls_port, raw_daemon.proxy_port)
+                && explicit != short
+            {
+                warn!(
+                    "daemon {short_name}: proxy_tls_port ({explicit}) and proxy_port ({short}) \
+                     disagree; using proxy_tls_port"
+                );
+            }
+            let proxy_tls_port = raw_daemon.proxy_tls_port.or(raw_daemon.proxy_port);
+
+            // The hostname maps to one of the daemon's own ports, so a port it
+            // never declares cannot be routed to.
+            if let Some(port_want) = proxy_tls_port {
+                let declared = port.as_ref().map(|p| p.expect.clone()).unwrap_or_default();
+                if !declared.contains(&port_want) {
+                    return Err(ConfigParseError::ProxyPortNotDeclared {
+                        daemon: short_name.clone(),
+                        port: port_want,
+                        declared,
+                        path: path.to_path_buf(),
+                    }
+                    .into());
+                }
+            }
+
             // TLS passthrough splices the raw stream to 127.0.0.1:<port>, so a
             // daemon without a known port has nothing to splice to.
             if raw_daemon
@@ -1338,6 +1368,7 @@ impl PitchforkToml {
                 port,
                 proxy_tls: raw_daemon.proxy_tls,
                 proxy_tls_port: raw_daemon.proxy_tls_port,
+                proxy_port: raw_daemon.proxy_port,
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
@@ -1501,6 +1532,7 @@ impl PitchforkToml {
                     port: port.cloned(),
                     proxy_tls: daemon.proxy_tls,
                     proxy_tls_port: daemon.proxy_tls_port,
+                    proxy_port: daemon.proxy_port,
                     // Deprecated fields: written for backward compatibility with older pitchfork versions
                     expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
                     auto_bump_port: port.filter(|p| p.auto_bump()).map(|_| true),
@@ -1951,8 +1983,15 @@ pub struct PitchforkTomlDaemon {
     pub proxy_tls: Option<ProxyTlsMode>,
     /// Which of the daemon's ports the proxy hostname maps to.
     ///
-    /// Defaults to the daemon's first port. Also accepted as `proxy_port`.
+    /// Must name one of the ports in `port`. Defaults to the daemon's first
+    /// port. `proxy_port` is the shorter spelling of the same setting.
     pub proxy_tls_port: Option<u16>,
+    /// Shorter spelling of `proxy_tls_port`. Set one or the other, not both.
+    ///
+    /// Kept separate rather than folded so that a config keeps the spelling
+    /// its author chose when pitchfork rewrites it. Read
+    /// [`Self::effective_proxy_tls_port`] rather than either field.
+    pub proxy_port: Option<u16>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
     /// List of daemon IDs that must be started before this one
@@ -2006,6 +2045,15 @@ pub struct PitchforkTomlDaemon {
 }
 
 impl PitchforkTomlDaemon {
+    /// Which of the daemon's ports its proxy hostname maps to, from either
+    /// spelling of the setting.
+    ///
+    /// `proxy_tls_port` wins when both are set; parsing has already warned
+    /// about that combination.
+    pub fn effective_proxy_tls_port(&self) -> Option<u16> {
+        self.proxy_tls_port.or(self.proxy_port)
+    }
+
     /// Effective user for this daemon: per-daemon `user` overrides `settings.supervisor.user`.
     ///
     /// Returns `None` when neither is set (inherit the supervisor's user).

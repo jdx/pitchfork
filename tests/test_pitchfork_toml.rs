@@ -2977,6 +2977,42 @@ port = 8443
     Ok(())
 }
 
+/// A `proxy_tls_port` the daemon does not declare is rejected rather than
+/// routed to a port nothing bound.
+#[test]
+fn test_proxy_tls_port_must_name_a_declared_port() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = [8443, 9443]
+proxy_tls_port = 7443
+"#,
+    )
+    .unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+        .expect_err("a port outside `port` should not parse");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("7443"), "{msg}");
+
+    // Including when the daemon declares no ports at all.
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+proxy_tls_port = 7443
+"#,
+    )
+    .unwrap();
+    assert!(pitchfork_toml::PitchforkToml::read(&toml_path).is_err());
+}
+
 /// `proxy_port` is accepted as the shorter spelling of `proxy_tls_port`.
 #[test]
 fn test_read_proxy_port_alias() -> Result<()> {
@@ -2996,7 +3032,14 @@ proxy_port = 9443
 
     let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
     let daemon = get_daemon_by_name(&pt, "api").unwrap();
-    assert_eq!(daemon.proxy_tls_port, Some(9443));
+    assert_eq!(daemon.effective_proxy_tls_port(), Some(9443));
+
+    // A rewrite keeps the spelling the config used rather than swapping it
+    // for the longer one.
+    pt.write()?;
+    let raw = fs::read_to_string(&toml_path).unwrap();
+    assert!(raw.contains("proxy_port = 9443"), "{raw}");
+    assert!(!raw.contains("proxy_tls_port"), "{raw}");
 
     Ok(())
 }

@@ -193,7 +193,7 @@ pub(crate) fn read_proxy_tls_route(
     match pt.daemons.get(&id) {
         Some(cfg) => ProxyTlsRoute {
             mode: cfg.proxy_tls.unwrap_or_default(),
-            port: cfg.proxy_tls_port,
+            port: cfg.effective_proxy_tls_port(),
         },
         None => ProxyTlsRoute::default(),
     }
@@ -678,11 +678,33 @@ async fn serve_https_with_http_fallback(
                         // daemon is spliced through untouched, so the daemon's own
                         // certificate, ALPN and client-certificate request reach the
                         // client. Everything else is terminated here as before.
-                        if let Some(host) = peek_sni_host(&stream).await
-                            && resolve_tls_mode(&host, &tld).await.is_passthrough()
-                        {
-                            serve_passthrough(stream, &host, &tld).await;
-                            return;
+                        match peek_sni_host(&stream, SNI_PEEK_TIMEOUT).await {
+                            SniProbe::Host(host) => {
+                                if resolve_tls_mode(&host, &tld).await.is_passthrough() {
+                                    serve_passthrough(stream, &host, &tld).await;
+                                    return;
+                                }
+                            }
+                            SniProbe::NoHost => {}
+                            // The hostname could not be read, so whether this
+                            // connection belongs to a passthrough daemon is
+                            // unknown. Terminating it would answer with the
+                            // proxy's certificate in place of the daemon's,
+                            // which is a silent downgrade of exactly the
+                            // property passthrough exists to preserve, so the
+                            // connection is dropped instead — but only where a
+                            // passthrough daemon exists to be downgraded.
+                            SniProbe::Undetermined => {
+                                if any_passthrough_route().await {
+                                    log::warn!(
+                                        "Closing a TLS connection whose ClientHello could not be \
+                                         read: this deployment has passthrough daemons, and \
+                                         terminating would serve the proxy's certificate instead \
+                                         of theirs."
+                                    );
+                                    return;
+                                }
+                            }
                         }
 
                         // TLS handshake → HTTP/2 or HTTP/1.1 (negotiated via ALPN)
@@ -735,8 +757,7 @@ async fn serve_https_with_http_fallback(
 /// How long to wait for a complete ClientHello before giving up on reading SNI.
 ///
 /// A client sends its ClientHello immediately after the TCP handshake, so this
-/// only ever expires on a stalled or malicious connection. On expiry the
-/// connection falls through to TLS termination, which applies its own limits.
+/// only ever expires on a stalled or malicious connection.
 #[cfg(feature = "proxy-tls")]
 const SNI_PEEK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -747,26 +768,55 @@ const SNI_PEEK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(feature = "proxy-tls")]
 const SNI_PEEK_MAX_BYTES: usize = 16 * 1024;
 
+/// What peeking at a connection's opening bytes established about its hostname.
+///
+/// The third case is the one that matters: "no hostname" and "hostname unknown"
+/// must not be treated alike, because a connection whose hostname could not be
+/// read may well belong to a passthrough daemon.
+#[cfg(feature = "proxy-tls")]
+#[derive(Debug, PartialEq, Eq)]
+enum SniProbe {
+    /// The ClientHello named this host.
+    Host(String),
+    /// A complete ClientHello carried no SNI, or the connection is not a TLS
+    /// handshake at all. Either way it cannot name a passthrough daemon.
+    NoHost,
+    /// No verdict: the hello stalled, exceeded the inspection window, or never
+    /// reconciled its own length fields. Passthrough cannot be ruled out.
+    Undetermined,
+}
+
 /// Read the SNI hostname from a connection's ClientHello *without consuming
 /// it*, so the same bytes are still available to whichever path handles the
 /// connection.
 ///
-/// Returns `None` when the client sent no SNI, sent something that is not a
-/// ClientHello, or did not finish sending one in time. All three fall back to
-/// TLS termination, which is the mode a daemon gets when nothing says
-/// otherwise.
+/// `timeout` bounds the wait for a hello that arrives in pieces. Note that a
+/// client which sends part of a hello and then closes cannot be detected here:
+/// `peek` keeps returning the buffered bytes rather than reporting end of file,
+/// so such a connection is held until the timeout and then reported as
+/// [`SniProbe::Undetermined`].
 #[cfg(feature = "proxy-tls")]
-async fn peek_sni_host(stream: &TcpStream) -> Option<String> {
+async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniProbe {
     use crate::proxy::sni::{SniPeek, parse_sni};
 
-    let deadline = tokio::time::Instant::now() + SNI_PEEK_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeout;
     let mut buf = vec![0u8; 2048];
 
     loop {
-        let n = stream.peek(&mut buf).await.ok()?;
+        let n = match stream.peek(&mut buf).await {
+            // End of file with nothing buffered: the client hung up before
+            // saying anything, so there is nothing to route and nothing to
+            // downgrade.
+            Ok(0) => return SniProbe::NoHost,
+            Ok(n) => n,
+            Err(e) => {
+                log::debug!("Failed to peek at a TLS connection: {e}");
+                return SniProbe::Undetermined;
+            }
+        };
         match parse_sni(&buf[..n]) {
-            SniPeek::Found(host) => return Some(host),
-            SniPeek::Absent | SniPeek::NotTls => return None,
+            SniPeek::Found(host) => return SniProbe::Host(host),
+            SniPeek::Absent | SniPeek::NotTls => return SniProbe::NoHost,
             SniPeek::Incomplete => {}
         }
 
@@ -777,16 +827,33 @@ async fn peek_sni_host(stream: &TcpStream) -> Option<String> {
         }
         if n >= SNI_PEEK_MAX_BYTES {
             log::debug!("Giving up on SNI after {n} bytes without a complete ClientHello");
-            return None;
+            return SniProbe::Undetermined;
         }
         if tokio::time::Instant::now() >= deadline {
             log::debug!("Timed out waiting for a complete ClientHello ({n} bytes read)");
-            return None;
+            return SniProbe::Undetermined;
         }
         // Peeked data stays in the socket buffer, so `readable()` would return
         // immediately and spin. Sleep briefly instead and re-peek.
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+}
+
+/// Whether any hostname this proxy serves resolves to a passthrough daemon.
+///
+/// Answered from the slug cache, so it costs no disk I/O. It decides what to do
+/// with a connection whose hostname could not be read: where nothing is
+/// passthrough, terminating cannot downgrade anything and the connection is
+/// served as before.
+#[cfg(feature = "proxy-tls")]
+async fn any_passthrough_route() -> bool {
+    get_cached_slugs().await.values().any(|entry| {
+        entry.tls.mode.is_passthrough()
+            || entry
+                .worktree_tls
+                .values()
+                .any(|route| route.mode.is_passthrough())
+    })
 }
 
 /// Splice a TLS connection straight through to its daemon.
@@ -857,23 +924,32 @@ async fn connect_backend(addr: SocketAddr) -> std::io::Result<TcpStream> {
 /// Resolve the daemon port a passthrough hostname splices to, starting the
 /// daemon if it is not running.
 ///
-/// Waiting replaces the "Starting…" page that the HTTP path shows, and is
-/// bounded by the same `proxy.auto_start_timeout` budget.
+/// Waiting replaces the "Starting…" page that the HTTP path shows, and the
+/// whole resolution — waiting behind another connection's start *and* running
+/// one of its own — is bounded by a single `proxy.auto_start_timeout` budget,
+/// which is what the documentation promises.
 #[cfg(feature = "proxy-tls")]
 async fn resolve_passthrough_port(host: &str, tld: &str) -> std::result::Result<u16, String> {
-    let deadline = tokio::time::Instant::now() + settings().proxy_auto_start_timeout();
+    let budget = settings().proxy_auto_start_timeout();
+    match tokio::time::timeout(budget, resolve_passthrough_port_inner(host, tld)).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(format!(
+            "no daemon was ready for '{host}' within proxy.auto_start_timeout ({budget:?})"
+        )),
+    }
+}
+
+/// Inner loop of [`resolve_passthrough_port`], wrapped by the caller so that
+/// waiting and starting share one deadline.
+#[cfg(feature = "proxy-tls")]
+async fn resolve_passthrough_port_inner(host: &str, tld: &str) -> std::result::Result<u16, String> {
     loop {
         match resolve_target(host, tld).await {
             ResolveResult::Ready(port) => return Ok(port),
             // Another connection is already auto-starting this daemon; wait
-            // for it rather than starting a second copy.
-            ResolveResult::Starting { slug } => {
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(format!(
-                        "daemon for slug '{slug}' did not become ready within \
-                         proxy.auto_start_timeout"
-                    ));
-                }
+            // for it rather than starting a second copy. The caller's timeout
+            // ends this wait.
+            ResolveResult::Starting { slug: _ } => {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
             ResolveResult::NotFound => {
@@ -1734,17 +1810,21 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 /// the HTTP path, where it cannot be served.
 ///
 /// Passthrough routes on the hostname in the TLS ClientHello, so there are two
-/// ways to end up here: the proxy is not serving TLS at all, or the client
-/// completed a TLS handshake without telling the proxy which host it wanted.
+/// ways to end up here: the proxy is not serving TLS at all, or the TLS
+/// connection named one host and the request inside it named another.
+///
+/// A connection with no SNI at all never reaches this point: the certificate
+/// resolver has no name to issue for, so the handshake fails outright.
 fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
     if is_tls {
         format!(
-            "'{host}' uses proxy_tls = \"passthrough\", which routes on the TLS \
-             ClientHello's SNI hostname.\n\
-             This connection carried no SNI hostname, so the stream could not be \
-             spliced to the daemon.\n\
-             Connect by host name rather than by IP address, or use a client that \
-             sends SNI."
+            "'{host}' uses proxy_tls = \"passthrough\", which routes on the host name \
+             in the TLS ClientHello.\n\
+             This connection's TLS handshake named a different host, so it was \
+             terminated here and the request inside it cannot be spliced to the \
+             daemon.\n\
+             Make the connection itself name '{host}' rather than overriding the Host \
+             header of a connection opened to something else."
         )
     } else {
         format!(
@@ -1920,9 +2000,11 @@ pub(crate) async fn resolve_tls_mode(host: &str, tld: &str) -> ProxyTlsMode {
 /// With `proxy_tls_port` set, the configured port is matched by *position* in
 /// the daemon's `port` list, so the mapping survives auto-bump: a daemon
 /// configured for `[8443, 9443]` whose ports bumped to `[8444, 9444]` still
-/// routes `proxy_tls_port = 9443` to 9444. A port that is not in the
-/// configured list is used as given, which covers ports the daemon binds
-/// without declaring.
+/// routes `proxy_tls_port = 9443` to 9444. Config validation rejects a
+/// `proxy_tls_port` the daemon does not declare, so the only way the position
+/// lookup can miss is a state record that predates the current config; the
+/// port is then used as written only while the daemon has no resolved ports to
+/// contradict it.
 fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> Option<u16> {
     let Some(want) = route.port else {
         // A passthrough hostname has to reach the daemon's *TLS* listener.
@@ -1953,13 +2035,19 @@ fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> 
     if daemon.resolved_port.contains(&want) {
         return Some(want);
     }
-    log::debug!(
+    if daemon.resolved_port.is_empty() {
+        // Nothing recorded to place the port against — the config is the only
+        // information there is, so use it.
+        return Some(want);
+    }
+    log::warn!(
         "Daemon {} has proxy_tls_port {want}, which is not among its resolved ports {:?}; \
-         forwarding to {want} anyway",
+         refusing to route rather than forwarding to a port it never bound. \
+         Restart the daemon if its ports changed.",
         daemon.id,
         daemon.resolved_port,
     );
-    Some(want)
+    None
 }
 
 /// RAII guard that removes a `DaemonId` from `AUTO_START_IN_PROGRESS` on drop.
@@ -2467,20 +2555,39 @@ mod tests {
         assert_eq!(select_daemon_port(&route, &d), Some(9444));
     }
 
-    /// A port the daemon binds without declaring it in `port` is still
-    /// routable: it is used as written.
+    /// A daemon whose recorded ports contradict `proxy_tls_port` — a state
+    /// record left by an older config — is not routed to a port it never
+    /// bound. Config validation stops this combination from being written in
+    /// the first place.
     #[test]
-    fn test_select_daemon_port_accepts_undeclared_port() {
+    fn test_select_daemon_port_refuses_a_port_the_daemon_never_bound() {
         let route = ProxyTlsRoute {
             mode: ProxyTlsMode::Passthrough,
             port: Some(9443),
         };
-        let d = make_daemon(&[8443], &[8443], Some(8443));
-        assert_eq!(select_daemon_port(&route, &d), Some(9443));
+        let stale = make_daemon(&[8443], &[8443], Some(8443));
+        assert_eq!(select_daemon_port(&route, &stale), None);
 
-        // Including when the daemon declares no ports in state at all.
+        // With nothing recorded to contradict it, the configured port is all
+        // the information there is, so it is used.
         let bare = make_daemon(&[], &[], None);
         assert_eq!(select_daemon_port(&route, &bare), Some(9443));
+    }
+
+    /// `proxy_tls_port` selects the forwarded port in terminate mode too, not
+    /// only for passthrough hostnames.
+    #[test]
+    fn test_select_daemon_port_honors_configured_port_when_terminating() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Terminate,
+            port: Some(9080),
+        };
+        let d = make_daemon(&[8080, 9080], &[8080, 9080], Some(8080));
+        assert_eq!(select_daemon_port(&route, &d), Some(9080));
+
+        // Following auto-bump by position, as in passthrough mode.
+        let bumped = make_daemon(&[8080, 9080], &[8081, 9081], Some(8081));
+        assert_eq!(select_daemon_port(&route, &bumped), Some(9081));
     }
 
     /// The route of a wildcard worktree host comes from that worktree's own
@@ -2708,11 +2815,14 @@ mod tests {
         assert!(no_tls.contains("api.localhost"), "{no_tls}");
         assert!(no_tls.contains("settings.proxy.https = true"), "{no_tls}");
 
-        let no_sni = passthrough_unroutable_message("api.localhost", true);
-        assert!(no_sni.contains("SNI"), "{no_sni}");
+        // Over TLS this branch is reached when the handshake named a
+        // different host than the request did — a connection with no host
+        // name at all fails in the certificate resolver and never gets here.
+        let mismatch = passthrough_unroutable_message("api.localhost", true);
+        assert!(mismatch.contains("named a different host"), "{mismatch}");
         assert!(
-            !no_sni.contains("settings.proxy.https"),
-            "a TLS connection without SNI is not an HTTPS configuration problem: {no_sni}"
+            !mismatch.contains("settings.proxy.https"),
+            "a host mismatch is not an HTTPS configuration problem: {mismatch}"
         );
     }
 
@@ -2744,6 +2854,137 @@ mod tests {
             Some("café".to_string())
         );
         assert_eq!(strip_dot_suffix_ignore_case("café", "afé"), None);
+    }
+
+    /// Build a minimal ClientHello naming `host`, as it goes on the wire.
+    #[cfg(feature = "proxy-tls")]
+    fn client_hello_wire(host: &str) -> Vec<u8> {
+        let mut entry = vec![0u8];
+        entry.extend_from_slice(&(host.len() as u16).to_be_bytes());
+        entry.extend_from_slice(host.as_bytes());
+        let mut sni = (entry.len() as u16).to_be_bytes().to_vec();
+        sni.extend_from_slice(&entry);
+
+        let mut ext = vec![0x00, 0x00];
+        ext.extend_from_slice(&(sni.len() as u16).to_be_bytes());
+        ext.extend_from_slice(&sni);
+
+        let mut body = vec![0x03, 0x03];
+        body.extend_from_slice(&[0x22; 32]);
+        body.push(0);
+        body.extend_from_slice(&[0x00, 0x02, 0x13, 0x01]);
+        body.extend_from_slice(&[0x01, 0x00]);
+        body.extend_from_slice(&(ext.len() as u16).to_be_bytes());
+        body.extend_from_slice(&ext);
+
+        let mut msg = vec![0x01];
+        let len = body.len() as u32;
+        msg.extend_from_slice(&[(len >> 16) as u8, (len >> 8) as u8, len as u8]);
+        msg.extend_from_slice(&body);
+
+        let mut record = vec![0x16, 0x03, 0x01];
+        record.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+        record.extend_from_slice(&msg);
+        record
+    }
+
+    /// Accept one connection, hand the peeked verdict back, and report what a
+    /// reader sees afterwards.
+    #[cfg(feature = "proxy-tls")]
+    async fn probe_over_socket(
+        writes: Vec<Vec<u8>>,
+        gap: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> (SniProbe, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let total: usize = writes.iter().map(Vec::len).sum();
+
+        let client = tokio::spawn(async move {
+            let mut sock = TcpStream::connect(addr).await.unwrap();
+            for chunk in writes {
+                sock.write_all(&chunk).await.unwrap();
+                sock.flush().await.unwrap();
+                tokio::time::sleep(gap).await;
+            }
+            // Hold the connection open so the server can read back what it
+            // only peeked at.
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let probe = peek_sni_host(&stream, timeout).await;
+
+        // Whatever was peeked must still be readable, byte for byte.
+        let mut replayed = vec![0u8; total];
+        let mut stream = stream;
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            stream.read_exact(&mut replayed),
+        )
+        .await;
+        let replayed = match read {
+            Ok(Ok(_)) => replayed,
+            _ => vec![],
+        };
+        client.abort();
+        (probe, replayed)
+    }
+
+    /// The peek loop reassembles a hello that arrives in many small writes,
+    /// and leaves every byte in the socket for the path that handles the
+    /// connection.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_reads_a_hello_split_across_writes() {
+        let wire = client_hello_wire("api.localhost");
+        let writes: Vec<Vec<u8>> = wire.chunks(3).map(<[u8]>::to_vec).collect();
+        let (probe, replayed) = probe_over_socket(
+            writes,
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Host("api.localhost".to_string()));
+        assert_eq!(replayed, wire, "peeked bytes must still be readable");
+    }
+
+    /// A hello that stops half way is reported as undetermined once the
+    /// timeout expires, never as "no hostname": the caller must not terminate
+    /// a connection that might belong to a passthrough daemon.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_undetermined_when_a_hello_stalls() {
+        let wire = client_hello_wire("api.localhost");
+        let truncated = wire[..wire.len() / 2].to_vec();
+        let (probe, _) = probe_over_socket(
+            vec![truncated],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Undetermined);
+    }
+
+    /// Something that is not a TLS handshake is a definite "no hostname", so
+    /// the connection is still served rather than dropped.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_reports_no_host_for_non_tls() {
+        let (probe, _) = probe_over_socket(
+            vec![b"GET / HTTP/1.1\r\n\r\n".to_vec()],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::NoHost);
     }
 
     #[cfg(feature = "proxy-tls")]

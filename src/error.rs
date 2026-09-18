@@ -227,6 +227,26 @@ pub enum ConfigParseError {
     PassthroughWithoutPort { daemon: String, path: PathBuf },
 
     #[error(
+        "daemon '{daemon}' in {} sets proxy_tls_port = {port}, which is not one of its ports {declared:?}",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::proxy_port_not_declared),
+        url(
+            "https://pitchfork.jdx.dev/guides/port-management#choosing-a-port-on-a-multi-port-daemon"
+        ),
+        help(
+            "the proxy hostname maps to one of the daemon's own ports, so name a port from `port`, or add this one to it"
+        )
+    )]
+    ProxyPortNotDeclared {
+        daemon: String,
+        port: u16,
+        declared: Vec<u16>,
+        path: PathBuf,
+    },
+
+    #[error(
         "invalid dependency '{dependency}' in daemon '{daemon}' ({}): {reason}",
         path.display()
     )]

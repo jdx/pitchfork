@@ -542,12 +542,16 @@ proxy_tls = "passthrough"
 - A stopped daemon is still auto-started on request; the connection is held
   until the daemon is ready, bounded by `settings.proxy.auto_start_timeout`
 - No `X-Forwarded-*` headers, request logs or HTML error pages exist for a
-  passthrough hostname, because the proxy never reads the request
+  passthrough hostname, because the proxy never reads the request. The daemon
+  therefore sees every client as a connection from `127.0.0.1`, which matters
+  for a daemon that treats loopback as trusted — see the warning in the
+  [guide](/guides/port-management#tls-passthrough)
 
 ### `proxy_tls_port`
 
 Which of the daemon's ports its proxy hostname maps to. Defaults to the
-daemon's first port; also accepted as `proxy_port`.
+daemon's first port. `proxy_port` is a shorter spelling of the same setting;
+set one or the other, not both.
 
 ```toml
 [daemons.api]
@@ -560,9 +564,10 @@ proxy_tls_port = 9443
 **Behavior:**
 - Applies in both TLS modes; with `terminate` it chooses which port HTTP is
   forwarded to
+- Must name one of the ports in `port`; config that names another port, or
+  that sets no `port` at all, is rejected when it is read
 - The port is matched by its position in `port`, so the mapping follows
   auto-bump rather than pointing at a port nothing is listening on
-- A port that is not listed in `port` is used as written
 
 ### `expected_port` (deprecated)
 

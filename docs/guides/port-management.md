@@ -352,6 +352,30 @@ passthrough hostname: on a raw TLS stream there is nothing to write them into.
 When routing fails, the connection is closed and the reason is logged to the
 supervisor log.
 
+::: warning The daemon loses the client's address
+
+A terminating hostname gives the daemon an `X-Forwarded-For` header with the
+address the connection came from. A spliced hostname cannot: the daemon sees a
+connection from `127.0.0.1` for every client, because the proxy opened it.
+
+That matters when `proxy.lan` is on, since the proxy then binds `0.0.0.0` and
+accepts connections from the network. A daemon that treats loopback as trusted
+— an admin route with no auth, a debug endpoint, a permissive CORS rule — would
+be extending that trust to everything that can reach the proxy host. Either
+authenticate such routes properly, use a daemon that terminates TLS with its own
+client-certificate check, or keep passthrough off the LAN.
+
+:::
+
+The hostname is read from the ClientHello, which is sent in the clear. Under
+Encrypted Client Hello the inner name is not visible, so routing follows the
+outer `public_name`, as it must for any proxy that routes on SNI. A connection
+whose ClientHello cannot be read at all — it stalls, exceeds the inspection
+window, or never reconciles its own length fields — is closed rather than
+terminated, so a passthrough hostname is never quietly answered with the
+proxy's own certificate. Where no daemon is configured for passthrough, such a
+connection is terminated as before.
+
 Passthrough requires the `proxy-tls` feature (enabled in default builds) and
 `proxy.https = true`, because it only applies to the TLS listener. Plain HTTP
 requests to a passthrough hostname are redirected to HTTPS as usual.
@@ -365,9 +389,10 @@ become ready, and only then splices the stream through. The wait is bounded by
 `proxy.auto_start_timeout` (default 30 s); if the daemon is not ready by then,
 the connection is closed.
 
-From the client's side this looks like a slow handshake, so both its own
-timeout and `proxy.auto_start_timeout` need to be longer than the daemon takes
-to start:
+One budget covers the whole wait, including the case where another connection
+is already starting the same daemon. From the client's side this looks like a
+slow handshake, so both its own timeout and `proxy.auto_start_timeout` need to
+be longer than the daemon takes to start:
 
 ```toml
 [settings.proxy]
@@ -387,15 +412,17 @@ proxy_tls = "passthrough"
 proxy_tls_port = 9443       # route api.localhost to the gRPC port
 ```
 
-`proxy_port` is accepted as a shorter spelling of the same setting. It applies
-to terminated hostnames too, where it chooses which port the proxy forwards
-HTTP to.
+`proxy_port` is accepted as a shorter spelling of the same setting; set one or
+the other, not both, and pitchfork keeps whichever spelling the file already
+uses when it rewrites it. Either way the setting applies to terminated
+hostnames too, where it chooses which port the proxy forwards HTTP to.
 
 The port is matched by its **position** in the daemon's `port` list, so the
 mapping follows [auto-bump](#auto-port-bumping): if the ports above bump to
 `[8081, 9444]`, `api.localhost` routes to 9444 rather than to a port nothing is
-listening on. A `proxy_tls_port` that is not in the `port` list is used as
-written, which covers a port the daemon binds without declaring it.
+listening on. `proxy_tls_port` has to name one of the ports in `port`; config
+that points it somewhere else is rejected when it is read, rather than routing
+traffic to a port the daemon never bound.
 
 `proxy_tls_port` is a property of the daemon, not of the hostname that reached
 it, so registering a second slug for the same daemon gives a second hostname

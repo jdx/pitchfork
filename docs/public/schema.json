@@ -506,6 +506,16 @@
             }
           ]
         },
+        "proxy_port": {
+          "description": "Shorter spelling of `proxy_tls_port`. Set one or the other, not both.\n\nKept separate rather than folded so that a config keeps the spelling\nits author chose when pitchfork rewrites it. Read\n[`Self::effective_proxy_tls_port`] rather than either field.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
         "proxy_tls": {
           "description": "TLS handling for this daemon's proxy hostname.\n\n- `terminate` (default): the proxy terminates TLS with its own\n  certificate and forwards plain HTTP to the daemon.\n- `passthrough`: the proxy reads the SNI hostname from the TLS\n  ClientHello and splices the raw TCP stream to the daemon, which\n  presents its own certificate and can require client certificates.\n  Requires `port`.",
           "anyOf": [
@@ -518,7 +528,7 @@
           ]
         },
         "proxy_tls_port": {
-          "description": "Which of the daemon's ports the proxy hostname maps to.\n\nDefaults to the daemon's first port. Also accepted as `proxy_port`.",
+          "description": "Which of the daemon's ports the proxy hostname maps to.\n\nMust name one of the ports in `port`. Defaults to the daemon's first\nport. `proxy_port` is the shorter spelling of the same setting.",
           "type": [
             "integer",
             "null"
