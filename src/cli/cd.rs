@@ -42,8 +42,9 @@ impl Cd {
                 .into_iter()
                 .map(|d| d.id)
                 .collect();
+            let completed = crate::daemon_list::completed_oneshots();
             for id in &to_start {
-                if active_daemons.contains(id) {
+                if active_daemons.contains(id) || completed.contains(id) {
                     continue;
                 }
                 args.push(id.qualified());

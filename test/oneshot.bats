@@ -517,3 +517,63 @@ TOML
   run pitchfork status migrate
   assert_output --partial "completed"
 }
+
+@test "directory entry does not re-run a completed oneshot" {
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = "echo migration ran"
+oneshot = true
+auto = ["start"]
+TOML
+
+  # First entry runs it.
+  run pitchfork cd --shell-pid $$
+  assert_success
+  wait_for_logs migrate "migration ran" 10
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  # Entering again must not run it a second time: `cd` fires constantly and is
+  # not a request to run the project's migrations again.
+  run pitchfork cd --shell-pid $$
+  assert_success
+  sleep 1
+
+  run pitchfork logs migrate --raw
+  local count
+  count=$(grep -c "migration ran" <<< "$output")
+  [[ $count -eq 1 ]]
+
+  # An explicit start still re-runs it, as documented.
+  run pitchfork start migrate
+  assert_success
+  wait_for_log_lines migrate 2
+  run pitchfork logs migrate --raw
+  count=$(grep -c "migration ran" <<< "$output")
+  [[ $count -eq 2 ]]
+}
+
+@test "directory entry still starts a oneshot that failed" {
+  local fail_script
+  fail_script="$(script_path fail.sh)"
+
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = 'bash $fail_script 0'
+oneshot = true
+auto = ["start"]
+TOML
+
+  run pitchfork cd --shell-pid $$
+  wait_for_logs migrate "Failed after 0!" 10
+  run pitchfork status migrate
+  assert_output --partial "errored"
+
+  # Only a completed task is left alone; a failed one is tried again.
+  run pitchfork cd --shell-pid $$
+  wait_for_log_lines migrate 2
+  run pitchfork logs migrate --raw
+  local count
+  count=$(grep -c "Failed after 0!" <<< "$output")
+  [[ $count -ge 2 ]]
+}

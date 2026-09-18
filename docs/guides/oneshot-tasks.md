@@ -115,5 +115,12 @@ because starting a completed task runs it again.
   cannot be told the task succeeded, so it reports a failure and does not start
   the dependents. Start the task again if you need it to have definitely run. A
   task that had already completed keeps that status across a restart.
+- **`auto = ["start"]`** does not re-run a task that has already completed.
+  Entering a directory happens constantly, and it is not a request to run the
+  project's migrations again. A task that failed or was interrupted is started
+  again on entry, and an explicit `pitchfork start` re-runs a completed one.
+- **`depends`** is the deliberate path and does re-run a completed task, so a
+  dependent start always runs against a task that has just succeeded rather
+  than one that succeeded at some point in the past.
 - **`retry`** applies as it does to any daemon: a nonzero exit is retried, and
   the attempts share the one `oneshot_timeout` budget described above.

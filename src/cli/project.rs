@@ -128,8 +128,9 @@ impl Enter {
                 .map(|d| d.id)
                 .collect();
             let mut args = vec!["start".to_string()];
+            let completed = crate::daemon_list::completed_oneshots();
             for id in &to_start {
-                if active_daemons.contains(id) {
+                if active_daemons.contains(id) || completed.contains(id) {
                     continue;
                 }
                 args.push(id.qualified());

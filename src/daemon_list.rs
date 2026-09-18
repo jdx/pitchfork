@@ -7,6 +7,22 @@ use crate::pitchfork_toml::{NamespaceEntry, PitchforkToml};
 use indexmap::IndexMap;
 use std::collections::HashSet;
 
+/// IDs of `oneshot` daemons that have already run to completion.
+///
+/// Entering a directory does not re-run a finished task. `auto = ["start"]`
+/// fires on every entry, and entering a project is not a request to run its
+/// migrations again; an explicit `pitchfork start` still re-runs it, as the
+/// guide documents. A task that failed, or was interrupted, is not here and so
+/// is started again on entry.
+pub fn completed_oneshots() -> HashSet<DaemonId> {
+    crate::state_file::StateFile::get()
+        .daemons
+        .iter()
+        .filter(|(_, d)| d.oneshot && d.status.is_completed())
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 /// A set of namespaces to scope daemon listings to.
 ///
 /// An empty filter matches every daemon. Built from the `--namespace` and
