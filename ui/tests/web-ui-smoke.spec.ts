@@ -238,7 +238,7 @@ test('project pages list projects, worktrees, and stack groups without auto-star
     const partial = page.locator('section').filter({
       has: page.getByRole('heading', { name: 'partial', level: 3 }),
     })
-    await expect(partial.getByText(/Not defined in this worktree/)).toBeVisible()
+    await expect(partial.getByText(/No daemon matches/)).toBeVisible()
     // The group's own action, not the member row's Start button.
     await partial.locator('.group-actions').getByRole('button', { name: 'Start', exact: true }).click()
     await expect(page.getByText(/partially started/)).toBeVisible()

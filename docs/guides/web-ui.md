@@ -219,9 +219,11 @@ reload the page. A group can also name a daemon from another namespace; when
 that one is unresolvable, the page says so separately, because registering this
 worktree would not fix it.
 
-A stack page shows the groups declared by the config loaded for that worktree,
-in the order they appear, except that a group named `default` comes first and
-is presented as the stack's primary action:
+A stack page shows the groups that worktree's own configuration declares, in
+the order they appear, except that a group named `default` comes first and is
+presented as the stack's primary action. The user and system configs are not
+included: their groups apply to every directory, so listing them here would
+repeat the same stack under every worktree.
 
 ```toml
 # shop/pitchfork.toml

@@ -162,7 +162,9 @@ async function onRestart(groupName: string) {
       </header>
 
       <p v-if="group.missing.length" class="group-missing">
-        Not defined in this worktree's config: {{ group.missing.join(', ') }}
+        No daemon matches {{ group.missing.join(', ') }}, so the group action skips
+        {{ group.missing.length === 1 ? 'it' : 'them' }}. The name may be stale, or the
+        daemon may live outside the namespaces this page loads.
       </p>
 
       <DaemonTable

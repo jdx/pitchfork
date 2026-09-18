@@ -478,24 +478,40 @@ fn canonical(path: &StdPath) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Groups declared by the config loaded for `dir`, plus the error when that
-/// config could not be read: a syntax error would otherwise be indistinguishable
-/// from a worktree that declares no groups.
+/// Groups the worktree's own configuration declares, plus the error when a
+/// config could not be read: a syntax error would otherwise be
+/// indistinguishable from a worktree that declares no groups.
+///
+/// The user and system configs are skipped. Their groups apply to every
+/// directory, so including them would show the same groups under every
+/// worktree of every project and let "Start stack" there start unrelated
+/// global daemons.
 fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<String>) {
-    match PitchforkToml::all_merged_from(dir) {
-        Ok(config) => (
-            config
-                .groups
-                .into_iter()
-                .map(|(name, group)| (name, group.daemons))
-                .collect(),
-            None,
-        ),
-        Err(e) => {
-            log::warn!("Failed to load config for {}: {e}", dir.display());
-            (IndexMap::new(), Some(e.to_string()))
+    let mut groups: IndexMap<String, Vec<DaemonId>> = IndexMap::new();
+    let mut error = None;
+
+    for path in PitchforkToml::list_paths_from(dir) {
+        if path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
+            || path == *crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
+            || !path.exists()
+        {
+            continue;
+        }
+        match PitchforkToml::read(&path) {
+            // Later files override earlier ones, as in the normal merge.
+            Ok(config) => {
+                for (name, group) in config.groups {
+                    groups.insert(name, group.daemons);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to load config {}: {e}", path.display());
+                error = Some(e.to_string());
+            }
         }
     }
+
+    (groups, error)
 }
 
 /// A URL name for a worktree that no other worktree of this project uses.
@@ -1167,6 +1183,31 @@ mod tests {
         let namespace = namespace_for_worktree(&worktree).unwrap();
         assert_eq!(namespace, "feat");
         assert_ne!(namespace, "global");
+    }
+
+    /// Two worktrees of one repository, registered while the main checkout is
+    /// not, are separate projects: each stands for its own directory instead of
+    /// both listing the repository's full worktree set.
+    #[test]
+    fn a_registered_linked_worktree_stands_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let main = temp.path().join("repo");
+        let linked = temp.path().join("repo-feature");
+        std::fs::create_dir_all(main.join(".git").join("worktrees").join("feature")).unwrap();
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main.join(".git/worktrees/feature").display()
+            ),
+        )
+        .unwrap();
+
+        let views = worktree_views(&linked);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].path, linked);
+        assert!(views[0].is_primary);
     }
 
     /// A group can name daemons of other namespaces. Those are rendered by the

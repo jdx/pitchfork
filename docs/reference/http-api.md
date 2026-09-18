@@ -316,10 +316,21 @@ curl http://127.0.0.1:3120/api/projects/shop/main
     }
   ],
   "ungrouped": [],
-  "daemons": { "total": 3, "running": 1, "stopped": 2, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
+  "daemons": {
+    "total": 3,
+    "running": 1,
+    "stopped": 2,
+    "completed": 0,
+    "transitioning": 0,
+    "failed": 0,
+    "available": 0
+  },
   "url": "/projects/shop/main"
 }
 ```
+
+Each entry of `daemons` inside a group is a full daemon object, the same shape
+`GET /api/daemons` returns; it is abbreviated above.
 
 These three endpoints are read-only and never start a daemon. To act on a
 group, POST to the daemon control endpoints above with each of the group's

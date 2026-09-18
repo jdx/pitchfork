@@ -121,6 +121,27 @@ function daemonName(id: string): string {
   return id.split('.').pop() ?? id
 }
 
+/**
+ * Send one daemon control request, distinguishing a real failure from a member
+ * that is already in the requested state. The endpoints answer the latter with
+ * `{ok: false, noop: true}`, which is not a failure of the group action.
+ */
+async function daemonAction(id: string, endpoint: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/daemons/${encodeURIComponent(id)}/${endpoint}`,
+      { method: 'POST', headers: getAuthHeaders() },
+    )
+    const body = await res.json().catch(() => null) as
+      { ok?: boolean; noop?: boolean; error?: string } | null
+    if (!res.ok) return body?.error ?? `HTTP ${res.status}`
+    if (body?.ok === false && body.noop !== true) return body.error ?? 'unknown error'
+    return null
+  } catch (e: any) {
+    return e.message ?? 'unknown error'
+  }
+}
+
 async function toastAction(
   name: string,
   verb: string,
@@ -165,30 +186,29 @@ export function useDaemonActions() {
     }
   }
 
+  // A daemon already in the requested state answers `noop`, which is not a
+  // failure: the click got what it asked for, so it is not reported as one.
+  function act(id: string, verb: string, endpoint: string) {
+    return toastAction(daemonName(id), verb, wrap(id, async () => {
+      const failure = await daemonAction(id, endpoint)
+      if (failure) throw new Error(failure)
+    }))
+  }
+
   function start(id: string) {
-    return toastAction(daemonName(id), 'Start', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/start`, { method: 'POST' }),
-    ))
+    return act(id, 'Start', 'start')
   }
   function stop(id: string) {
-    return toastAction(daemonName(id), 'Stop', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
-    ))
+    return act(id, 'Stop', 'stop')
   }
   function restart(id: string) {
-    return toastAction(daemonName(id), 'Restart', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/restart`, { method: 'POST' }),
-    ))
+    return act(id, 'Restart', 'restart')
   }
   function enable(id: string) {
-    return toastAction(daemonName(id), 'Enable', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/enable`, { method: 'POST' }),
-    ))
+    return act(id, 'Enable', 'enable')
   }
   function disable(id: string) {
-    return toastAction(daemonName(id), 'Disable', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/disable`, { method: 'POST' }),
-    ))
+    return act(id, 'Disable', 'disable')
   }
   return { start, stop, restart, enable, disable, acting }
 }
@@ -594,27 +614,6 @@ export function useStack(project: Ref<string>, worktree: Ref<string>, pollInterv
   )
   const { data, loading, error, refresh } = usePolledResource<Stack>(path, pollInterval)
   return { stack: data, loading, error, refresh }
-}
-
-/**
- * Send one daemon control request, distinguishing a real failure from a member
- * that is already in the requested state. The endpoints answer the latter with
- * `{ok: false, noop: true}`, which is not a failure of the group action.
- */
-async function daemonAction(id: string, endpoint: string): Promise<string | null> {
-  try {
-    const res = await fetch(
-      `${API_BASE}/daemons/${encodeURIComponent(id)}/${endpoint}`,
-      { method: 'POST', headers: getAuthHeaders() },
-    )
-    const body = await res.json().catch(() => null) as
-      { ok?: boolean; noop?: boolean; error?: string } | null
-    if (!res.ok) return body?.error ?? `HTTP ${res.status}`
-    if (body?.ok === false && body.noop !== true) return body.error ?? 'unknown error'
-    return null
-  } catch (e: any) {
-    return e.message ?? 'unknown error'
-  }
 }
 
 /**
