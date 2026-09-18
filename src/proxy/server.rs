@@ -1657,7 +1657,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
-        if subdomain == "pitchfork" {
+        if subdomain.eq_ignore_ascii_case("pitchfork") {
             crate::web::port()
         } else {
             None
@@ -2331,14 +2331,18 @@ async fn try_auto_start_inner(
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
 ///
+/// Host names are case-insensitive (RFC 4343) and a trailing dot names the same
+/// host, so both are accepted here: this is the one place every routing path
+/// passes a host name through, whether it came from a `Host` header, an HTTP/2
+/// `:authority`, a peeked ClientHello, or rustls handing over the SNI name it
+/// parsed, and only some of those are normalized by the time they arrive.
+///
 /// Examples:
 /// - `api.myproject.localhost` with tld `localhost` → `api.myproject`
-/// - `api.localhost` with tld `localhost` → `api`
+/// - `API.LocalHost.` with tld `localhost` → `API`
 /// - `localhost` with tld `localhost` → `None` (no subdomain)
 fn strip_tld(host: &str, tld: &str) -> Option<String> {
-    host.strip_suffix(&format!(".{tld}"))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    strip_dot_suffix_ignore_case(host.trim_end_matches('.'), tld)
 }
 
 /// Build a human-friendly error message for port binding failures.
@@ -2536,6 +2540,23 @@ mod tests {
             Some("api".to_string())
         );
         assert_eq!(strip_tld("localhost", "localhost"), None);
+        // Host names are case-insensitive, and a trailing root dot names the
+        // same host. rustls hands over the SNI name as the client wrote it, so
+        // both spellings have to resolve or a passthrough hostname would be
+        // read as terminating.
+        assert_eq!(
+            strip_tld("API.LocalHost", "localhost"),
+            Some("API".to_string())
+        );
+        assert_eq!(
+            strip_tld("api.localhost.", "localhost"),
+            Some("api".to_string())
+        );
+        assert_eq!(
+            strip_tld("API.MyProject.LOCALHOST.", "localhost"),
+            Some("API.MyProject".to_string())
+        );
+        assert_eq!(strip_tld("localhost.", "localhost"), None);
         assert_eq!(
             strip_tld("api.myproject.test", "test"),
             Some("api.myproject".to_string())
@@ -2971,9 +2992,17 @@ mod tests {
         let mode = |host: &str| resolve_tls_mode_in(host, "localhost", &entries);
 
         assert_eq!(mode("spliced.localhost"), ProxyTlsMode::Passthrough);
-        // Host names are case-insensitive, and a wildcard subdomain inherits
-        // the slug's mode.
+        // Host names are case-insensitive, including the TLD, and a trailing
+        // root dot names the same host — rustls passes the SNI name through
+        // exactly as the client wrote it.
         assert_eq!(mode("SPLICED.localhost"), ProxyTlsMode::Passthrough);
+        assert_eq!(mode("Spliced.LocalHost"), ProxyTlsMode::Passthrough);
+        assert_eq!(mode("spliced.localhost."), ProxyTlsMode::Passthrough);
+        assert_eq!(
+            mode("FEATURE-C.Spliced.LOCALHOST."),
+            ProxyTlsMode::Passthrough
+        );
+        // A wildcard subdomain inherits the slug's mode.
         assert_eq!(mode("tenant.spliced.localhost"), ProxyTlsMode::Passthrough);
         // A worktree with its own setting overrides the slug's …
         assert_eq!(mode("feature-b.spliced.localhost"), ProxyTlsMode::Terminate);
