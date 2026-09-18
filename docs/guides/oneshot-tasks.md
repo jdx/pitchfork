@@ -65,8 +65,14 @@ readiness signal, and there is no running service to health-check afterward.
 ## When tasks run again
 
 A completed task runs again when you start or restart it, including when startup
-reaches it as another daemon's dependency. Automatic startup with
-`auto = ["start"]` follows the same rule. Completion is not cached across starts.
+reaches it as another daemon's dependency. Completion is not cached across
+starts, so asking for the task is always asking for it to run.
+
+Entering a directory is the exception. `auto = ["start"]` fires on every `cd`
+and on entering a project session, which is not a request to run the project's
+migrations again, so a task that has already completed is left alone there —
+including when entry reaches it through a service's `depends`. A task that
+failed or was interrupted is still started on entry.
 
 ::: warning Make the command safe to repeat
 Use commands that tolerate repeated runs, such as a migration tool that skips

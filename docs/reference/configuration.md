@@ -273,6 +273,9 @@ depends = ["seed"]
 - Cannot be combined with any `ready_*` or `health_*` field.
 - Runs again on subsequent starts, including when started as a dependency.
   The command must be safe to repeat.
+- Not re-run by [`auto`](#auto) on directory entry once it has completed, since
+  entering a directory is not a request to run the task again. One that failed
+  or was interrupted is still started there.
 - Reports `stopped` if interrupted by `pitchfork stop`.
 - Uses `settings.supervisor.oneshot_timeout` to limit how long startup waits
   (default `"1h"`; `"0"` disables the deadline). A timeout does not stop the task.
