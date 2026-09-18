@@ -2074,6 +2074,7 @@ impl PitchforkTomlDaemon {
             // daemon's own project rather than whatever directory this process
             // happens to be in.
             oneshot_wait: None,
+            on_directory_enter: false,
             cron_schedule: self.cron.as_ref().map(|c| c.schedule.clone()),
             cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
             cron_immediate: self.cron.as_ref().map(|c| c.immediate),

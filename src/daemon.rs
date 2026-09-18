@@ -255,6 +255,13 @@ pub struct RunOptions {
     /// the supervisor to fall back to whatever it can resolve.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub oneshot_wait: Option<OneshotWait>,
+    /// This start came from entering a directory rather than from a person
+    /// asking for it, so a completed `oneshot` is left alone. Decided by the
+    /// supervisor because only it holds authoritative state: the state file
+    /// lags it by up to the flush interval, which is exactly the window a
+    /// second directory entry lands in.
+    #[serde(default)]
+    pub on_directory_enter: bool,
 }
 
 impl Daemon {
@@ -292,6 +299,7 @@ impl Daemon {
             // resolve it from; a supervisor-internal restart keeps None and
             // falls back.
             oneshot_wait: None,
+            on_directory_enter: false,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

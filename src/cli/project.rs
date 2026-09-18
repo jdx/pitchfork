@@ -115,9 +115,9 @@ impl Enter {
 
         let to_start: Vec<DaemonId> = pt
             .daemons
-            .into_iter()
+            .iter()
             .filter(|(_, d)| d.auto.contains(&PitchforkTomlAuto::Start))
-            .map(|(id, _)| id)
+            .map(|(id, _)| id.clone())
             .collect();
 
         if !to_start.is_empty() {
@@ -127,15 +127,20 @@ impl Enter {
                 .into_iter()
                 .map(|d| d.id)
                 .collect();
-            let mut args = vec!["start".to_string()];
+            let mut args = vec!["start".to_string(), "--on-directory-enter".to_string()];
+            // See the same loop in `cd`: the flag above is what drops a
+            // completed task reached as a dependency; this only avoids
+            // spawning `start` when every requested daemon is already settled.
             let completed = crate::daemon_list::completed_oneshots();
             for id in &to_start {
-                if active_daemons.contains(id) || completed.contains(id) {
+                let settled =
+                    completed.contains(id) && pt.daemons.get(id).is_some_and(|d| d.is_oneshot());
+                if active_daemons.contains(id) || settled {
                     continue;
                 }
                 args.push(id.qualified());
             }
-            if args.len() > 1 {
+            if args.len() > 2 {
                 let status = tokio::process::Command::new(&*env::PITCHFORK_BIN)
                     .args(&args)
                     .current_dir(&target_dir)

@@ -75,6 +75,11 @@ pub struct SpawnTaskResult {
 pub struct StartOptions {
     /// Force restart if already running
     pub force: bool,
+    /// This start came from entering a directory rather than from a person
+    /// asking for it, so a `oneshot` task that has already completed is left
+    /// alone — including when it is reached as a dependency, which is how the
+    /// migrate-then-api layout reaches it.
+    pub on_directory_enter: bool,
     /// Shell PID for autostop tracking
     pub shell_pid: Option<u32>,
     /// Override ready delay
@@ -120,6 +125,7 @@ pub async fn build_run_options(
 
     let mut run_opts = daemon_config.to_run_options(id, cmd);
     run_opts.wait_ready = true;
+    run_opts.on_directory_enter = overrides.is_some_and(|o| o.on_directory_enter);
 
     if let Some(opts) = overrides {
         run_opts.shell_pid = opts.shell_pid;
@@ -587,6 +593,7 @@ impl IpcClient {
             .filter(|d| d.oneshot && (d.status.is_running() || d.status.is_waiting()))
             .map(|d| d.id.clone())
             .collect();
+
         let running_ports_map: HashMap<DaemonId, Vec<u16>> = active_daemons
             .into_iter()
             .filter(|d| {

@@ -577,3 +577,74 @@ TOML
   count=$(grep -c "Failed after 0!" <<< "$output")
   [[ $count -ge 2 ]]
 }
+
+@test "directory entry does not re-run a completed oneshot reached as a dependency" {
+  # The layout the feature exists for: entry starts the service, and the
+  # service depends on the task. Filtering the task out of the requested IDs
+  # is not enough, because dependency resolution pulls it back in.
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = "echo migration ran"
+oneshot = true
+
+[daemons.api]
+run = "echo api started && $(default_shell_sleep_command)"
+depends = ["migrate"]
+auto = ["start"]
+ready_delay = 1
+TOML
+
+  run pitchfork cd --shell-pid $$
+  assert_success
+  wait_for_logs migrate "migration ran" 10
+  wait_for_logs api "api started" 10
+
+  # Stop only the service, so the next entry actually has something to start
+  # and reaches the task through dependency resolution. With the service still
+  # up nothing is spawned at all and this path is never exercised.
+  run pitchfork stop api
+  assert_success
+
+  run pitchfork cd --shell-pid $$
+  assert_success
+  wait_for_log_lines api 2
+
+  run pitchfork logs migrate --raw
+  local count
+  count=$(grep -c "migration ran" <<< "$output")
+  [[ $count -eq 1 ]]
+
+  pitchfork stop --all || true
+}
+
+@test "directory entry starts a daemon that config no longer marks oneshot" {
+  create_pitchfork_toml <<TOML
+[daemons.task]
+run = "echo ran once"
+oneshot = true
+auto = ["start"]
+TOML
+
+  run pitchfork cd --shell-pid $$
+  assert_success
+  wait_for_logs task "ran once" 10
+  run pitchfork status task
+  assert_output --partial "completed"
+
+  # The persisted oneshot flag is only refreshed by a run, so the skip has to
+  # be decided from config: turning it into a service must start it again.
+  create_pitchfork_toml <<TOML
+[daemons.task]
+run = "echo ran once && $(default_shell_sleep_command)"
+auto = ["start"]
+ready_delay = 1
+TOML
+
+  run pitchfork cd --shell-pid $$
+  assert_success
+  wait_for_log_lines task 2
+
+  run pitchfork status task
+  assert_output --partial "running"
+  pitchfork stop --all || true
+}

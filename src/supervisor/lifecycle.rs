@@ -461,6 +461,20 @@ impl Supervisor {
         let Some(daemon) = self.get_daemon(id).await else {
             return Ok(None);
         };
+        // Entering a directory does not re-run a finished task, at any level of
+        // the dependency graph — the layout this exists for reaches the task
+        // through a service's `depends`, not by naming it. Decided here rather
+        // than in the client because this is the authoritative state: the state
+        // file lags it by up to the flush interval, which is exactly the window
+        // a second entry lands in after the task completes.
+        // `opts.oneshot` rather than the record's: the request carries what
+        // config says now, while the stored flag is only refreshed by a run, so
+        // a daemon that used to be a task would otherwise stay skipped forever
+        // after being turned into a service.
+        if opts.on_directory_enter && opts.oneshot && daemon.status.is_completed() {
+            debug!("daemon {id} already completed; directory entry leaves it alone");
+            return Ok(Some(IpcResponse::DaemonReady { daemon }));
+        }
         // Stopping is treated as "not running": the monitoring task will clean
         // it up. Only a live PID under a non-terminal status blocks a start.
         if daemon.status.is_stopping() || daemon.status.is_stopped() || daemon.status.is_completed()

@@ -3969,6 +3969,18 @@
             }
           },
           {
+            "name": "on-directory-enter",
+            "usage": "--on-directory-enter",
+            "help": "Set by the shell hook and project sessions: this start came from entering a directory, so a completed oneshot is left alone rather than re-run, at any level of the dependency graph.",
+            "help_first_line": "Set by the shell hook and project sessions: this start came from entering a directory, so a completed oneshot is left alone rather than re-run, at any level of the dependency graph.",
+            "short": [],
+            "long": [
+              "on-directory-enter"
+            ],
+            "hide": true,
+            "global": false
+          },
+          {
             "name": "force",
             "usage": "-f --force",
             "help": "Stop the daemon if it is already running",
