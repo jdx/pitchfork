@@ -410,3 +410,32 @@ TOML
   wait "$migrate_job" || true
   pitchfork stop --all || true
 }
+
+@test "start re-runs a completed oneshot that has retry configured" {
+  # The retry loop short-circuits on a completed record so a backoff does not
+  # duplicate work the background checker already did. That must not reach the
+  # first attempt, or `retry` would quietly opt a oneshot out of the documented
+  # re-run behavior.
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = "echo migration ran"
+oneshot = true
+retry = 2
+TOML
+
+  run pitchfork start migrate
+  assert_success
+  wait_for_logs migrate "migration ran" 5
+
+  run pitchfork start migrate
+  assert_success
+
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  wait_for_log_lines migrate 2
+  run pitchfork logs migrate --raw
+  local count
+  count=$(grep -c "migration ran" <<< "$output")
+  [[ $count -eq 2 ]]
+}

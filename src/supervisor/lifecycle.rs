@@ -340,11 +340,17 @@ impl Supervisor {
                 if let Some(response) = self.claim_or_defer(&retry_opts, &mut guard).await? {
                     return Ok(response);
                 }
-                // The background retry checker may have run this attempt for us
-                // and seen it succeed while we slept. Starting again would
+                // The background retry checker may have run this attempt for
+                // us and seen it succeed while we slept. Starting again would
                 // repeat a task that has already done its work — for a
                 // migration or a seed, repeating its side effects.
-                if let Some(daemon) = self.get_daemon(id).await
+                //
+                // Only after a backoff, though. A completed record on the first
+                // attempt is the previous run's, and a start is defined to
+                // re-run a completed oneshot; short-circuiting here would make
+                // that true only for oneshots without `retry`.
+                if attempt > 0
+                    && let Some(daemon) = self.get_daemon(id).await
                     && daemon.status.is_completed()
                 {
                     info!("daemon {id} completed while waiting to retry; not running it again");
@@ -535,6 +541,15 @@ impl Supervisor {
                             daemon.retry_count + 1,
                             daemon.retry.count() + 1
                         );
+                        // The backoff between attempts clears the PID, so the
+                        // per-attempt reset below cannot fire and the previous
+                        // attempt's clock would run through the sleep. A run
+                        // that is still owed an attempt has not stalled, so
+                        // hold the deadline open across the gap — this also
+                        // covers an attempt that happens to reuse the last
+                        // PID, which a PID comparison alone would miss.
+                        deadline = budget.map(|d| tokio::time::Instant::now() + d);
+                        watched_pid = None;
                     } else {
                         // -1 records an unobservable exit code; the caller
                         // renders `None` as a plain failure rather than
