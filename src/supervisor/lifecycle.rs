@@ -301,15 +301,33 @@ const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 /// long as this value lives, so the background checker does not start an
 /// attempt out from under it. Released on every exit from the retry loop,
 /// including the early returns.
-pub(crate) struct RetryingGuard(DaemonId);
+pub(crate) struct RetryingGuard {
+    id: DaemonId,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RetryingGuard {
+    /// Whether a `stop` has asked this retry sequence to end.
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
 
 impl Drop for RetryingGuard {
     fn drop(&mut self) {
-        SUPERVISOR
+        let mut retrying = SUPERVISOR
             .retrying
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&self.0);
+            .unwrap_or_else(|e| e.into_inner());
+        // Only if it is still ours: a later sequence for the same daemon has
+        // its own flag, and dropping this guard must not take that one out of
+        // the registry.
+        if retrying
+            .get(&self.id)
+            .is_some_and(|flag| std::sync::Arc::ptr_eq(flag, &self.cancel))
+        {
+            retrying.remove(&self.id);
+        }
     }
 }
 
@@ -320,15 +338,33 @@ impl Supervisor {
         self.retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .contains(id)
+            .contains_key(id)
     }
 
     fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.retrying
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id.clone());
-        RetryingGuard(id.clone())
+            .insert(id.clone(), cancel.clone());
+        RetryingGuard {
+            id: id.clone(),
+            cancel,
+        }
+    }
+
+    /// Ask a foreground retry sequence for this daemon, if there is one, to
+    /// end. A stop is a decision about the daemon, not about one of its
+    /// attempts, so the attempts left must not go ahead behind it.
+    pub(crate) fn cancel_retrying(&self, id: &DaemonId) {
+        if let Some(cancel) = self
+            .retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+        {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
     }
 
     /// Run a daemon, handling retries if configured
@@ -365,7 +401,7 @@ impl Supervisor {
             // backoff between attempts leaves the record errored with no PID,
             // which is what `check_retry` scans for, and an attempt started
             // there would leave this call reporting on a run it does not own.
-            let _retrying = self.mark_retrying(id);
+            let retrying_claim = self.mark_retrying(id);
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
             for attempt in 0..max_attempts {
@@ -406,6 +442,16 @@ impl Supervisor {
                     info!("daemon {id} completed while waiting to retry; not running it again");
                     return Ok(IpcResponse::DaemonReady { daemon });
                 }
+                // A stop that arrived during the backoff ends the sequence.
+                // Without this the loop would start the next attempt on a
+                // daemon the user has just stopped, and the stop would look
+                // like it had done nothing.
+                if retrying_claim.is_cancelled() {
+                    info!("daemon {id} was stopped while waiting to retry; abandoning its retries");
+                    return Ok(IpcResponse::DaemonFailed {
+                        error: "stopped while retrying".to_string(),
+                    });
+                }
                 let Some(guard) = guard else {
                     // Only the deferring paths take the guard, and each of
                     // those returned above.
@@ -429,7 +475,8 @@ impl Supervisor {
                             // PID, and the next attempt's ownership check would
                             // read its own dead predecessor as a competing run
                             // and abandon the retries that are left.
-                            self.wait_for_exit_finalized(id).await;
+                            let attempt_pid = self.get_daemon(id).await.and_then(|d| d.pid);
+                            self.wait_for_exit_finalized(id, attempt_pid).await;
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
                                 "daemon {id} failed (attempt {}/{}), retrying in {}s",
@@ -447,7 +494,18 @@ impl Supervisor {
                                 vec![],
                             )
                             .await;
-                            time::sleep(Duration::from_secs(backoff_secs)).await;
+                            // Slept in slices so a stop arriving during a
+                            // long backoff — they grow to an hour — is acted
+                            // on when it arrives rather than when the sleep
+                            // happens to end.
+                            let backoff_deadline =
+                                tokio::time::Instant::now() + Duration::from_secs(backoff_secs);
+                            while tokio::time::Instant::now() < backoff_deadline
+                                && !retrying_claim.is_cancelled()
+                            {
+                                let remaining = backoff_deadline - tokio::time::Instant::now();
+                                time::sleep(remaining.min(Duration::from_millis(200))).await;
+                            }
                             continue;
                         } else {
                             info!("daemon {id} failed after {max_attempts} attempts");
@@ -477,11 +535,15 @@ impl Supervisor {
     /// longest it can hold the record after the process has gone. Giving up
     /// early is safe: the ownership check that follows simply sees a PID and
     /// defers, which is what it would have done anyway.
-    async fn wait_for_exit_finalized(&self, id: &DaemonId) {
+    ///
+    /// `pid` names the run being waited for, so a record that has moved on to
+    /// another run is not mistaken for this one still finishing.
+    async fn wait_for_exit_finalized(&self, id: &DaemonId, pid: Option<u32>) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
         loop {
             match self.get_daemon(id).await {
-                Some(daemon) if daemon.pid.is_some() => {}
+                Some(daemon) if pid.map_or(daemon.pid.is_some(), |pid| daemon.pid == Some(pid)) => {
+                }
                 _ => return,
             }
             if tokio::time::Instant::now() >= deadline {
@@ -2231,6 +2293,11 @@ impl Supervisor {
             ));
         }
         info!("stopping daemon: {id}");
+        // A foreground `start` may be working through this daemon's retries,
+        // sleeping out a backoff with no process of its own to kill. Tell it to
+        // give up, or it would start the next attempt once the stop has
+        // returned.
+        self.cancel_retrying(id);
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
@@ -2347,7 +2414,7 @@ impl Supervisor {
                     debug!(
                         "pid {pid} not running but daemon {id} is still monitored; waiting for its monitor to settle the outcome"
                     );
-                    self.wait_for_exit_finalized(id).await;
+                    self.wait_for_exit_finalized(id, Some(pid)).await;
                     let finished = self.get_daemon(id).await;
                     if finished
                         .as_ref()
@@ -3029,6 +3096,34 @@ mod oneshot_tests {
         let (status, success) = terminal_exit_state("fail", true, 3, false);
         assert!(matches!(status, DaemonStatus::Errored(3)));
         assert!(!success);
+    }
+
+    #[test]
+    fn a_stop_cancels_the_retry_sequence_it_finds() {
+        let id = DaemonId::new("retry-cancel-test", "task");
+        let claim = SUPERVISOR.mark_retrying(&id);
+        assert!(!claim.is_cancelled());
+        assert!(SUPERVISOR.is_retrying(&id));
+        SUPERVISOR.cancel_retrying(&id);
+        assert!(claim.is_cancelled());
+        drop(claim);
+        assert!(!SUPERVISOR.is_retrying(&id));
+    }
+
+    #[test]
+    fn a_dropped_claim_does_not_unregister_its_successor() {
+        // Each sequence has its own flag, so the first one going away must not
+        // leave the second unprotected from the retry checker.
+        let id = DaemonId::new("retry-cancel-test", "successor");
+        let first = SUPERVISOR.mark_retrying(&id);
+        let second = SUPERVISOR.mark_retrying(&id);
+        drop(first);
+        assert!(SUPERVISOR.is_retrying(&id));
+        // ...and cancelling now reaches the sequence that is actually running.
+        SUPERVISOR.cancel_retrying(&id);
+        assert!(second.is_cancelled());
+        drop(second);
+        assert!(!SUPERVISOR.is_retrying(&id));
     }
 
     #[test]

@@ -1118,14 +1118,27 @@ impl IpcClient {
     /// - Ad-hoc daemon handling (no dependencies)
     /// - Parallel execution within dependency levels
     pub async fn stop_daemons(self: &Arc<Self>, ids: &[DaemonId]) -> Result<StopResult> {
-        // Get currently running daemons
-        let running_daemons: HashSet<DaemonId> = self
+        // Daemons a stop has something to do for.
+        let mut running_daemons: HashSet<DaemonId> = self
             .active_daemons()
             .await?
             .iter()
             .filter(|d| d.status.is_running() || d.status.is_waiting())
             .map(|d| d.id.clone())
             .collect();
+        // A daemon between retries has no PID, so it is not in the list above,
+        // but an attempt may still be started for it — by the start that is
+        // waiting on it or by the retry checker. Stopping it has to end those
+        // rather than report that there is nothing running.
+        running_daemons.extend(
+            crate::state_file::StateFile::get()
+                .daemons
+                .iter()
+                .filter(|(_, d)| {
+                    d.pid.is_none() && d.status.is_errored() && d.retry_count < d.retry.count()
+                })
+                .map(|(id, _)| id.clone()),
+        );
 
         // Filter to only running daemons
         let requested_ids: Vec<DaemonId> = ids

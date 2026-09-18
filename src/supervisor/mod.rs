@@ -73,11 +73,15 @@ pub struct Supervisor {
     pub(crate) pending_notifications: Mutex<Vec<(log::LevelFilter, String)>>,
     pub(crate) last_refreshed_at: Mutex<time::Instant>,
     /// Daemons whose retry sequence a foreground `run` is already working
-    /// through. The backoff between its attempts leaves the record errored
-    /// with no PID, which is exactly what `check_retry` looks for, so without
-    /// this the background checker would start the next attempt itself and the
-    /// foreground call would be left reporting on a run it does not own.
-    pub(crate) retrying: std::sync::Mutex<HashSet<DaemonId>>,
+    /// through, each with the flag that asks it to stop. The backoff between
+    /// its attempts leaves the record errored with no PID, which is exactly
+    /// what `check_retry` looks for, so without this the background checker
+    /// would start the next attempt itself and the foreground call would be
+    /// left reporting on a run it does not own. `stop` raises the flag, so the
+    /// sequence ends rather than starting another attempt behind the user's
+    /// back.
+    pub(crate) retrying:
+        std::sync::Mutex<HashMap<DaemonId, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Autostop stops that have been spawned as detached tasks but have not
@@ -327,7 +331,7 @@ impl Supervisor {
             )),
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
-            retrying: std::sync::Mutex::new(HashSet::new()),
+            retrying: std::sync::Mutex::new(HashMap::new()),
             pending_autostops: Mutex::new(HashMap::new()),
             in_flight_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
