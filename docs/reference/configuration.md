@@ -117,8 +117,11 @@ replacing the worktree directory's name.
 worktree_label = "fix-login"
 ```
 
-The daemon `api` in this worktree then answers at
-`api.fix-login.<project>.<tld>`. See [hostnames](/guides/port-management#hostnames).
+With the proxy enabled, the daemon `api` uses
+`api.fix-login.<project>.<tld>`. Set this in `pitchfork.local.toml` or an external
+config registered for the checkout so other worktrees do not inherit the same
+label. It has no effect in the primary checkout. See
+[hostnames](/guides/port-management#hostnames).
 
 ## Shared environment
 
@@ -527,15 +530,15 @@ port = { expect = [3000], bump = 10 }
 
 ### `proxy`
 
-Controls the daemon's proxy hostname. Every daemon with a `port` gets one
-automatically, so this field is only needed to opt out or to rename the daemon
-label.
+Controls the daemon label in an automatic proxy hostname. With the proxy
+enabled, project daemons with a `port` get a hostname by default. Use this field
+to rename the label or disable the automatic hostname.
 
 ```toml
 [daemons.admin]
 run = "node admin.js"
 port = 3001
-proxy = false        # no hostname; reachable only on its port
+proxy = false        # disable the automatic hostname
 
 [daemons.web-frontend]
 run = "npm run dev"
@@ -543,8 +546,8 @@ port = 5173
 proxy = "web"        # https://web.<project>.<tld>
 ```
 
-Accepts `true` (the default), `false`, or a string label. A daemon without a
-`port` is never routed, whatever this is set to. See
+Accepts `true` (the default), `false`, or a string label. Automatic hostnames
+require a `port`. Existing slug mappings are independent of this setting. See
 [hostnames](/guides/port-management#hostnames).
 
 ### `expected_port` (deprecated)

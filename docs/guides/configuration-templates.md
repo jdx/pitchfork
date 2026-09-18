@@ -140,25 +140,35 @@ Global proxy settings are available:
 
 ### Proxy URL
 
-<code v-pre>{{ url }}</code> is the full proxy URL for the current daemon, and
-<code v-pre>{{ daemons.api.url }}</code> the URL of the daemon named `api`. Every
-daemon with a `port` has one; it is null for a daemon with no port or with
-`proxy = false`.
+<code v-pre>{{ url }}</code> provides the current daemon's full proxy URL.
+Use <code v-pre>{{ daemons.api.url }}</code> to reference the URL of an `api`
+dependency. The URL uses a registered slug when available, otherwise the
+[automatic hostname](port-management.md#hostnames).
+
+For a registered project named `myproj`, with HTTPS enabled on port 443:
 
 ```toml
 [daemons.api]
-run = "echo {{ url }}"
-# Renders to: "echo https://api.myproj.localhost"
+run = "node server.js"
+port = 3000
+env.PUBLIC_URL = "{{ url }}"
+# PUBLIC_URL: https://api.myproj.localhost
 
 [daemons.worker]
+depends = ["api"]
 run = "./worker --api {{ daemons.api.url }}"
-# Renders to: "./worker --api https://api.myproj.localhost"
+# Renders to: ./worker --api https://api.myproj.localhost
 ```
 
-The daemon's own URL also reaches it as `PITCHFORK_URL` in its environment,
-alongside `PORT`.
+The URL is null when the proxy is disabled or no routable hostname is available.
+Automatic hostnames require a `port` and are disabled by `proxy = false`;
+existing slug mappings still apply. Label conflicts can also prevent an
+automatic hostname from being assigned.
 
-<code v-pre>{{ proxy_url }}</code> is the former spelling of <code v-pre>{{ url }}</code> and still renders the same value.
+The daemon receives the same URL as `PITCHFORK_URL` in its environment.
+<code v-pre>{{ host }}</code> contains the hostname without the TLD, such as
+`api.myproj`. <code v-pre>{{ proxy_url }}</code> remains an alias for
+<code v-pre>{{ url }}</code>.
 
 ## Resolution Order
 
