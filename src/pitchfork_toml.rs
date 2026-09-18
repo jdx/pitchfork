@@ -2049,20 +2049,12 @@ impl PitchforkTomlDaemon {
             self.path.as_deref(),
             effective_user.as_deref(),
         );
-        let slug = crate::pitchfork_toml::PitchforkToml::read_global_slugs()
-            .into_iter()
-            .find(|(slug, entry)| {
-                let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
-                if daemon_name != id.name() {
-                    return false;
-                }
-
-                match entry.resolve_namespace() {
-                    Some(namespace) => namespace == id.namespace(),
-                    None => false,
-                }
-            })
-            .map(|(slug, _)| slug);
+        // The same lookup the proxy and the CLI use, so a slug the proxy
+        // refuses to route as ambiguous is not handed to the daemon either.
+        let slug = PitchforkToml::find_slug_for_daemon_in_registry(
+            id,
+            &PitchforkToml::read_global_slugs(),
+        );
 
         RunOptions {
             id: id.clone(),

@@ -595,3 +595,44 @@ EOF
   assert_output --partial "api.renamed.labelproj.localhost:7788"
   refute_output --partial "api.wt-raw.labelproj.localhost"
 }
+
+@test "a slugged daemon receives the slug URL as PITCHFORK_URL" {
+  local proj="$TEST_TEMP_DIR/slug-url"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local env_script daemon_port proxy_port
+  env_script="$(to_shell_path "$(script_path echo_env_server.py)")"
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.api]
+run = 'python3 -u $env_script $daemon_port PITCHFORK_URL'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/"
+EOF
+
+  run pitchfork proxy add legacy --daemon api
+  assert_success
+
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run pitchfork start api
+  assert_success
+  sleep 2
+
+  # The daemon is told the address the proxy actually routes: its slug, not the
+  # automatic hostname it would otherwise get.
+  run curl -s -H "Host: legacy.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "http://legacy.localhost:$proxy_port"
+  refute_output --partial "api.slug-url"
+
+  run pitchfork stop api || true
+  kill_port "$daemon_port"
+}

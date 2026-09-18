@@ -2721,13 +2721,15 @@ async fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
         .clone()
         .unwrap_or_else(|| opts.dir.0.clone());
     let id = opts.id.clone();
-    // Reading the config and walking the project's checkouts are both file I/O,
-    // so they happen together on a blocking worker rather than on the
-    // supervisor's executor.
+    // Reading the config, the slug registry and the project's checkouts is all
+    // file I/O, so it happens together on a blocking worker rather than on the
+    // supervisor's executor. The lookup is the one the CLI and the proxy use,
+    // so the daemon is told the address they advertise for it — a registered
+    // slug when it has one, otherwise its automatic hostname.
     tokio::task::spawn_blocking(move || {
         let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(&config_dir).ok()?;
-        let config = pt.daemons.get(&id)?;
-        crate::proxy::hostname::auto_host_for_daemon(&id, config)
+        let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        crate::proxy::hostname::host_for_daemon(&id, pt.daemons.get(&id), &slugs)
     })
     .await
     .unwrap_or_default()
