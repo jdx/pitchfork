@@ -514,7 +514,7 @@
           ],
           "format": "uint16",
           "maximum": 65535,
-          "minimum": 0
+          "minimum": 1
         },
         "proxy_tls": {
           "description": "`terminate` (default) or `passthrough`: whether the proxy terminates TLS for this daemon's hostname or splices the stream to the daemon, which then needs `port`.",
@@ -535,7 +535,7 @@
           ],
           "format": "uint16",
           "maximum": 65535,
-          "minimum": 0
+          "minimum": 1
         },
         "pty": {
           "description": "Allocate a pseudo-terminal for the daemon process.",

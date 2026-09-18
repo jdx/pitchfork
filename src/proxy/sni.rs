@@ -239,9 +239,12 @@ fn parse_server_name_list(body: &[u8]) -> SniPeek {
             continue;
         }
         // A host name is ASCII on the wire (an internationalized name is sent
-        // A-label encoded), so anything else is not routable.
+        // A-label encoded), so anything else is not routable. The character
+        // set is narrowed to what a host name can contain, which keeps a name
+        // carrying control bytes — a newline to forge a log line, a NUL to
+        // truncate one — from being routed on or logged at all.
         return match std::str::from_utf8(name) {
-            Ok(host) if !host.is_empty() && host.is_ascii() => {
+            Ok(host) if is_routable_host_name(host) => {
                 SniPeek::Found(host.trim_end_matches('.').to_ascii_lowercase())
             }
             _ => SniPeek::Absent,
@@ -249,6 +252,21 @@ fn parse_server_name_list(body: &[u8]) -> SniPeek {
     }
 
     SniPeek::Absent
+}
+
+/// Whether a name from the wire can be routed on, and logged, as a host name.
+///
+/// Accepts the presentation form of a DNS name: ASCII letters, digits, `-`,
+/// `.`, and `_`, which appears in service names and in some development
+/// hostnames. Everything else — a control byte, a space, a quote, an escape —
+/// is not a host name pitchfork can serve, and is refused here rather than
+/// reaching a routing table or a log line.
+fn is_routable_host_name(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_'))
 }
 
 #[cfg(test)]
@@ -503,6 +521,63 @@ mod tests {
         let hello = client_hello(vec![extension(
             EXTENSION_SERVER_NAME,
             &server_name_ext("café.localhost"),
+        )]);
+        assert_eq!(parse_sni(&record(&hello)), SniPeek::Absent);
+    }
+
+    /// A name carrying control bytes is not routed on. It would otherwise
+    /// reach a routing lookup and a log line, where a newline forges an entry.
+    #[test]
+    fn test_parse_sni_absent_for_control_characters() {
+        for host in [
+            "api.localhost\n",
+            "api\r\nlocalhost",
+            "api.localhost\u{0}",
+            "api\tlocalhost",
+            "api localhost",
+            "api.localhost\u{7f}",
+            "\u{1b}[31mapi.localhost",
+        ] {
+            let hello = client_hello(vec![extension(
+                EXTENSION_SERVER_NAME,
+                &server_name_ext(host),
+            )]);
+            assert_eq!(
+                parse_sni(&record(&hello)),
+                SniPeek::Absent,
+                "{host:?} must not be routable"
+            );
+        }
+    }
+
+    /// The characters a host name is actually made of stay routable, including
+    /// the underscore that service names and some dev hostnames use.
+    #[test]
+    fn test_parse_sni_accepts_host_name_characters() {
+        for host in [
+            "api.localhost",
+            "api-2.my_project.localhost",
+            "API.LOCALHOST",
+        ] {
+            let hello = client_hello(vec![extension(
+                EXTENSION_SERVER_NAME,
+                &server_name_ext(host),
+            )]);
+            assert_eq!(
+                parse_sni(&record(&hello)),
+                SniPeek::Found(host.to_ascii_lowercase()),
+                "{host:?} must stay routable"
+            );
+        }
+    }
+
+    /// A name longer than DNS allows is refused rather than carried around.
+    #[test]
+    fn test_parse_sni_absent_for_oversized_hostname() {
+        let host = format!("{}.localhost", "a".repeat(250));
+        let hello = client_hello(vec![extension(
+            EXTENSION_SERVER_NAME,
+            &server_name_ext(&host),
         )]);
         assert_eq!(parse_sni(&record(&hello)), SniPeek::Absent);
     }

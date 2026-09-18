@@ -2095,12 +2095,21 @@ fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> 
         // that came up earlier, so the declared first port wins there — as
         // documented. A terminating hostname keeps preferring the detected
         // port, which is what routes daemons that declare no ports at all.
+        // Port 0 is what a daemon carries when it asked the operating system
+        // to choose and nothing has been detected yet; it is not connectable.
         return if route.mode.is_passthrough() {
-            daemon.resolved_port.first().copied().or(daemon.active_port)
+            daemon
+                .resolved_port
+                .iter()
+                .copied()
+                .find(|&p| p != 0)
+                .or(daemon.active_port)
+                .filter(|&p| p != 0)
         } else {
             daemon
                 .active_port
-                .or_else(|| daemon.resolved_port.first().copied())
+                .or_else(|| daemon.resolved_port.iter().copied().find(|&p| p != 0))
+                .filter(|&p| p != 0)
         };
     };
 
@@ -2600,6 +2609,24 @@ mod tests {
         let route = ProxyTlsRoute::default();
         let d = make_daemon(&[8443, 9443], &[8443, 9443], Some(8443));
         assert_eq!(select_daemon_port(&route, &d), Some(8443));
+    }
+
+    /// A port of 0 is not connectable — it is what a daemon carries when it
+    /// asked the operating system to choose and nothing has been detected yet
+    /// — so it is skipped rather than spliced to.
+    #[test]
+    fn test_select_daemon_port_skips_port_zero() {
+        for mode in [ProxyTlsMode::Passthrough, ProxyTlsMode::Terminate] {
+            let route = ProxyTlsRoute { mode, port: None };
+
+            // A later real port is used in place of the placeholder.
+            let mixed = make_daemon(&[0, 8443], &[0, 8443], None);
+            assert_eq!(select_daemon_port(&route, &mixed), Some(8443));
+
+            // With nothing but placeholders there is no route.
+            let unresolved = make_daemon(&[0], &[0], Some(0));
+            assert_eq!(select_daemon_port(&route, &unresolved), None);
+        }
     }
 
     /// A passthrough hostname without `proxy_tls_port` takes the daemon's

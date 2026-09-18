@@ -3013,6 +3013,49 @@ proxy_tls_port = 7443
     assert!(pitchfork_toml::PitchforkToml::read(&toml_path).is_err());
 }
 
+/// Port 0 asks the operating system to choose a port, so it names nothing a
+/// hostname can be routed to.
+#[test]
+fn test_proxy_port_zero_is_rejected() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    for key in ["proxy_tls_port", "proxy_port"] {
+        fs::write(
+            &toml_path,
+            format!(
+                r#"
+[daemons.api]
+run = "serve"
+port = [0, 8443]
+{key} = 0
+"#
+            ),
+        )
+        .unwrap();
+
+        let err = format!(
+            "{:?}",
+            pitchfork_toml::PitchforkToml::read(&toml_path).expect_err("port 0 should not parse")
+        );
+        assert!(err.contains(key), "{err}");
+    }
+
+    // Passthrough needs a port that can be connected to, so a daemon whose
+    // only declared port is 0 is rejected as well.
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = 0
+proxy_tls = "passthrough"
+"#,
+    )
+    .unwrap();
+    assert!(pitchfork_toml::PitchforkToml::read(&toml_path).is_err());
+}
+
 /// `proxy_port` is accepted as the shorter spelling of `proxy_tls_port`.
 #[test]
 fn test_read_proxy_port_alias() -> Result<()> {

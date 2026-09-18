@@ -566,6 +566,8 @@ proxy_tls_port = 9443
   forwarded to
 - Must name one of the ports in `port`; config that names another port, or
   that sets no `port` at all, is rejected when it is read
+- Cannot be `0`: that asks the operating system to choose a port, so it names
+  no port a hostname can be sent to
 - The port is matched by its position in `port`, so the mapping follows
   auto-bump rather than pointing at a port nothing is listening on
 

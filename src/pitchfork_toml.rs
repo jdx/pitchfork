@@ -1323,6 +1323,22 @@ impl PitchforkToml {
             }
             let proxy_tls_port = raw_daemon.proxy_tls_port.or(raw_daemon.proxy_port);
 
+            // Port 0 asks the operating system to choose, so it names no port
+            // a hostname can be sent to.
+            for (key, value) in [
+                ("proxy_tls_port", raw_daemon.proxy_tls_port),
+                ("proxy_port", raw_daemon.proxy_port),
+            ] {
+                if value == Some(0) {
+                    return Err(ConfigParseError::ProxyPortZero {
+                        daemon: short_name.clone(),
+                        key,
+                        path: path.to_path_buf(),
+                    }
+                    .into());
+                }
+            }
+
             // The hostname maps to one of the daemon's own ports, so a port it
             // never declares cannot be routed to.
             if let Some(port_want) = proxy_tls_port {
@@ -1343,7 +1359,9 @@ impl PitchforkToml {
             if raw_daemon
                 .proxy_tls
                 .is_some_and(ProxyTlsMode::is_passthrough)
-                && port.as_ref().is_none_or(|p| p.expect.is_empty())
+                && port
+                    .as_ref()
+                    .is_none_or(|p| p.expect.iter().all(|&port| port == 0))
             {
                 return Err(ConfigParseError::PassthroughWithoutPort {
                     daemon: short_name.clone(),
@@ -1992,7 +2010,8 @@ pub struct PitchforkTomlDaemon {
     /// port. `proxy_port` is the shorter spelling of the same setting.
     #[schemars(
         description = "Which of the daemon's `port` entries its proxy hostname maps \
-                              to. Defaults to the first."
+                              to. Defaults to the first.",
+        range(min = 1)
     )]
     pub proxy_tls_port: Option<u16>,
     /// Shorter spelling of `proxy_tls_port`. Set one or the other, not both.
@@ -2000,7 +2019,10 @@ pub struct PitchforkTomlDaemon {
     /// Kept separate rather than folded so that a config keeps the spelling
     /// its author chose when pitchfork rewrites it. Read
     /// [`Self::effective_proxy_tls_port`] rather than either field.
-    #[schemars(description = "Shorter spelling of `proxy_tls_port`; set one or the other.")]
+    #[schemars(
+        description = "Shorter spelling of `proxy_tls_port`; set one or the other.",
+        range(min = 1)
+    )]
     pub proxy_port: Option<u16>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
