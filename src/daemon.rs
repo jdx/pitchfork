@@ -55,11 +55,6 @@ pub struct Daemon {
     pub boot_time: Option<u64>,
     pub shell_pid: Option<u32>,
     pub status: DaemonStatus,
-    /// Run-to-completion task rather than a long-running service. Readiness is
-    /// a zero exit code, and the terminal state is `completed` instead of
-    /// `stopped`. See `DaemonStatus::Completed`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub oneshot: bool,
     pub dir: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cmd: Option<Vec<String>>,
@@ -159,6 +154,15 @@ pub struct Daemon {
     /// not yet started. Treated as "available" by list/status/stats.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub config_registered: bool,
+    /// Run-to-completion task rather than a long-running service. Readiness is
+    /// a zero exit code, and the terminal state is `completed` instead of
+    /// `stopped`. See `DaemonStatus::Completed`.
+    ///
+    /// Appended rather than grouped with `status`: IPC encodes this struct
+    /// positionally, so a field inserted in the middle shifts every field
+    /// after it for a peer that does not have it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub oneshot: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -173,18 +177,6 @@ pub struct RunOptions {
     pub shell_pid: Option<u32>,
     pub dir: Dir,
     pub autostop: bool,
-    /// Run-to-completion task rather than a long-running service.
-    #[serde(default)]
-    pub oneshot: bool,
-    /// How long to wait for a oneshot to finish, already resolved from the
-    /// project's `supervisor.oneshot_timeout`.
-    ///
-    /// Resolved by the client and carried on the request because the
-    /// supervisor is long-lived and may have started in another directory, so
-    /// its own `settings()` would not see the project's value. `None` leaves
-    /// the supervisor to fall back to whatever it can resolve.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub oneshot_wait: Option<OneshotWait>,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
@@ -246,6 +238,23 @@ pub struct RunOptions {
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
+    /// Run-to-completion task rather than a long-running service.
+    ///
+    /// Appended rather than grouped with `autostop`: IPC encodes this struct
+    /// positionally, so a field inserted in the middle shifts every field
+    /// after it for a CLI or supervisor that does not have it, and a version
+    /// mismatch is only warned about, not refused.
+    #[serde(default)]
+    pub oneshot: bool,
+    /// How long to wait for a oneshot to finish, already resolved from the
+    /// project's `supervisor.oneshot_timeout`.
+    ///
+    /// Resolved by the client and carried on the request because the
+    /// supervisor is long-lived and may have started in another directory, so
+    /// its own `settings()` would not see the project's value. `None` leaves
+    /// the supervisor to fall back to whatever it can resolve.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub oneshot_wait: Option<OneshotWait>,
 }
 
 impl Daemon {

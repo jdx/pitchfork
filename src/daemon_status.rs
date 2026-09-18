@@ -12,8 +12,16 @@ pub enum DaemonStatus {
     /// Exit code of the process, or -1 if unknown.
     Errored(i32),
     /// A `oneshot = true` daemon whose process ran to completion with exit
-    /// code 0. Distinct from `Stopped` so `depends` can treat it as satisfied
-    /// and so the CLI can tell "finished its work" from "not running".
+    /// code 0.
+    ///
+    /// Distinct from `Stopped` so the CLI, the TUI and the web UI can tell
+    /// "finished its work" from "never ran" or "was interrupted", and so a
+    /// failed run stays distinguishable from a successful one.
+    ///
+    /// It does not mark the task as permanently done: a start re-runs a
+    /// completed oneshot, including when it is reached as a dependency, which
+    /// is why the guide requires the command to be idempotent. What waits on
+    /// a oneshot is the start that is running it, not this status.
     Completed,
     #[default]
     Stopped,

@@ -463,6 +463,7 @@ impl Supervisor {
         let hook_resolved_ports = daemon.resolved_port.clone();
         let hook_retry = daemon.retry;
         let hook_retry_count = daemon.retry_count;
+        let is_oneshot = daemon.oneshot;
 
         tokio::spawn(async move {
             let token = guard.token();
@@ -599,6 +600,14 @@ impl Supervisor {
             if owns_pid {
                 let new_status = match exit_reason {
                     "stop" => DaemonStatus::Stopped,
+                    // An adopted process is not this supervisor's child, so its
+                    // exit code cannot be read. For a task that is the wrong
+                    // guess to make: `errored` is what `check_retry` looks for,
+                    // and it would re-run a migration or seed that may well
+                    // have succeeded. Record the run as ended without claiming
+                    // either outcome, and leave re-running to an explicit
+                    // start.
+                    _ if is_oneshot => DaemonStatus::Stopped,
                     _ => DaemonStatus::Errored(exit_code),
                 };
                 // The poll monitor did observe this process die (it just cannot

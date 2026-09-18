@@ -340,6 +340,16 @@ impl Supervisor {
                 if let Some(response) = self.claim_or_defer(&retry_opts, &mut guard).await? {
                     return Ok(response);
                 }
+                // The background retry checker may have run this attempt for us
+                // and seen it succeed while we slept. Starting again would
+                // repeat a task that has already done its work — for a
+                // migration or a seed, repeating its side effects.
+                if let Some(daemon) = self.get_daemon(id).await
+                    && daemon.status.is_completed()
+                {
+                    info!("daemon {id} completed while waiting to retry; not running it again");
+                    return Ok(IpcResponse::DaemonReady { daemon });
+                }
                 let Some(guard) = guard else {
                     // Only the deferring paths take the guard, and each of
                     // those returned above.
@@ -491,14 +501,23 @@ impl Supervisor {
         //
         // `None` here means the setting asked for no limit, so there is no
         // deadline to reach rather than a distant one.
-        let deadline = wait
+        let budget = wait
             .unwrap_or_else(|| settings().supervisor_oneshot_wait())
-            .duration()
-            .map(|d| tokio::time::Instant::now() + d);
+            .duration();
+        let mut deadline = budget.map(|d| tokio::time::Instant::now() + d);
+        // The budget bounds one attempt rather than a whole retry sequence.
+        // Backoffs alone can outlast any sane deadline (2^n seconds per
+        // attempt), so charging them to a single clock would time out a run
+        // that is progressing exactly as configured.
+        let mut watched_pid: Option<u32> = None;
         loop {
             let Some(daemon) = self.get_daemon(id).await else {
                 return IpcResponse::DaemonNotFound;
             };
+            if daemon.pid.is_some() && daemon.pid != watched_pid {
+                watched_pid = daemon.pid;
+                deadline = budget.map(|d| tokio::time::Instant::now() + d);
+            }
             match &daemon.status {
                 DaemonStatus::Completed => {
                     info!("daemon {id}: the in-flight oneshot completed");
@@ -545,7 +564,15 @@ impl Supervisor {
             }
             if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                 warn!("daemon {id}: gave up waiting for the in-flight oneshot to finish");
-                return IpcResponse::DaemonAlreadyRunning;
+                // Reported as a failure rather than as "already running": the
+                // batch start path only counts a result carrying an exit code
+                // as failed, so anything else would let dependents start
+                // against a task that never finished. 124 is the code a
+                // readiness timeout already uses.
+                return IpcResponse::DaemonFailedWithCode {
+                    exit_code: Some(124),
+                    resolved_ports: Vec::new(),
+                };
             }
             time::sleep(interval).await;
         }
@@ -2165,9 +2192,21 @@ impl Supervisor {
                             .build(),
                     )
                     .await?;
+                } else if self.is_monitored(id, pid) {
+                    // The process is gone but its monitor is still running, so
+                    // it is on its way to writing the real outcome — which for
+                    // a task that finished on its own is `completed`. Writing
+                    // `stopped` over it would discard a success the daemon
+                    // actually achieved and report failure to anyone waiting
+                    // on it, purely because a stop arrived a moment late.
+                    debug!(
+                        "pid {pid} not running but daemon {id} is still monitored; leaving the terminal state to its monitor"
+                    );
+                    return Ok(IpcResponse::DaemonWasNotRunning);
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
-                    // Process already dead — transition to Stopped so the
+                    // Process already dead and unmonitored, so nothing else
+                    // will record an outcome — transition to Stopped so the
                     // retry checker sees a terminal state and stops
                     // scheduling new attempts. This is important for an
                     // explicit `pitchfork stop` on an Errored daemon: the
