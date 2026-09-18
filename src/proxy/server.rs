@@ -1806,6 +1806,7 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
                 &ctx.cached,
                 ctx.worktree_dir.as_deref(),
                 ctx.expected_namespace.as_deref(),
+                &ctx.route,
             )
             .await
         }
@@ -1986,6 +1987,7 @@ async fn try_auto_start(
     cached: &CachedSlugEntry,
     worktree_dir: Option<&std::path::Path>,
     expected_namespace: Option<&str>,
+    route: &ProxyTlsRoute,
 ) -> ResolveResult {
     let s = settings();
     if !s.proxy.auto_start {
@@ -2018,7 +2020,7 @@ async fn try_auto_start(
 
     match tokio::time::timeout(
         timeout,
-        try_auto_start_inner(slug, cached, &daemon_id, worktree_dir),
+        try_auto_start_inner(slug, cached, &daemon_id, worktree_dir, route),
     )
     .await
     {
@@ -2043,6 +2045,7 @@ async fn try_auto_start_inner(
     cached: &CachedSlugEntry,
     daemon_id: &DaemonId,
     worktree_dir: Option<&std::path::Path>,
+    route: &ProxyTlsRoute,
 ) -> ResolveResult {
     let config_dir = worktree_dir.unwrap_or(&cached.dir);
 
@@ -2112,7 +2115,11 @@ async fn try_auto_start_inner(
 
         if let Some(d) = daemons.get(daemon_id) {
             if d.status.is_running() {
-                if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
+                // Selected through the same route as an already-running daemon,
+                // so a hostname with `proxy_tls_port` lands on its configured
+                // port on the request that started the daemon, not only on
+                // later ones.
+                if let Some(port) = select_daemon_port(route, d) {
                     log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
                     return ResolveResult::Ready(port);
                 }

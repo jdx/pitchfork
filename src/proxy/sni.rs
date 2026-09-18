@@ -100,8 +100,13 @@ impl<'a> Reader<'a> {
 ///
 /// A ClientHello may be split across several TLS records, so the handshake
 /// bytes are reassembled from every complete handshake record in `buf` before
-/// being parsed. Records of any other content type mean this is not the start
-/// of a fresh handshake.
+/// being parsed.
+///
+/// Reassembly stops at the first record of another content type rather than
+/// rejecting the connection: a TLS 1.3 client may follow its hello with a
+/// compatibility ChangeCipherSpec or early data in the same flight, and the
+/// hello that arrived before it is still the thing to route on. Only a
+/// connection whose *first* record is not a handshake is ruled out.
 pub fn parse_sni(buf: &[u8]) -> SniPeek {
     let mut records = Reader::new(buf);
     let mut handshake: Vec<u8> = Vec::new();
@@ -112,8 +117,13 @@ pub fn parse_sni(buf: &[u8]) -> SniPeek {
         }
         // A record header is 5 bytes: type (1), legacy version (2), length (2).
         if records.remaining() < 5 {
-            // Not even a full header — but the first byte is enough to rule
-            // out a non-TLS client (e.g. a plain HTTP request).
+            // Not even a full header. With handshake bytes already in hand the
+            // partial record cannot add to them, so parse what arrived;
+            // otherwise the first byte is enough to rule out a non-TLS client
+            // such as a plain HTTP request.
+            if !handshake.is_empty() {
+                break;
+            }
             return match records.u8() {
                 Some(CONTENT_TYPE_HANDSHAKE) => SniPeek::Incomplete,
                 Some(_) => SniPeek::NotTls,
@@ -124,6 +134,12 @@ pub fn parse_sni(buf: &[u8]) -> SniPeek {
             return SniPeek::Incomplete;
         };
         if content_type != CONTENT_TYPE_HANDSHAKE {
+            // Another content type ends the handshake bytes. Whatever hello
+            // already arrived is what this connection is routed on; with none,
+            // the connection never started a handshake at all.
+            if !handshake.is_empty() {
+                break;
+            }
             return SniPeek::NotTls;
         }
         // Legacy record version: not checked, a ClientHello advertises its
@@ -407,6 +423,57 @@ mod tests {
         assert_eq!(parse_sni(&wire[..wire.len() - 10]), SniPeek::Incomplete);
         assert_eq!(parse_sni(&[]), SniPeek::Incomplete);
         assert_eq!(parse_sni(&[CONTENT_TYPE_HANDSHAKE]), SniPeek::Incomplete);
+    }
+
+    /// A TLS 1.3 client may send a compatibility ChangeCipherSpec, or early
+    /// data, right behind its hello. The hostname must still be found, or the
+    /// connection would be terminated with the proxy's certificate instead of
+    /// spliced to the daemon.
+    #[test]
+    fn test_parse_sni_finds_hostname_before_a_non_handshake_record() {
+        let hello = client_hello(vec![extension(
+            EXTENSION_SERVER_NAME,
+            &server_name_ext("api.localhost"),
+        )]);
+
+        // ClientHello followed by a dummy ChangeCipherSpec record.
+        let mut wire = record(&hello);
+        wire.extend_from_slice(&[0x14, 0x03, 0x03, 0x00, 0x01, 0x01]);
+        assert_eq!(
+            parse_sni(&wire),
+            SniPeek::Found("api.localhost".to_string())
+        );
+
+        // …and then application data, as an 0-RTT client sends.
+        wire.extend_from_slice(&[0x17, 0x03, 0x03, 0x00, 0x03, 0xaa, 0xbb, 0xcc]);
+        assert_eq!(
+            parse_sni(&wire),
+            SniPeek::Found("api.localhost".to_string())
+        );
+
+        // A fragmented hello followed by the same trailing record.
+        let mut fragmented = records_of(&hello, 9);
+        fragmented.extend_from_slice(&[0x14, 0x03, 0x03, 0x00, 0x01, 0x01]);
+        assert_eq!(
+            parse_sni(&fragmented),
+            SniPeek::Found("api.localhost".to_string())
+        );
+    }
+
+    /// A truncated record header behind a complete hello is not a reason to
+    /// keep waiting: the hostname is already known.
+    #[test]
+    fn test_parse_sni_ignores_a_partial_trailing_record_header() {
+        let hello = client_hello(vec![extension(
+            EXTENSION_SERVER_NAME,
+            &server_name_ext("api.localhost"),
+        )]);
+        let mut wire = record(&hello);
+        wire.extend_from_slice(&[0x14, 0x03]);
+        assert_eq!(
+            parse_sni(&wire),
+            SniPeek::Found("api.localhost".to_string())
+        );
     }
 
     #[test]
