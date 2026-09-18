@@ -491,10 +491,9 @@ fn collect_projects(
                 // record from another checkout says nothing about this one.
                 let other_checkout = daemon.is_some_and(|d| {
                     project.shares_daemon_id(&checkout.namespace, &name)
-                        && !d
-                            .dir
-                            .as_deref()
-                            .is_some_and(|dir| dir.starts_with(&checkout.dir))
+                        && !d.dir.as_deref().is_some_and(|dir| {
+                            crate::proxy::hostname::checkout_root_of(dir) == checkout.dir
+                        })
                 });
                 let (status, port) = match daemon {
                     _ if other_checkout => ("other checkout".to_string(), None),

@@ -84,7 +84,6 @@ pub struct Checkout {
 
 impl Checkout {
     /// The root of the checkout the directory belongs to.
-    #[allow(dead_code)]
     pub fn root(&self) -> &Path {
         self.worktree.as_deref().unwrap_or(&self.primary)
     }
@@ -139,6 +138,17 @@ fn primary_from_worktree_gitdir(gitdir: &Path) -> Option<PathBuf> {
     }
     let common = worktrees_dir.parent()?;
     common.parent().map(Path::to_path_buf)
+}
+
+/// The root of the checkout a directory belongs to, canonicalized.
+///
+/// Used to attribute a running daemon to one checkout. Comparing paths
+/// lexically would put a worktree nested inside its primary checkout (say
+/// `.worktrees/feature`) in the primary, and would miss a daemon whose
+/// directory reaches the same place through a symlink.
+pub fn checkout_root_of(dir: &Path) -> PathBuf {
+    let checkout = detect_checkout(dir);
+    checkout.root().to_path_buf()
 }
 
 /// Locate the checkout containing `dir` by walking up to the nearest `.git`.
@@ -251,7 +261,7 @@ pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Opti
         return None;
     }
 
-    let project = cached_project_hosts(&checkout.primary, &project_label)?;
+    let project = project_hosts_for(&checkout.primary, &project_label)?;
     let (hosts, worktree) = match &checkout.worktree {
         Some(dir) => {
             // A worktree missing from the project either collided with another
@@ -459,51 +469,47 @@ fn group_worktrees(
     (kept, errors)
 }
 
-/// How long a built project stays cached for the hostname display paths.
+/// How long a project's worktree discovery stays cached.
 ///
-/// `pitchfork list` derives a hostname for every daemon it prints, and each
-/// one would otherwise re-read the project's configs and re-enumerate its
-/// worktrees. The window is short so a new worktree or a renamed label shows
-/// up almost immediately.
-const PROJECT_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+/// `pitchfork list` derives a hostname for every daemon it prints, and each one
+/// would otherwise re-enumerate the project's worktrees. Only the enumeration
+/// is cached: configuration is re-read every time, so a label that starts
+/// colliding stops being advertised at once, and only a brand-new worktree
+/// directory can take up to this long to appear.
+const WORKTREE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
-struct ProjectCache {
-    entries: HashMap<PathBuf, (std::time::Instant, Option<std::sync::Arc<ProjectHosts>>)>,
+struct WorktreeCache {
+    entries: HashMap<PathBuf, (std::time::Instant, std::sync::Arc<Vec<PathBuf>>)>,
 }
 
-static PROJECT_CACHE: once_cell::sync::Lazy<std::sync::Mutex<ProjectCache>> =
+static WORKTREE_CACHE: once_cell::sync::Lazy<std::sync::Mutex<WorktreeCache>> =
     once_cell::sync::Lazy::new(|| {
-        std::sync::Mutex::new(ProjectCache {
+        std::sync::Mutex::new(WorktreeCache {
             entries: HashMap::new(),
         })
     });
 
-/// [`build_project_hosts`] with a short-lived per-project cache.
-fn cached_project_hosts(primary: &Path, label: &str) -> Option<std::sync::Arc<ProjectHosts>> {
+/// The linked worktree roots of a project, cached briefly.
+fn cached_worktree_dirs(primary: &Path) -> std::sync::Arc<Vec<PathBuf>> {
     let now = std::time::Instant::now();
     {
-        let cache = PROJECT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((expires_at, project)) = cache.entries.get(primary)
+        let cache = WORKTREE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((expires_at, dirs)) = cache.entries.get(primary)
             && now < *expires_at
         {
-            return project.clone();
+            return std::sync::Arc::clone(dirs);
         }
     } // lock released before any I/O
 
-    let built = build_project_hosts(primary, label).map(|(project, errors)| {
-        for err in errors {
-            log::warn!("{err}");
-        }
-        std::sync::Arc::new(project)
-    });
+    let dirs = std::sync::Arc::new(worktree_dirs(primary));
 
-    let mut cache = PROJECT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = WORKTREE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.entries.retain(|_, (expires_at, _)| now < *expires_at);
     cache.entries.insert(
         primary.to_path_buf(),
-        (now + PROJECT_CACHE_TTL, built.clone()),
+        (now + WORKTREE_CACHE_TTL, std::sync::Arc::clone(&dirs)),
     );
-    built
+    dirs
 }
 
 /// Directories that may contain a project pitchfork knows about.
@@ -572,10 +578,40 @@ fn linked_worktree_dirs(primary: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Every linked worktree root of a project, from both discovery sources.
+///
+/// `git worktree list` also covers jj workspaces, and the `gitdir` pointers
+/// cover repositories where `git` is unavailable or errors.
+fn worktree_dirs(primary: &Path) -> Vec<PathBuf> {
+    if !crate::settings::settings().general.worktree {
+        return vec![];
+    }
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let found = crate::proxy::worktree::discover_worktrees(primary)
+        .into_iter()
+        .map(|entry| entry.path)
+        .chain(linked_worktree_dirs(primary));
+    for path in found {
+        let Some(wt_dir) = detect_checkout(&path).worktree else {
+            continue; // the primary checkout itself
+        };
+        if !dirs.contains(&wt_dir) {
+            dirs.push(wt_dir);
+        }
+    }
+    dirs
+}
+
 /// Build one project's checkouts: its primary and every linked worktree.
 ///
 /// Returns the project together with the label collisions found inside it.
-fn build_project_hosts(primary: &Path, label: &str) -> Option<(ProjectHosts, Vec<String>)> {
+/// Configuration is read fresh on every call, so a collision introduced by an
+/// edit takes effect immediately; only `worktree_dirs` may be cached.
+fn build_project_hosts(
+    primary: &Path,
+    label: &str,
+    worktrees: &[PathBuf],
+) -> Option<(ProjectHosts, Vec<String>)> {
     let (primary_hosts, mut errors) = CheckoutHosts::load(primary)?;
     let mut project = ProjectHosts {
         label: label.to_string(),
@@ -583,36 +619,32 @@ fn build_project_hosts(primary: &Path, label: &str) -> Option<(ProjectHosts, Vec
         worktrees: HashMap::new(),
     };
 
-    if crate::settings::settings().general.worktree {
-        let mut found: Vec<(String, CheckoutHosts)> = Vec::new();
-        let discovered = crate::proxy::worktree::discover_worktrees(primary)
-            .into_iter()
-            .map(|entry| entry.path)
-            .chain(linked_worktree_dirs(primary));
-        let mut seen: Vec<PathBuf> = Vec::new();
-        for path in discovered {
-            let checkout = detect_checkout(&path);
-            let Some(wt_dir) = checkout.worktree else {
-                continue; // the primary checkout itself
-            };
-            if seen.contains(&wt_dir) {
-                continue;
-            }
-            seen.push(wt_dir.clone());
-            let (Some(wt_label), Some((hosts, wt_errors))) =
-                (worktree_label(&wt_dir), CheckoutHosts::load(&wt_dir))
-            else {
-                continue;
-            };
-            errors.extend(wt_errors);
-            found.push((wt_label, hosts));
-        }
-        let (worktrees, wt_errors) = group_worktrees(label, found);
-        project.worktrees = worktrees;
+    let mut found: Vec<(String, CheckoutHosts)> = Vec::new();
+    for wt_dir in worktrees {
+        let (Some(wt_label), Some((hosts, wt_errors))) =
+            (worktree_label(wt_dir), CheckoutHosts::load(wt_dir))
+        else {
+            continue;
+        };
         errors.extend(wt_errors);
+        found.push((wt_label, hosts));
     }
+    let (worktrees, wt_errors) = group_worktrees(label, found);
+    project.worktrees = worktrees;
+    errors.extend(wt_errors);
 
     Some((project, errors))
+}
+
+/// Build a project the way the proxy routes it, reusing a brief cache of its
+/// worktree enumeration.
+fn project_hosts_for(primary: &Path, label: &str) -> Option<ProjectHosts> {
+    let worktrees = cached_worktree_dirs(primary);
+    let (project, errors) = build_project_hosts(primary, label, &worktrees)?;
+    for err in errors {
+        log::warn!("{err}");
+    }
+    Some(project)
 }
 
 impl HostRegistry {
@@ -666,7 +698,8 @@ impl HostRegistry {
                 continue;
             }
 
-            let Some((project, errors)) = build_project_hosts(&primary, &label) else {
+            let worktrees = worktree_dirs(&primary);
+            let Some((project, errors)) = build_project_hosts(&primary, &label, &worktrees) else {
                 continue;
             };
             registry.errors.extend(errors);

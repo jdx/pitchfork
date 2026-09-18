@@ -2000,16 +2000,19 @@ async fn resolve_registry_daemon(
     result
 }
 
-/// Whether a daemon's working directory lies inside a checkout.
+/// Whether a daemon is running from this checkout.
 ///
-/// A daemon with an explicit `dir` outside its project counts as running
-/// nowhere in particular, which keeps such a daemon reachable as long as its
+/// The daemon's directory is resolved to the checkout that contains it rather
+/// than compared as a path prefix, so a worktree nested inside its primary
+/// checkout is attributed to the worktree, and a symlinked or non-canonical
+/// directory still matches. A daemon whose explicit `dir` lies outside every
+/// checkout belongs to none of them, which keeps it reachable as long as its
 /// hostname is unambiguous.
 fn daemon_runs_in(daemon: &crate::daemon::Daemon, checkout: &std::path::Path) -> bool {
     daemon
         .dir
         .as_deref()
-        .is_some_and(|d| d.starts_with(checkout))
+        .is_some_and(|d| crate::proxy::hostname::checkout_root_of(d) == checkout)
 }
 
 /// Escape the five characters that change the meaning of HTML text.
@@ -2671,33 +2674,49 @@ mod tests {
         assert_eq!(host_port_suffix("host:notaport"), "");
     }
 
-    /// A daemon counts as running in a checkout when its working directory is
-    /// inside it; an explicit `dir` elsewhere belongs to no checkout.
+    /// A daemon belongs to the checkout that contains its working directory,
+    /// which is the worktree rather than the primary when one is nested inside
+    /// the other, and no checkout at all when its `dir` points elsewhere.
     #[test]
     fn test_daemon_runs_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir_all(repo.join(".git/worktrees/feature")).unwrap();
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        // A worktree checked out *inside* the primary's directory tree.
+        let nested = repo.join(".worktrees/feature");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                repo.join(".git/worktrees/feature").display()
+            ),
+        )
+        .unwrap();
+
+        let root = |p: &std::path::Path| crate::proxy::hostname::checkout_root_of(p);
+        let repo_root = root(&repo);
+        let nested_root = root(&nested);
+
         let mut daemon = crate::daemon::Daemon {
-            dir: Some(std::path::PathBuf::from("/repos/myproj/sub")),
+            dir: Some(repo.join("sub")),
             ..Default::default()
         };
-        assert!(daemon_runs_in(
-            &daemon,
-            std::path::Path::new("/repos/myproj")
-        ));
-        assert!(!daemon_runs_in(
-            &daemon,
-            std::path::Path::new("/repos/fix-1")
-        ));
+        assert!(daemon_runs_in(&daemon, &repo_root));
+        assert!(!daemon_runs_in(&daemon, &nested_root));
 
-        daemon.dir = Some(std::path::PathBuf::from("/opt/app"));
-        assert!(!daemon_runs_in(
-            &daemon,
-            std::path::Path::new("/repos/myproj")
-        ));
+        // Lexically the nested worktree sits under the primary; by checkout it
+        // does not, so the primary's hostname must not claim it.
+        daemon.dir = Some(nested.clone());
+        assert!(daemon_runs_in(&daemon, &nested_root));
+        assert!(!daemon_runs_in(&daemon, &repo_root));
+
+        // An explicit dir outside every checkout belongs to none of them.
+        daemon.dir = Some(temp.path().join("elsewhere"));
+        assert!(!daemon_runs_in(&daemon, &repo_root));
 
         daemon.dir = None;
-        assert!(!daemon_runs_in(
-            &daemon,
-            std::path::Path::new("/repos/myproj")
-        ));
+        assert!(!daemon_runs_in(&daemon, &repo_root));
     }
 }
