@@ -473,7 +473,9 @@ fn collect_projects(
             format!("{scheme}://{host}.{tld}:{effective_port}")
         }
     };
-    let hosts = |checkout: &crate::proxy::hostname::CheckoutHosts, suffix: &str| {
+    let hosts = |project: &crate::proxy::hostname::ProjectHosts,
+                 checkout: &crate::proxy::hostname::CheckoutHosts,
+                 suffix: &str| {
         checkout
             .labels()
             .into_iter()
@@ -485,7 +487,17 @@ fn collect_projects(
                         .find(|(id, _)| id.name() == name && id.namespace() == checkout.namespace)
                         .map(|(_, d)| d)
                 });
+                // Checkouts that share a namespace share one state record, so a
+                // record from another checkout says nothing about this one.
+                let other_checkout = daemon.is_some_and(|d| {
+                    project.shares_daemon_id(&checkout.namespace, &name)
+                        && !d
+                            .dir
+                            .as_deref()
+                            .is_some_and(|dir| dir.starts_with(&checkout.dir))
+                });
                 let (status, port) = match daemon {
+                    _ if other_checkout => ("other checkout".to_string(), None),
                     Some(d) if d.status.is_running() => (
                         "running".to_string(),
                         d.active_port.or_else(|| d.resolved_port.first().copied()),
@@ -522,7 +534,7 @@ fn collect_projects(
                     let suffix = format!("{wt_label}.{label}");
                     Some(JsonProxyWorktree {
                         url: url(&suffix),
-                        daemons: hosts(checkout, &suffix),
+                        daemons: hosts(project, checkout, &suffix),
                         worktree: wt_label,
                         dir: checkout.dir.display().to_string(),
                     })
@@ -530,7 +542,7 @@ fn collect_projects(
                 .collect();
             Some(JsonProxyProject {
                 url: url(&label),
-                daemons: hosts(&project.primary, &label),
+                daemons: hosts(project, &project.primary, &label),
                 dir: project.primary.dir.display().to_string(),
                 project: label,
                 worktrees,

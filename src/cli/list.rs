@@ -258,31 +258,10 @@ impl List {
     }
 }
 
-/// Build the proxy URL for a daemon based on its slug and proxy settings.
+/// Build the proxy URL for a daemon's hostname.
 ///
-/// Only daemons with a `slug` are routable through the proxy — no slug means
-/// not proxied.  This matches the routing logic in `resolve_target_port`.
-///
-/// Returns `None` if:
-/// - The daemon has no slug (not proxied)
-/// - `proxy.port` is invalid (out of range or zero)
-pub fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
-    // No slug = not proxied.
-    let slug = slug?;
-
-    let scheme = if s.proxy.https { "https" } else { "http" };
-    let tld = &s.proxy.tld;
-    let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
-
-    // Return None for an invalid port so callers don't display a broken URL.
-    let effective_port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
-
-    let host = format!("{slug}.{tld}");
-
-    // Omit port for standard ports (80 for http, 443 for https)
-    Some(if effective_port == standard_port {
-        format!("{scheme}://{host}")
-    } else {
-        format!("{scheme}://{host}:{effective_port}")
-    })
+/// Re-exported here because the CLI display paths grew up around this name; the
+/// implementation lives in [`crate::proxy::build_proxy_url`].
+pub fn build_proxy_url(host: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
+    crate::proxy::build_proxy_url(host, s)
 }

@@ -2714,29 +2714,19 @@ fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
     if opts.slug.is_some() {
         return opts.slug.clone();
     }
-    let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(&opts.dir.0).ok()?;
+    // The daemon's own `dir` can point outside its project, so look the config
+    // up from where it was defined.
+    let config_dir = opts.watch_base_dir.as_deref().unwrap_or(&opts.dir.0);
+    let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(config_dir).ok()?;
     let config = pt.daemons.get(&opts.id)?;
     crate::proxy::hostname::auto_host_for_daemon(&opts.id, config)
 }
 
 /// Compute the public proxy URL for a daemon.
 ///
-/// Returns `None` if the daemon has no slug or the proxy is not enabled.
-fn build_pitchfork_url(slug: &Option<String>, s: &crate::settings::Settings) -> Option<String> {
-    let slug = slug.as_ref()?;
-    if !s.proxy.enable {
-        return None;
-    }
-    let scheme = if s.proxy.https { "https" } else { "http" };
-    let port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
-    let port_suffix = if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) {
-        String::new()
-    } else {
-        format!(":{port}")
-    };
-    let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
-    let tld = if lan_enabled { "local" } else { &s.proxy.tld };
-    Some(format!("{scheme}://{slug}.{tld}{port_suffix}",))
+/// Returns `None` if the daemon has no hostname or the proxy is not enabled.
+fn build_pitchfork_url(host: &Option<String>, s: &crate::settings::Settings) -> Option<String> {
+    crate::proxy::build_proxy_url(host.as_deref(), s)
 }
 
 #[cfg(test)]

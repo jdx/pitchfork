@@ -177,7 +177,7 @@ impl TemplateContext {
 
         // Always expose proxy_url so templates can distinguish an unroutable daemon
         // via a strict null value instead of an undefined-variable error.
-        let proxy_url = build_proxy_url(self.self_state.host.as_deref(), &s);
+        let proxy_url = crate::proxy::build_proxy_url(self.self_state.host.as_deref(), &s);
         ctx.insert("proxy_url", &proxy_url);
         // `url` is the current spelling; `proxy_url` stays for existing configs.
         ctx.insert("url", &proxy_url);
@@ -204,7 +204,7 @@ fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
         "namespace": state.namespace,
         "slug": state.slug,
         "host": state.host,
-        "url": build_proxy_url(state.host.as_deref(), &settings()),
+        "url": crate::proxy::build_proxy_url(state.host.as_deref(), &settings()),
         "dir": state.dir.to_string_lossy(),
     })
 }
@@ -213,21 +213,6 @@ fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
 /// E.g. `myproj/redis` -> `myproj.redis`
 fn qualified_key(id: &DaemonId) -> String {
     format!("{}.{}", id.namespace(), id.name())
-}
-
-/// Build a proxy URL from slug and settings.
-fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
-    let slug = slug?;
-    let scheme = if s.proxy.https { "https" } else { "http" };
-    let tld = &s.proxy.tld;
-    let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
-    let effective_port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
-    let host = format!("{slug}.{tld}");
-    Some(if effective_port == standard_port {
-        format!("{scheme}://{host}")
-    } else {
-        format!("{scheme}://{host}:{effective_port}")
-    })
 }
 
 // ---------------------------------------------------------------------------

@@ -497,16 +497,20 @@ EOF
   assert_output "200"
 
   # <project>.<tld> is reserved for the project page and never routes to a daemon.
-  run curl -s -H "Host: hostproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  run curl -s -w '\n%{http_code}' -H "Host: hostproj.localhost" \
+    "http://127.0.0.1:$proxy_port/health"
   assert_success
   assert_output --partial "reserved"
   assert_output --partial "api.hostproj.localhost"
+  [[ "${lines[-1]}" == "200" ]]
 
   # An unknown daemon of a known project is a 404 that lists the known names.
-  run curl -s -H "Host: nope.hostproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  run curl -s -w '\n%{http_code}' -H "Host: nope.hostproj.localhost" \
+    "http://127.0.0.1:$proxy_port/health"
   assert_success
   assert_output --partial "Unknown daemon"
   assert_output --partial "api"
+  [[ "${lines[-1]}" == "404" ]]
 
   run pitchfork stop api || true
   kill_port "$daemon_port"

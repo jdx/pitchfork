@@ -24,6 +24,29 @@ use std::path::{Path, PathBuf};
 /// Maximum length of a single DNS label (RFC 1035).
 const MAX_LABEL_LEN: usize = 63;
 
+/// Maximum length of a full host name (RFC 1035), which the labels share with
+/// the configured TLD.
+const MAX_HOSTNAME_LEN: usize = 253;
+
+/// Whether the generated labels still leave room for the configured TLD.
+///
+/// Three maximum-length labels plus a long `proxy.tld` can exceed what DNS
+/// accepts, and a name nothing can resolve is worse than no name at all.
+fn fits_with_tld(host: &str) -> bool {
+    let s = crate::settings::settings();
+    let tld = crate::proxy::effective_tld(&s);
+    let total = host.len() + 1 + tld.len();
+    if total > MAX_HOSTNAME_LEN {
+        log::warn!(
+            "'{host}.{tld}' is {total} bytes, over the {MAX_HOSTNAME_LEN}-byte DNS limit; \
+             no hostname is assigned. Shorten the project, worktree or daemon name, or \
+             use a shorter proxy.tld."
+        );
+        return false;
+    }
+    true
+}
+
 /// Convert an arbitrary name into a DNS-safe lowercase label.
 ///
 /// ASCII letters are lowercased, digits are kept, and every other character
@@ -243,7 +266,8 @@ pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Opti
         return None;
     }
 
-    Some(join_labels(&daemon, worktree.as_deref(), &project_label))
+    let host = join_labels(&daemon, worktree.as_deref(), &project_label);
+    fits_with_tld(&host).then_some(host)
 }
 
 /// The hostname to advertise for a daemon: a legacy `[slugs]` entry when one

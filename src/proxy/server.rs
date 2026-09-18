@@ -1965,7 +1965,39 @@ async fn resolve_registry_daemon(
         worktrees: vec![],
         rejected_worktree_prefixes: std::collections::HashSet::new(),
     };
-    try_auto_start(host, &cached, None, Some(namespace)).await
+    let result = try_auto_start(host, &cached, None, Some(namespace)).await;
+
+    // The start can land on a record another checkout already owns, because the
+    // supervisor refuses to run a second daemon under the same ID. Serving that
+    // port would hand this hostname the other checkout's content.
+    if per_checkout && let ResolveResult::Ready(_) = result {
+        let started = {
+            let state_file = SUPERVISOR.state_file.lock().await;
+            state_file
+                .daemons
+                .iter()
+                .find(|(id, _)| id.name() == daemon && id.namespace() == namespace)
+                .map(|(_, d)| d.clone())
+        };
+        if let Some(d) = started
+            && !daemon_runs_in(&d, dir)
+        {
+            return ResolveResult::Error(format!(
+                "'{host}' belongs to the checkout at {}, but daemon '{namespace}/{daemon}' is \
+                 running from {}.\n\
+                 These checkouts share the namespace '{namespace}', so pitchfork cannot run \
+                 both copies at once.\n\
+                 Give each checkout its own top-level `namespace`, or stop the other one first.",
+                dir.display(),
+                d.dir
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "an unknown directory".to_string()),
+            ));
+        }
+    }
+
+    result
 }
 
 /// Whether a daemon's working directory lies inside a checkout.
