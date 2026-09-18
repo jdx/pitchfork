@@ -369,12 +369,15 @@ client-certificate check, or keep passthrough off the LAN.
 
 The hostname is read from the ClientHello, which is sent in the clear. Under
 Encrypted Client Hello the inner name is not visible, so routing follows the
-outer `public_name`, as it must for any proxy that routes on SNI. A connection
-whose ClientHello cannot be read at all — it stalls, exceeds the inspection
-window, or never reconciles its own length fields — is closed rather than
-terminated, so a passthrough hostname is never quietly answered with the
-proxy's own certificate. Where no daemon is configured for passthrough, such a
-connection is terminated as before.
+outer `public_name`, as it must for any proxy that routes on SNI.
+
+A connection whose ClientHello the proxy cannot read before the handshake — it
+stalls, exceeds the inspection window, or never reconciles its own length
+fields — is handed to the TLS listener like any other. If the handshake then
+turns out to name a passthrough hostname, the proxy fails it rather than
+answering with its own certificate, and logs why. A passthrough hostname is
+therefore never quietly downgraded, and connections for ordinary terminating
+hostnames are unaffected.
 
 Passthrough requires the `proxy-tls` feature (enabled in default builds) and
 `proxy.https = true`, because it only applies to the TLS listener. Plain HTTP

@@ -106,6 +106,29 @@ struct SlugCache {
     expires_at: std::time::Instant,
 }
 
+/// Synchronous mirror of the slug table, for code that cannot await.
+///
+/// `rustls` calls its certificate resolver from a synchronous trait method, and
+/// that resolver has to know whether a hostname is passthrough before it issues
+/// a certificate for it. Published on every refresh of [`SLUG_CACHE`], so it is
+/// the same data one lock away.
+static SLUG_SNAPSHOT: once_cell::sync::Lazy<
+    std::sync::RwLock<Arc<std::collections::HashMap<String, CachedSlugEntry>>>,
+> = once_cell::sync::Lazy::new(|| {
+    std::sync::RwLock::new(Arc::new(std::collections::HashMap::new()))
+});
+
+/// Read the synchronous slug snapshot.
+///
+/// Empty until the async cache has been populated once, which every TLS
+/// connection does before reaching the certificate resolver.
+fn slug_snapshot() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
+    match SLUG_SNAPSHOT.read() {
+        Ok(guard) => Arc::clone(&guard),
+        Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+    }
+}
+
 static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
     once_cell::sync::Lazy::new(|| {
         tokio::sync::Mutex::new(SlugCache {
@@ -308,6 +331,15 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
         let mut cache = SLUG_CACHE.lock().await;
         cache.entries = Arc::clone(&new_entries);
         cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
+    }
+
+    // Publish the same data where a synchronous caller can read it.
+    {
+        let mut snapshot = match SLUG_SNAPSHOT.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *snapshot = Arc::clone(&new_entries);
     }
 
     new_entries
@@ -604,7 +636,7 @@ async fn serve_https_with_http_fallback(
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Build the SNI resolver (loads CA, caches per-domain certs)
-    let resolver = SniCertResolver::new(&ca_cert_path, &ca_key_path)?;
+    let resolver = SniCertResolver::new(&ca_cert_path, &ca_key_path, effective_tld.clone())?;
 
     let mut tls_config = ServerConfig::builder()
         .with_no_client_auth()
@@ -686,24 +718,23 @@ async fn serve_https_with_http_fallback(
                                 }
                             }
                             SniProbe::NoHost => {}
-                            // The hostname could not be read, so whether this
-                            // connection belongs to a passthrough daemon is
-                            // unknown. Terminating it would answer with the
-                            // proxy's certificate in place of the daemon's,
-                            // which is a silent downgrade of exactly the
-                            // property passthrough exists to preserve, so the
-                            // connection is dropped instead — but only where a
-                            // passthrough daemon exists to be downgraded.
+                            // The hostname could not be read here, so this
+                            // connection is handed to the TLS acceptor like any
+                            // other: rustls defragments the handshake itself
+                            // and hands the real host name to the certificate
+                            // resolver, which refuses to issue for a
+                            // passthrough hostname rather than answering with
+                            // the proxy's certificate. Unrelated terminating
+                            // hostnames are served normally.
                             SniProbe::Undetermined => {
-                                if any_passthrough_route().await {
-                                    log::warn!(
-                                        "Closing a TLS connection whose ClientHello could not be \
-                                         read: this deployment has passthrough daemons, and \
-                                         terminating would serve the proxy's certificate instead \
-                                         of theirs."
-                                    );
-                                    return;
-                                }
+                                log::debug!(
+                                    "Could not read the ClientHello of a TLS connection; \
+                                     handing it to the TLS acceptor, which refuses to terminate \
+                                     a passthrough hostname."
+                                );
+                                // Make sure the resolver's synchronous snapshot
+                                // has been populated before it has to decide.
+                                let _ = get_cached_slugs().await;
                             }
                         }
 
@@ -837,23 +868,6 @@ async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniP
         // immediately and spin. Sleep briefly instead and re-peek.
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-}
-
-/// Whether any hostname this proxy serves resolves to a passthrough daemon.
-///
-/// Answered from the slug cache, so it costs no disk I/O. It decides what to do
-/// with a connection whose hostname could not be read: where nothing is
-/// passthrough, terminating cannot downgrade anything and the connection is
-/// served as before.
-#[cfg(feature = "proxy-tls")]
-async fn any_passthrough_route() -> bool {
-    get_cached_slugs().await.values().any(|entry| {
-        entry.tls.mode.is_passthrough()
-            || entry
-                .worktree_tls
-                .values()
-                .any(|route| route.mode.is_passthrough())
-    })
 }
 
 /// Splice a TLS connection straight through to its daemon.
@@ -1098,6 +1112,9 @@ pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> c
 struct SniCertResolver {
     /// The CA issuer (key + parsed cert params, used to sign leaf certs).
     issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
+    /// The TLD hostnames are resolved against, so a passthrough hostname can
+    /// be recognized before a certificate is issued for it.
+    tld: String,
     /// Directory where per-domain PEM files are cached on disk.
     host_certs_dir: std::path::PathBuf,
     /// L1 cache: domain → certified key (in-memory).
@@ -1120,7 +1137,11 @@ impl std::fmt::Debug for SniCertResolver {
 #[cfg(feature = "proxy-tls")]
 impl SniCertResolver {
     /// Load the CA from disk and prepare the resolver.
-    fn new(ca_cert_path: &std::path::Path, ca_key_path: &std::path::Path) -> crate::Result<Self> {
+    fn new(
+        ca_cert_path: &std::path::Path,
+        ca_key_path: &std::path::Path,
+        tld: String,
+    ) -> crate::Result<Self> {
         let ca_key_pem = std::fs::read_to_string(ca_key_path)
             .map_err(|e| miette::miette!("Failed to read CA key {}: {e}", ca_key_path.display()))?;
         let ca_cert_pem = std::fs::read_to_string(ca_cert_path).map_err(|e| {
@@ -1149,6 +1170,7 @@ impl SniCertResolver {
 
         Ok(Self {
             issuer,
+            tld,
             host_certs_dir,
             cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             pending: std::sync::Mutex::new(std::collections::HashSet::new()),
@@ -1435,6 +1457,22 @@ impl rustls::server::ResolvesServerCert for SniCertResolver {
         client_hello: rustls::server::ClientHello<'_>,
     ) -> Option<Arc<rustls::sign::CertifiedKey>> {
         let domain = client_hello.server_name()?;
+
+        // This is the last point where a passthrough hostname can still be
+        // caught, and the first where the host name is authoritative: rustls
+        // has reassembled the handshake itself. Issuing here would answer with
+        // the proxy's certificate in place of the daemon's and drop the
+        // client-certificate request, so the handshake is failed instead.
+        // Reached only when the pre-handshake peek could not read the hello.
+        if resolve_tls_mode_in(domain, &self.tld, &slug_snapshot()).is_passthrough() {
+            log::warn!(
+                "Refusing to terminate TLS for '{domain}', which is configured for \
+                 proxy_tls = \"passthrough\": its ClientHello could not be inspected before the \
+                 handshake, so the stream could not be spliced to the daemon."
+            );
+            return None;
+        }
+
         self.get_or_create(domain)
     }
 }
@@ -1983,10 +2021,39 @@ async fn resolve_route_context(host: &str, tld: &str) -> Result<RouteContext, Re
 /// host, the built-in web UI, a bare IP — keeps today's behavior and
 /// terminates.
 pub(crate) async fn resolve_tls_mode(host: &str, tld: &str) -> ProxyTlsMode {
-    match resolve_route_context(host, tld).await {
-        Ok(ctx) => ctx.route.mode,
-        Err(_) => ProxyTlsMode::Terminate,
+    let entries = get_cached_slugs().await;
+    resolve_tls_mode_in(host, tld, &entries)
+}
+
+/// [`resolve_tls_mode`] against a given slug table, without awaiting.
+///
+/// Used by the certificate resolver, which runs in a synchronous trait method
+/// and reads [`slug_snapshot`].
+fn resolve_tls_mode_in(
+    host: &str,
+    tld: &str,
+    entries: &std::collections::HashMap<String, CachedSlugEntry>,
+) -> ProxyTlsMode {
+    let Some(subdomain) = strip_tld(host, tld) else {
+        return ProxyTlsMode::Terminate;
+    };
+    let Some(cached) = wildcard_slug_lookup(&subdomain, entries, settings().proxy.wildcard) else {
+        return ProxyTlsMode::Terminate;
+    };
+
+    // A wildcard match may name a worktree, which carries its own setting.
+    if !subdomain.eq_ignore_ascii_case(&cached.slug)
+        && let Some(prefix) = strip_dot_suffix_ignore_case(&subdomain, &cached.slug)
+        && let PrefixMatch::Worktree(wt) = match_worktree_prefix(cached, &prefix)
+    {
+        return cached
+            .worktree_tls
+            .get(&wt.sanitized_branch.to_ascii_lowercase())
+            .map(|route| route.mode)
+            .unwrap_or(cached.tls.mode);
     }
+
+    cached.tls.mode
 }
 
 /// Pick which of a running daemon's ports a hostname forwards to.
@@ -2823,6 +2890,65 @@ mod tests {
         assert!(
             !mismatch.contains("settings.proxy.https"),
             "a host mismatch is not an HTTPS configuration problem: {mismatch}"
+        );
+    }
+
+    /// The synchronous mode lookup the certificate resolver uses agrees with
+    /// the async one: exact hosts, wildcard subdomains, worktree prefixes with
+    /// their own setting, and anything that is not a slug at all.
+    #[test]
+    fn test_resolve_tls_mode_in() {
+        let mut entries = std::collections::HashMap::new();
+
+        let mut spliced = make_entry("spliced");
+        spliced.tls = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        spliced.worktrees = vec![
+            make_worktree("feature/b", "feature-b"),
+            make_worktree("feature/c", "feature-c"),
+        ];
+        spliced.worktree_tls.insert(
+            "feature-b".to_string(),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Terminate,
+                port: None,
+            },
+        );
+        entries.insert("spliced".to_string(), spliced);
+        entries.insert("plain".to_string(), make_entry("plain"));
+
+        let mode = |host: &str| resolve_tls_mode_in(host, "localhost", &entries);
+
+        assert_eq!(mode("spliced.localhost"), ProxyTlsMode::Passthrough);
+        // Host names are case-insensitive, and a wildcard subdomain inherits
+        // the slug's mode.
+        assert_eq!(mode("SPLICED.localhost"), ProxyTlsMode::Passthrough);
+        assert_eq!(mode("tenant.spliced.localhost"), ProxyTlsMode::Passthrough);
+        // A worktree with its own setting overrides the slug's …
+        assert_eq!(mode("feature-b.spliced.localhost"), ProxyTlsMode::Terminate);
+        // … and one without it inherits.
+        assert_eq!(
+            mode("feature-c.spliced.localhost"),
+            ProxyTlsMode::Passthrough
+        );
+        // Everything else terminates: another slug, an unknown host, the
+        // bare TLD, and a host outside the TLD.
+        assert_eq!(mode("plain.localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("unknown.localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("spliced.example.com"), ProxyTlsMode::Terminate);
+    }
+
+    /// An empty table — the snapshot before any refresh — terminates rather
+    /// than refusing certificates for hosts it knows nothing about.
+    #[test]
+    fn test_resolve_tls_mode_in_empty_table() {
+        let entries = std::collections::HashMap::new();
+        assert_eq!(
+            resolve_tls_mode_in("spliced.localhost", "localhost", &entries),
+            ProxyTlsMode::Terminate
         );
     }
 
