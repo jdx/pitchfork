@@ -73,7 +73,13 @@ async function onRestart(groupName: string) {
       <code>{{ stack.config_error }}</code>
     </p>
 
-    <p v-if="stack.dir_exists && unresolvable.length" class="notice">
+    <p v-if="!stack.namespace" class="notice">
+      No namespace could be derived for this worktree, so no daemons are attributed to
+      it: {{ stack.namespace_error }}. Set <code>namespace</code> in a
+      <code>pitchfork.toml</code> here to give it one.
+    </p>
+
+    <p v-else-if="stack.dir_exists && unresolvable.length" class="notice">
       The supervisor has no config for
       <code>{{ unresolvable.join(', ') }}</code>, so starting or restarting them would
       fail; stopping still works. Register <code>{{ stack.dir }}</code> as namespace

@@ -28,7 +28,7 @@ const prefersCard = ref(safeGet('pitchfork.viewMode') === 'card')
         <h1 class="page-title">{{ worktree }}</h1>
         <span class="page-subtitle">
           <span v-if="stack">
-            {{ stack.branch }} &middot; {{ stack.namespace }} &middot;
+            {{ stack.branch }} &middot; {{ stack.namespace ?? 'no namespace' }} &middot;
             {{ stack.daemons.running }}/{{ stack.daemons.total }} daemons running
           </span>
         </span>

@@ -39,7 +39,12 @@ pub struct WorktreeView {
     pub name: String,
     pub branch: String,
     pub path: PathBuf,
-    pub namespace: String,
+    /// Namespace daemons declared here would carry, or `None` when none can be
+    /// derived. Borrowing the project's namespace would let this worktree list
+    /// and control the primary checkout's daemons.
+    pub namespace: Option<String>,
+    /// Why the namespace could not be derived, when it could not be.
+    pub namespace_error: Option<String>,
     pub is_primary: bool,
     /// False when the directory is gone, e.g. a checkout deleted while its
     /// `[namespaces]` entry stayed behind.
@@ -94,7 +99,10 @@ pub struct ApiWorktreeSummary {
     name: String,
     branch: String,
     path: String,
-    namespace: String,
+    namespace: Option<String>,
+    /// Why no namespace could be derived for this worktree, when none could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    namespace_error: Option<String>,
     is_primary: bool,
     /// False when the supervisor cannot resolve config for some of this
     /// worktree's daemons, so starting them would fail.
@@ -142,7 +150,10 @@ pub struct ApiStack {
     project: String,
     worktree: String,
     branch: String,
-    namespace: String,
+    namespace: Option<String>,
+    /// Why no namespace could be derived for this worktree, when none could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    namespace_error: Option<String>,
     dir: String,
     is_primary: bool,
     /// False when `unresolvable_daemons` is non-empty.
@@ -180,7 +191,7 @@ pub type Resolvable = HashSet<String>;
 /// Daemons of this worktree the web endpoints could not start or restart.
 fn unresolvable_for(
     daemons: &DaemonIndex,
-    namespace: &str,
+    namespace: Option<&str>,
     resolvable: &Resolvable,
 ) -> Vec<String> {
     namespace_entries(daemons, namespace)
@@ -214,22 +225,26 @@ fn last_activity_for<'a>(entries: impl Iterator<Item = &'a ApiDaemonEntry>) -> O
     Some(started.to_rfc3339())
 }
 
+/// Entries of one namespace; none at all when the worktree has no namespace.
 fn namespace_entries<'a>(
     daemons: &'a DaemonIndex,
-    namespace: &'a str,
+    namespace: Option<&'a str>,
 ) -> impl Iterator<Item = &'a ApiDaemonEntry> {
     daemons
         .values()
-        .filter(move |e| e.namespace().eq_ignore_ascii_case(namespace))
+        .filter(move |e| namespace.is_some_and(|ns| e.namespace().eq_ignore_ascii_case(ns)))
 }
 
 /// Every namespace a project covers: one per worktree, deduplicated.
 fn project_namespaces(project: &ProjectView) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for wt in &project.worktrees {
-        if seen.insert(wt.namespace.to_ascii_lowercase()) {
-            out.push(wt.namespace.clone());
+    for wt in project.worktrees.iter() {
+        let Some(namespace) = wt.namespace.as_deref() else {
+            continue;
+        };
+        if seen.insert(namespace.to_ascii_lowercase()) {
+            out.push(namespace.to_string());
         }
     }
     out
@@ -280,12 +295,14 @@ fn build_worktree_summary(
         branch: wt.branch.clone(),
         path: wt.path.to_string_lossy().to_string(),
         namespace: wt.namespace.clone(),
+        namespace_error: wt.namespace_error.clone(),
         is_primary: wt.is_primary,
-        can_start: wt.dir_exists && unresolvable_for(daemons, &wt.namespace, resolvable).is_empty(),
+        can_start: wt.dir_exists
+            && unresolvable_for(daemons, wt.namespace.as_deref(), resolvable).is_empty(),
         dir_exists: wt.dir_exists,
         group_count: wt.groups.len(),
-        daemons: counts_for(namespace_entries(daemons, &wt.namespace)),
-        last_activity: last_activity_for(namespace_entries(daemons, &wt.namespace)),
+        daemons: counts_for(namespace_entries(daemons, wt.namespace.as_deref())),
+        last_activity: last_activity_for(namespace_entries(daemons, wt.namespace.as_deref())),
         url: format!("/projects/{}/{}", project.name, wt.name),
         api_url: format!("/api/projects/{}/{}", project.name, wt.name),
         // Pitchfork does not track a data directory for daemons, so there is
@@ -334,11 +351,11 @@ pub fn build_stack(
         });
     }
 
-    let unresolvable = unresolvable_for(daemons, &wt.namespace, resolvable);
+    let unresolvable = unresolvable_for(daemons, wt.namespace.as_deref(), resolvable);
     // A registration left behind by a deleted checkout must not look healthy.
     let dir_exists = wt.dir_exists;
 
-    let ungrouped: Vec<ApiDaemonEntry> = namespace_entries(daemons, &wt.namespace)
+    let ungrouped: Vec<ApiDaemonEntry> = namespace_entries(daemons, wt.namespace.as_deref())
         .filter(|e| !grouped.contains(e.qualified()))
         .cloned()
         .collect();
@@ -348,6 +365,7 @@ pub fn build_stack(
         worktree: wt.name.clone(),
         branch: wt.branch.clone(),
         namespace: wt.namespace.clone(),
+        namespace_error: wt.namespace_error.clone(),
         dir: wt.path.to_string_lossy().to_string(),
         is_primary: wt.is_primary,
         can_start: dir_exists && unresolvable.is_empty(),
@@ -356,7 +374,7 @@ pub fn build_stack(
         config_error: wt.config_error.clone(),
         groups,
         ungrouped,
-        daemons: counts_for(namespace_entries(daemons, &wt.namespace)),
+        daemons: counts_for(namespace_entries(daemons, wt.namespace.as_deref())),
         url: format!("/projects/{}/{}", project.name, wt.name),
     }
 }
@@ -483,22 +501,31 @@ fn unique_name(base: &str, taken: &mut HashSet<String>) -> String {
 /// its own, because the user config is then the nearest one. Attributing the
 /// worktree to `global` would show every global daemon under it, so fall back
 /// to the name the directory itself would produce.
-fn namespace_for_worktree(path: &StdPath, project_name: &str) -> String {
+///
+/// That fallback can fail, for instance when the directory name is not a valid
+/// namespace. The worktree then has no namespace at all rather than borrowing
+/// the project's, which would let it list and control the primary checkout's
+/// daemons.
+fn namespace_for_worktree(path: &StdPath) -> Result<String, String> {
     match PitchforkToml::namespace_for_dir(path) {
-        Ok(ns) if ns != "global" => ns,
-        _ => PitchforkToml::namespace_for_project_dir(path)
-            .unwrap_or_else(|_| project_name.to_string()),
+        Ok(ns) if ns != "global" => Ok(ns),
+        _ => PitchforkToml::namespace_for_project_dir(path).map_err(|e| e.to_string()),
     }
 }
 
 fn worktree_view_for(
-    project_name: &str,
     path: PathBuf,
     branch: String,
     name: String,
     project_canonical: &StdPath,
 ) -> WorktreeView {
-    let namespace = namespace_for_worktree(&path, project_name);
+    let (namespace, namespace_error) = match namespace_for_worktree(&path) {
+        Ok(ns) => (Some(ns), None),
+        Err(e) => {
+            log::warn!("No namespace for worktree {}: {e}", path.display());
+            (None, Some(e))
+        }
+    };
     let (groups, config_error) = groups_for_dir(&path);
     WorktreeView {
         is_primary: canonical(&path) == project_canonical,
@@ -506,13 +533,14 @@ fn worktree_view_for(
         groups,
         config_error,
         namespace,
+        namespace_error,
         name,
         branch,
         path,
     }
 }
 
-fn worktree_views(project_name: &str, project_dir: &StdPath) -> Vec<WorktreeView> {
+fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     let project_canonical = canonical(project_dir);
     // Discover from the main checkout: `jj workspace list` resolved from a
     // secondary workspace reports `default` as the directory it ran in, which
@@ -526,7 +554,6 @@ fn worktree_views(project_name: &str, project_dir: &StdPath) -> Vec<WorktreeView
     for wt in discovered {
         let name = unique_name(&wt.sanitized_branch, &mut taken);
         views.push(worktree_view_for(
-            project_name,
             wt.path,
             wt.branch,
             name,
@@ -542,7 +569,6 @@ fn worktree_views(project_name: &str, project_dir: &StdPath) -> Vec<WorktreeView
         views.insert(
             0,
             worktree_view_for(
-                project_name,
                 project_dir.to_path_buf(),
                 DEFAULT_WORKTREE.to_string(),
                 name,
@@ -630,7 +656,7 @@ fn collect_project_views_blocking() -> Vec<ProjectView> {
     let mut projects: Vec<(ProjectView, Option<PathBuf>)> = registry
         .iter()
         .map(|(name, entry)| {
-            let worktrees = worktree_views(name, &entry.dir);
+            let worktrees = worktree_views(&entry.dir);
             // Where this project's repository really lives, so a registration
             // that points at a linked worktree is folded into its checkout.
             let main = main_checkout_root(&entry.dir)
@@ -817,7 +843,8 @@ mod tests {
             name: "main".into(),
             branch: "main".into(),
             path: PathBuf::from("/src/shop"),
-            namespace: "shop".into(),
+            namespace: Some("shop".into()),
+            namespace_error: None,
             is_primary: true,
             dir_exists: true,
             groups: IndexMap::from([("web".to_string(), group(&["shop/api", "shop/frontend"]))]),
@@ -827,7 +854,8 @@ mod tests {
             name: "feature-a".into(),
             branch: "feature/a".into(),
             path: PathBuf::from("/src/shop-feature-a"),
-            namespace: "shop-feature-a".into(),
+            namespace: Some("shop-feature-a".into()),
+            namespace_error: None,
             is_primary: false,
             dir_exists: true,
             groups: IndexMap::from([
@@ -843,7 +871,8 @@ mod tests {
             name: "default".into(),
             branch: "default".into(),
             path: PathBuf::from("/src/blog"),
-            namespace: "blog".into(),
+            namespace: Some("blog".into()),
+            namespace_error: None,
             is_primary: true,
             dir_exists: true,
             groups: IndexMap::new(),
@@ -1041,7 +1070,7 @@ mod tests {
         )
         .unwrap();
 
-        let views = worktree_views("repo", &repo);
+        let views = worktree_views(&repo);
         assert_eq!(views.len(), 1);
         assert!(views[0].is_primary);
         assert_eq!(views[0].name, DEFAULT_WORKTREE);
@@ -1111,9 +1140,41 @@ mod tests {
         let worktree = temp.path().join("feat");
         std::fs::create_dir_all(&worktree).unwrap();
 
-        let namespace = namespace_for_worktree(&worktree, "shop");
+        let namespace = namespace_for_worktree(&worktree).unwrap();
         assert_eq!(namespace, "feat");
         assert_ne!(namespace, "global");
+    }
+
+    /// A directory name that is not a valid namespace leaves the worktree
+    /// without one, rather than borrowing the project's: that would list and
+    /// control the primary checkout's daemons under this worktree.
+    #[test]
+    fn worktree_with_an_underivable_namespace_borrows_none() {
+        let temp = tempfile::tempdir().unwrap();
+        // Non-ASCII directory names have no valid namespace.
+        let worktree = temp.path().join("功能");
+        std::fs::create_dir_all(&worktree).unwrap();
+        assert!(namespace_for_worktree(&worktree).is_err());
+
+        let views = worktree_views(&worktree);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].namespace, None);
+        assert!(views[0].namespace_error.is_some());
+
+        // With no namespace, no daemon is attributed to it.
+        let daemons = index(vec![daemon("shop/api", ApiDaemonStatus::Running, Some(5))]);
+        let project = ProjectView {
+            name: "shop".into(),
+            dir: worktree.clone(),
+            dir_exists: true,
+            worktrees: views,
+        };
+        let json =
+            serde_json::to_value(build_project(&project, &daemons, &all_resolvable(&daemons)))
+                .unwrap();
+        assert_eq!(json["worktrees"][0]["namespace"], serde_json::Value::Null);
+        assert_eq!(json["worktrees"][0]["daemons"]["total"], 0);
+        assert_eq!(json["stack"]["ungrouped"].as_array().unwrap().len(), 0);
     }
 
     /// A `[namespaces]` entry whose directory was deleted must not render as a
@@ -1121,7 +1182,7 @@ mod tests {
     #[test]
     fn missing_project_directory_is_reported_and_not_startable() {
         let missing = PathBuf::from("/nonexistent/pitchfork-project");
-        let worktrees = worktree_views("ghost", &missing);
+        let worktrees = worktree_views(&missing);
         assert_eq!(worktrees.len(), 1);
         assert!(!worktrees[0].dir_exists);
 
@@ -1175,7 +1236,7 @@ mod tests {
             &["worktree", "add", "-q", "../shop-feat", "-b", "feature/a"]
         ));
 
-        let views = worktree_views("shop", &repo);
+        let views = worktree_views(&repo);
         let names: Vec<&str> = views.iter().map(|w| w.name.as_str()).collect();
         assert!(names.contains(&"main"), "got {names:?}");
         assert!(names.contains(&"feature-a"), "got {names:?}");

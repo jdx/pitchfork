@@ -144,7 +144,10 @@ export interface WorktreeSummary {
   name: string
   branch: string
   path: string
-  namespace: string
+  /** Null when no namespace can be derived for this worktree. */
+  namespace: string | null
+  /** Why no namespace could be derived, when none could. */
+  namespace_error?: string
   is_primary: boolean
   /** False when the supervisor cannot resolve config for some of its daemons. */
   can_start: boolean
@@ -172,7 +175,10 @@ export interface Stack {
   project: string
   worktree: string
   branch: string
-  namespace: string
+  /** Null when no namespace can be derived for this worktree. */
+  namespace: string | null
+  /** Why no namespace could be derived, when none could. */
+  namespace_error?: string
   dir: string
   is_primary: boolean
   /** False when `unresolvable_daemons` is non-empty. */

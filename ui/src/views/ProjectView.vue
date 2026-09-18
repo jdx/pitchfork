@@ -68,7 +68,10 @@ const showDisk = computed(() =>
                 <span v-else-if="!w.can_start" class="tag tag-warn" title="The supervisor has no config for some of these daemons; register this worktree to start them">not startable</span>
                 <div class="cell-dir">{{ w.path }}</div>
               </td>
-              <td class="cell-ns">{{ w.namespace }}</td>
+              <td class="cell-ns">
+                <span v-if="w.namespace">{{ w.namespace }}</span>
+                <span v-else class="dim" :title="w.namespace_error">none</span>
+              </td>
               <td class="cell-n">{{ w.daemons.running }}</td>
               <td class="cell-n">{{ w.daemons.stopped }}</td>
               <td class="cell-n">{{ w.daemons.total }}</td>
@@ -126,6 +129,7 @@ const showDisk = computed(() =>
 .tag { margin-left: 0.4rem; .font-sans(0.62rem; @c-accent-dim; 600); background: @sf-accent-10; padding: 0.08rem 0.35rem; border-radius: @r-sm; text-transform: uppercase; }
 .cell-dir { .font-mono(0.72rem; @sf-30); }
 .cell-ns { .font-mono(0.78rem; @sf-45); }
+.dim { color: @sf-25; }
 .cell-n { text-align: center; .font-sans(0.82rem; @sf-45; 500); font-variant-numeric: tabular-nums; }
 .cell-since { text-align: right; padding-right: 0.75rem; .font-sans(0.78rem; @sf-30; 500); }
 </style>
