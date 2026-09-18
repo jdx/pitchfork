@@ -1154,6 +1154,8 @@ pub enum ReadyCheckType {
     Port(u16),
     Cmd(String),
     Delay(u64),
+    /// A `oneshot` daemon: ready when the process exits 0.
+    Completion,
     Default,
 }
 
@@ -1165,6 +1167,7 @@ impl std::fmt::Display for ReadyCheckType {
             ReadyCheckType::Port(port) => write!(f, "TCP port {port}"),
             ReadyCheckType::Cmd(cmd) => write!(f, "command '{cmd}'"),
             ReadyCheckType::Delay(secs) => write!(f, "delay ({secs}s)"),
+            ReadyCheckType::Completion => write!(f, "completion"),
             ReadyCheckType::Default => write!(f, "default readiness check"),
         }
     }

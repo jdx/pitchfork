@@ -2920,3 +2920,104 @@ run = "echo"
 
     Ok(())
 }
+
+/// A oneshot daemon parses and round-trips through a write.
+#[test]
+fn test_daemon_oneshot() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.migrate]
+run = "npm run migrate"
+oneshot = true
+depends = ["db"]
+
+[daemons.db]
+run = "postgres"
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+
+    let mut pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let migrate = get_daemon_by_name(&pt, "migrate").unwrap();
+    assert!(migrate.is_oneshot());
+    assert_eq!(migrate.oneshot, Some(true));
+
+    let db = get_daemon_by_name(&pt, "db").unwrap();
+    assert!(!db.is_oneshot());
+    assert_eq!(db.oneshot, None, "oneshot should be omitted when unset");
+
+    pt.path = Some(toml_path.clone());
+    pt.write()?;
+    let written = fs::read_to_string(&toml_path).unwrap();
+    assert!(written.contains("oneshot = true"), "written: {written}");
+
+    let reread = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    assert!(get_daemon_by_name(&reread, "migrate").unwrap().is_oneshot());
+    assert!(!get_daemon_by_name(&reread, "db").unwrap().is_oneshot());
+
+    Ok(())
+}
+
+/// Readiness and health checks are rejected on a oneshot daemon: its
+/// readiness is defined as a zero exit code, so a second answer to the same
+/// question would be ambiguous.
+#[test]
+fn test_daemon_oneshot_rejects_ready_and_health_fields() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let conflicting = [
+        ("ready_delay", "ready_delay = 5"),
+        ("ready_output", "ready_output = \"done\""),
+        ("ready_http", "ready_http = \"http://localhost:8080/\""),
+        ("ready_port", "ready_port = 8080"),
+        ("ready_cmd", "ready_cmd = \"test -f /tmp/ready\""),
+        ("health_cmd", "health_cmd = \"true\""),
+        ("health_http", "health_http = \"http://localhost:8080/\""),
+        ("health_port", "health_port = 8080"),
+    ];
+
+    for (field, line) in conflicting {
+        let toml_content = format!(
+            r#"
+[daemons.migrate]
+run = "npm run migrate"
+oneshot = true
+{line}
+"#
+        );
+        fs::write(&toml_path, toml_content).unwrap();
+        let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+            .expect_err(&format!("oneshot with {field} should be rejected"));
+        let chain = format!("{err:?}");
+        assert!(
+            chain.contains(field) && chain.contains("oneshot"),
+            "error for {field} should name both the field and oneshot: {chain}"
+        );
+    }
+}
+
+/// The same fields are fine when `oneshot` is absent or false.
+#[test]
+fn test_ready_checks_allowed_without_oneshot() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    let toml_content = r#"
+[daemons.api]
+run = "npm start"
+oneshot = false
+ready_port = 8080
+health_port = 8080
+"#;
+
+    fs::write(&toml_path, toml_content).unwrap();
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let api = get_daemon_by_name(&pt, "api").unwrap();
+    assert!(!api.is_oneshot());
+    assert!(api.ready_port.is_some());
+
+    Ok(())
+}

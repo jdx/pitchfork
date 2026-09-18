@@ -884,6 +884,17 @@ pub struct SettingsSupervisor {
     #[usage(env = "PITCHFORK_RESTART_DELAY", default = "100ms", ty = "duration")]
     pub restart_delay: String,
 
+    /// Maximum time to wait for a oneshot daemon to finish
+    ///
+    /// A `oneshot = true` daemon is ready when its process exits `0`, so there is no
+    /// readiness check to bound the wait. `pitchfork start` gives up after this long
+    /// and reports a timeout; the task itself keeps running and is still recorded as
+    /// `completed` if it later exits successfully. A nonzero exit remains a failure.
+    ///
+    /// Set to `0` for no limit. Raise it for long migrations, backfills, or seeds.
+    #[usage(env = "PITCHFORK_ONESHOT_TIMEOUT", default = "1h", ty = "duration")]
+    pub oneshot_timeout: String,
+
     /// Maximum time to wait for daemon to stop gracefully
     ///
     /// When stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long
@@ -1173,6 +1184,7 @@ duration_getters! {
     supervisor_health_port_timeout => supervisor.health_port_timeout, "5s";
     supervisor_http_client_timeout => supervisor.http_client_timeout, "5s";
     supervisor_log_flush_interval => supervisor.log_flush_interval, "500ms";
+    supervisor_oneshot_timeout => supervisor.oneshot_timeout, "1h";
     supervisor_ready_check_interval => supervisor.ready_check_interval, "500ms";
     supervisor_restart_delay => supervisor.restart_delay, "100ms";
     supervisor_stop_timeout => supervisor.stop_timeout, "5s";
@@ -1185,6 +1197,22 @@ duration_getters! {
 }
 
 impl Settings {
+    /// How long to wait for a `oneshot` daemon to finish.
+    ///
+    /// `supervisor.oneshot_timeout = "0"` means no limit: a task's natural end
+    /// is its exit, and a long migration should not be called failed merely for
+    /// outlasting a default. That is an absent deadline, not a very large one,
+    /// so no task can outlive the substitute and be reported as timed out
+    /// despite the setting promising otherwise.
+    pub fn supervisor_oneshot_wait(&self) -> crate::config_types::OneshotWait {
+        let configured = self.supervisor_oneshot_timeout();
+        if configured.is_zero() {
+            crate::config_types::OneshotWait::Unlimited
+        } else {
+            crate::config_types::OneshotWait::For(configured)
+        }
+    }
+
     /// Resolve `general.ready_delay` as whole seconds.
     ///
     /// The ready-check pipeline (RunOptions/IPC/supervisor) models the delay
@@ -1819,6 +1847,8 @@ settings_partial! {
         orphan_policy: String,
         /// Maximum port increment attempts when auto_bump_port is enabled
         port_bump_attempts: i64,
+        /// Maximum time to wait for a oneshot daemon to finish
+        oneshot_timeout: String,
         /// Interval between ready checks (HTTP, TCP, command)
         ready_check_interval: String,
         /// Delay between stop and start during restart
@@ -2062,8 +2092,9 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 75, "{keys:?}");
+        assert_eq!(keys.len(), 76, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
+        assert!(keys.contains(&"supervisor.oneshot_timeout"));
         assert!(keys.contains(&"logs.archive_hook.command"));
         assert!(keys.contains(&"supervisor.health_check_interval"));
         assert!(keys.contains(&"supervisor.watch_interval"));
@@ -2276,6 +2307,54 @@ mod tests {
         // Convenience methods should fallback to default values
         assert_eq!(settings.general_autostop_delay(), Duration::from_secs(60)); // default "1m"
         assert_eq!(settings.general_interval(), Duration::from_secs(10)); // default "10s"
+    }
+
+    #[test]
+    fn oneshot_wait_defaults_to_an_hour() {
+        use crate::config_types::OneshotWait;
+        let settings = Settings::default();
+        assert_eq!(
+            settings.supervisor_oneshot_timeout(),
+            Duration::from_secs(3600)
+        );
+        assert_eq!(
+            settings.supervisor_oneshot_wait(),
+            OneshotWait::For(Duration::from_secs(3600))
+        );
+    }
+
+    #[test]
+    fn oneshot_wait_of_zero_means_no_deadline_at_all() {
+        // A task's natural end is its exit, so `0` has to read as "wait",
+        // never as "give up immediately" — and never as a distant substitute
+        // deadline that a long enough task could still outlive.
+        use crate::config_types::OneshotWait;
+        let mut settings = Settings::default();
+        for value in ["0", "0s"] {
+            settings.supervisor.oneshot_timeout = value.to_string();
+            assert!(settings.supervisor_oneshot_timeout().is_zero());
+            assert_eq!(
+                settings.supervisor_oneshot_wait(),
+                OneshotWait::Unlimited,
+                "{value} should wait without a deadline"
+            );
+            assert_eq!(settings.supervisor_oneshot_wait().duration(), None);
+        }
+    }
+
+    #[test]
+    fn oneshot_wait_honours_a_configured_value() {
+        use crate::config_types::OneshotWait;
+        let mut settings = Settings::default();
+        settings.supervisor.oneshot_timeout = "6h".to_string();
+        assert_eq!(
+            settings.supervisor_oneshot_wait(),
+            OneshotWait::For(Duration::from_secs(6 * 3600))
+        );
+        assert_eq!(
+            settings.supervisor_oneshot_wait().duration(),
+            Some(Duration::from_secs(6 * 3600))
+        );
     }
 
     #[test]

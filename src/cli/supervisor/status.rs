@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::cli::json_output::{JsonSupervisorStatus, print_json};
 use crate::ipc::client::IpcClient;
-use crate::procs::PROCS;
+use crate::supervisor::supervisor_record_is_live;
 
 /// Gets the status of the pitchfork daemon
 #[derive(Debug, usage_rs::Args)]
@@ -45,14 +45,16 @@ impl Status {
                 // (permission denied on the socket, stale socket, I/O errors).
                 // Only report "down" when the supervisor process is confirmed
                 // gone; otherwise report "unknown" with what failed.
-                match super::existing_supervisor_pid() {
-                    Ok(Some(pid)) if PROCS.is_running(pid) => JsonSupervisorStatus {
-                        status: "unknown",
-                        web_ui: None,
-                        error: Some(format!(
-                            "supervisor process is running but IPC connection failed: {err}"
-                        )),
-                    },
+                match super::existing_supervisor() {
+                    Ok(Some(record)) if supervisor_record_is_live(&record) => {
+                        JsonSupervisorStatus {
+                            status: "unknown",
+                            web_ui: None,
+                            error: Some(format!(
+                                "supervisor process is running but IPC connection failed: {err}"
+                            )),
+                        }
+                    }
                     Ok(_) => JsonSupervisorStatus {
                         status: "down",
                         web_ui: None,

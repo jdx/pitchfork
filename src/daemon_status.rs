@@ -11,6 +11,18 @@ pub enum DaemonStatus {
     Stopping,
     /// Exit code of the process, or -1 if unknown.
     Errored(i32),
+    /// A `oneshot = true` daemon whose process ran to completion with exit
+    /// code 0.
+    ///
+    /// Distinct from `Stopped` so the CLI, the TUI and the web UI can tell
+    /// "finished its work" from "never ran" or "was interrupted", and so a
+    /// failed run stays distinguishable from a successful one.
+    ///
+    /// It does not mark the task as permanently done: a start re-runs a
+    /// completed oneshot, including when it is reached as a dependency, which
+    /// is why the guide requires the command to be idempotent. What waits on
+    /// a oneshot is the start that is running it, not this status.
+    Completed,
     #[default]
     Stopped,
 }
@@ -24,6 +36,7 @@ impl DaemonStatus {
             DaemonStatus::Running => console::style(s).green().to_string(),
             DaemonStatus::Stopping => console::style(s).yellow().to_string(),
             DaemonStatus::Stopped => console::style(s).dim().to_string(),
+            DaemonStatus::Completed => console::style(s).green().dim().to_string(),
             DaemonStatus::Errored(_) => console::style(s).red().to_string(),
         }
     }
@@ -51,7 +64,43 @@ mod tests {
             ("failed", DaemonStatus::Failed("some error".to_string())),
             ("errored", DaemonStatus::Errored(1)),
             ("errored_unknown", DaemonStatus::Errored(-1)),
+            ("completed", DaemonStatus::Completed),
         ]
+    }
+
+    #[test]
+    fn variants_are_encoded_by_name_not_position() {
+        // IPC encodes structs positionally, so it is reasonable to expect the
+        // same of enums — but `DaemonStatus` carries `rename_all`, and
+        // rmp_serde writes these variants as their names. That is what makes
+        // the variant order here free to change: `stopped` travels as the
+        // string "stopped" regardless of where it sits. Pin that, so the day
+        // it stops being true is the day this fails rather than the day a
+        // mismatched CLI reads one status as another.
+        for (name, status) in all_variants() {
+            let encoded = rmp_serde::to_vec(&status).expect("encode");
+            let name = name.split('_').next().unwrap_or(name);
+            assert!(
+                encoded.windows(name.len()).any(|w| w == name.as_bytes()),
+                "{status} did not encode its name: {encoded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_completed_serializes_as_completed() {
+        // `mise daemons ls` and other consumers read this string; keep it
+        // stable and distinct from "stopped".
+        assert_eq!(DaemonStatus::Completed.to_string(), "completed");
+        assert_eq!(
+            serde_json::to_string(&DaemonStatus::Completed).unwrap(),
+            "\"completed\""
+        );
+    }
+
+    #[test]
+    fn test_completed_has_no_error_message() {
+        assert!(DaemonStatus::Completed.error_message().is_none());
     }
 
     #[test]

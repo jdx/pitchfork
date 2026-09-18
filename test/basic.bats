@@ -880,3 +880,42 @@ EOF
 
   pitchfork stop --all
 }
+
+@test "stop during a retry backoff ends the retries" {
+  local fail_script
+  fail_script="$(script_path fail.sh)"
+
+  create_pitchfork_toml <<EOF
+[daemons.retry_stop]
+run = "bash $fail_script 0"
+retry = 8
+ready_delay = 10
+EOF
+
+  pitchfork start retry_stop >/dev/null 2>&1 &
+  local start_job=$!
+
+  # Let a couple of attempts fail so the start is sleeping out a backoff with
+  # no process of its own when the stop arrives.
+  wait_for_log_lines retry_stop 2
+
+  run pitchfork stop retry_stop
+  assert_success
+
+  local before
+  before=$(pitchfork logs retry_stop --raw 2>/dev/null | grep -c "Failed after 0!" || true)
+
+  # Well past the backoff that was running: the stop has to have ended the
+  # sequence rather than let it start another attempt.
+  sleep 8
+
+  local after
+  after=$(pitchfork logs retry_stop --raw 2>/dev/null | grep -c "Failed after 0!" || true)
+  [[ "$after" -eq "$before" ]]
+
+  run pitchfork status retry_stop
+  refute_output --partial "running"
+
+  kill "$start_job" 2>/dev/null || true
+  wait "$start_job" 2>/dev/null || true
+}

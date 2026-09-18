@@ -73,6 +73,8 @@ pub struct ApiDaemonCounts {
     total: usize,
     running: usize,
     stopped: usize,
+    /// Oneshot daemons that ran and exited successfully.
+    completed: usize,
     /// Daemons on their way up or down (`waiting`, `stopping`), which are
     /// neither running nor stopped yet.
     transitioning: usize,
@@ -230,6 +232,7 @@ fn counts_for<'a>(entries: impl Iterator<Item = &'a ApiDaemonEntry>) -> ApiDaemo
             "running" => c.running += 1,
             "available" => c.available += 1,
             "failed" | "errored" => c.failed += 1,
+            "completed" => c.completed += 1,
             "waiting" | "stopping" => c.transitioning += 1,
             _ => c.stopped += 1,
         }

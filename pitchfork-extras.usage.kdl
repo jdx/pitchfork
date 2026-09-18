@@ -4,10 +4,10 @@ case "{{words[1]}}" in
     pitchfork ls --hide-header --status running | awk '{print $1}'
     ;;
   restart)
-    pitchfork ls --hide-header --status running --status stopped --status errored --status failed | awk '{print $1}'
+    pitchfork ls --hide-header --status running --status stopped --status completed --status errored --status failed | awk '{print $1}'
     ;;
   start)
-    pitchfork ls --hide-header --status available --status stopped --status errored --status failed | awk '{print $1}'
+    pitchfork ls --hide-header --status available --status stopped --status completed --status errored --status failed | awk '{print $1}'
     ;;
   enable)
     pitchfork ls --hide-header --status disabled | awk '{print $1}'

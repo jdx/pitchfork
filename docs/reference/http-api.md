@@ -220,7 +220,7 @@ curl http://127.0.0.1:3120/api/projects
     "dir": "/home/user/shop",
     "dir_exists": true,
     "worktree_count": 2,
-    "daemons": { "total": 5, "running": 2, "stopped": 2, "transitioning": 0, "failed": 0, "available": 1 },
+    "daemons": { "total": 5, "running": 2, "stopped": 2, "completed": 0, "transitioning": 0, "failed": 0, "available": 1 },
     "last_activity": "2026-05-31T10:00:00+02:00",
     "url": "/projects/shop",
     "api_url": "/api/projects/shop"
@@ -256,7 +256,7 @@ curl http://127.0.0.1:3120/api/projects/shop
   "name": "shop",
   "dir": "/home/user/shop",
   "dir_exists": true,
-  "daemons": { "total": 5, "running": 2, "stopped": 2, "transitioning": 0, "failed": 0, "available": 1 },
+  "daemons": { "total": 5, "running": 2, "stopped": 2, "completed": 0, "transitioning": 0, "failed": 0, "available": 1 },
   "last_activity": "2026-05-31T10:00:00+02:00",
   "worktrees": [
     {
@@ -268,7 +268,7 @@ curl http://127.0.0.1:3120/api/projects/shop
       "can_start": true,
       "dir_exists": true,
       "group_count": 2,
-      "daemons": { "total": 3, "running": 2, "stopped": 1, "transitioning": 0, "failed": 0, "available": 0 },
+      "daemons": { "total": 3, "running": 2, "stopped": 1, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
       "last_activity": "2026-05-31T10:00:00+02:00",
       "url": "/projects/shop/main",
       "api_url": "/api/projects/shop/main"
@@ -316,7 +316,7 @@ curl http://127.0.0.1:3120/api/projects/shop/main
     }
   ],
   "ungrouped": [],
-  "daemons": { "total": 3, "running": 1, "stopped": 2, "transitioning": 0, "failed": 0, "available": 0 },
+  "daemons": { "total": 3, "running": 1, "stopped": 2, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
   "url": "/projects/shop/main"
 }
 ```

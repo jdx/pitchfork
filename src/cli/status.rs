@@ -78,6 +78,7 @@ impl Status {
                 } else {
                     daemon.status.to_string()
                 },
+                oneshot: daemon.oneshot,
                 active_port: daemon.active_port,
                 port: daemon.resolved_port.clone(),
                 proxy_url,

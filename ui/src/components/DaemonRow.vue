@@ -65,7 +65,7 @@ function openProxy(e: Event) {
     </td>
     <td class="cell-actions" @click.stop>
       <button
-        v-if="daemon.status.type === 'stopped' || daemon.status.type === 'failed' || daemon.status.type === 'errored' || daemon.status.type === 'available'"
+        v-if="daemon.status.type === 'stopped' || daemon.status.type === 'completed' || daemon.status.type === 'failed' || daemon.status.type === 'errored' || daemon.status.type === 'available'"
         class="act-btn act-start" :disabled="isActing() || !!actionsDisabledReason" :title="actionsDisabledReason" @click="onStart"
       >
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -131,6 +131,7 @@ function openProxy(e: Event) {
 
   &.running { .status-running(); }
   &.stopped { .status-stopped(); }
+  &.completed { .status-completed(); }
   &.waiting, &.stopping { .status-waiting(); }
   &.failed, &.errored { .status-failed(); }
   &.available { .status-available(); }

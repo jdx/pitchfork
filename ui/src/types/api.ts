@@ -11,6 +11,7 @@ export type DaemonStatus =
   | { type: 'stopping' }
   | { type: 'errored'; code: number }
   | { type: 'stopped' }
+  | { type: 'completed' }
   | { type: 'available' }
 
 export interface DaemonEntry {
@@ -122,6 +123,8 @@ export interface DaemonCounts {
   total: number
   running: number
   stopped: number
+  /** Oneshot daemons that ran and exited successfully. */
+  completed: number
   /** On the way up or down: waiting or stopping. */
   transitioning: number
   failed: number

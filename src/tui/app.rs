@@ -350,6 +350,10 @@ pub struct EditorState {
     pub scroll_offset: usize,
     /// Preserved config field for ready_cmd (no form UI yet)
     preserved_ready_cmd: Option<ReadyCmd>,
+    /// Preserved `oneshot` flag (no form UI yet). Without this, saving a
+    /// oneshot daemon through the editor would silently turn it back into a
+    /// long-running service.
+    preserved_oneshot: Option<bool>,
     /// Preserved ready_http statuses (no form UI yet)
     preserved_ready_http_status: Option<Vec<u16>>,
     /// Preserved ready_http timeout (no form UI yet)
@@ -378,6 +382,7 @@ impl EditorState {
             unsaved_changes: false,
             scroll_offset: 0,
             preserved_ready_cmd: None,
+            preserved_oneshot: None,
             preserved_ready_http_status: None,
             preserved_ready_http_timeout: None,
             preserved_ready_output_timeout: None,
@@ -402,6 +407,7 @@ impl EditorState {
             unsaved_changes: false,
             scroll_offset: 0,
             preserved_ready_cmd: config.ready_cmd.clone(),
+            preserved_oneshot: config.oneshot,
             preserved_ready_http_status: config
                 .ready_http
                 .as_ref()
@@ -602,6 +608,7 @@ impl EditorState {
     pub fn to_daemon_config(&self) -> PitchforkTomlDaemon {
         let mut config = PitchforkTomlDaemon {
             ready_cmd: self.preserved_ready_cmd.clone(),
+            oneshot: self.preserved_oneshot,
             path: Some(self.config_path.clone()),
             ..PitchforkTomlDaemon::default()
         };
@@ -1140,9 +1147,10 @@ impl App {
                         crate::daemon_status::DaemonStatus::Running => 0,
                         crate::daemon_status::DaemonStatus::Waiting => 1,
                         crate::daemon_status::DaemonStatus::Stopping => 2,
-                        crate::daemon_status::DaemonStatus::Stopped => 3,
-                        crate::daemon_status::DaemonStatus::Errored(_) => 4,
-                        crate::daemon_status::DaemonStatus::Failed(_) => 5,
+                        crate::daemon_status::DaemonStatus::Completed => 3,
+                        crate::daemon_status::DaemonStatus::Stopped => 4,
+                        crate::daemon_status::DaemonStatus::Errored(_) => 5,
+                        crate::daemon_status::DaemonStatus::Failed(_) => 6,
                     };
                     status_order(a).cmp(&status_order(b))
                 }

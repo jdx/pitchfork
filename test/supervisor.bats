@@ -50,6 +50,145 @@ get_supervisor_pid() {
   assert_success
 }
 
+# Write a state file whose supervisor entry points at $1 with a process
+# identity that cannot match it: a bogus start time and/or a boot time from a
+# previous boot. This reproduces the record left behind by a reboot (see
+# jdx/pitchfork discussion #877), where the PID has since been handed to an
+# unrelated process. Extra arguments are appended verbatim as TOML lines.
+write_stale_supervisor_record() {
+  local pid="$1"
+  shift
+  {
+    echo '[daemons."global/pitchfork"]'
+    echo 'id = "global/pitchfork"'
+    echo "pid = $pid"
+    echo 'status = "running"'
+    echo 'autostop = false'
+    printf '%s\n' "$@"
+  } >"$PITCHFORK_STATE_DIR/state.toml"
+}
+
+# Start a bystander process that plays the role of the unrelated process now
+# owning the stale PID. Prints its PID. Its stdio is detached so neither the
+# command substitution nor bats waits on it.
+start_bystander() {
+  sleep 300 >/dev/null 2>&1 </dev/null &
+  echo $!
+}
+
+@test "supervisor stop does not kill an unrelated process holding a stale supervisor pid" {
+  skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  local bystander
+  bystander="$(start_bystander)"
+  # Start time cannot match: kernel start tokens are never this small.
+  write_stale_supervisor_record "$bystander" 'start_time = 1'
+
+  run pitchfork supervisor stop
+  assert_success
+  assert_output --partial "not running"
+  refute_output --partial "Stopped pitchfork daemon"
+
+  # The bystander must be untouched and the stale record cleared.
+  pid_alive "$bystander"
+  run get_supervisor_pid
+  assert_output ""
+
+  kill "$bystander" 2>/dev/null || true
+  wait "$bystander" 2>/dev/null || true
+}
+
+@test "supervisor stop treats a record from a previous boot as stale" {
+  skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  local bystander
+  bystander="$(start_bystander)"
+  # Only the boot time is recorded, as from a legacy supervisor that has been
+  # rebooted since: the boot-time check alone must reject the record.
+  write_stale_supervisor_record "$bystander" 'boot_time = 1'
+
+  run pitchfork supervisor stop
+  assert_success
+  assert_output --partial "not running"
+
+  pid_alive "$bystander"
+  run get_supervisor_pid
+  assert_output ""
+
+  kill "$bystander" 2>/dev/null || true
+  wait "$bystander" 2>/dev/null || true
+}
+
+@test "supervisor stop does not trust a legacy record that names a non-pitchfork process" {
+  skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  local bystander
+  bystander="$(start_bystander)"
+  # No identity fields at all, as written by pitchfork before v2.18.0. The
+  # live process must at least be a pitchfork binary to be trusted.
+  write_stale_supervisor_record "$bystander"
+
+  run pitchfork supervisor stop
+  assert_success
+  assert_output --partial "not running"
+  refute_output --partial "Stopped pitchfork daemon"
+
+  pid_alive "$bystander"
+  run get_supervisor_pid
+  assert_output ""
+
+  kill "$bystander" 2>/dev/null || true
+  wait "$bystander" 2>/dev/null || true
+}
+
+@test "supervisor start replaces a stale supervisor record without --force" {
+  skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  local bystander
+  bystander="$(start_bystander)"
+  write_stale_supervisor_record "$bystander" 'start_time = 1' 'boot_time = 1'
+
+  run pitchfork supervisor start
+  assert_success
+  refute_output --partial "already running"
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+  [[ "$sup_pid" != "$bystander" ]]
+  pid_alive "$bystander"
+
+  kill "$bystander" 2>/dev/null || true
+  wait "$bystander" 2>/dev/null || true
+}
+
+@test "commands auto-start the supervisor past a stale supervisor record" {
+  skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  local bystander
+  bystander="$(start_bystander)"
+  write_stale_supervisor_record "$bystander" 'start_time = 1' 'boot_time = 1'
+
+  # Before the fix this failed with "failed to connect to supervisor after N
+  # attempts": the stale record made auto-start believe a supervisor was up.
+  run pitchfork list
+  assert_success
+
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+  [[ "$sup_pid" != "$bystander" ]]
+  pid_alive "$bystander"
+
+  kill "$bystander" 2>/dev/null || true
+  wait "$bystander" 2>/dev/null || true
+}
+
 @test "supervisor run starts in foreground and can be killed" {
   pitchfork supervisor stop 2>/dev/null || true
   pitchfork supervisor run &

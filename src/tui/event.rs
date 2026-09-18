@@ -148,6 +148,7 @@ fn handle_dashboard_event(
                             .find(|d| d.id == *id)
                             .map(|d| {
                                 d.status.is_stopped()
+                                    || d.status.is_completed()
                                     || d.status.is_errored()
                                     || d.status.is_failed()
                             })
@@ -159,6 +160,7 @@ fn handle_dashboard_event(
                 }
             } else if let Some(daemon) = app.selected_daemon()
                 && (daemon.status.is_stopped()
+                    || daemon.status.is_completed()
                     || daemon.status.is_errored()
                     || daemon.status.is_failed())
             {
@@ -205,6 +207,7 @@ fn handle_dashboard_event(
                         && !app.config_daemon_ids.contains(id)
                         && entry.pid.is_none()
                         && (entry.status.is_stopped()
+                            || entry.status.is_completed()
                             || entry.status.is_failed()
                             || entry.status.is_errored())
                 })

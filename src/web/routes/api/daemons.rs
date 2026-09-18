@@ -77,6 +77,8 @@ pub enum ApiDaemonStatus {
     #[serde(rename = "stopped")]
     #[default]
     Stopped,
+    #[serde(rename = "completed")]
+    Completed,
     #[serde(rename = "available")]
     Available,
 }
@@ -101,6 +103,7 @@ impl ApiDaemonEntry {
             ApiDaemonStatus::Stopping => "stopping",
             ApiDaemonStatus::Errored { .. } => "errored",
             ApiDaemonStatus::Stopped => "stopped",
+            ApiDaemonStatus::Completed => "completed",
             ApiDaemonStatus::Available => "available",
         }
     }
@@ -145,6 +148,7 @@ fn api_status(status: &DaemonStatus, is_available: bool) -> ApiDaemonStatus {
         DaemonStatus::Stopping => ApiDaemonStatus::Stopping,
         DaemonStatus::Errored(code) => ApiDaemonStatus::Errored { code: *code },
         DaemonStatus::Stopped => ApiDaemonStatus::Stopped,
+        DaemonStatus::Completed => ApiDaemonStatus::Completed,
     }
 }
 

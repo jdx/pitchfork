@@ -1560,7 +1560,7 @@
             "name": "status",
             "usage": "--status <STATUS>",
             "help": "Filter daemons by status (repeatable for OR logic)",
-            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, available, disabled",
+            "help_long": "Filter daemons by status (repeatable for OR logic)\n\nValues: running, stopped, waiting, stopping, failed, errored, completed, available, disabled",
             "help_first_line": "Filter daemons by status (repeatable for OR logic)",
             "short": [],
             "long": [
@@ -1583,6 +1583,7 @@
                   "stopping",
                   "failed",
                   "errored",
+                  "completed",
                   "available",
                   "disabled"
                 ],
@@ -1604,6 +1605,9 @@
                   },
                   {
                     "value": "errored"
+                  },
+                  {
+                    "value": "completed"
                   },
                   {
                     "value": "available"
@@ -3963,6 +3967,18 @@
               "double_dash": "Optional",
               "hide": false
             }
+          },
+          {
+            "name": "on-directory-enter",
+            "usage": "--on-directory-enter",
+            "help": "Set by the shell hook and project sessions: this start came from entering a directory, so a completed oneshot is left alone rather than re-run, at any level of the dependency graph.",
+            "help_first_line": "Set by the shell hook and project sessions: this start came from entering a directory, so a completed oneshot is left alone rather than re-run, at any level of the dependency graph.",
+            "short": [],
+            "long": [
+              "on-directory-enter"
+            ],
+            "hide": true,
+            "global": false
           },
           {
             "name": "force",
@@ -6754,6 +6770,38 @@
         "default_list": [],
         "extensions": []
       },
+      "supervisor.oneshot_timeout": {
+        "default": "1h",
+        "default_note": null,
+        "data_type": "null",
+        "value_type": {
+          "kind": "base",
+          "of": "duration"
+        },
+        "env": "PITCHFORK_ONESHOT_TIMEOUT",
+        "envs": [
+          "PITCHFORK_ONESHOT_TIMEOUT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Maximum time to wait for a oneshot daemon to finish",
+        "long_help": "Maximum time to wait for a oneshot daemon to finish\n\nA `oneshot = true` daemon is ready when its process exits `0`, so there is no readiness check to bound the wait. `pitchfork start` gives up after this long and reports a timeout; the task itself keeps running and is still recorded as `completed` if it later exits successfully. A nonzero exit remains a failure.\n\nSet to `0` for no limit. Raise it for long migrations, backfills, or seeds.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "supervisor.orphan_policy": {
         "default": "adopt",
         "default_note": null,
@@ -7411,7 +7459,7 @@
   "complete": {
     "id": {
       "name": "id",
-      "run": "case \"{{words[1]}}\" in\n  stop|wait)\n    pitchfork ls --hide-header --status running | awk '{print $1}'\n    ;;\n  restart)\n    pitchfork ls --hide-header --status running --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  start)\n    pitchfork ls --hide-header --status available --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  enable)\n    pitchfork ls --hide-header --status disabled | awk '{print $1}'\n    ;;\n  disable)\n    pitchfork ls --hide-header --status running --status available | awk '{print $1}'\n    ;;\n  *)\n    pitchfork ls --hide-header | awk '{print $1}'\n    ;;\nesac"
+      "run": "case \"{{words[1]}}\" in\n  stop|wait)\n    pitchfork ls --hide-header --status running | awk '{print $1}'\n    ;;\n  restart)\n    pitchfork ls --hide-header --status running --status stopped --status completed --status errored --status failed | awk '{print $1}'\n    ;;\n  start)\n    pitchfork ls --hide-header --status available --status stopped --status completed --status errored --status failed | awk '{print $1}'\n    ;;\n  enable)\n    pitchfork ls --hide-header --status disabled | awk '{print $1}'\n    ;;\n  disable)\n    pitchfork ls --hide-header --status running --status available | awk '{print $1}'\n    ;;\n  *)\n    pitchfork ls --hide-header | awk '{print $1}'\n    ;;\nesac"
     }
   },
   "about": "Daemons with DX",
