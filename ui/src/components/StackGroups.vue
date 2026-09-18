@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import DaemonTable from './DaemonTable.vue'
 import { api, useGroupActions } from '@/composables/useApi'
 import { toast } from 'vue-sonner'
-import type { Stack } from '@/types/api'
+import type { NamespaceEntry, Stack } from '@/types/api'
 
 const props = defineProps<{ stack: Stack; prefersCard: boolean }>()
 const emit = defineEmits<{ refresh: [] }>()
@@ -18,18 +18,37 @@ const groups = computed(() => props.stack.groups)
 // namespace registry. A worktree in neither is listed, but starting its
 // daemons would fail, so its actions stay disabled until it is registered.
 const startable = computed(() => props.stack.can_start)
-const blockedReason = computed(() =>
-  startable.value
-    ? undefined
-    : `The supervisor has no config for ${props.stack.unresolvable_daemons.join(', ')}. `
-      + 'Register this worktree to start it.',
-)
+const unresolvable = computed(() => props.stack.unresolvable_daemons)
+const blockedReason =
+  'The supervisor has no config for this daemon. Register this worktree to start it.'
+
+// Only the members the supervisor cannot resolve lose their group action; a
+// group of resolvable daemons stays usable even when the stack has others.
+function groupBlocked(groupName: string): boolean {
+  return ids(groupName).some(id => unresolvable.value.includes(id))
+}
 
 const registering = ref(false)
 async function registerWorktree() {
   if (registering.value) return
   registering.value = true
   try {
+    // Registering under a name that is already bound elsewhere would silently
+    // repoint it, so the other directory's daemons would resolve from this
+    // worktree instead. Refuse rather than move someone else's namespace.
+    const existing = await api<NamespaceEntry[]>('/namespaces')
+    const clash = existing.find(
+      n => n.name === props.stack.namespace && n.dir !== props.stack.dir,
+    )
+    if (clash) {
+      toast.error(`Namespace ${clash.name} is already registered`, {
+        duration: 6000,
+        description:
+          `It points at ${clash.dir}. Give this worktree its own namespace in its `
+          + 'pitchfork.toml, then register it again.',
+      })
+      return
+    }
     const res = await api<{ ok: boolean; name?: string; error?: string }>('/namespaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -98,13 +117,13 @@ async function onRestart(groupName: string) {
           <span class="group-count">{{ group.running }}/{{ group.total }} running</span>
         </div>
         <div class="group-actions">
-          <button class="act-btn act-start" :disabled="isActing(group.name) || !startable || group.daemons.length === 0" @click="onStart(group.name)">
+          <button class="act-btn act-start" :disabled="isActing(group.name) || groupBlocked(group.name) || group.daemons.length === 0" @click="onStart(group.name)">
             {{ group.is_default ? 'Start stack' : 'Start' }}
           </button>
-          <button class="act-btn act-stop" :disabled="isActing(group.name) || !startable || group.daemons.length === 0" @click="onStop(group.name)">
+          <button class="act-btn act-stop" :disabled="isActing(group.name) || groupBlocked(group.name) || group.daemons.length === 0" @click="onStop(group.name)">
             {{ group.is_default ? 'Stop stack' : 'Stop' }}
           </button>
-          <button class="act-btn act-restart" :disabled="isActing(group.name) || !startable || group.daemons.length === 0" @click="onRestart(group.name)">
+          <button class="act-btn act-restart" :disabled="isActing(group.name) || groupBlocked(group.name) || group.daemons.length === 0" @click="onRestart(group.name)">
             {{ group.is_default ? 'Restart stack' : 'Restart' }}
           </button>
         </div>
@@ -118,7 +137,8 @@ async function onRestart(groupName: string) {
         v-if="group.daemons.length"
         :daemons="group.daemons"
         :prefers-card="prefersCard"
-        :actions-disabled-reason="blockedReason"
+        :disabled-ids="unresolvable"
+        :disabled-reason="blockedReason"
         @refresh="emit('refresh')"
       />
     </section>
@@ -133,7 +153,8 @@ async function onRestart(groupName: string) {
       <DaemonTable
         :daemons="stack.ungrouped"
         :prefers-card="prefersCard"
-        :actions-disabled-reason="blockedReason"
+        :disabled-ids="unresolvable"
+        :disabled-reason="blockedReason"
         @refresh="emit('refresh')"
       />
     </section>

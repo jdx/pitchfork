@@ -105,12 +105,6 @@ impl ApiDaemonEntry {
         }
     }
 
-    /// True for a daemon that only exists in config: the supervisor has no
-    /// state for it, so starting it needs a config it can resolve.
-    pub(crate) fn is_available(&self) -> bool {
-        self.is_available
-    }
-
     /// Seconds the daemon's process has been up, when it is running.
     pub(crate) fn uptime_secs(&self) -> Option<u64> {
         self.uptime_secs

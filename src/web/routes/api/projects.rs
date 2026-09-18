@@ -147,20 +147,22 @@ pub struct ApiStack {
 /// Daemon entries indexed by qualified id, in listing order.
 pub type DaemonIndex = IndexMap<String, ApiDaemonEntry>;
 
-/// Qualified ids the supervisor can resolve a config for, which is what its
-/// start path requires. Daemons already tracked in the state file can be
-/// restarted from their saved command, so they count as resolvable too.
+/// Qualified ids the supervisor can resolve a config for.
+///
+/// This is what the web control endpoints require: they call
+/// `IpcClient::start_daemon`, which looks the daemon up in the merged config
+/// and fails with "Daemon config not found" otherwise. A daemon already
+/// running does not help, because restart stops it before that lookup.
 pub type Resolvable = HashSet<String>;
 
-/// Daemons of this worktree the supervisor could not start, because it has
-/// neither a config nor a saved command for them.
+/// Daemons of this worktree the web endpoints could not start or restart.
 fn unresolvable_for(
     daemons: &DaemonIndex,
     namespace: &str,
     resolvable: &Resolvable,
 ) -> Vec<String> {
     namespace_entries(daemons, namespace)
-        .filter(|e| e.is_available() && !resolvable.contains(e.qualified()))
+        .filter(|e| !resolvable.contains(e.qualified()))
         .map(|e| e.qualified().to_string())
         .collect()
 }
@@ -535,7 +537,12 @@ fn main_checkout_root(dir: &StdPath) -> Option<PathBuf> {
         } else {
             dir.join(gitdir)
         };
-        // <main>/.git/worktrees/<name> → <main>
+        // Only a linked worktree points at <main>/.git/worktrees/<name>. A
+        // submodule's .git file points at <super>/.git/modules/<name>, which
+        // must not make the superproject its main checkout.
+        if !gitdir.components().any(|c| c.as_os_str() == "worktrees") {
+            return None;
+        }
         let mut current = gitdir.as_path();
         loop {
             let parent = current.parent()?;
@@ -631,15 +638,6 @@ async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<(DaemonIndex, Resolvable
 
     for (qualified, entry) in extra {
         index.entry(qualified).or_insert(entry);
-    }
-
-    // A daemon the supervisor already tracks can be restarted from its saved
-    // command, so it needs no config lookup.
-    let mut resolvable = resolvable;
-    for entry in index.values() {
-        if !entry.is_available() {
-            resolvable.insert(entry.qualified().to_string());
-        }
     }
 
     Ok((index, resolvable))
@@ -939,10 +937,10 @@ mod tests {
         let stack = serde_json::to_value(build_stack(project, wt, &daemons, &resolvable)).unwrap();
         assert_eq!(stack["can_start"], false);
         let unresolvable = stack["unresolvable_daemons"].as_array().unwrap();
-        // The running daemon is startable from its saved command; only the
-        // config-only ones are reported.
+        // Every daemon of the worktree is reported, running or not: the web
+        // endpoints need a config for all of them.
         assert!(unresolvable.contains(&serde_json::json!("shop-feature-a/worker")));
-        assert!(!unresolvable.contains(&serde_json::json!("shop-feature-a/api")));
+        assert!(unresolvable.contains(&serde_json::json!("shop-feature-a/api")));
     }
 
     #[test]
@@ -1018,18 +1016,39 @@ mod tests {
         assert!(!is_main_checkout(&secondary));
     }
 
-    /// A daemon already tracked by the supervisor can be restarted from its
-    /// saved command, so it never counts as unresolvable.
+    /// A running daemon whose config the supervisor cannot resolve is still
+    /// unresolvable: restart stops it first and then fails to start it again.
     #[test]
-    fn tracked_daemons_stay_startable_without_a_config() {
+    fn running_daemons_without_a_config_are_not_startable() {
         let projects = fixture_projects();
         let project = find_project(&projects, "blog").unwrap();
         let wt = find_worktree(project, "default").unwrap();
         let daemons = index(vec![daemon("blog/site", ApiDaemonStatus::Running, Some(5))]);
 
         let stack = build_stack(project, wt, &daemons, &Resolvable::new());
-        assert!(stack.unresolvable_daemons.is_empty());
-        assert!(stack.can_start);
+        assert_eq!(stack.unresolvable_daemons, vec!["blog/site".to_string()]);
+        assert!(!stack.can_start);
+    }
+
+    #[test]
+    fn submodules_are_not_treated_as_linked_worktrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let superproject = temp.path().join("repo");
+        let submodule = superproject.join("vendor").join("lib");
+        std::fs::create_dir_all(superproject.join(".git").join("modules").join("lib")).unwrap();
+        std::fs::create_dir_all(&submodule).unwrap();
+        std::fs::write(
+            submodule.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                superproject.join(".git/modules/lib").display()
+            ),
+        )
+        .unwrap();
+
+        // The superproject is not the submodule's main checkout, so the
+        // submodule keeps its own project and worktrees.
+        assert_eq!(main_checkout_root(&submodule), None);
     }
 
     #[test]

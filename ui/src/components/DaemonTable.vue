@@ -7,11 +7,18 @@ const props = defineProps<{
   daemons: DaemonEntry[]
   prefersCard: boolean
   /**
-   * Reason the supervisor would reject start/restart for these daemons, e.g.
-   * a worktree whose config it cannot resolve. Undefined means actions work.
+   * Qualified ids whose start/restart the supervisor would reject, e.g.
+   * daemons of a worktree whose config it cannot resolve. Other rows keep
+   * their controls.
    */
-  actionsDisabledReason?: string
+  disabledIds?: string[]
+  /** Why those ids cannot be acted on; shown as the button tooltip. */
+  disabledReason?: string
 }>()
+
+function reasonFor(qualified: string): string | undefined {
+  return props.disabledIds?.includes(qualified) ? props.disabledReason : undefined
+}
 
 defineEmits<{ refresh: [] }>()
 </script>
@@ -33,7 +40,7 @@ defineEmits<{ refresh: [] }>()
         v-for="d in daemons"
         :key="d.id.qualified"
         :daemon="d"
-        :actions-disabled-reason="actionsDisabledReason"
+        :actions-disabled-reason="reasonFor(d.id.qualified)"
         @refresh="$emit('refresh')"
       />
     </tbody>
@@ -43,7 +50,7 @@ defineEmits<{ refresh: [] }>()
       v-for="d in daemons"
       :key="d.id.qualified"
       :daemon="d"
-      :actions-disabled-reason="actionsDisabledReason"
+      :actions-disabled-reason="reasonFor(d.id.qualified)"
       @refresh="$emit('refresh')"
     />
   </div>

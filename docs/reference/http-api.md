@@ -225,11 +225,13 @@ case-insensitively.
 
 `disk_usage_bytes` is omitted from a worktree whenever pitchfork does not track
 a data directory for its daemons, which is the case today.
-`can_start` is `false` when the supervisor has neither a config nor a saved
-command for some of the worktree's daemons, which happens for a worktree
-outside both its own project and the namespace registry. Those daemons are
-still listed, and the stack response names them in `unresolvable_daemons`;
-starting one fails until the worktree is registered.
+`can_start` is `false` when the control endpoints cannot resolve a config for
+some of the worktree's daemons, which happens for a worktree outside both the
+supervisor's own project and the namespace registry. Those daemons are still
+listed, and the stack response names them in `unresolvable_daemons`. Starting
+or restarting one fails with "Daemon config not found" until the worktree is
+registered, including for a daemon that is currently running: restart stops it
+before the lookup.
 
 ```bash
 curl http://127.0.0.1:3120/api/projects/shop

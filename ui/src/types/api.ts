@@ -59,8 +59,8 @@ export interface DaemonEntry {
 
 export interface NamespaceEntry {
   name: string
-  daemon_count: number
-  is_active: boolean
+  /** Project directory the namespace resolves daemons from. */
+  dir: string
 }
 
 export interface NamespaceRegistration {
