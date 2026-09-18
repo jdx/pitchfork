@@ -334,8 +334,17 @@ pub fn host_for_daemon(
     config: Option<&PitchforkTomlDaemon>,
     global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
 ) -> Option<String> {
+    // Slugs are registered without a length check, and one too long for the
+    // configured TLD is a name the proxy will not route, so it is not offered
+    // as a URL either.
     if let Some(slug) = PitchforkToml::find_slug_for_daemon_in_registry(id, global_slugs) {
-        return Some(slug);
+        if hostname_fits(&slug) {
+            return Some(slug);
+        }
+        log::warn!(
+            "Slug '{slug}' plus the configured proxy.tld is over the \
+             {MAX_HOSTNAME_LEN}-byte DNS limit, so it is not advertised for {id}."
+        );
     }
     auto_host_for_daemon(id, config?)
 }
@@ -543,6 +552,27 @@ fn cached_worktree_dirs(primary: &Path) -> std::sync::Arc<Vec<PathBuf>> {
     dirs
 }
 
+/// Report a configuration problem once per distinct message.
+///
+/// A label collision persists until someone renames something, while the
+/// registry behind it is rebuilt every couple of seconds and on every CLI
+/// invocation. Logging each rebuild would fill the supervisor log with the same
+/// line; the user needs to read it once.
+pub fn warn_once(message: &str) {
+    static SEEN: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashSet<String>>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    // Distinct messages are bounded by the configuration, but a pathological
+    // one should not grow the set forever.
+    if seen.len() > 256 {
+        seen.clear();
+    }
+    if seen.insert(message.to_string()) {
+        log::warn!("{message}");
+    }
+}
+
 /// Directories that may contain a project pitchfork knows about.
 ///
 /// Only persisted knowledge counts: the namespace registry, the legacy slug
@@ -676,7 +706,7 @@ fn project_hosts_for(primary: &Path, label: &str) -> Option<ProjectHosts> {
     let worktrees = cached_worktree_dirs(primary);
     let (project, errors) = build_project_hosts(primary, label, &worktrees)?;
     for err in errors {
-        log::warn!("{err}");
+        warn_once(&err);
     }
     Some(project)
 }

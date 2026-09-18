@@ -274,7 +274,7 @@ pub async fn get_cached_host_registry() -> Arc<crate::proxy::hostname::HostRegis
             }),
     );
     for err in &registry.errors {
-        log::warn!("{err}");
+        crate::proxy::hostname::warn_once(err);
     }
 
     {
@@ -1359,10 +1359,16 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 worktree,
                 daemons,
             } => {
+                // A reserved name answers 200 while an unknown one answers 404,
+                // which tells anything on the network which projects exist. Off
+                // this machine the two look the same.
+                if !local_client {
+                    return unknown_host_response(&host, "Not found", &[]);
+                }
                 return page_placeholder_response(
                     &project,
                     worktree.as_deref(),
-                    if local_client { &daemons } else { &[] },
+                    &daemons,
                     &state.tld,
                     &host_port_suffix(&raw_host),
                 );
