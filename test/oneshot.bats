@@ -285,6 +285,12 @@ TOML
 }
 
 @test "a stopped oneshot that exits 0 is not reported as ready" {
+  # Windows has no POSIX signals: a stop terminates the process rather than
+  # signalling it, so no shell trap can run and a task cannot exit 0 on the way
+  # out. The case this test constructs does not exist there. What a stopped
+  # oneshot is recorded as on Windows is covered by the plain stop test above.
+  skip_on_windows "POSIX signal traps are not supported on Windows"
+
   # The trap has to live in the daemon's own process. A script run through a
   # second shell would leave the daemon process itself dying from the signal,
   # which is the ordinary case and not the one under test.
