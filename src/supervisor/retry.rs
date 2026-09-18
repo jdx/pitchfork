@@ -33,6 +33,10 @@ impl Supervisor {
         };
 
         for id in ids_to_retry {
+            // Read before the checks below, so a stop that lands between here
+            // and the spawn is noticed: `run_retry` compares this under the
+            // daemon's lock, which the stop holds while it records itself.
+            let approved_at = self.stop_epoch(&id);
             // Look up daemon when needed and re-verify retry criteria
             // (state may have changed since we collected IDs)
             let daemon = {
@@ -94,7 +98,7 @@ impl Supervisor {
             .await;
             let mut retry_opts = daemon.to_run_options(cmd);
             retry_opts.retry_count = daemon.retry_count + 1;
-            if let Err(e) = self.run(retry_opts).await {
+            if let Err(e) = self.run_retry(retry_opts, approved_at).await {
                 error!("failed to retry daemon {id}: {e}");
             }
         }

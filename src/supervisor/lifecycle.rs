@@ -342,6 +342,25 @@ impl Supervisor {
             .is_some_and(|claims| !claims.is_empty())
     }
 
+    /// How many times this daemon has been stopped so far.
+    pub(crate) fn stop_epoch(&self, id: &DaemonId) -> u64 {
+        self.stop_epochs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn bump_stop_epoch(&self, id: &DaemonId) {
+        *self
+            .stop_epochs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(id.clone())
+            .or_default() += 1;
+    }
+
     fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.retrying
@@ -377,6 +396,21 @@ impl Supervisor {
 
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
+        self.run_inner(opts, None).await
+    }
+
+    /// Run an attempt the retry checker decided on while `stop_epoch` read
+    /// `approved_at`. If the daemon has been stopped since, the attempt is
+    /// abandoned instead of started.
+    pub(crate) async fn run_retry(
+        &self,
+        opts: RunOptions,
+        approved_at: u64,
+    ) -> Result<IpcResponse> {
+        self.run_inner(opts, Some(approved_at)).await
+    }
+
+    async fn run_inner(&self, opts: RunOptions, approved_at: Option<u64>) -> Result<IpcResponse> {
         let id = &opts.id;
         let cmd = opts.cmd.clone();
 
@@ -399,6 +433,16 @@ impl Supervisor {
         // concurrent run pass this same check (duplicate processes) or let a
         // concurrent stop see no PID and return without stopping anything.
         let mut stop_guard = Some(self.stop_lock(id).await.lock_owned().await);
+        // Checked here, under the daemon's lock, because that is what a stop
+        // takes too: an approval from before the stop cannot slip past it.
+        // Writing `stopped` over the record is not enough on its own, since an
+        // attempt already approved would read that as a daemon free to start.
+        if let Some(approved_at) = approved_at
+            && self.stop_epoch(id) != approved_at
+        {
+            info!("daemon {id} was stopped after this retry was decided on; not starting it");
+            return Ok(IpcResponse::DaemonNotRunning);
+        }
         if let Some(response) = self.claim_or_defer(&opts, &mut stop_guard).await? {
             return Ok(response);
         }
@@ -2306,6 +2350,10 @@ impl Supervisor {
         // give up, or it would start the next attempt once the stop has
         // returned.
         self.cancel_retrying(id);
+        // ...and the retry checker may already have decided on an attempt it
+        // has not started yet. Bumping the epoch makes it stand down when it
+        // reaches the daemon's lock.
+        self.bump_stop_epoch(id);
         if let Some(daemon) = self.get_daemon(id).await {
             trace!("daemon to stop: {daemon}");
             if let Some(pid) = daemon.pid {
@@ -3150,6 +3198,30 @@ mod oneshot_tests {
         assert!(SUPERVISOR.is_retrying(&id));
         drop(first);
         assert!(!SUPERVISOR.is_retrying(&id));
+    }
+
+    #[test]
+    fn a_stop_invalidates_an_attempt_decided_on_before_it() {
+        // The retry checker reads the epoch when it decides on an attempt and
+        // `run_retry` compares it under the daemon's lock, so an approval from
+        // before a stop cannot slip past that stop.
+        let id = DaemonId::new("stop-epoch-test", "task");
+        let approved_at = SUPERVISOR.stop_epoch(&id);
+        assert_eq!(SUPERVISOR.stop_epoch(&id), approved_at);
+        SUPERVISOR.bump_stop_epoch(&id);
+        assert_ne!(SUPERVISOR.stop_epoch(&id), approved_at);
+        // An attempt decided on after the stop is still fine to start.
+        let approved_after = SUPERVISOR.stop_epoch(&id);
+        assert_eq!(SUPERVISOR.stop_epoch(&id), approved_after);
+    }
+
+    #[test]
+    fn stop_epochs_are_tracked_per_daemon() {
+        let stopped = DaemonId::new("stop-epoch-test", "stopped");
+        let untouched = DaemonId::new("stop-epoch-test", "untouched");
+        let approved_at = SUPERVISOR.stop_epoch(&untouched);
+        SUPERVISOR.bump_stop_epoch(&stopped);
+        assert_eq!(SUPERVISOR.stop_epoch(&untouched), approved_at);
     }
 
     #[test]

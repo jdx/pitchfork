@@ -85,6 +85,11 @@ pub struct Supervisor {
     /// daemon's retries at once, and a stop has to reach all of them.
     pub(crate) retrying:
         std::sync::Mutex<HashMap<DaemonId, Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>>>,
+    /// How many times each daemon has been stopped. The retry checker reads
+    /// this when it decides to run an attempt and again when it is about to
+    /// start one, holding the daemon's lock: a stop in between means the
+    /// attempt it approved is one the user has since called off.
+    pub(crate) stop_epochs: std::sync::Mutex<HashMap<DaemonId, u64>>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Autostop stops that have been spawned as detached tasks but have not
@@ -335,6 +340,7 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             retrying: std::sync::Mutex::new(HashMap::new()),
+            stop_epochs: std::sync::Mutex::new(HashMap::new()),
             pending_autostops: Mutex::new(HashMap::new()),
             in_flight_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
