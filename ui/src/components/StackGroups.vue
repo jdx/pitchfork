@@ -20,10 +20,13 @@ const groups = computed(() => props.stack.groups)
 const startable = computed(() => props.stack.can_start)
 const unresolvable = computed(() => props.stack.unresolvable_daemons)
 const blockedReason =
-  'The supervisor has no config for this daemon. Register this worktree to start it.'
+  'The supervisor has no config for this daemon, so it cannot be started or restarted. '
+  + 'Register this worktree first.'
 
 // Only the members the supervisor cannot resolve lose their group action; a
 // group of resolvable daemons stays usable even when the stack has others.
+// This gates Start and Restart only: stopping works from the daemon's tracked
+// state and needs no config, so a running stack can always be taken down.
 function groupBlocked(groupName: string): boolean {
   return ids(groupName).some(id => unresolvable.value.includes(id))
 }
@@ -100,9 +103,9 @@ async function onRestart(groupName: string) {
     <div v-if="!startable" class="unregistered">
       <p>
         The supervisor has no config for
-        <code>{{ stack.unresolvable_daemons.join(', ') }}</code>, so starting them would
-        fail. Register this worktree as namespace <code>{{ stack.namespace }}</code> to
-        enable its actions.
+        <code>{{ stack.unresolvable_daemons.join(', ') }}</code>, so starting or restarting
+        them would fail. Stopping still works. Register this worktree as namespace
+        <code>{{ stack.namespace }}</code> to enable the rest.
       </p>
       <button class="act-btn" :disabled="registering" @click="registerWorktree">
         Register worktree
@@ -120,7 +123,7 @@ async function onRestart(groupName: string) {
           <button class="act-btn act-start" :disabled="isActing(group.name) || groupBlocked(group.name) || group.daemons.length === 0" @click="onStart(group.name)">
             {{ group.is_default ? 'Start stack' : 'Start' }}
           </button>
-          <button class="act-btn act-stop" :disabled="isActing(group.name) || groupBlocked(group.name) || group.daemons.length === 0" @click="onStop(group.name)">
+          <button class="act-btn act-stop" :disabled="isActing(group.name) || group.daemons.length === 0" @click="onStop(group.name)">
             {{ group.is_default ? 'Stop stack' : 'Stop' }}
           </button>
           <button class="act-btn act-restart" :disabled="isActing(group.name) || groupBlocked(group.name) || group.daemons.length === 0" @click="onRestart(group.name)">

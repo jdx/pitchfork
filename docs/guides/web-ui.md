@@ -203,9 +203,10 @@ today, so the column stays hidden rather than reporting a guess.
 
 The supervisor resolves daemon configs from its own project directory and from
 the namespace registry. A worktree in neither is still listed with its daemons,
-but marked "not startable" and the actions for exactly those daemons are
-disabled, because a start would fail with "Daemon config not found". A restart
-would stop a running one and then fail to bring it back. Its stack page offers a **Register
+but marked "not startable" and the start and restart actions for exactly those
+daemons are disabled, because they would fail with "Daemon config not found";
+a restart would stop a running one and then fail to bring it back. Stopping
+needs no config, so it stays available. Its stack page offers a **Register
 worktree** button that adds the namespace; `pitchfork proxy add` registers one
 too, as does adding it under `[namespaces]` in the user config.
 
