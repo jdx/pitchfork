@@ -199,9 +199,13 @@ fn reject_case_colliding_worktrees(
 /// Read a daemon's TLS route (`proxy_tls`, `proxy_tls_port`) from the config
 /// that applies in `dir`.
 ///
-/// Falls back to the default route (terminate, first port) whenever the config
-/// cannot be read or names no such daemon: an unreadable config must not turn
-/// into a passthrough splice to an unknown port.
+/// `None` means that directory says nothing about the daemon, because its
+/// config could not be read or does not describe it. That is deliberately not
+/// the same as a route of `terminate`: a worktree the proxy knows nothing
+/// about inherits its slug's mode, where a synthesized `terminate` would
+/// silently stop splicing a passthrough daemon and answer with the proxy's
+/// certificate instead. A directory that *does* describe the daemon is
+/// authoritative, including when it leaves `proxy_tls` out and so terminates.
 ///
 /// Any other way of resolving a hostname to a daemon can reuse this to get the
 /// same TLS decision, since the mode belongs to the daemon rather than to the
@@ -213,13 +217,8 @@ pub(crate) fn read_proxy_tls_route(
     dir: &std::path::Path,
     namespace: Option<&str>,
     daemon_name: &str,
-) -> ProxyTlsRoute {
-    let Some(namespace) = namespace else {
-        return ProxyTlsRoute::default();
-    };
-    let Ok(id) = DaemonId::try_new(namespace, daemon_name) else {
-        return ProxyTlsRoute::default();
-    };
+) -> Option<ProxyTlsRoute> {
+    let id = DaemonId::try_new(namespace?, daemon_name).ok()?;
     let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(dir) {
         Ok(pt) => pt,
         Err(e) => {
@@ -227,16 +226,14 @@ pub(crate) fn read_proxy_tls_route(
                 "Proxy TLS route: could not read config in {}: {e}",
                 dir.display()
             );
-            return ProxyTlsRoute::default();
+            return None;
         }
     };
-    match pt.daemons.get(&id) {
-        Some(cfg) => ProxyTlsRoute {
-            mode: cfg.proxy_tls.unwrap_or_default(),
-            port: cfg.effective_proxy_tls_port(),
-        },
-        None => ProxyTlsRoute::default(),
-    }
+    let cfg = pt.daemons.get(&id)?;
+    Some(ProxyTlsRoute {
+        mode: cfg.proxy_tls.unwrap_or_default(),
+        port: cfg.effective_proxy_tls_port(),
+    })
 }
 
 /// Build the slug lookup table from disk (expensive — involves file I/O + subprocesses).
@@ -292,14 +289,16 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
             (vec![], std::collections::HashSet::new())
         };
         let dir = entry.resolve_dir().unwrap_or_default();
-        let tls = read_proxy_tls_route(&dir, ns.as_deref(), &daemon_name);
+        // The slug's own directory has nothing to inherit from, so silence
+        // there is the default route.
+        let tls = read_proxy_tls_route(&dir, ns.as_deref(), &daemon_name).unwrap_or_default();
+        // A worktree only gets an entry when its own config describes the
+        // daemon; the rest inherit the slug's route at lookup time.
         let worktree_tls = worktrees
             .iter()
-            .map(|wt| {
-                (
-                    wt.sanitized_branch.to_ascii_lowercase(),
-                    read_proxy_tls_route(&wt.path, wt.namespace.as_deref(), &daemon_name),
-                )
+            .filter_map(|wt| {
+                read_proxy_tls_route(&wt.path, wt.namespace.as_deref(), &daemon_name)
+                    .map(|route| (wt.sanitized_branch.to_ascii_lowercase(), route))
             })
             .collect();
         entries.insert(
@@ -2719,6 +2718,70 @@ mod tests {
         // Following auto-bump by position, as in passthrough mode.
         let bumped = make_daemon(&[8080, 9080], &[8081, 9081], Some(8081));
         assert_eq!(select_daemon_port(&route, &bumped), Some(9081));
+    }
+
+    /// A directory that says nothing about the daemon reads as no route at
+    /// all, so a worktree the proxy cannot read inherits its slug's mode
+    /// instead of being recorded as terminating and quietly ending a splice.
+    #[test]
+    fn test_read_proxy_tls_route_absent_without_config() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A directory with no config at all.
+        assert_eq!(read_proxy_tls_route(dir.path(), Some("proj"), "api"), None);
+
+        // A config that describes some other daemon.
+        std::fs::write(
+            dir.path().join("pitchfork.toml"),
+            "[daemons.other]\nrun = \"serve\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_proxy_tls_route(dir.path(), Some("proj"), "api"),
+            None,
+            "a config without this daemon says nothing about it"
+        );
+
+        // No namespace to resolve the daemon against.
+        assert_eq!(read_proxy_tls_route(dir.path(), None, "api"), None);
+    }
+
+    /// A worktree whose own config describes the daemon is authoritative,
+    /// including when it leaves `proxy_tls` out, and one the proxy knows
+    /// nothing about inherits the slug's route.
+    #[test]
+    fn test_worktree_route_inherits_when_unknown() {
+        let mut entry = make_entry("spliced");
+        entry.tls = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        entry.worktrees = vec![
+            make_worktree("feature/known", "feature-known"),
+            make_worktree("feature/unknown", "feature-unknown"),
+        ];
+        // Only the worktree whose config was readable gets an entry.
+        entry.worktree_tls.insert(
+            "feature-known".to_string(),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Terminate,
+                port: None,
+            },
+        );
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("spliced".to_string(), entry);
+
+        let mode = |host: &str| resolve_tls_mode_in(host, "localhost", &entries);
+        assert_eq!(
+            mode("feature-known.spliced.localhost"),
+            ProxyTlsMode::Terminate,
+            "an explicit worktree setting wins"
+        );
+        assert_eq!(
+            mode("feature-unknown.spliced.localhost"),
+            ProxyTlsMode::Passthrough,
+            "a worktree with nothing recorded inherits the slug"
+        );
     }
 
     /// The route of a wildcard worktree host comes from that worktree's own

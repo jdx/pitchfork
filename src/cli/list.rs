@@ -296,7 +296,8 @@ pub fn proxy_tls_mode(
         entry.resolve_namespace().as_deref(),
         daemon_name,
     )
-    .mode
+    .map(|route| route.mode)
+    .unwrap_or_default()
 }
 
 /// Build the proxy URL for a daemon based on its slug and proxy settings.
