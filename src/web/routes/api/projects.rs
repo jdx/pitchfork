@@ -158,10 +158,10 @@ pub struct ApiStack {
     is_primary: bool,
     /// False when `unresolvable_daemons` is non-empty.
     can_start: bool,
-    /// Daemons listed here that the supervisor cannot resolve a config for.
-    /// It loads configs from its own project and from the namespace registry,
-    /// so a worktree that is in neither is visible but not startable until its
-    /// namespace is registered.
+    /// Daemons this stack shows, in its own namespace or named by one of its
+    /// groups, that the supervisor cannot resolve a config for. It loads
+    /// configs from its own project and from the namespace registry, so a
+    /// worktree in neither is visible but not startable until registered.
     unresolvable_daemons: Vec<String>,
     /// False when the worktree directory no longer exists.
     dir_exists: bool,
@@ -189,15 +189,37 @@ pub type DaemonIndex = IndexMap<String, ApiDaemonEntry>;
 pub type Resolvable = HashSet<String>;
 
 /// Daemons of this worktree the web endpoints could not start or restart.
+/// Daemons this worktree's stack shows that the web endpoints could not start
+/// or restart: the worktree's own namespace, plus every group member the stack
+/// renders. A group can name daemons of other namespaces, and those need the
+/// same check, or the page would offer a Restart that stops a daemon and then
+/// fails to bring it back.
 fn unresolvable_for(
     daemons: &DaemonIndex,
-    namespace: Option<&str>,
+    wt: &WorktreeView,
     resolvable: &Resolvable,
 ) -> Vec<String> {
-    namespace_entries(daemons, namespace)
-        .filter(|e| !resolvable.contains(e.qualified()))
-        .map(|e| e.qualified().to_string())
-        .collect()
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut consider = |qualified: &str| {
+        if !resolvable.contains(qualified) && seen.insert(qualified.to_string()) {
+            out.push(qualified.to_string());
+        }
+    };
+
+    for entry in namespace_entries(daemons, wt.namespace.as_deref()) {
+        consider(entry.qualified());
+    }
+    for id in wt.groups.values().flatten() {
+        let qualified = id.qualified();
+        // Members no daemon matches are reported as `missing` instead.
+        if daemons.contains_key(&qualified) {
+            consider(&qualified);
+        }
+    }
+
+    out
 }
 
 fn counts_for<'a>(entries: impl Iterator<Item = &'a ApiDaemonEntry>) -> ApiDaemonCounts {
@@ -297,8 +319,7 @@ fn build_worktree_summary(
         namespace: wt.namespace.clone(),
         namespace_error: wt.namespace_error.clone(),
         is_primary: wt.is_primary,
-        can_start: wt.dir_exists
-            && unresolvable_for(daemons, wt.namespace.as_deref(), resolvable).is_empty(),
+        can_start: wt.dir_exists && unresolvable_for(daemons, wt, resolvable).is_empty(),
         dir_exists: wt.dir_exists,
         group_count: wt.groups.len(),
         daemons: counts_for(namespace_entries(daemons, wt.namespace.as_deref())),
@@ -351,7 +372,7 @@ pub fn build_stack(
         });
     }
 
-    let unresolvable = unresolvable_for(daemons, wt.namespace.as_deref(), resolvable);
+    let unresolvable = unresolvable_for(daemons, wt, resolvable);
     // A registration left behind by a deleted checkout must not look healthy.
     let dir_exists = wt.dir_exists;
 
@@ -1143,6 +1164,33 @@ mod tests {
         let namespace = namespace_for_worktree(&worktree).unwrap();
         assert_eq!(namespace, "feat");
         assert_ne!(namespace, "global");
+    }
+
+    /// A group can name daemons of other namespaces. Those are rendered by the
+    /// stack, so they need the same resolvability check: otherwise Restart
+    /// stops such a daemon and then fails to start it again.
+    #[test]
+    fn cross_namespace_group_members_are_checked_too() {
+        let mut projects = fixture_projects();
+        let shop = projects.iter_mut().find(|p| p.name == "shop").unwrap();
+        shop.worktrees[0]
+            .groups
+            .insert("shared".to_string(), group(&["shop/api", "other/api"]));
+
+        let daemons = index(vec![
+            daemon("shop/api", ApiDaemonStatus::Running, Some(10)),
+            daemon("other/api", ApiDaemonStatus::Running, Some(10)),
+        ]);
+        // The supervisor can resolve the worktree's own daemon, but not the
+        // one the group borrows from another namespace.
+        let resolvable: Resolvable = ["shop/api".to_string()].into_iter().collect();
+
+        let project = find_project(&projects, "shop").unwrap();
+        let wt = find_worktree(project, "main").unwrap();
+        let stack = build_stack(project, wt, &daemons, &resolvable);
+
+        assert_eq!(stack.unresolvable_daemons, vec!["other/api".to_string()]);
+        assert!(!stack.can_start);
     }
 
     /// A directory name that is not a valid namespace leaves the worktree
