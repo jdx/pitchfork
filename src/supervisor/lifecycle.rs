@@ -279,20 +279,16 @@ fn terminal_exit_state(
     }
 }
 
-/// The exit reason to record once a stop that arrived during the monitor's
-/// output drain is taken into account.
+/// Whether a stop that arrived after a run's process was already gone should
+/// leave the status its monitor settled on alone.
 ///
-/// The stop did not get to write anything, so it is applied here. A run that
-/// had already succeeded keeps that outcome — there was nothing left to
-/// interrupt, and for a oneshot that is the `completed` the deferral exists to
-/// protect. A failed one becomes a stop, so the retry checker leaves alone a
-/// daemon the user has just stopped.
-fn exit_reason_after_drain(exit_reason: &str, stop_during_drain: bool) -> &str {
-    if stop_during_drain && exit_reason == "fail" {
-        "stop"
-    } else {
-        exit_reason
-    }
+/// Only a completed task is left alone: it had already done its work, so there
+/// was nothing for the stop to interrupt, and overwriting it would report a
+/// failure to anyone waiting on it. Anything else — a failure above all — is
+/// replaced by the stop, so the retry checker does not carry on with a task
+/// the user has stopped.
+fn stop_keeps_finalized_status(status: &DaemonStatus) -> bool {
+    status.is_completed()
 }
 
 /// How long a failed start waits for the daemon's output to become queryable
@@ -325,22 +321,6 @@ impl Supervisor {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains(id)
-    }
-
-    /// Record that a stop arrived for this run while its monitor was still
-    /// draining, and take that record when the monitor finalizes.
-    fn mark_stop_during_drain(&self, id: &DaemonId, pid: u32) {
-        self.stop_during_drain
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((id.clone(), pid));
-    }
-
-    pub(crate) fn take_stop_during_drain(&self, id: &DaemonId, pid: u32) -> bool {
-        self.stop_during_drain
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&(id.clone(), pid))
     }
 
     fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
@@ -2016,9 +1996,6 @@ impl Supervisor {
             }
 
             let current_daemon = SUPERVISOR.get_daemon(&id).await;
-            // Taken unconditionally, including on the early return below, so
-            // no request is left behind for a later run of this daemon.
-            let stop_during_drain = SUPERVISOR.take_stop_during_drain(&id, pid);
 
             // Signal that this monitoring task is processing its exit path.
             // The RAII guard will decrement the counter and notify close()
@@ -2069,7 +2046,7 @@ impl Supervisor {
                     .is_some_and(|d| d.status.is_stopping());
 
             // --- Phase 1: Determine exit_code, exit_reason, and update daemon state ---
-            let (exit_code, mut exit_reason) = match (&exit_status, is_stopping) {
+            let (exit_code, exit_reason) = match (&exit_status, is_stopping) {
                 (Ok(status), true) => {
                     // Intentional stop (by pitchfork). status.code() returns None
                     // on Unix when killed by signal (e.g. SIGTERM); use -1 to
@@ -2089,7 +2066,6 @@ impl Supervisor {
             // succeeded keeps that outcome — there was nothing left to
             // interrupt — but a failed one is recorded as stopped, so the
             // retry checker leaves it alone.
-            exit_reason = exit_reason_after_drain(exit_reason, stop_during_drain);
 
             // Update daemon state unless stop() already did it (won the race),
             // OR the daemon was intentionally stopped before the drain
@@ -2350,28 +2326,47 @@ impl Supervisor {
                     .await?;
                 } else if daemon.oneshot && self.is_monitored(id, pid) {
                     // The task's process is gone but its monitor is still
-                    // running, so it is on its way to writing the real
-                    // outcome — which for a task that finished on its own is
-                    // `completed`. Writing `stopped` over it would discard a
-                    // success the daemon actually achieved and report failure
-                    // to anyone waiting on it, purely because a stop arrived a
-                    // moment late.
+                    // running, so the run's real outcome has not been written
+                    // yet — and for a task that finished on its own that
+                    // outcome is `completed`. Writing `stopped` straight over
+                    // it would discard a success the task actually achieved
+                    // and report failure to anyone waiting on it, purely
+                    // because a stop arrived a moment late.
                     //
-                    // Only for a oneshot. A service has no successful exit to
-                    // preserve, and deferring for one would leave the monitor
-                    // writing `errored` for a daemon the user just stopped,
-                    // which the retry checker would then act on — the exact
-                    // case the arm below exists for. The drain can run for
-                    // five seconds, so that window is not narrow.
+                    // So wait for whoever is monitoring this run — the native
+                    // monitor or an adopted one — to finish, then decide from
+                    // what it wrote. Waiting rather than leaving a note for
+                    // the monitor to find means there is no window in which
+                    // the note lands too late to be read, and nothing left
+                    // behind if it is never read at all. The wait is bounded,
+                    // as is the monitor's own five-second output drain.
+                    //
+                    // Only oneshots take this path. A service has no
+                    // successful exit to preserve, so it falls through to the
+                    // arm below, which records the stop immediately.
                     debug!(
-                        "pid {pid} not running but daemon {id} is still monitored; leaving the terminal state to its monitor"
+                        "pid {pid} not running but daemon {id} is still monitored; waiting for its monitor to settle the outcome"
                     );
-                    // The monitor still has to know a stop was asked for. A
-                    // run that finished successfully keeps its `completed`,
-                    // but one that failed must be recorded as stopped rather
-                    // than errored, or the retry checker would carry on with a
-                    // task the user has just stopped.
-                    self.mark_stop_during_drain(id, pid);
+                    self.wait_for_exit_finalized(id).await;
+                    let finished = self.get_daemon(id).await;
+                    if finished
+                        .as_ref()
+                        .is_some_and(|d| stop_keeps_finalized_status(&d.status))
+                    {
+                        return Ok(IpcResponse::DaemonWasNotRunning);
+                    }
+                    // The run did not finish its work, so record the stop. A
+                    // failure left in place would be picked up by the retry
+                    // checker, which would start a task the user just stopped.
+                    self.upsert_daemon(
+                        UpsertDaemonOpts::builder(id.clone())
+                            .set(|o| {
+                                o.pid = None;
+                                o.status = DaemonStatus::Stopped;
+                            })
+                            .build(),
+                    )
+                    .await?;
                     return Ok(IpcResponse::DaemonWasNotRunning);
                 } else {
                     debug!("pid {pid} not running, process may have exited unexpectedly");
@@ -3037,32 +3032,18 @@ mod oneshot_tests {
     }
 
     #[test]
-    fn stop_during_drain_turns_a_failure_into_a_stop() {
-        // Otherwise the monitor records `errored` for a daemon the user just
-        // stopped, and the retry checker picks it back up.
-        assert_eq!(exit_reason_after_drain("fail", true), "stop");
-        let (status, _) =
-            terminal_exit_state(exit_reason_after_drain("fail", true), true, 1, false);
-        assert!(matches!(status, DaemonStatus::Stopped));
+    fn a_stop_leaves_a_completed_task_alone() {
+        // It had already done its work, so the stop had nothing to interrupt.
+        assert!(stop_keeps_finalized_status(&DaemonStatus::Completed));
     }
 
     #[test]
-    fn stop_during_drain_leaves_a_finished_run_alone() {
-        // The task had already done its work; the stop had nothing to
-        // interrupt, so a oneshot keeps its `completed`.
-        assert_eq!(exit_reason_after_drain("exit", true), "exit");
-        let (status, _) = terminal_exit_state(exit_reason_after_drain("exit", true), true, 0, true);
-        assert!(matches!(status, DaemonStatus::Completed));
-    }
-
-    #[test]
-    fn a_taken_stop_request_is_not_seen_twice() {
-        let id = DaemonId::new("stop-drain-test", "task");
-        SUPERVISOR.mark_stop_during_drain(&id, 4242);
-        // Keyed by PID, so a later run of the same daemon does not inherit it.
-        assert!(!SUPERVISOR.take_stop_during_drain(&id, 4243));
-        assert!(SUPERVISOR.take_stop_during_drain(&id, 4242));
-        assert!(!SUPERVISOR.take_stop_during_drain(&id, 4242));
+    fn a_stop_replaces_a_failure_so_retries_do_not_resume() {
+        // check_retry() picks up errored daemons, so a stop has to overwrite
+        // one or it will start the task again.
+        assert!(!stop_keeps_finalized_status(&DaemonStatus::Errored(1)));
+        assert!(!stop_keeps_finalized_status(&DaemonStatus::Running));
+        assert!(!stop_keeps_finalized_status(&DaemonStatus::Stopped));
     }
 
     #[test]

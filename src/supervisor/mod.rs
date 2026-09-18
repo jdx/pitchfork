@@ -78,12 +78,6 @@ pub struct Supervisor {
     /// this the background checker would start the next attempt itself and the
     /// foreground call would be left reporting on a run it does not own.
     pub(crate) retrying: std::sync::Mutex<HashSet<DaemonId>>,
-    /// Runs that a `pitchfork stop` asked to end after their process was gone
-    /// but while their monitor was still draining output. Keyed by PID so a
-    /// later run of the same daemon cannot inherit the request. The monitor
-    /// takes the entry when it finalizes and records a stop rather than a
-    /// failure, so an explicit stop is not turned into retry-eligible state.
-    pub(crate) stop_during_drain: std::sync::Mutex<HashSet<(DaemonId, u32)>>,
     /// Map of daemon ID to scheduled autostop time
     pub(crate) pending_autostops: Mutex<HashMap<DaemonId, time::Instant>>,
     /// Autostop stops that have been spawned as detached tasks but have not
@@ -334,7 +328,6 @@ impl Supervisor {
             last_refreshed_at: Mutex::new(time::Instant::now()),
             pending_notifications: Mutex::new(vec![]),
             retrying: std::sync::Mutex::new(HashSet::new()),
-            stop_during_drain: std::sync::Mutex::new(HashSet::new()),
             pending_autostops: Mutex::new(HashMap::new()),
             in_flight_autostops: Mutex::new(HashMap::new()),
             ipc_shutdown: Mutex::new(None),
