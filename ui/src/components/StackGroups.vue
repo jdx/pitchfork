@@ -13,6 +13,10 @@ const { start, stop, restart, acting } = useGroupActions()
 // "Start stack" rather than repeating the group name.
 const groups = computed(() => props.stack.groups)
 
+// The supervisor resolves daemon configs through the namespace registry, so
+// an unregistered worktree's daemons are listed but cannot be started yet.
+const startable = computed(() => props.stack.namespace_registered)
+
 function key(groupName: string): string {
   return `${props.stack.project}/${props.stack.worktree}/${groupName}`
 }
@@ -42,6 +46,12 @@ async function onRestart(groupName: string) {
 
 <template>
   <div class="stack-groups">
+    <p v-if="!startable" class="unregistered">
+      Namespace <code>{{ stack.namespace }}</code> is not registered, so the supervisor
+      cannot start these daemons yet. Register it with
+      <code>pitchfork supervisor namespace add {{ stack.namespace }} {{ stack.dir }}</code>.
+    </p>
+
     <section v-for="group in groups" :key="group.name" class="group" :class="{ primary: group.is_default }">
       <header class="group-header">
         <div class="group-title">
@@ -50,13 +60,13 @@ async function onRestart(groupName: string) {
           <span class="group-count">{{ group.running }}/{{ group.total }} running</span>
         </div>
         <div class="group-actions">
-          <button class="act-btn act-start" :disabled="isActing(group.name)" @click="onStart(group.name)">
+          <button class="act-btn act-start" :disabled="isActing(group.name) || !startable" @click="onStart(group.name)">
             {{ group.is_default ? 'Start stack' : 'Start' }}
           </button>
-          <button class="act-btn act-stop" :disabled="isActing(group.name)" @click="onStop(group.name)">
+          <button class="act-btn act-stop" :disabled="isActing(group.name) || !startable" @click="onStop(group.name)">
             {{ group.is_default ? 'Stop stack' : 'Stop' }}
           </button>
-          <button class="act-btn act-restart" :disabled="isActing(group.name)" @click="onRestart(group.name)">
+          <button class="act-btn act-restart" :disabled="isActing(group.name) || !startable" @click="onRestart(group.name)">
             {{ group.is_default ? 'Restart stack' : 'Restart' }}
           </button>
         </div>
@@ -151,6 +161,13 @@ async function onRestart(groupName: string) {
 
 .act-start:hover:not(:disabled) { color: @c-success; }
 .act-stop:hover:not(:disabled) { color: @c-danger; }
+
+.unregistered {
+  margin: 0;
+  .font-sans(0.78rem; @c-warning; 500);
+
+  code { .font-mono(0.75rem; @sf-45); }
+}
 
 .group-missing {
   margin: 0;

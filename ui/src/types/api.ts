@@ -142,6 +142,8 @@ export interface WorktreeSummary {
   path: string
   namespace: string
   is_primary: boolean
+  /** False when the namespace is not registered, so its daemons cannot start yet. */
+  namespace_registered: boolean
   group_count: number
   daemons: DaemonCounts
   last_activity: string | null
@@ -167,6 +169,8 @@ export interface Stack {
   namespace: string
   dir: string
   is_primary: boolean
+  /** False when the namespace is not registered, so its daemons cannot start yet. */
+  namespace_registered: boolean
   groups: StackGroup[]
   ungrouped: DaemonEntry[]
   daemons: DaemonCounts

@@ -201,6 +201,11 @@ page under "Stack · primary checkout". Per-worktree disk usage is only shown
 when pitchfork tracks a data directory for the daemons, which it does not do
 today, so the column stays hidden rather than reporting a guess.
 
+A worktree whose namespace is not in the namespace registry is listed with its
+daemons, but marked "unregistered" and its stack actions are disabled: the
+supervisor resolves daemon configs through that registry, so register the
+namespace with `pitchfork supervisor namespace add` before starting them.
+
 A stack page shows the groups declared by the config loaded for that worktree,
 in the order they appear, except that a group named `default` comes first and
 is presented as the stack's primary action:

@@ -64,6 +64,7 @@ const showDisk = computed(() =>
                   {{ w.name }}
                 </router-link>
                 <span v-if="w.is_primary" class="tag">primary</span>
+                <span v-if="!w.namespace_registered" class="tag tag-warn" title="Register this namespace before its daemons can start">unregistered</span>
                 <div class="cell-dir">{{ w.path }}</div>
               </td>
               <td class="cell-ns">{{ w.namespace }}</td>
@@ -120,6 +121,7 @@ const showDisk = computed(() =>
 .row { border-bottom: 1px solid rgba(255, 255, 255, 0.03); &:last-child { border-bottom: none; } }
 .cell-name { padding: 0.55rem 0.75rem; }
 .wt-link { .font-sans(0.9rem; @c-white; 600); text-decoration: none; &:hover { color: @c-accent-dim; } }
+.tag-warn { color: @c-warning; background: @sf-warning-8; }
 .tag { margin-left: 0.4rem; .font-sans(0.62rem; @c-accent-dim; 600); background: @sf-accent-10; padding: 0.08rem 0.35rem; border-radius: @r-sm; text-transform: uppercase; }
 .cell-dir { .font-mono(0.72rem; @sf-30); }
 .cell-ns { .font-mono(0.78rem; @sf-45); }

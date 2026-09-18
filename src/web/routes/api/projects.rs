@@ -41,6 +41,11 @@ pub struct WorktreeView {
     pub path: PathBuf,
     pub namespace: String,
     pub is_primary: bool,
+    /// Whether the worktree's namespace is in the global namespace registry.
+    /// The supervisor resolves daemon configs through that registry, so
+    /// daemons of an unregistered worktree are visible here but cannot be
+    /// started until the namespace is registered.
+    pub namespace_registered: bool,
     pub groups: IndexMap<String, Vec<DaemonId>>,
 }
 
@@ -82,6 +87,9 @@ pub struct ApiWorktreeSummary {
     path: String,
     namespace: String,
     is_primary: bool,
+    /// False when the worktree's namespace is not registered, which means the
+    /// supervisor cannot start its daemons yet.
+    namespace_registered: bool,
     group_count: usize,
     daemons: ApiDaemonCounts,
     last_activity: Option<String>,
@@ -125,6 +133,9 @@ pub struct ApiStack {
     namespace: String,
     dir: String,
     is_primary: bool,
+    /// False when the worktree's namespace is not registered, which means the
+    /// supervisor cannot start its daemons yet.
+    namespace_registered: bool,
     groups: Vec<ApiGroup>,
     /// Daemons in the worktree's namespace that no group lists.
     ungrouped: Vec<ApiDaemonEntry>,
@@ -226,6 +237,7 @@ fn build_worktree_summary(
         path: wt.path.to_string_lossy().to_string(),
         namespace: wt.namespace.clone(),
         is_primary: wt.is_primary,
+        namespace_registered: wt.namespace_registered,
         group_count: wt.groups.len(),
         daemons: counts_for(namespace_entries(daemons, &wt.namespace)),
         last_activity: last_activity_for(namespace_entries(daemons, &wt.namespace)),
@@ -284,6 +296,7 @@ pub fn build_stack(project: &ProjectView, wt: &WorktreeView, daemons: &DaemonInd
         namespace: wt.namespace.clone(),
         dir: wt.path.to_string_lossy().to_string(),
         is_primary: wt.is_primary,
+        namespace_registered: wt.namespace_registered,
         groups,
         ungrouped,
         daemons: counts_for(namespace_entries(daemons, &wt.namespace)),
@@ -364,16 +377,23 @@ fn groups_for_dir(dir: &StdPath) -> IndexMap<String, Vec<DaemonId>> {
     }
 }
 
-fn worktree_views(project_name: &str, project_dir: &StdPath) -> Vec<WorktreeView> {
+fn worktree_views(
+    project_name: &str,
+    project_dir: &StdPath,
+    registered: &HashSet<String>,
+) -> Vec<WorktreeView> {
     let project_canonical = canonical(project_dir);
     let discovered = discover_cached(project_dir);
+    let is_registered = |namespace: &str| registered.contains(&namespace.to_ascii_lowercase());
 
     if discovered.is_empty() {
+        let namespace = PitchforkToml::namespace_for_dir(project_dir)
+            .unwrap_or_else(|_| project_name.to_string());
         return vec![WorktreeView {
             name: DEFAULT_WORKTREE.to_string(),
             branch: DEFAULT_WORKTREE.to_string(),
-            namespace: PitchforkToml::namespace_for_dir(project_dir)
-                .unwrap_or_else(|_| project_name.to_string()),
+            namespace_registered: is_registered(&namespace),
+            namespace,
             groups: groups_for_dir(project_dir),
             path: project_dir.to_path_buf(),
             is_primary: true,
@@ -398,6 +418,7 @@ fn worktree_views(project_name: &str, project_dir: &StdPath) -> Vec<WorktreeView
             branch: wt.branch.clone(),
             is_primary: canonical(&wt.path) == project_canonical,
             groups: groups_for_dir(&wt.path),
+            namespace_registered: is_registered(&namespace),
             namespace,
             path: wt.path,
         });
@@ -428,19 +449,24 @@ fn is_main_checkout(dir: &StdPath) -> bool {
 /// its own. Registering only the worktree keeps it a project in its own right.
 fn collect_project_views_blocking() -> Vec<ProjectView> {
     let registry = PitchforkToml::read_global_namespaces();
+    // Namespaces the supervisor can resolve daemon configs for, lowercased.
+    let registered: HashSet<String> = registry
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
 
     let mut projects: Vec<(ProjectView, Option<PathBuf>)> = registry
-        .into_iter()
+        .iter()
         .map(|(name, entry)| {
-            let worktrees = worktree_views(&name, &entry.dir);
+            let worktrees = worktree_views(name, &entry.dir, &registered);
             let main = worktrees
                 .iter()
                 .find(|w| is_main_checkout(&w.path))
                 .map(|w| canonical(&w.path));
             (
                 ProjectView {
-                    name,
-                    dir: entry.dir,
+                    name: name.clone(),
+                    dir: entry.dir.clone(),
                     worktrees,
                 },
                 main,
@@ -577,6 +603,7 @@ mod tests {
             path: PathBuf::from("/src/shop"),
             namespace: "shop".into(),
             is_primary: true,
+            namespace_registered: true,
             groups: IndexMap::from([("web".to_string(), group(&["shop/api", "shop/frontend"]))]),
         };
         let shop_feature = WorktreeView {
@@ -585,6 +612,8 @@ mod tests {
             path: PathBuf::from("/src/shop-feature-a"),
             namespace: "shop-feature-a".into(),
             is_primary: false,
+            // Registered nowhere: the supervisor cannot start these daemons.
+            namespace_registered: false,
             groups: IndexMap::from([
                 ("workers".to_string(), group(&["shop-feature-a/worker"])),
                 (
@@ -599,6 +628,7 @@ mod tests {
             path: PathBuf::from("/src/blog"),
             namespace: "blog".into(),
             is_primary: true,
+            namespace_registered: true,
             groups: IndexMap::new(),
         };
         vec![
@@ -723,6 +753,22 @@ mod tests {
         let ungrouped = json["ungrouped"].as_array().unwrap();
         assert_eq!(ungrouped.len(), 1);
         assert_eq!(ungrouped[0]["id"]["qualified"], "shop-feature-a/extra");
+    }
+
+    /// A worktree whose namespace is not registered is still listed with its
+    /// daemons, but flagged so the UI does not offer an action the supervisor
+    /// would reject with "Daemon config not found".
+    #[test]
+    fn unregistered_worktree_namespace_is_flagged() {
+        let projects = fixture_projects();
+        let project = find_project(&projects, "shop").unwrap();
+        let json = serde_json::to_value(build_project(project, &fixture_daemons())).unwrap();
+        assert_eq!(json["worktrees"][0]["namespace_registered"], true);
+        assert_eq!(json["worktrees"][1]["namespace_registered"], false);
+
+        let wt = find_worktree(project, "feature-a").unwrap();
+        let stack = serde_json::to_value(build_stack(project, wt, &fixture_daemons())).unwrap();
+        assert_eq!(stack["namespace_registered"], false);
     }
 
     #[test]

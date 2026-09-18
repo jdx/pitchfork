@@ -524,6 +524,12 @@ function usePolledResource<T>(
 
   watchEffect((onCleanup) => {
     if (!path.value) return
+    // These views are reused across routes, so drop the previous target's
+    // payload before fetching the new one. Otherwise the old project's
+    // worktrees stay on screen under the new title, and a 404 renders the
+    // previous page next to the error.
+    data.value = null
+    error.value = null
     loading.value = true
     refresh()
     const timer = setInterval(refresh, pollInterval)
@@ -557,6 +563,20 @@ export function useStack(project: Ref<string>, worktree: Ref<string>, pollInterv
 }
 
 /**
+ * A daemon state the group action would be a no-op for. The per-daemon
+ * endpoints answer `{ok: false, error: "daemon is already running"}` (or
+ * "daemon is not running") in that case, which is not a failure of the group
+ * action: the member already is where the click wants it.
+ */
+function isNoOpResult(message: string): boolean {
+  const m = message.toLowerCase()
+  return m.includes('already running')
+    || m.includes('already enabled')
+    || m.includes('already disabled')
+    || m.includes('is not running')
+}
+
+/**
  * Group actions, run as ordinary per-daemon start/stop/restart requests
  * against the group's qualified ids. Nothing starts on its own: a stack only
  * changes state when one of these is clicked.
@@ -582,7 +602,10 @@ export function useGroupActions() {
         try {
           await api(`/daemons/${encodeURIComponent(id)}/${endpoint}`, { method: 'POST' })
         } catch (e: any) {
-          failures.push(`${daemonName(id)}: ${e.message ?? 'unknown error'}`)
+          const message = e.message ?? 'unknown error'
+          // A member that is already in the target state is not a failure.
+          if (isNoOpResult(message)) continue
+          failures.push(`${daemonName(id)}: ${message}`)
         }
       }
       toast.dismiss(toastId)

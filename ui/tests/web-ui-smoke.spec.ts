@@ -215,6 +215,11 @@ test('project pages list projects, worktrees, and stack groups without auto-star
     await page.getByRole('button', { name: 'Start stack', exact: true }).click()
     await expect(page.getByText('2/2 running')).toBeVisible()
 
+    // Starting an already-running stack is a no-op per member, not a failure.
+    await page.getByRole('button', { name: 'Start stack', exact: true }).click()
+    await expect(page.getByText('2/2 running')).toBeVisible()
+    await expect(page.getByText(/partially started|Start .* failed/)).toHaveCount(0)
+
     await page.getByRole('button', { name: 'Stop stack', exact: true }).click()
     await expect(page.getByText('0/2 running')).toBeVisible()
 
