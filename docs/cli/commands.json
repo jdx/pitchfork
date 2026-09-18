@@ -7447,7 +7447,7 @@
   "complete": {
     "id": {
       "name": "id",
-      "run": "case \"{{words[1]}}\" in\n  stop|wait)\n    pitchfork ls --hide-header --status running | awk '{print $1}'\n    ;;\n  restart)\n    pitchfork ls --hide-header --status running --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  start)\n    pitchfork ls --hide-header --status available --status stopped --status errored --status failed | awk '{print $1}'\n    ;;\n  enable)\n    pitchfork ls --hide-header --status disabled | awk '{print $1}'\n    ;;\n  disable)\n    pitchfork ls --hide-header --status running --status available | awk '{print $1}'\n    ;;\n  *)\n    pitchfork ls --hide-header | awk '{print $1}'\n    ;;\nesac"
+      "run": "case \"{{words[1]}}\" in\n  stop|wait)\n    pitchfork ls --hide-header --status running | awk '{print $1}'\n    ;;\n  restart)\n    pitchfork ls --hide-header --status running --status stopped --status completed --status errored --status failed | awk '{print $1}'\n    ;;\n  start)\n    pitchfork ls --hide-header --status available --status stopped --status completed --status errored --status failed | awk '{print $1}'\n    ;;\n  enable)\n    pitchfork ls --hide-header --status disabled | awk '{print $1}'\n    ;;\n  disable)\n    pitchfork ls --hide-header --status running --status available | awk '{print $1}'\n    ;;\n  *)\n    pitchfork ls --hide-header | awk '{print $1}'\n    ;;\nesac"
     }
   },
   "about": "Daemons with DX",

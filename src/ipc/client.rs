@@ -342,11 +342,16 @@ impl IpcClient {
         // global setting is only consulted when no per-run delay is given, and
         // subsecond values are rejected there rather than silently truncated
         // by `as_secs()` into a zero delay.
-        let ready_delay = match opts.ready_delay {
-            Some(secs) => secs,
-            None => crate::settings::settings()
-                .general_ready_delay_secs()
-                .map_err(|e| miette::miette!("{e}"))?,
+        // Resolved lazily: a oneshot has no readiness delay, and
+        // `general_ready_delay_secs` rejects a subsecond global value, which
+        // would fail a run that never consults the delay at all.
+        let resolve_ready_delay = || -> Result<u64> {
+            match opts.ready_delay {
+                Some(secs) => Ok(secs),
+                None => crate::settings::settings()
+                    .general_ready_delay_secs()
+                    .map_err(|e| miette::miette!("{e}")),
+            }
         };
         // If any configured readiness check is unbounded (no timeout), the
         // supervisor may wait indefinitely. Use a generous cap so the client
@@ -405,7 +410,7 @@ impl IpcClient {
                         .map(|d| d.as_secs())
                         .unwrap_or(0),
                 )
-                .max(ready_delay);
+                .max(resolve_ready_delay()?);
             Some(Duration::from_secs(max_deadline + 60))
         };
         let rsp = self

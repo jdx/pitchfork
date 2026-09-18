@@ -310,37 +310,8 @@ impl Supervisor {
         // concurrent run pass this same check (duplicate processes) or let a
         // concurrent stop see no PID and return without stopping anything.
         let mut stop_guard = Some(self.stop_lock(id).await.lock_owned().await);
-        let daemon = self.get_daemon(id).await;
-        if let Some(daemon) = daemon {
-            // Stopping state is treated as "not running" - the monitoring task will clean it up
-            // Only check for Running state with a valid PID
-            if !daemon.status.is_stopping()
-                && !daemon.status.is_stopped()
-                && !daemon.status.is_completed()
-                && let Some(pid) = daemon.pid
-            {
-                if opts.force {
-                    self.stop_locked(id).await?;
-                    info!("run: stop completed for daemon {id}");
-                } else if daemon.oneshot && opts.wait_ready {
-                    // An in-flight oneshot has not done its work yet, so
-                    // reporting "already running" would let dependents start
-                    // against the state the task is still establishing. Wait
-                    // for the run that is already under way instead.
-                    //
-                    // Release the stop lock first: this wait lasts as long as
-                    // the task does, and holding it would block a stop of the
-                    // very run being waited on.
-                    info!(
-                        "daemon {id} is an in-flight oneshot (pid {pid}); waiting for it to finish"
-                    );
-                    drop(stop_guard.take());
-                    return Ok(self.await_running_oneshot(id, opts.oneshot_wait).await);
-                } else {
-                    warn!("daemon {id} already running with pid {pid}");
-                    return Ok(IpcResponse::DaemonAlreadyRunning);
-                }
-            }
+        if let Some(response) = self.claim_or_defer(&opts, &mut stop_guard).await? {
+            return Ok(response);
         }
 
         // If wait_ready is true and retry is configured, implement retry loop
@@ -355,9 +326,24 @@ impl Supervisor {
                 // The first attempt starts under the guard held since the
                 // running check above; later attempts re-acquire it so stops
                 // are not locked out during the backoff sleeps.
-                let guard = match stop_guard.take() {
+                let mut guard = Some(match stop_guard.take() {
                     Some(guard) => guard,
                     None => self.stop_lock(id).await.lock_owned().await,
+                });
+                // Ownership has to be re-checked on every attempt, not just
+                // the first. The backoff leaves the daemon errored with no PID,
+                // which is exactly what `check_retry` looks for, so the
+                // background checker can start the next attempt during the
+                // sleep. Spawning another process here would replace that
+                // attempt's monitor registration and leave its process running
+                // unmonitored.
+                if let Some(response) = self.claim_or_defer(&retry_opts, &mut guard).await? {
+                    return Ok(response);
+                }
+                let Some(guard) = guard else {
+                    // Only the deferring paths take the guard, and each of
+                    // those returned above.
+                    return Ok(IpcResponse::DaemonAlreadyRunning);
                 };
                 let result = self.run_once(retry_opts, guard).await?;
 
@@ -408,6 +394,54 @@ impl Supervisor {
             None => self.stop_lock(id).await.lock_owned().await,
         };
         self.run_once(opts, guard).await
+    }
+
+    /// Decide whether this start may take the daemon's record, or must stand
+    /// down because a live run already owns it.
+    ///
+    /// Returns `Some(response)` when the caller must report that run's outcome
+    /// instead of spawning a second process, and `None` when the record is free
+    /// (including after a forced stop of the previous instance).
+    ///
+    /// `stop_guard` is released before an in-flight oneshot is awaited: that
+    /// wait lasts as long as the task does, and holding the lock would block a
+    /// stop of the very run being waited on.
+    async fn claim_or_defer(
+        &self,
+        opts: &RunOptions,
+        stop_guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) -> Result<Option<IpcResponse>> {
+        let id = &opts.id;
+        let Some(daemon) = self.get_daemon(id).await else {
+            return Ok(None);
+        };
+        // Stopping is treated as "not running": the monitoring task will clean
+        // it up. Only a live PID under a non-terminal status blocks a start.
+        if daemon.status.is_stopping() || daemon.status.is_stopped() || daemon.status.is_completed()
+        {
+            return Ok(None);
+        }
+        let Some(pid) = daemon.pid else {
+            return Ok(None);
+        };
+        if opts.force {
+            self.stop_locked(id).await?;
+            info!("run: stop completed for daemon {id}");
+            return Ok(None);
+        }
+        if daemon.oneshot && opts.wait_ready {
+            // An in-flight oneshot has not done its work yet, so reporting
+            // "already running" would let dependents start against the state
+            // the task is still establishing. Wait for the run already under
+            // way instead.
+            info!("daemon {id} is an in-flight oneshot (pid {pid}); waiting for it to finish");
+            drop(stop_guard.take());
+            return Ok(Some(
+                self.await_running_oneshot(id, opts.oneshot_wait).await,
+            ));
+        }
+        warn!("daemon {id} already running with pid {pid}");
+        Ok(Some(IpcResponse::DaemonAlreadyRunning))
     }
 
     /// Wait for a oneshot that is already running to reach a terminal state,
