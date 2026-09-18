@@ -650,11 +650,14 @@ impl IpcClient {
                 let rendered = match rendered {
                     Ok(rendered) => rendered,
                     Err(e) => {
-                        // Nothing in this level was rendered, so nothing starts;
-                        // the run has to report that rather than exit cleanly.
+                        // Nothing in this level was rendered, so nothing in it
+                        // starts. Later levels depend on this one, so the run
+                        // stops here rather than starting dependents whose
+                        // prerequisites never ran.
                         error!("Template rendering task failed: {e}");
+                        error!("Dependency failed, aborting remaining starts");
                         any_failed = true;
-                        continue;
+                        break;
                     }
                 };
 
