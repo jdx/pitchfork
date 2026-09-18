@@ -7,17 +7,15 @@ const props = defineProps<{
   daemons: DaemonEntry[]
   prefersCard: boolean
   /**
-   * Qualified ids whose start/restart the supervisor would reject, e.g.
-   * daemons of a worktree whose config it cannot resolve. Other rows keep
-   * their controls.
+   * Why start/restart is unavailable, per qualified id: daemons of a worktree
+   * whose config the supervisor cannot resolve, or whose directory is gone.
+   * Ids that are absent keep their controls, and the reason is the tooltip.
    */
-  disabledIds?: string[]
-  /** Why those ids cannot be acted on; shown as the button tooltip. */
-  disabledReason?: string
+  disabledReasons?: Record<string, string>
 }>()
 
 function reasonFor(qualified: string): string | undefined {
-  return props.disabledIds?.includes(qualified) ? props.disabledReason : undefined
+  return props.disabledReasons?.[qualified]
 }
 
 defineEmits<{ refresh: [] }>()

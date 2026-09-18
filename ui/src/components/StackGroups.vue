@@ -18,31 +18,43 @@ const groups = computed(() => props.stack.groups)
 // daemons would fail, so its actions stay disabled until it is registered.
 const unresolvable = computed(() => props.stack.unresolvable_daemons)
 
-// A worktree whose directory is gone cannot start anything, whatever its
-// registration still claims, so every row is blocked rather than just the
-// daemons with no resolvable config.
-const blockedIds = computed(() =>
-  props.stack.dir_exists
-    ? unresolvable.value
-    : [
-        ...props.stack.groups.flatMap(g => g.daemons.map(d => d.id.qualified)),
-        ...props.stack.ungrouped.map(d => d.id.qualified),
-      ],
-)
-const blockedReason = computed(() =>
-  props.stack.dir_exists
-    ? 'The supervisor has no config for this daemon, so it cannot be started or '
-      + 'restarted. Register this worktree first.'
-    : 'This worktree directory no longer exists, so its daemons cannot be started '
-      + 'or restarted.',
-)
+const NO_CONFIG =
+  'The supervisor has no config for this daemon, so it cannot be started or '
+  + 'restarted. Register this worktree first.'
+const NO_DIRECTORY =
+  'This worktree directory no longer exists, so its daemons cannot be started or '
+  + 'restarted.'
+
+/** Every daemon the page renders, grouped or not. */
+const renderedDaemons = computed(() => [
+  ...props.stack.groups.flatMap(g => g.daemons),
+  ...props.stack.ungrouped,
+])
+
+/**
+ * Why each daemon cannot be started or restarted, keyed by qualified id.
+ *
+ * A missing directory only blocks the daemons that would run from it, which
+ * are the ones in this worktree's namespace. A group inherited from a wider
+ * config can name daemons of other namespaces, and those stay usable.
+ */
+const blockedReasons = computed(() => {
+  const reasons: Record<string, string> = {}
+  for (const id of unresolvable.value) reasons[id] = NO_CONFIG
+  if (!props.stack.dir_exists && props.stack.namespace) {
+    for (const d of renderedDaemons.value) {
+      if (d.id.namespace === props.stack.namespace) reasons[d.id.qualified] = NO_DIRECTORY
+    }
+  }
+  return reasons
+})
 
 // Only the members the supervisor cannot resolve lose their group action; a
 // group of resolvable daemons stays usable even when the stack has others.
 // This gates Start and Restart only: stopping works from the daemon's tracked
 // state and needs no config, so a running stack can always be taken down.
 function groupBlocked(groupName: string): boolean {
-  return !props.stack.dir_exists || ids(groupName).some(id => unresolvable.value.includes(id))
+  return ids(groupName).some(id => id in blockedReasons.value)
 }
 
 function key(groupName: string): string {
@@ -131,8 +143,7 @@ async function onRestart(groupName: string) {
         v-if="group.daemons.length"
         :daemons="group.daemons"
         :prefers-card="prefersCard"
-        :disabled-ids="blockedIds"
-        :disabled-reason="blockedReason"
+        :disabled-reasons="blockedReasons"
         @refresh="emit('refresh')"
       />
     </section>
@@ -147,8 +158,7 @@ async function onRestart(groupName: string) {
       <DaemonTable
         :daemons="stack.ungrouped"
         :prefers-card="prefersCard"
-        :disabled-ids="blockedIds"
-        :disabled-reason="blockedReason"
+        :disabled-reasons="blockedReasons"
         @refresh="emit('refresh')"
       />
     </section>
