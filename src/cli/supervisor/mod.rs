@@ -75,11 +75,25 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
     // Bind the kill to a process generation so a PID recycled between the
     // check above and the signal is still refused. A legacy record without a
     // start time was just verified to be a live pitchfork process, so bind to
-    // the generation observed now; if no start token can be read at all the
-    // kill is refused rather than sent to a bare PID.
-    let expected_start_time = record.start_time.or_else(|| PROCS.start_time(existing_pid));
+    // the generation observed now.
+    let Some(expected_start_time) = record.start_time.or_else(|| PROCS.start_time(existing_pid))
+    else {
+        // The process is alive (the check above said so) but its identity
+        // cannot be read, so the kill cannot be bound. That is a failure to
+        // report, not proof of death: mapping it to `AlreadyDead` would have
+        // `stop` drop the record of a supervisor that keeps running, and a
+        // forced `start`/`run` launch a second one beside it.
+        return Err(miette::miette!(
+            "cannot verify the identity of supervisor pid {existing_pid}: its start time is unreadable; not signalling it. Try rerun with sudo."
+        ));
+    };
     let killed = PROCS
-        .kill_if_start_time_matches_async(existing_pid, expected_start_time, stop_signal, None)
+        .kill_if_start_time_matches_async(
+            existing_pid,
+            Some(expected_start_time),
+            stop_signal,
+            None,
+        )
         .await;
     match killed {
         Ok(true) => Ok(KillOrStopOutcome::Killed),
