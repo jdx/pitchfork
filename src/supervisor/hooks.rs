@@ -284,25 +284,41 @@ async fn render_hook_template(
             .collect()
     };
 
-    let daemon_config = pt.daemons.get(daemon_id);
-    let mut ctx = template::TemplateContext::new(
-        daemon_id,
-        daemon_config.unwrap_or(&Default::default()),
-        &resolved_daemons,
-        &pt.daemons,
-    );
+    // Building the context reads the slug registry and derives the daemon's
+    // hostname, which walks the project's checkouts. Hooks fire on the
+    // supervisor's runtime, so that work goes to a blocking worker.
+    let pt = pt.clone();
+    let daemon_id = daemon_id.clone();
+    let template_str = template_str.to_string();
+    let template_for_error = template_str.clone();
+    tokio::task::spawn_blocking(move || {
+        let daemon_config = pt.daemons.get(&daemon_id);
+        let mut ctx = template::TemplateContext::new(
+            &daemon_id,
+            daemon_config.unwrap_or(&Default::default()),
+            &resolved_daemons,
+            &pt.daemons,
+        );
 
-    // Merge top-level env with per-daemon env (per-daemon wins), render the
-    // values, and expose them as `{{ env.X }}` for hook templates.
-    if let Some(rendered_env) = template::render_env(
-        pt.env.as_ref(),
-        daemon_config.and_then(|d| d.env.as_ref()),
-        &ctx,
-    )? {
-        ctx.set_env(rendered_env);
-    }
+        // Merge top-level env with per-daemon env (per-daemon wins), render the
+        // values, and expose them as `{{ env.X }}` for hook templates.
+        if let Some(rendered_env) = template::render_env(
+            pt.env.as_ref(),
+            daemon_config.and_then(|d| d.env.as_ref()),
+            &ctx,
+        )? {
+            ctx.set_env(rendered_env);
+        }
 
-    template::render_template(template_str, &ctx)
+        template::render_template(&template_str, &ctx)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        Err(template::RenderError::RenderFailed {
+            template: template_for_error,
+            source: tera::Error::message(format!("hook template rendering task failed: {e}")),
+        })
+    })
 }
 
 #[cfg(test)]

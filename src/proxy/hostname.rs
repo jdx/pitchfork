@@ -413,19 +413,6 @@ impl ProjectHosts {
         std::iter::once(&self.primary).chain(self.worktrees.values())
     }
 
-    /// Whether more than one checkout of this project would run this daemon ID.
-    ///
-    /// Checkouts share a namespace when the project declares one explicitly,
-    /// and the state file holds a single record per daemon ID, so a running
-    /// daemon cannot be told apart by its ID alone. Callers use this to decide
-    /// whether a request must be matched to the checkout it names.
-    pub fn shares_daemon_id(&self, namespace: &str, daemon: &str) -> bool {
-        self.checkouts()
-            .filter(|c| c.namespace == namespace && c.daemons.values().any(|n| n == daemon))
-            .count()
-            > 1
-    }
-
     /// Sorted worktree labels.
     pub fn worktree_labels(&self) -> Vec<String> {
         let mut labels: Vec<String> = self.worktrees.keys().cloned().collect();
@@ -743,6 +730,24 @@ impl HostRegistry {
         }
 
         registry
+    }
+
+    /// Whether more than one checkout across all known projects would run this
+    /// daemon ID.
+    ///
+    /// A namespace comes from the checkout's own directory name or config, not
+    /// from the project above it, so two unrelated projects that each have a
+    /// `fix-1` worktree with an `api` daemon both produce `fix-1/api`. The
+    /// state file holds one record per ID, so in that case a request has to be
+    /// matched to the checkout it names, exactly as for two checkouts of one
+    /// project.
+    pub fn shares_daemon_id(&self, namespace: &str, daemon: &str) -> bool {
+        self.projects
+            .values()
+            .flat_map(ProjectHosts::checkouts)
+            .filter(|c| c.namespace == namespace && c.daemons.values().any(|n| n == daemon))
+            .count()
+            > 1
     }
 
     /// Sorted project labels.
@@ -1317,30 +1322,65 @@ mod tests {
         );
     }
 
-    /// Checkouts that share an explicit namespace cannot be told apart by
-    /// daemon ID, which the proxy has to know before trusting a state record.
+    /// Checkouts that share a namespace cannot be told apart by daemon ID,
+    /// which the proxy has to know before trusting a state record. Namespaces
+    /// come from directory names, so the clash can span unrelated projects.
     #[test]
     fn test_shares_daemon_id() {
-        let mut project = ProjectHosts {
-            label: "myproj".to_string(),
-            primary: checkout("/repos/myproj", "myproj", &[("api", "api")]),
-            worktrees: HashMap::new(),
+        let project = |label: &str, primary: CheckoutHosts, wts: Vec<(&str, CheckoutHosts)>| {
+            (
+                label.to_string(),
+                ProjectHosts {
+                    label: label.to_string(),
+                    primary,
+                    worktrees: wts.into_iter().map(|(l, c)| (l.to_string(), c)).collect(),
+                },
+            )
         };
-        // A worktree with its own namespace is distinguishable.
-        project.worktrees.insert(
-            "fix-1".to_string(),
-            checkout("/repos/fix-1", "fix-1", &[("api", "api")]),
-        );
-        assert!(!project.shares_daemon_id("myproj", "api"));
 
-        // One that inherits the project's explicit namespace is not.
-        project.worktrees.insert(
-            "fix-2".to_string(),
-            checkout("/repos/fix-2", "myproj", &[("api", "api")]),
+        // One project, one worktree, each with its own namespace.
+        let mut registry = HostRegistry {
+            projects: HashMap::from([project(
+                "myproj",
+                checkout("/repos/myproj", "myproj", &[("api", "api")]),
+                vec![(
+                    "fix-1",
+                    checkout("/repos/fix-1", "fix-1", &[("api", "api")]),
+                )],
+            )]),
+            errors: vec![],
+        };
+        assert!(!registry.shares_daemon_id("myproj", "api"));
+        assert!(!registry.shares_daemon_id("fix-1", "api"));
+
+        // A worktree inheriting the project's explicit namespace clashes with
+        // the primary checkout.
+        registry
+            .projects
+            .get_mut("myproj")
+            .unwrap()
+            .worktrees
+            .insert(
+                "fix-2".to_string(),
+                checkout("/repos/fix-2", "myproj", &[("api", "api")]),
+            );
+        assert!(registry.shares_daemon_id("myproj", "api"));
+
+        // So does an identically named worktree of an unrelated project, whose
+        // namespace is its directory name.
+        let (label, other) = project(
+            "other",
+            checkout("/repos/other", "other", &[("api", "api")]),
+            vec![(
+                "fix-1",
+                checkout("/repos/other/fix-1", "fix-1", &[("api", "api")]),
+            )],
         );
-        assert!(project.shares_daemon_id("myproj", "api"));
+        registry.projects.insert(label, other);
+        assert!(registry.shares_daemon_id("fix-1", "api"));
+
         // A daemon only one checkout defines stays unambiguous.
-        assert!(!project.shares_daemon_id("myproj", "worker"));
+        assert!(!registry.shares_daemon_id("myproj", "worker"));
     }
 
     /// Two worktrees reducing to one label are both dropped, and the error

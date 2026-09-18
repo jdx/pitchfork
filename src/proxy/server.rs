@@ -1771,11 +1771,28 @@ async fn try_auto_start_inner(
         }
     };
 
-    // Render Tera templates and merge top-level env (per-daemon wins).
-    if let Err(e) = crate::ipc::batch::render_daemon_config(daemon_id, &mut daemon_config, &pt) {
-        log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
-        return ResolveResult::Error(format!("Failed to render templates: {e}"));
-    }
+    // Render Tera templates and merge top-level env (per-daemon wins). Building
+    // the template context reads configuration and derives hostnames, so it
+    // runs on a blocking worker rather than on the thread serving the request.
+    let rendered = {
+        let id = daemon_id.clone();
+        let mut config = daemon_config.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::ipc::batch::render_daemon_config(&id, &mut config, &pt).map(|()| config)
+        })
+        .await
+    };
+    daemon_config = match rendered {
+        Ok(Ok(config)) => config,
+        Ok(Err(e)) => {
+            log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
+            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+        }
+        Err(e) => {
+            log::warn!("Auto-start: template rendering task failed for {daemon_id}: {e}");
+            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+        }
+    };
 
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
@@ -1856,19 +1873,16 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
     }
     match registry.resolve(subdomain, settings().proxy.wildcard) {
         crate::proxy::hostname::HostTarget::Daemon {
-            ref project,
             ref dir,
             ref namespace,
             ref daemon,
             ..
         } => {
-            // When several checkouts of this project share the namespace, the
-            // daemon's ID no longer says which checkout is running, so the
+            // When several checkouts share this daemon's namespace — in this
+            // project or in another one, since namespaces come from directory
+            // names — the ID no longer says which checkout is running, so the
             // request has to be matched to the directory it named.
-            let per_checkout = registry
-                .projects
-                .get(project)
-                .is_some_and(|p| p.shares_daemon_id(namespace, daemon));
+            let per_checkout = registry.shares_daemon_id(namespace, daemon);
             resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout).await
         }
         crate::proxy::hostname::HostTarget::ProjectPage { project } => {

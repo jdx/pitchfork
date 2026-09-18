@@ -473,7 +473,7 @@ fn collect_projects(
             format!("{scheme}://{host}.{tld}:{effective_port}")
         }
     };
-    let hosts = |project: &crate::proxy::hostname::ProjectHosts,
+    let hosts = |registry: &crate::proxy::hostname::HostRegistry,
                  checkout: &crate::proxy::hostname::CheckoutHosts,
                  suffix: &str| {
         checkout
@@ -494,7 +494,7 @@ fn collect_projects(
                 // Checkouts that share a namespace share one state record, so a
                 // record from another checkout says nothing about this one.
                 let other_checkout = daemon.is_some_and(|d| {
-                    project.shares_daemon_id(&checkout.namespace, &name)
+                    registry.shares_daemon_id(&checkout.namespace, &name)
                         && !d.dir.as_deref().is_some_and(|dir| {
                             crate::proxy::hostname::checkout_root_of(dir) == checkout.dir
                         })
@@ -537,7 +537,7 @@ fn collect_projects(
                     let suffix = format!("{wt_label}.{label}");
                     Some(JsonProxyWorktree {
                         url: url(&suffix),
-                        daemons: hosts(project, checkout, &suffix),
+                        daemons: hosts(&registry, checkout, &suffix),
                         worktree: wt_label,
                         dir: checkout.dir.display().to_string(),
                     })
@@ -545,7 +545,7 @@ fn collect_projects(
                 .collect();
             Some(JsonProxyProject {
                 url: url(&label),
-                daemons: hosts(project, &project.primary, &label),
+                daemons: hosts(&registry, &project.primary, &label),
                 dir: project.primary.dir.display().to_string(),
                 project: label,
                 worktrees,
