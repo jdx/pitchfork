@@ -38,6 +38,7 @@ use duct::cmd;
 use miette::IntoDiagnostic;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::collections::HashSet;
 use std::fs;
 #[cfg(unix)]
