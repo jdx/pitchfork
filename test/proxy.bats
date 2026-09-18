@@ -452,3 +452,176 @@ EOF
   assert_output --partial "fields=1"
   assert_output --partial "cookie=_session=abc123; theme=dark"
 }
+
+# ============================================================================
+# TLS passthrough tests
+# ============================================================================
+
+# Generate a CA, a server certificate for $1 (with a matching SAN), and a
+# client certificate, all in the current directory.
+_make_tls_certs() {
+  local server_host="$1"
+  openssl req -x509 -newkey rsa:2048 -nodes -keyout ca-key.pem -out ca.pem \
+    -days 2 -subj "/CN=pitchfork-test-ca" 2>/dev/null
+  openssl req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr \
+    -subj "/CN=$server_host" 2>/dev/null
+  printf "subjectAltName=DNS:%s\n" "$server_host" >san.cnf
+  openssl x509 -req -in server.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
+    -out server.pem -days 2 -extfile san.cnf 2>/dev/null
+  openssl req -newkey rsa:2048 -nodes -keyout client-key.pem -out client.csr \
+    -subj "/CN=pitchfork-test-client" 2>/dev/null
+  openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial \
+    -out client.pem -days 2 2>/dev/null
+}
+
+@test "passthrough splices an mTLS handshake through to the daemon" {
+  skip_on_windows "openssl and python ssl paths differ under MSYS"
+  if ! command -v openssl >/dev/null 2>&1; then
+    skip "openssl is required to mint test certificates"
+  fi
+
+  local proj="$TEST_TEMP_DIR/passthrough-mtls"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  _make_tls_certs "passthru.localhost"
+
+  local tls_script daemon_port proxy_port
+  tls_script="$(to_shell_path "$(script_path mtls_echo_server.py)")"
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.tls-echo]
+run = 'python3 -u $tls_script $daemon_port $proj/server.pem $proj/server-key.pem $proj/ca.pem'
+port = $daemon_port
+proxy_tls = "passthrough"
+ready_port = $daemon_port
+EOF
+
+  run pitchfork proxy add passthru --daemon tls-echo
+  assert_success
+
+  # The supervisor owns the proxy listener, so the proxy settings have to be in
+  # its environment. HTTPS is required: passthrough exists only on the TLS
+  # listener. Auto-trust is off so the test never touches the system trust
+  # store.
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=true \
+    PITCHFORK_PROXY_AUTO_TRUST=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  # The daemon is deliberately left stopped: a passthrough request must
+  # auto-start it and hold the connection until it is ready, since a raw TLS
+  # stream has no "Starting…" page to show.
+  run curl -sS --max-time 60 \
+    --cacert ca.pem --cert client.pem --key client-key.pem \
+    --resolve "passthru.localhost:$proxy_port:127.0.0.1" \
+    "https://passthru.localhost:$proxy_port/"
+  assert_success
+  # The handshake completed against the *daemon's* certificate (validated
+  # against our CA, which the proxy does not hold) while presenting a client
+  # certificate the daemon required. Neither is possible if the proxy
+  # terminated TLS.
+  assert_output --partial "client-cn=pitchfork-test-client"
+  assert_output --partial "sni=passthru.localhost"
+
+  run pitchfork stop tls-echo || true
+  kill_port "$daemon_port"
+}
+
+@test "passthrough daemon reports its mode in list and status" {
+  local proj="$TEST_TEMP_DIR/passthrough-mode"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local port
+  port=$(_free_port)
+
+  local http_script
+  http_script="$(script_path http_server.py)"
+
+  create_pitchfork_toml <<EOF
+[daemons.secure]
+run = "python3 -u $http_script 0 $port"
+port = $port
+proxy_tls = "passthrough"
+EOF
+
+  run pitchfork proxy add secure
+  assert_success
+
+  run pitchfork start secure
+  assert_success
+  sleep 2
+
+  # The mode is spelled out next to the URL in status …
+  run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=7777 pitchfork status secure
+  assert_success
+  assert_output --partial "Proxy:"
+  assert_output --partial "passthrough"
+
+  # … and annotates the URL in the list table, where only the non-default
+  # mode is called out.
+  run env PITCHFORK_PROXY_ENABLE=true PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=7777 pitchfork list
+  assert_success
+  assert_output --partial "passthrough"
+
+  run pitchfork stop secure || true
+  kill_port "$port"
+}
+
+@test "passthrough without a port is rejected as invalid config" {
+  local proj="$TEST_TEMP_DIR/passthrough-no-port"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  create_pitchfork_toml <<'EOF'
+[daemons.broken]
+run = "sleep 60"
+proxy_tls = "passthrough"
+EOF
+
+  run pitchfork list
+  assert_failure
+  assert_output --partial "passthrough"
+  assert_output --partial "port"
+}
+
+@test "passthrough hostname on a plain-HTTP proxy explains that HTTPS is required" {
+  local proj="$TEST_TEMP_DIR/passthrough-http"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local daemon_port proxy_port
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.tls-only]
+run = "sleep 60"
+port = $daemon_port
+proxy_tls = "passthrough"
+EOF
+
+  run pitchfork proxy add tlsonly --daemon tls-only
+  assert_success
+
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  # Forwarding plain HTTP to a daemon that expects a TLS handshake would fail
+  # inside the daemon, so the proxy refuses up front and says why.
+  run curl -sS --max-time 20 -H "Host: tlsonly.localhost" \
+    "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "passthrough"
+  assert_output --partial "settings.proxy.https = true"
+}

@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::cli::json_output::{JsonStatusEntry, print_json};
-use crate::cli::list::build_proxy_url;
+use crate::cli::list::{build_proxy_url, proxy_tls_mode};
 use crate::daemon::Daemon;
 use crate::daemon_list::build_placeholder_daemon;
 use crate::pitchfork_toml::PitchforkToml;
@@ -68,6 +68,9 @@ impl Status {
             } else {
                 None
             };
+            let proxy_tls = proxy_url
+                .as_ref()
+                .map(|_| proxy_tls_mode(&daemon).to_string());
             let entry = JsonStatusEntry {
                 id: qualified_id.qualified(),
                 namespace: qualified_id.namespace().to_string(),
@@ -81,6 +84,7 @@ impl Status {
                 active_port: daemon.active_port,
                 port: daemon.resolved_port.clone(),
                 proxy_url,
+                proxy_tls,
             };
             return print_json(&entry);
         }
@@ -110,7 +114,7 @@ impl Status {
             let slug =
                 PitchforkToml::find_slug_for_daemon_in_registry(&qualified_id, &global_slugs);
             if let Some(url) = build_proxy_url(slug.as_deref(), &s) {
-                println!("Proxy: {url}");
+                println!("Proxy: {url} ({})", proxy_tls_mode(&daemon));
             }
         }
         Ok(())

@@ -214,6 +214,19 @@ pub enum ConfigParseError {
     },
 
     #[error(
+        "daemon '{daemon}' in {} sets proxy_tls = \"passthrough\" but has no port",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::passthrough_without_port),
+        url("https://pitchfork.jdx.dev/guides/port-management#tls-passthrough"),
+        help(
+            "TLS passthrough splices the raw stream to a port on 127.0.0.1, so the daemon's port must be known up front; add `port = <number>` to the daemon, or remove proxy_tls"
+        )
+    )]
+    PassthroughWithoutPort { daemon: String, path: PathBuf },
+
+    #[error(
         "invalid dependency '{dependency}' in daemon '{daemon}' ({}): {reason}",
         path.display()
     )]

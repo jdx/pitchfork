@@ -11,6 +11,10 @@ pub struct JsonListEntry {
     pub disabled: bool,
     pub available: bool,
     pub proxy_url: Option<String>,
+    /// How the proxy handles TLS for this daemon: `terminate` or `passthrough`.
+    /// Omitted when the daemon is not routed through the proxy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_tls: Option<String>,
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_port: Option<u16>,
@@ -28,6 +32,10 @@ pub struct JsonStatusEntry {
     pub active_port: Option<u16>,
     pub port: Vec<u16>,
     pub proxy_url: Option<String>,
+    /// How the proxy handles TLS for this daemon: `terminate` or `passthrough`.
+    /// Omitted when the daemon is not routed through the proxy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_tls: Option<String>,
 }
 
 #[derive(Serialize)]

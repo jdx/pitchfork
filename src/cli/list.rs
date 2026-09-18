@@ -155,6 +155,9 @@ impl List {
                         status: status_text,
                         disabled: entry.is_disabled,
                         available: entry.is_available,
+                        proxy_tls: proxy_url
+                            .as_ref()
+                            .map(|_| proxy_tls_mode(&entry.daemon).to_string()),
                         proxy_url,
                         error: entry.daemon.status.error_message(),
                         active_port: entry.daemon.active_port,
@@ -214,7 +217,15 @@ impl List {
                 extra_parts.push("disabled".to_string());
             }
             if let Some(url) = &proxy_url {
-                extra_parts.push(url.clone());
+                // Only the non-default mode is called out: annotating every
+                // terminating daemon would add a column's worth of noise to
+                // the common case.
+                let mode = proxy_tls_mode(&entry.daemon);
+                if mode.is_passthrough() {
+                    extra_parts.push(format!("{url} ({mode})"));
+                } else {
+                    extra_parts.push(url.clone());
+                }
             }
             if !error_msg.is_empty() {
                 extra_parts.push(error_msg.clone());
@@ -240,6 +251,14 @@ impl List {
 
         print_table(table)
     }
+}
+
+/// The TLS mode the proxy uses for a daemon's hostname.
+///
+/// Daemons recorded before this setting existed, and those that never set it,
+/// report `terminate` — the behavior they have.
+pub fn proxy_tls_mode(daemon: &crate::daemon::Daemon) -> crate::pitchfork_toml::ProxyTlsMode {
+    daemon.proxy_tls.unwrap_or_default()
 }
 
 /// Build the proxy URL for a daemon based on its slug and proxy settings.

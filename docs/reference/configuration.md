@@ -513,6 +513,57 @@ port = { expect = [3000], bump = 10 }
 - When `bump` is enabled and the port is occupied, all ports are incremented by the same offset to maintain relative spacing
 - Resolved ports are available via `pitchfork status` and in the start output
 
+### `proxy_tls`
+
+How the [reverse proxy](/guides/port-management#tls-passthrough) handles TLS for
+this daemon's hostname. Default: `"terminate"`.
+
+```toml
+[daemons.api]
+run = "./serve --tls-cert server.pem --tls-key server-key.pem"
+port = 8443
+proxy_tls = "passthrough"
+```
+
+**Values:**
+- `terminate` (default) - the proxy answers the TLS handshake with its own
+  certificate and forwards plain HTTP to the daemon
+- `passthrough` - the proxy reads the hostname from the TLS ClientHello and
+  splices the raw TCP stream to the daemon, which presents its own certificate
+  and may require client certificates (mTLS). HTTP/2 and gRPC pass through
+  unchanged
+
+**Behavior:**
+- Requires `port`: the proxy must know where to splice the stream before any
+  application data is exchanged. Config that sets `passthrough` without a port
+  is rejected when it is read
+- Requires `settings.proxy.https = true`, since passthrough applies only to the
+  TLS listener
+- A stopped daemon is still auto-started on request; the connection is held
+  until the daemon is ready, bounded by `settings.proxy.auto_start_timeout`
+- No `X-Forwarded-*` headers, request logs or HTML error pages exist for a
+  passthrough hostname, because the proxy never reads the request
+
+### `proxy_tls_port`
+
+Which of the daemon's ports its proxy hostname maps to. Defaults to the
+daemon's first port; also accepted as `proxy_port`.
+
+```toml
+[daemons.api]
+run = "./serve --http 8080 --grpc 9443"
+port = [8080, 9443]
+proxy_tls = "passthrough"
+proxy_tls_port = 9443
+```
+
+**Behavior:**
+- Applies in both TLS modes; with `terminate` it chooses which port HTTP is
+  forwarded to
+- The port is matched by its position in `port`, so the mapping follows
+  auto-bump rather than pointing at a port nothing is listening on
+- A port that is not listed in `port` is used as written
+
 ### `expected_port` (deprecated)
 
 Use `port` instead. TCP ports the daemon is expected to bind to.

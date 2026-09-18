@@ -506,6 +506,27 @@
             }
           ]
         },
+        "proxy_tls": {
+          "description": "TLS handling for this daemon's proxy hostname.\n\n- `terminate` (default): the proxy terminates TLS with its own\n  certificate and forwards plain HTTP to the daemon.\n- `passthrough`: the proxy reads the SNI hostname from the TLS\n  ClientHello and splices the raw TCP stream to the daemon, which\n  presents its own certificate and can require client certificates.\n  Requires `port`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyTlsMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proxy_tls_port": {
+          "description": "Which of the daemon's ports the proxy hostname maps to.\n\nDefaults to the daemon's first port. Also accepted as `proxy_port`.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
         "pty": {
           "description": "Allocate a pseudo-terminal for the daemon process.",
           "type": [
@@ -751,6 +772,21 @@
               }
             }
           }
+        }
+      ]
+    },
+    "ProxyTlsMode": {
+      "description": "How the reverse proxy handles TLS for a daemon's hostname.",
+      "oneOf": [
+        {
+          "description": "The proxy terminates TLS with its own certificate and forwards plain\nHTTP to the daemon (the historical behavior).",
+          "type": "string",
+          "const": "terminate"
+        },
+        {
+          "description": "The proxy reads the SNI hostname from the TLS ClientHello and splices\nthe raw TCP stream to the daemon, which terminates TLS itself.",
+          "type": "string",
+          "const": "passthrough"
         }
       ]
     },
