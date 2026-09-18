@@ -118,6 +118,38 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Canonicalize as much of a path as exists, keeping the rest as written.
+///
+/// Every checkout path pitchfork compares goes through here, so the same
+/// directory has one spelling no matter how it was reached: through a symlink,
+/// as `/var` instead of `/private/var` on macOS, or with the `\\?\` prefix
+/// Windows adds. A leaf that no longer exists — a deleted working directory, a
+/// dangling symlink — still resolves against its nearest surviving ancestor, so
+/// a daemon whose directory disappeared keeps the checkout it started in.
+fn canonicalize_best_effort(path: &Path) -> PathBuf {
+    let path = normalize(path);
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut current = path.as_path();
+    loop {
+        if let Ok(resolved) = current.canonicalize() {
+            let mut out = dunce::simplified(&resolved).to_path_buf();
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        let Some(parent) = current.parent() else {
+            return path;
+        };
+        match current.file_name() {
+            Some(name) => suffix.push(name.to_os_string()),
+            // A path with no file name (a bare root) cannot be walked further.
+            None => return path,
+        }
+        current = parent;
+    }
+}
+
 /// Split `<common>/worktrees/<name>` into the primary checkout directory.
 ///
 /// The common directory is the parent of `worktrees/`, and the primary
@@ -129,7 +161,9 @@ fn primary_from_worktree_gitdir(gitdir: &Path) -> Option<PathBuf> {
         return None;
     }
     let common = worktrees_dir.parent()?;
-    common.parent().map(Path::to_path_buf)
+    // The pointer is whatever git wrote, so it needs the same resolution as a
+    // path the caller supplied before it can be compared with one.
+    common.parent().map(canonicalize_best_effort)
 }
 
 /// The root of the checkout a directory belongs to, canonicalized.
@@ -151,8 +185,7 @@ pub fn checkout_root_of(dir: &Path) -> PathBuf {
 /// `.git` is found the directory is treated as its own primary checkout, so
 /// projects that are not git repositories still get a hostname.
 pub fn detect_checkout(dir: &Path) -> Checkout {
-    let start = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    let start = dunce::simplified(&start).to_path_buf();
+    let start = canonicalize_best_effort(dir);
     for current in start.ancestors() {
         let git = current.join(".git");
         if git.is_dir() {
@@ -868,6 +901,49 @@ mod tests {
         assert_eq!(found.primary, canonical(&repo));
         assert_eq!(found.worktree, Some(canonical(&wt)));
         assert_eq!(found.root(), canonical(&wt));
+    }
+
+    /// A working directory that no longer exists still belongs to the checkout
+    /// above it, so a daemon whose directory was deleted keeps its hostname.
+    #[test]
+    fn test_checkout_root_of_missing_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+        assert_eq!(
+            checkout_root_of(&repo.join("gone/deeper")),
+            canonical(&repo)
+        );
+    }
+
+    /// The primary checkout read from a worktree's `gitdir:` pointer is spelled
+    /// the same as the one found by walking into the primary directly, whatever
+    /// alias the pointer took.
+    #[cfg(unix)]
+    #[test]
+    fn test_detect_checkout_primary_spelling_matches_through_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        let admin = repo.join(".git/worktrees/fix-1");
+        std::fs::create_dir_all(&admin).unwrap();
+        let wt = temp.path().join("fix-1");
+        std::fs::create_dir_all(&wt).unwrap();
+
+        // Point the worktree at the repository through a symlinked alias, the
+        // way a checkout under a symlinked home directory would.
+        let alias = temp.path().join("alias");
+        symlink(&repo, &alias).unwrap();
+        std::fs::write(
+            wt.join(".git"),
+            format!("gitdir: {}\n", alias.join(".git/worktrees/fix-1").display()),
+        )
+        .unwrap();
+
+        assert_eq!(detect_checkout(&wt).primary, detect_checkout(&repo).primary);
+        assert_eq!(detect_checkout(&wt).primary, canonical(&repo));
     }
 
     /// A `.git` file that is not a worktree pointer (a submodule) is its own
