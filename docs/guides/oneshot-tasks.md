@@ -100,3 +100,18 @@ reports a timeout and does not start the dependents, but the task keeps running.
 If it later exits with code `0`, it reports `completed`; a nonzero exit still
 counts as a failure. Inspect the task's status and logs before starting again,
 because starting a completed task runs it again.
+
+## Interaction with other features
+
+- **`watch`** does not re-run a completed task. File-triggered restart only
+  applies to a daemon that is currently running, so a change after the task has
+  finished does nothing, and a change while it is still running restarts it
+  mid-flight. Use `cron` or an explicit start to re-run a finished task.
+- **A supervisor restart** loses a running task's exit code: the new supervisor
+  adopts the process but cannot read the exit status of something that is not
+  its own child. Such a run is recorded as `stopped` rather than `completed` or
+  `errored`, so nothing re-runs it automatically and no dependent is told it
+  failed. Start it again if you need the task to have definitely run. A task
+  that had already completed keeps that status across a restart.
+- **`retry`** applies as it does to any daemon: a nonzero exit is retried, and
+  the attempts share the one `oneshot_timeout` budget described above.

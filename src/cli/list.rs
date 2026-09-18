@@ -158,6 +158,7 @@ impl List {
                         name: entry.id.name().to_string(),
                         pid: entry.daemon.pid,
                         status: status_text,
+                        oneshot: entry.daemon.oneshot,
                         disabled: entry.is_disabled,
                         available: entry.is_available,
                         proxy_url,

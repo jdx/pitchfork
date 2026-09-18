@@ -439,3 +439,75 @@ TOML
   count=$(grep -c "migration ran" <<< "$output")
   [[ $count -eq 2 ]]
 }
+
+@test "status --json reports completed and the oneshot flag" {
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = "echo migration done"
+oneshot = true
+
+[daemons.api]
+run = "echo api started && $(default_shell_sleep_command)"
+ready_delay = 1
+TOML
+
+  run pitchfork start migrate
+  assert_success
+
+  run pitchfork status migrate --json
+  assert_success
+  assert_output --partial '"status": "completed"'
+  assert_output --partial '"oneshot": true'
+
+  # A service is distinguishable from a task even before either has run.
+  run pitchfork list --json
+  assert_success
+  assert_output --partial '"oneshot": false'
+}
+
+@test "a plain service still retries through the per-attempt ownership check" {
+  local fail_script
+  fail_script="$(script_path fail.sh)"
+
+  # The ownership re-check added for oneshots runs before every retry attempt
+  # for all daemons. A service with retries must still make all of them.
+  create_pitchfork_toml <<TOML
+[daemons.flaky]
+run = 'bash $fail_script 0'
+retry = 2
+ready_delay = 1
+TOML
+
+  run pitchfork start flaky
+  assert_failure
+
+  wait_for_logs flaky "Failed after 0!" 15
+  run pitchfork logs flaky --raw
+  local count
+  count=$(grep -c "Failed after 0!" <<< "$output")
+  [[ $count -eq 3 ]]
+
+  run pitchfork status flaky
+  assert_output --partial "errored"
+}
+
+@test "a completed oneshot keeps its status across a supervisor restart" {
+  create_pitchfork_toml <<TOML
+[daemons.migrate]
+run = "echo migration done"
+oneshot = true
+TOML
+
+  run pitchfork start migrate
+  assert_success
+  run pitchfork status migrate
+  assert_output --partial "completed"
+
+  pitchfork supervisor start --force >/dev/null 2>&1
+  wait_for_logs migrate "migration done" 5
+
+  # Startup reconciliation only touches records that still name a PID, so a
+  # finished task must not be reclassified.
+  run pitchfork status migrate
+  assert_output --partial "completed"
+}
