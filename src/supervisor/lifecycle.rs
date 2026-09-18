@@ -356,6 +356,14 @@ impl Supervisor {
                         resolved_ports,
                     } => {
                         if attempt < opts.retry.count() {
+                            // `run_once` reports failure the moment the process
+                            // exits, but its monitor finalizes the record only
+                            // after draining the process's remaining output.
+                            // Until then the record still names this attempt's
+                            // PID, and the next attempt's ownership check would
+                            // read its own dead predecessor as a competing run
+                            // and abandon the retries that are left.
+                            self.wait_for_exit_finalized(id).await;
                             let backoff_secs = 2u64.saturating_pow(attempt).min(3600);
                             info!(
                                 "daemon {id} failed (attempt {}/{}), retrying in {}s",
@@ -394,6 +402,28 @@ impl Supervisor {
             None => self.stop_lock(id).await.lock_owned().await,
         };
         self.run_once(opts, guard).await
+    }
+
+    /// Wait for a just-failed attempt's monitor to write its terminal state,
+    /// clearing the PID from the record.
+    ///
+    /// Bounded a little beyond the monitor's own five-second output drain, the
+    /// longest it can hold the record after the process has gone. Giving up
+    /// early is safe: the ownership check that follows simply sees a PID and
+    /// defers, which is what it would have done anyway.
+    async fn wait_for_exit_finalized(&self, id: &DaemonId) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            match self.get_daemon(id).await {
+                Some(daemon) if daemon.pid.is_some() => {}
+                _ => return,
+            }
+            if tokio::time::Instant::now() >= deadline {
+                debug!("daemon {id}: previous attempt has not finalized yet; continuing anyway");
+                return;
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Decide whether this start may take the daemon's record, or must stand
