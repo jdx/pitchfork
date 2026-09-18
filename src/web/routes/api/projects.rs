@@ -488,7 +488,6 @@ fn canonical(path: &StdPath) -> PathBuf {
 /// global daemons.
 fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<String>) {
     let mut groups: IndexMap<String, Vec<DaemonId>> = IndexMap::new();
-    let mut error = None;
 
     for path in PitchforkToml::list_paths_from(dir) {
         if path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
@@ -505,13 +504,17 @@ fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<Str
                 }
             }
             Err(e) => {
+                // Stop at the first unreadable file rather than serve what the
+                // files before it declared: the unreadable one may override
+                // those groups, and acting on a superseded `default` group
+                // would stop or start daemons the worktree no longer means.
                 log::warn!("Failed to load config {}: {e}", path.display());
-                error = Some(e.to_string());
+                return (IndexMap::new(), Some(e.to_string()));
             }
         }
     }
 
-    (groups, error)
+    (groups, None)
 }
 
 /// A URL name for a worktree that no other worktree of this project uses.
@@ -582,12 +585,23 @@ fn worktree_view_for(
 
 fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     let project_canonical = canonical(project_dir);
-    // Discover from the main checkout: `jj workspace list` resolved from a
-    // secondary workspace reports `default` as the directory it ran in, which
-    // would hide the real main workspace.
-    let discovery_dir =
-        main_checkout_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf());
-    let discovered = discover_cached(&discovery_dir);
+
+    // A namespace registered on a linked worktree stands for that directory
+    // alone. The repository's other checkouts belong to the project registered
+    // on its main checkout, which this one is folded into when it exists; if it
+    // does not, enumerating them here would repeat the same worktrees and
+    // totals under every registered sibling. Discovery from a secondary jj
+    // workspace also mislabels the main one, so it is not used at all here.
+    if !is_main_checkout(project_dir) {
+        return vec![worktree_view_for(
+            project_dir.to_path_buf(),
+            DEFAULT_WORKTREE.to_string(),
+            DEFAULT_WORKTREE.to_string(),
+            &project_canonical,
+        )];
+    }
+
+    let discovered = discover_cached(project_dir);
 
     let mut taken: HashSet<String> = HashSet::new();
     let mut views = Vec::with_capacity(discovered.len() + 1);
@@ -1187,27 +1201,60 @@ mod tests {
 
     /// Two worktrees of one repository, registered while the main checkout is
     /// not, are separate projects: each stands for its own directory instead of
-    /// both listing the repository's full worktree set.
+    /// both listing the repository's full worktree set. Uses a real repository,
+    /// because a fixture git cannot read would only exercise the fallback.
     #[test]
     fn a_registered_linked_worktree_stands_alone() {
         let temp = tempfile::tempdir().unwrap();
-        let main = temp.path().join("repo");
-        let linked = temp.path().join("repo-feature");
-        std::fs::create_dir_all(main.join(".git").join("worktrees").join("feature")).unwrap();
-        std::fs::create_dir_all(&linked).unwrap();
+        let repo = temp.path().join("shop");
+        std::fs::create_dir_all(&repo).unwrap();
+        if !git(&repo, &["init", "-q", "-b", "main", "."]) {
+            return; // no usable git here
+        }
         std::fs::write(
-            linked.join(".git"),
-            format!(
-                "gitdir: {}\n",
-                main.join(".git/worktrees/feature").display()
-            ),
+            repo.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n",
+        )
+        .unwrap();
+        assert!(git(&repo, &["add", "-A"]));
+        assert!(git(&repo, &["commit", "-qm", "init"]));
+        assert!(git(
+            &repo,
+            &["worktree", "add", "-q", "../shop-feat", "-b", "feature-a"]
+        ));
+        let linked = temp.path().join("shop-feat");
+
+        // Sanity check: git really does enumerate both checkouts from here,
+        // so the assertion below is about the registration rule, not a
+        // discovery failure.
+        assert_eq!(crate::proxy::worktree::discover_worktrees(&linked).len(), 2);
+
+        let views = worktree_views(&linked);
+        assert_eq!(views.len(), 1, "got {:?}", views);
+        assert_eq!(canonical(&views[0].path), canonical(&linked));
+        assert!(views[0].is_primary);
+
+        // The main checkout still lists the whole repository.
+        assert_eq!(worktree_views(&repo).len(), 2);
+    }
+
+    /// A config file that cannot be read must not leave the groups the files
+    /// before it declared: the unreadable one may override them, and acting on
+    /// a superseded `default` group would touch the wrong daemons.
+    #[test]
+    fn unreadable_config_yields_no_groups() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n\n[groups.default]\ndaemons = [\"api\"\n",
         )
         .unwrap();
 
-        let views = worktree_views(&linked);
-        assert_eq!(views.len(), 1);
-        assert_eq!(views[0].path, linked);
-        assert!(views[0].is_primary);
+        let (groups, error) = groups_for_dir(&project);
+        assert!(groups.is_empty());
+        assert!(error.is_some());
     }
 
     /// A group can name daemons of other namespaces. Those are rendered by the
@@ -1293,23 +1340,23 @@ mod tests {
         assert_eq!(json["stack"]["can_start"], false);
     }
 
+    fn git(dir: &StdPath, args: &[&str]) -> bool {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
     /// Discovery against a real repository, so the git plumbing this relies on
     /// is exercised rather than only its parsers.
     #[test]
     fn worktree_views_match_real_git_worktrees() {
-        fn git(dir: &StdPath, args: &[&str]) -> bool {
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(dir)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@example.com")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@example.com")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        }
-
         let temp = tempfile::tempdir().unwrap();
         let repo = temp.path().join("shop");
         std::fs::create_dir_all(&repo).unwrap();
