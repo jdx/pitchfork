@@ -663,7 +663,7 @@ impl Supervisor {
         );
 
         // Inject proxy-related environment variables
-        inject_proxy_env(&mut cmd, &daemon_proxy_host(&opts));
+        inject_proxy_env(&mut cmd, &daemon_proxy_host(&opts).await);
 
         #[cfg(unix)]
         {
@@ -2710,16 +2710,27 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
 /// A daemon registered under a legacy `[slugs]` entry keeps that spelling,
 /// because the proxy resolves slugs first. Otherwise the hostname is derived
 /// from where the daemon's configuration lives.
-fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
+async fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
     if opts.slug.is_some() {
         return opts.slug.clone();
     }
     // The daemon's own `dir` can point outside its project, so look the config
     // up from where it was defined.
-    let config_dir = opts.watch_base_dir.as_deref().unwrap_or(&opts.dir.0);
-    let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(config_dir).ok()?;
-    let config = pt.daemons.get(&opts.id)?;
-    crate::proxy::hostname::auto_host_for_daemon(&opts.id, config)
+    let config_dir = opts
+        .watch_base_dir
+        .clone()
+        .unwrap_or_else(|| opts.dir.0.clone());
+    let id = opts.id.clone();
+    // Reading the config and walking the project's checkouts are both file I/O,
+    // so they happen together on a blocking worker rather than on the
+    // supervisor's executor.
+    tokio::task::spawn_blocking(move || {
+        let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(&config_dir).ok()?;
+        let config = pt.daemons.get(&id)?;
+        crate::proxy::hostname::auto_host_for_daemon(&id, config)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Compute the public proxy URL for a daemon.
