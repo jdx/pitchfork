@@ -285,7 +285,40 @@ fn terminal_exit_state(
 /// short.
 const SINK_OUTPUT_TIMEOUT: Duration = Duration::from_millis(400);
 
+/// Marks a daemon as having its retries managed by a foreground `run` for as
+/// long as this value lives, so the background checker does not start an
+/// attempt out from under it. Released on every exit from the retry loop,
+/// including the early returns.
+pub(crate) struct RetryingGuard(DaemonId);
+
+impl Drop for RetryingGuard {
+    fn drop(&mut self) {
+        SUPERVISOR
+            .retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
 impl Supervisor {
+    /// Whether a foreground `run` is already working through this daemon's
+    /// retries.
+    pub(crate) fn is_retrying(&self, id: &DaemonId) -> bool {
+        self.retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(id)
+    }
+
+    fn mark_retrying(&self, id: &DaemonId) -> RetryingGuard {
+        self.retrying
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone());
+        RetryingGuard(id.clone())
+    }
+
     /// Run a daemon, handling retries if configured
     pub async fn run(&self, opts: RunOptions) -> Result<IpcResponse> {
         let id = &opts.id;
@@ -316,6 +349,11 @@ impl Supervisor {
 
         // If wait_ready is true and retry is configured, implement retry loop
         if opts.wait_ready && opts.retry.count() > 0 {
+            // Claim this daemon's retries for the duration of the loop. The
+            // backoff between attempts leaves the record errored with no PID,
+            // which is what `check_retry` scans for, and an attempt started
+            // there would leave this call reporting on a run it does not own.
+            let _retrying = self.mark_retrying(id);
             // Use saturating_add to avoid overflow when retry = u32::MAX (infinite)
             let max_attempts = opts.retry.count().saturating_add(1);
             for attempt in 0..max_attempts {

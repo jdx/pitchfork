@@ -121,3 +121,35 @@ EOF
 
   pitchfork stop mem_hog
 }
+
+@test "start reports failure when the interval watcher retries during backoff" {
+  local fail_script
+  fail_script="$(script_path fail.sh)"
+
+  # Each attempt takes 5s to fail, short of the 10s ready delay, so no attempt
+  # ever reports ready. The backoff before the fourth attempt is 4s, longer
+  # than the 2s interval this file runs with, so the interval watcher's retry
+  # check runs while the foreground start is still sleeping, and the attempt it
+  # would start is still alive when the start wakes up. If the watcher is
+  # allowed to take over, the start finds a process it does not own and exits 0
+  # for a daemon that is about to fail.
+  create_pitchfork_toml <<EOF
+[daemons.always_fails]
+run = "bash $fail_script 5"
+retry = 3
+ready_delay = 10
+EOF
+
+  run pitchfork start always_fails
+  assert_failure
+
+  run pitchfork status always_fails
+  assert_output --partial "errored"
+
+  # Four attempts: the original and the three retries, no extras from the
+  # watcher.
+  run pitchfork logs always_fails --raw
+  local count
+  count=$(grep -c "Failed after 5!" <<< "$output" || true)
+  [[ $count -eq 4 ]]
+}

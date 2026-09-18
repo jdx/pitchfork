@@ -17,12 +17,16 @@ impl Supervisor {
             state_file
                 .daemons
                 .iter()
-                .filter(|(_id, d)| {
+                .filter(|(id, d)| {
                     // Daemon is errored, not currently running, and has retries remaining
                     d.status.is_errored()
                         && d.pid.is_none()
                         && d.retry.count() > 0
                         && d.retry_count < d.retry.count()
+                        // ...and no foreground run is already working through
+                        // its retries. Starting an attempt out from under one
+                        // leaves its caller reporting on a run it does not own.
+                        && !self.is_retrying(id)
                 })
                 .map(|(id, _d)| id.clone())
                 .collect()
