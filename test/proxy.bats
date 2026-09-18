@@ -625,3 +625,4 @@ EOF
   assert_output --partial "passthrough"
   assert_output --partial "settings.proxy.https = true"
 }
+
