@@ -221,6 +221,81 @@ impl Procs {
         .into_diagnostic()?
     }
 
+    /// Kill a single process only if it is still the generation identified by
+    /// `expected_start_time`.
+    ///
+    /// This is the single-process counterpart of
+    /// [`Self::kill_process_group_if_start_time_matches_async`], for processes
+    /// that are not session leaders (the supervisor itself is started in the
+    /// caller's session, so signalling its group would hit the caller's shell).
+    /// A recorded PID whose process is gone may have been handed to an
+    /// unrelated process, e.g. after a reboot, so the kill refuses when the
+    /// live start time differs from the recorded one. Returns `Ok(false)` when
+    /// nothing was signalled.
+    ///
+    /// On Linux the process is pinned with a pidfd before the identity check,
+    /// so the PID cannot be recycled between the check and the signal. Other
+    /// platforms re-verify immediately before signalling, leaving a window no
+    /// wider than the daemon kill path has there.
+    pub async fn kill_if_start_time_matches_async(
+        &self,
+        pid: u32,
+        expected_start_time: Option<u64>,
+        stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
+    ) -> Result<bool> {
+        let Some(expected_start_time) = expected_start_time else {
+            warn!(
+                "no recorded start time for pid {pid}; refusing to signal it (identity cannot be bound to a process generation)"
+            );
+            return Ok(false);
+        };
+        tokio::task::spawn_blocking(move || {
+            PROCS.kill_if_start_time_matches(pid, expected_start_time, stop_signal, stop_timeout)
+        })
+        .await
+        .into_diagnostic()?
+    }
+
+    fn kill_if_start_time_matches(
+        &self,
+        pid: u32,
+        expected_start_time: u64,
+        stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
+    ) -> Result<bool> {
+        // Holding a pidfd keeps the kernel's pid entry referenced, so the PID
+        // number cannot be reused by another process while `_pin` lives —
+        // which covers the plain `kill(pid)` calls below.
+        #[cfg(target_os = "linux")]
+        let _pin = match open_pidfd(pid) {
+            Ok(pidfd) => Some(pidfd),
+            Err(err) if err.raw_os_error() == Some(libc::ESRCH) => {
+                debug!("process {pid} no longer exists");
+                return Ok(false);
+            }
+            Err(err) => {
+                debug!("failed to open pidfd for {pid}: {err}; falling back to start-time check");
+                None
+            }
+        };
+        // Same idea on Windows: an open handle keeps the process object, and
+        // with it the PID, from being recycled.
+        #[cfg(windows)]
+        let _pin = open_process_handle(pid).ok();
+
+        match self.start_time(pid) {
+            Some(current) if current == expected_start_time => {}
+            current => {
+                warn!(
+                    "pid {pid} is not the recorded process (start time {current:?}, expected {expected_start_time}); not signalling it"
+                );
+                return Ok(false);
+            }
+        }
+        self.kill(pid, stop_signal, stop_timeout)
+    }
+
     /// Kill an entire process group with graceful shutdown strategy:
     /// 1. Send the configured stop signal to the process group (-pgid) and
     ///    wait up to the stop timeout for the WHOLE group to exit
