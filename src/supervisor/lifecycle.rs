@@ -2058,6 +2058,20 @@ impl Supervisor {
                         Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
                             current
                         }
+                        // A successor owns the record, so neither it nor the
+                        // spawn snapshot describes this run: one carries
+                        // another process's identity, the other still says
+                        // running under a PID that has exited. A oneshot that
+                        // reported ready did finish, so report that outcome
+                        // directly rather than either misleading record.
+                        _ if opts.oneshot => crate::daemon::Daemon {
+                            status: DaemonStatus::Completed,
+                            pid: None,
+                            start_time: None,
+                            boot_time: None,
+                            last_exit_success: Some(true),
+                            ..daemon
+                        },
                         _ => daemon,
                     };
                     Ok(IpcResponse::DaemonReady { daemon })
