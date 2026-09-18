@@ -2716,7 +2716,12 @@ async fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
     if !crate::settings::settings().proxy.enable {
         return None;
     }
-    if opts.slug.is_some() {
+    // A slug carried on the run options skips the lookup below, so it needs the
+    // same length check that lookup applies; otherwise the daemon is told a URL
+    // the proxy refuses to route.
+    if let Some(slug) = opts.slug.as_deref()
+        && crate::proxy::hostname::hostname_fits(slug)
+    {
         return opts.slug.clone();
     }
     // The daemon's own `dir` can point outside its project, so look the config

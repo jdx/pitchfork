@@ -2104,6 +2104,10 @@ async fn runs_in_checkout(daemon: crate::daemon::Daemon, checkout: &std::path::P
 }
 
 /// Order the candidates so that daemons running in this checkout come first.
+///
+/// Only the attribution runs off-thread, and the candidates stay here, so a
+/// failure in that task costs the ordering rather than the candidates
+/// themselves.
 async fn sort_by_checkout(
     daemons: Vec<crate::daemon::Daemon>,
     checkout: &std::path::Path,
@@ -2111,14 +2115,30 @@ async fn sort_by_checkout(
     if daemons.len() < 2 {
         return daemons;
     }
+    let dirs: Vec<Option<std::path::PathBuf>> = daemons.iter().map(|d| d.dir.clone()).collect();
     let checkout = checkout.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let mut daemons = daemons;
-        daemons.sort_by_key(|d| !daemon_runs_in(d, &checkout));
-        daemons
+    let here = tokio::task::spawn_blocking(move || {
+        dirs.iter()
+            .map(|dir| {
+                dir.as_deref()
+                    .is_some_and(|d| crate::proxy::hostname::checkout_root_of(d) == checkout)
+            })
+            .collect::<Vec<bool>>()
     })
-    .await
-    .unwrap_or_default()
+    .await;
+
+    match here {
+        Ok(here) => {
+            let mut ordered: Vec<(bool, crate::daemon::Daemon)> =
+                here.into_iter().zip(daemons).collect();
+            ordered.sort_by_key(|(here, _)| !here);
+            ordered.into_iter().map(|(_, d)| d).collect()
+        }
+        Err(e) => {
+            log::warn!("Checkout attribution task failed: {e}");
+            daemons
+        }
+    }
 }
 
 /// Escape the five characters that change the meaning of HTML text.
