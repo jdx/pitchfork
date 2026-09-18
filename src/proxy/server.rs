@@ -622,7 +622,7 @@ async fn serve_https_with_http_fallback(
 
         tokio::select! {
             accept_result = listener.accept() => {
-                let (stream, _peer_addr) = match accept_result {
+                let (stream, peer_addr) = match accept_result {
                     Ok(conn) => conn,
                     Err(e) => {
                         log::warn!("Accept error (will retry): {e}");
@@ -632,7 +632,13 @@ async fn serve_https_with_http_fallback(
                 };
 
                 let acceptor = acceptor.clone();
-                let app = app.clone();
+                // This loop serves the router itself rather than going through
+                // `into_make_service_with_connect_info`, so the peer address is
+                // attached here. Handlers use it to decide how much of this
+                // machine's configuration a response may describe.
+                let app = app
+                    .clone()
+                    .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
                 let redirect_app = redirect_app.clone();
 
                 conn_tasks.spawn(async move {
@@ -1362,9 +1368,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 );
             }
             ResolveResult::Unknown { heading, known } => {
+                // The heading says which project was recognised, which is one
+                // more thing than a remote client needs to learn.
                 return unknown_host_response(
                     &host,
-                    &heading,
+                    if local_client { &heading } else { "Not found" },
                     if local_client { &known } else { &[] },
                 );
             }
@@ -2046,9 +2054,11 @@ async fn resolve_registry_daemon(
 /// tell a device on the LAN things it has no business knowing, so pages spell
 /// them out for loopback clients only.
 fn is_local_client(req: &Request) -> bool {
+    // A request whose peer is unknown is treated as remote: withholding detail
+    // from a local client is a small loss, and the reverse is a leak.
     req.extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
-        .is_none_or(|ci| ci.0.ip().is_loopback())
+        .is_some_and(|ci| ci.0.ip().is_loopback())
 }
 
 /// Whether a daemon is running from this checkout.
@@ -2795,5 +2805,28 @@ mod tests {
 
         daemon.dir = None;
         assert!(!daemon_runs_in(&daemon, &repo_root));
+    }
+
+    /// Only a request known to come from this machine gets the detailed pages;
+    /// an unknown peer counts as remote.
+    #[test]
+    fn test_is_local_client() {
+        let build = |info: Option<SocketAddr>| {
+            let mut req = Request::new(Body::empty());
+            if let Some(addr) = info {
+                req.extensions_mut()
+                    .insert(axum::extract::ConnectInfo(addr));
+            }
+            req
+        };
+
+        assert!(is_local_client(&build(Some(
+            "127.0.0.1:5000".parse().unwrap()
+        ))));
+        assert!(is_local_client(&build(Some("[::1]:5000".parse().unwrap()))));
+        assert!(!is_local_client(&build(Some(
+            "192.168.1.42:5000".parse().unwrap()
+        ))));
+        assert!(!is_local_client(&build(None)));
     }
 }
