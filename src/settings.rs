@@ -644,7 +644,9 @@ pub struct SettingsProxy {
     /// route to that same daemon.
     ///
     /// For example, with a daemon reachable at `api.myproject.localhost`:
+    ///
     /// - `api.myproject.localhost` → exact match (always works)
+    ///
     /// - `tenant.api.myproject.localhost` → wildcard fallback to the same daemon
     ///
     /// The same holds for a legacy slug, where `tenant.myapp.localhost` falls

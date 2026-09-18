@@ -572,7 +572,11 @@ Enable wildcard subdomain matching for proxy routes
 
 When enabled (default), extra labels to the left of a daemon's hostname route to that same daemon.
 
-For example, with a daemon reachable at `api.myproject.localhost`: - `api.myproject.localhost` → exact match (always works) - `tenant.api.myproject.localhost` → wildcard fallback to the same daemon
+For example, with a daemon reachable at `api.myproject.localhost`:
+
+- `api.myproject.localhost` → exact match (always works)
+
+- `tenant.api.myproject.localhost` → wildcard fallback to the same daemon
 
 The same holds for a legacy slug, where `tenant.myapp.localhost` falls back to the slug `myapp`.
 

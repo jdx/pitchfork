@@ -6321,7 +6321,7 @@
         "cli": [],
         "bindings": {},
         "help": "Enable wildcard subdomain matching for proxy routes",
-        "long_help": "Enable wildcard subdomain matching for proxy routes\n\nWhen enabled (default), extra labels to the left of a daemon's hostname route to that same daemon.\n\nFor example, with a daemon reachable at `api.myproject.localhost`: - `api.myproject.localhost` → exact match (always works) - `tenant.api.myproject.localhost` → wildcard fallback to the same daemon\n\nThe same holds for a legacy slug, where `tenant.myapp.localhost` falls back to the slug `myapp`.\n\nThis is useful for multi-tenant apps where each tenant gets a unique subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but all share the same backend server.\n\nSet to `false` to require exact hostname matches only.",
+        "long_help": "Enable wildcard subdomain matching for proxy routes\n\nWhen enabled (default), extra labels to the left of a daemon's hostname route to that same daemon.\n\nFor example, with a daemon reachable at `api.myproject.localhost`:\n\n- `api.myproject.localhost` → exact match (always works)\n\n- `tenant.api.myproject.localhost` → wildcard fallback to the same daemon\n\nThe same holds for a legacy slug, where `tenant.myapp.localhost` falls back to the slug `myapp`.\n\nThis is useful for multi-tenant apps where each tenant gets a unique subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but all share the same backend server.\n\nSet to `false` to require exact hostname matches only.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
