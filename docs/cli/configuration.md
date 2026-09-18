@@ -211,7 +211,7 @@ The split follows POSIX rules, so a path with spaces or backslashes has to be qu
 
 Enable git worktree / jj workspace auto-discovery
 
-When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy slug routing and supervisor config discovery. Each worktree gets its own namespace.
+When enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy hostname routing and supervisor config discovery. Each worktree gets its own namespace, and its daemons answer at `<daemon>.<worktree>.<project>.<tld>`.
 
 Set to `false` to disable all worktree/workspace discovery. The deprecated `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration.
 
@@ -438,11 +438,11 @@ Set to `false` to disable auto-trust entirely.
 
 Enable the reverse proxy server for daemons
 
-When enabled, pitchfork starts a reverse proxy that routes requests from `<slug>.<tld>:<port>` to the daemon's actual listening port.
+When enabled, pitchfork starts a reverse proxy that routes a stable hostname to the daemon's actual listening port.
 
-Only daemons with an explicit `slug` are routable through the proxy. No slug = not proxied.
+Every daemon with a `port` gets a hostname built from its name, its worktree when it lives in one, and its project, unless it opts out with `proxy = false`. A daemon without a port is not routed.
 
-Example: `myapp.localhost:7777` -> `localhost:3000` (daemon with slug = "myapp")
+Example: `api.myproject.localhost:7777` -> `localhost:3000`
 
 ## `proxy.host`
 
@@ -536,7 +536,7 @@ Top-level domain used for proxy URLs
 The TLD appended to daemon hostnames in proxy URLs.
 
 With the default `localhost`, daemon URLs look like:
-  `myapp.localhost:7777`  (for a daemon with slug = "myapp")
+  `api.myproject.localhost:7777`  (daemon `api` of project `myproject`)
 
 For custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you can use dnsmasq or add entries to `/etc/resolver/`.
 
@@ -570,9 +570,11 @@ If left empty and `proxy.https = true`, pitchfork will auto-generate a self-sign
 
 Enable wildcard subdomain matching for proxy routes
 
-When enabled (default), requests for subdomains of a registered slug will fall back to the parent slug's daemon.
+When enabled (default), extra labels to the left of a daemon's hostname route to that same daemon.
 
-For example, with slug "myapp": - `myapp.localhost` → exact match (always works) - `tenant.myapp.localhost` → wildcard fallback to "myapp"
+For example, with a daemon reachable at `api.myproject.localhost`: - `api.myproject.localhost` → exact match (always works) - `tenant.api.myproject.localhost` → wildcard fallback to the same daemon
+
+The same holds for a legacy slug, where `tenant.myapp.localhost` falls back to the slug `myapp`.
 
 This is useful for multi-tenant apps where each tenant gets a unique subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but all share the same backend server.
 
