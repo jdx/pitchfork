@@ -45,6 +45,9 @@ pub struct Run {
     /// Number of times to retry on error exit
     #[usage(long, default = "0")]
     retry: u32,
+    /// Number of times to retry starting when the process fails before becoming ready
+    #[usage(long, default = "0")]
+    ready_retry: u32,
     /// Delay in seconds before considering daemon ready (default: 3 seconds)
     #[usage(short, long)]
     delay: Option<u64>,
@@ -108,6 +111,7 @@ impl Run {
                 Some(Some(n)) => Some(crate::config_types::PortBump(n)),
             },
             retry: Some(crate::config_types::Retry(self.retry)),
+            ready_retry: Some(crate::config_types::Retry(self.ready_retry)),
             quiet: self.quiet,
         };
 

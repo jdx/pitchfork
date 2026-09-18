@@ -41,6 +41,7 @@ Examples:
 ## Flags
 - **`--run <RUN>`** — Command to run (can also use positional args)
 - **`--retry <RETRY>`** — Number of retry attempts on failure (use \"true\" for infinite)
+- **`--ready-retry <READY_RETRY>`** — Number of retry attempts when startup fails before ready (use \"true\" for infinite)
 - **`--watch <WATCH>`** — Glob patterns to watch for changes (can be specified multiple times)
 - **`--dir <DIR>`** — Working directory for the daemon
 - **`--env <ENV>`** — Environment variables in KEY=value format (can be specified multiple times)

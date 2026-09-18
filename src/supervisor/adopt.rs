@@ -461,7 +461,7 @@ impl Supervisor {
             .unwrap_or_else(|| crate::env::CWD.clone());
         let hook_env = daemon.env.clone();
         let hook_resolved_ports = daemon.resolved_port.clone();
-        let hook_retry = daemon.retry;
+        let hook_ready_retry = daemon.ready_retry;
         let hook_retry_count = daemon.retry_count;
 
         tokio::spawn(async move {
@@ -620,8 +620,11 @@ impl Supervisor {
             ];
             let hooks_to_fire: Vec<HookType> = match exit_reason {
                 "stop" => vec![HookType::OnStop, HookType::OnExit],
-                // "fail": fire on_fail + on_exit only when retries are exhausted
-                _ if hook_retry_count >= hook_retry.count() => {
+                // "fail": fire on_fail + on_exit once the startup retry
+                // budget is exhausted. The supervisor never saw this adopted
+                // process become ready, so the pre-ready `ready_retry` budget
+                // applies rather than the background `retry` one.
+                _ if hook_retry_count >= hook_ready_retry.count() => {
                     vec![HookType::OnFail, HookType::OnExit]
                 }
                 _ => vec![],

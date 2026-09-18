@@ -134,7 +134,8 @@ accept an overall `timeout`. Without it, a check can keep waiting while the
 process remains alive.
 
 If every configured check reaches its deadline, startup fails with exit code
-`124`, the daemon is killed, and normal retry and dependency handling applies.
+`124`, the daemon is killed, and normal `ready_retry` and dependency handling
+applies.
 One unbounded check keeps startup open. If the process exits with a nonzero code
 before readiness, startup returns that code.
 

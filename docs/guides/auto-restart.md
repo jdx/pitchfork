@@ -1,20 +1,22 @@
 ---
-description: Configure bounded or unlimited retries for startup failures, runtime crashes, and failed health checks.
+description: Configure bounded or unlimited retries for startup failures and runtime crashes, and understand how they interact with health checks.
 ---
 # Automatic retries
 
-Set `retry` to restart a daemon after a failure. The default is no retries.
+Pitchfork has two independent retry budgets, split by when the failure happens.
+`ready_retry` covers failures while a blocking start is still waiting for
+readiness. `retry` covers background restarts after a failure.
 
 ```toml
 [daemons.api]
 run = "node server.js"
 ready_http = { url = "http://127.0.0.1:3000/health", timeout = "30s" }
-retry = 3
+ready_retry = 3  # blocking `pitchfork start` retries startup failures 3 times
+retry = 5        # the supervisor then restarts it up to 5 times in the background
 ```
 
-This allows the initial attempt plus three retries. It applies to startup
-failures and errors after startup, including termination caused by
-[health checks](/guides/health-checks) or resource limits.
+Both budgets apply to termination caused by [health checks](/guides/health-checks)
+or resource limits as well.
 
 ## Choose a policy
 
@@ -35,29 +37,37 @@ crashed service; use [cron](/guides/scheduling) to repeat a successful task.
 
 ## Startup failures versus runtime failures
 
-| When it fails | Who handles the retry | Timing |
-| --- | --- | --- |
-| Before becoming ready | The startup operation | Exponential backoff: `1s`, `2s`, `4s`, … |
-| After becoming ready | The supervisor in the background | Evaluated on interval ticks (`general.interval`, default `10s`) |
+| When it fails | Who retries | Budget | Timing |
+| --- | --- | --- | --- |
+| Before becoming ready | The blocking start (`pitchfork start` / `run`) | `ready_retry` | Exponential backoff: `1s`, `2s`, `4s`, … |
+| After becoming ready | The supervisor in the background | `retry` | Evaluated on interval ticks (`general.interval`, default `10s`) |
 
-During startup retries, the CLI keeps waiting until readiness or failure.
-Runtime retries happen independently of the terminal that started the daemon.
-Use `depends` and [ready checks](/guides/ready-checks) to handle startup ordering
-instead of relying on failures to delay a dependent service.
+During startup retries the CLI keeps waiting until readiness or failure. With
+`ready_retry` unset (the default), a first-attempt startup failure returns
+immediately and any restarts are left to the `retry` budget. Runtime retries
+happen independently of the terminal that started the daemon. Use `depends`
+and [ready checks](/guides/ready-checks) to handle startup ordering instead of
+relying on failures to delay a dependent service.
+
+The two loops never overlap: while a blocking start is still working (including
+its backoff sleeps), the supervisor's background restarts skip that daemon, and
+the blocking start stops retrying if the daemon was started elsewhere in the
+meantime. An explicit start, a file-watch restart, or a cron trigger resets the
+background counter.
 
 ## One-off commands
 
-`pitchfork run` accepts a retry count:
+`pitchfork run` accepts both counts:
 
 ```sh
-pitchfork run worker --retry 3 -- ./worker
+pitchfork run worker --retry 3 --ready-retry 2 -- ./worker
 ```
 
-For `pitchfork start`, configure `retry` in `pitchfork.toml`; it has no `--retry`
-override. You can also save a new daemon with a retry policy:
+For `pitchfork start`, configure `ready_retry` and `retry` in `pitchfork.toml`;
+it has no retry overrides. You can also save a new daemon with a retry policy:
 
 ```sh
-pitchfork daemons add worker --run './worker' --retry 3
+pitchfork daemons add worker --run './worker' --retry 3 --ready-retry 2
 ```
 
 ## Inspect or interrupt retries

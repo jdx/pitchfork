@@ -37,7 +37,7 @@ on_ready = "curl -s -X POST https://slack.example.com/webhook -d '{\"text\": \"A
 
 ### `on_fail`
 
-Fires when the daemon fails and all retries are exhausted. If `retry = 0`, fires immediately on failure.
+Fires when the daemon fails and the applicable retry budget is exhausted: `ready_retry` for a daemon that died before becoming ready, `retry` for one that had become ready. If the applicable budget is `0`, fires immediately on failure.
 
 ```toml
 [daemons.api.hooks]
@@ -48,7 +48,7 @@ The `PITCHFORK_EXIT_CODE` environment variable contains the exit code from the f
 
 ### `on_retry`
 
-Fires before each retry attempt.
+Fires before each retry attempt, both startup retries (`ready_retry`) and background restarts (`retry`).
 
 ```toml
 [daemons.api.hooks]
@@ -68,7 +68,7 @@ on_stop = "./scripts/notify-stopped.sh"
 
 Fires on **any** daemon termination — intentional stop, clean exit, or crash. Also fires during supervisor shutdown. Use this for cleanup that should always run regardless of why the daemon stopped.
 
-> **Note:** For daemons with `retry > 0`, `on_exit` fires **only after all retries are exhausted**, not on each individual crash attempt. Use `on_retry` if you need to react to every failure.
+> **Note:** For daemons with `retry > 0` or `ready_retry > 0`, a **failed** exit fires `on_exit` only after the applicable retry budget is exhausted, not on each individual crash attempt. Intentional stops (`pitchfork stop`) and clean exits fire `on_exit` immediately. Use `on_retry` if you need to react to every failure.
 
 ```toml
 [daemons.infra.hooks]
@@ -133,7 +133,7 @@ All hooks receive these environment variables:
 |----------|-------------|
 | `PITCHFORK_DAEMON_ID` | The daemon's fully-qualified ID (`namespace/name`) |
 | `PITCHFORK_DAEMON_NAMESPACE` | The daemon's namespace |
-| `PITCHFORK_RETRY_COUNT` | Current retry attempt (0 on first run) |
+| `PITCHFORK_RETRY_COUNT` | Current retry attempt (0 on first run). Counts startup retries during a blocking start and background restarts afterwards |
 | `PITCHFORK_EXIT_CODE` | Exit code of the process (`on_fail`, `on_stop`, `on_exit`). On Unix, processes terminated by a signal (e.g. SIGTERM) have no POSIX exit code; in that case this is set to `-1`. |
 | `PITCHFORK_EXIT_REASON` | Why the daemon stopped. Typically `"stop"` (intentional stop by pitchfork) or `"fail"` (non-zero exit); `"exit"` indicates an unexpected clean exit (process quit on its own with code 0). Available in `on_stop` and `on_exit`. |
 | `PITCHFORK_MATCHED_LINE` | The raw output line that triggered the hook (`on_output` only) |
