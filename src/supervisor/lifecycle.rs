@@ -2046,7 +2046,17 @@ impl Supervisor {
                     // spawn: a completed oneshot has since been finalized, and
                     // the snapshot would tell the caller it is still running
                     // under a PID that has exited.
-                    let daemon = self.get_daemon(id).await.unwrap_or(daemon);
+                    //
+                    // Only when the record still describes this run, though. A
+                    // successor that claimed it carries its own PID and start
+                    // time, and reporting those as the outcome of the process
+                    // this call spawned would misattribute them.
+                    let daemon = match self.get_daemon(id).await {
+                        Some(current) if current.pid.is_none() || current.pid == Some(pid) => {
+                            current
+                        }
+                        _ => daemon,
+                    };
                     Ok(IpcResponse::DaemonReady { daemon })
                 }
                 Ok(Err(exit_code)) => {
