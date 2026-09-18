@@ -646,10 +646,16 @@ impl IpcClient {
                             .collect::<Vec<_>>()
                     })
                     .await
-                    .unwrap_or_else(|e| {
+                };
+                let rendered = match rendered {
+                    Ok(rendered) => rendered,
+                    Err(e) => {
+                        // Nothing in this level was rendered, so nothing starts;
+                        // the run has to report that rather than exit cleanly.
                         error!("Template rendering task failed: {e}");
-                        Vec::new()
-                    })
+                        any_failed = true;
+                        continue;
+                    }
                 };
 
                 // Start all daemons in this level concurrently
