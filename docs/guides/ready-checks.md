@@ -16,7 +16,7 @@ can do useful work, such as an HTTP health endpoint or a database query.
 | `ready_port` | A TCP connection succeeds on `127.0.0.1` | Services without an application-level probe |
 | `ready_output` | A regex matches stdout or stderr | Services with a reliable startup message |
 | `ready_delay` | The process stays running for a fixed delay | A fallback when no other check is available |
-| `oneshot` | The process exits with code `0` | Setup tasks that must finish, such as migrations |
+| [`oneshot`](/guides/oneshot-tasks) | The process exits with code `0` | Setup tasks that must finish, such as migrations |
 
 ::: tip More than one check means “any,” not “all”
 The first successful output, HTTP, TCP, or command check marks the daemon ready.
@@ -130,69 +130,13 @@ does not extend the timeout of an HTTP, TCP, output, or command check.
 
 ## Oneshot tasks {#oneshot-tasks}
 
-Every other check assumes the daemon keeps running. A step that has to finish
-before the services that need it — running migrations once the database is up,
-creating message-bus streams, seeding a fixture — is the opposite: it is ready
-precisely because it exited. Set `oneshot = true` for that:
+For migrations, seeds, and other setup that must finish before a service starts,
+use `oneshot = true`. A oneshot task becomes ready when it exits with code `0`;
+its dependents wait for that successful completion. It cannot use `ready_*` or
+`health_*` fields.
 
-```toml
-[daemons.db]
-run = "postgres -D ./data"
-ready_cmd = { run = "pg_isready -h 127.0.0.1", timeout = "30s" }
-
-[daemons.migrate]
-run = "npm run migrate"
-oneshot = true
-depends = ["db"]
-
-[daemons.api]
-run = "node server.js"
-depends = ["migrate"]
-```
-
-`pitchfork start api` starts `db`, waits for `pg_isready` to succeed, runs
-`migrate` to completion, and only then starts `api`. Without `oneshot`, the
-usual workaround is `run = "npm run migrate && exec sleep infinity"`, which
-keeps a pointless process alive and still tells dependents nothing about
-whether the migration succeeded.
-
-A oneshot daemon:
-
-- **Is ready when its process exits `0`.** A nonzero exit is a failure, never
-  readiness, and is subject to [`retry`](/guides/auto-restart) like any other
-  failed daemon.
-- **Reports the `completed` status** instead of `stopped`, in `pitchfork list`,
-  `pitchfork status`, `--json` output, the TUI, and the web UI. `depends` on a
-  oneshot is satisfied by `completed`.
-- **Has no readiness or health checks.** Combining `oneshot` with any
-  `ready_*` or `health_*` field is a configuration error, because its readiness
-  is already defined.
-- **Can be stopped while running.** `pitchfork stop` sends the configured
-  [stop signal](/guides/lifecycle-hooks#stop-signal) as it would for any
-  daemon; an interrupted task is recorded as `stopped`, not `completed`.
-
-::: warning Oneshot commands must be idempotent
-`pitchfork start`, `pitchfork restart`, and `auto = ["start"]` on directory
-entry all re-run a oneshot that has already completed — including when it is
-reached as another daemon's dependency. Write the command so that running it
-twice is harmless, for example by using a migration tool that skips applied
-migrations.
-:::
-
-Starting a daemon whose oneshot dependency is already running waits for that
-in-flight run rather than starting a second copy, so two shells entering the
-project at once still see the task finish before its dependents start.
-
-The command must terminate on its own. `pitchfork start` waits up to
-`supervisor.oneshot_timeout`, one hour by default. A task that runs longer keeps
-going and is still recorded as `completed` when it finishes, but the command that
-was waiting reports a timeout and does not start the dependents. Raise it for a
-long migration or backfill, or set `0` to wait with no deadline at all:
-
-```toml
-[settings.supervisor]
-oneshot_timeout = "6h"
-```
+See [Oneshot tasks](/guides/oneshot-tasks) for a complete example, rerun behavior,
+and the separate timeout for waiting on a task.
 
 ## Timeouts and failures
 

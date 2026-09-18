@@ -889,7 +889,7 @@ pub struct SettingsSupervisor {
     /// A `oneshot = true` daemon is ready when its process exits `0`, so there is no
     /// readiness check to bound the wait. `pitchfork start` gives up after this long
     /// and reports a timeout; the task itself keeps running and is still recorded as
-    /// `completed` when it ends.
+    /// `completed` if it later exits successfully. A nonzero exit remains a failure.
     ///
     /// Set to `0` for no limit. Raise it for long migrations, backfills, or seeds.
     #[usage(env = "PITCHFORK_ONESHOT_TIMEOUT", default = "1h", ty = "duration")]

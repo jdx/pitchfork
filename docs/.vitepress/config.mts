@@ -75,6 +75,7 @@ export default defineConfig({
           { text: "Guide index", link: "/guides/" },
           { text: "Shell hooks & sessions", link: "/guides/shell-hook" },
           { text: "Ready checks", link: "/guides/ready-checks" },
+          { text: "Oneshot tasks", link: "/guides/oneshot-tasks" },
           { text: "File watching", link: "/guides/file-watching" },
           { text: "Automatic retries", link: "/guides/auto-restart" },
           { text: "Health checks", link: "/guides/health-checks" },

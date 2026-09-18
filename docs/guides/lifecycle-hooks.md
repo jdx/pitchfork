@@ -177,8 +177,8 @@ stop_signal = { signal = "SIGINT", timeout = "5s" }
 The default stop timeout is `5s`, but a foreground `docker compose up` needs
 longer: on `SIGTERM` it stops the containers it started, and Compose gives each
 one its own 10-second grace period before killing it. With the default, pitchfork
-sends `SIGKILL` to the process group while Compose is still shutting containers
-down, leaving them running. Raise the timeout past Compose's own grace period:
+can send `SIGKILL` to the process group while Compose is still shutting containers
+down, potentially leaving containers running. Allow time for Compose to finish:
 
 ```toml
 [daemons.infra]
@@ -189,15 +189,15 @@ stop_signal = { signal = "SIGTERM", timeout = "20s" }
 on_exit = "docker compose down --remove-orphans"
 ```
 
-Increase it further if any service sets a longer `stop_grace_period` in
-`docker-compose.yml`.
+The `on_exit` hook removes the Compose resources after the process exits.
+Increase the timeout if your services need longer to stop, including when they
+set a longer `stop_grace_period` in the Compose file.
 
 ## Behavior
 
 Hooks run asynchronously, so do not use `on_ready` to acquire a lock or perform
 setup that must finish before the daemon can serve requests. Put required setup
-in the daemon's `run` command or a dependency.
-
+in the daemon's `run` command or a [oneshot dependency](/guides/oneshot-tasks).
 
 - Hooks are **fire-and-forget** — they run in the background and never block the daemon
 - Hook commands run in the daemon's working directory
@@ -243,20 +243,6 @@ retry = 2
 on_fail = "./scripts/release-locks.sh"
 on_ready = "./scripts/acquire-locks.sh"
 ```
-
-**Tear down infrastructure on any exit:**
-
-```toml
-[daemons.infra]
-run = "docker compose up"
-stop_signal = { signal = "SIGTERM", timeout = "20s" }
-
-[daemons.infra.hooks]
-on_exit = "docker compose down --remove-orphans"
-```
-
-See [compose-backed daemons](#compose-backed-daemons) for why the timeout is
-raised above the default `5s`.
 
 **Distinguish stop reason in a shared cleanup script:**
 
