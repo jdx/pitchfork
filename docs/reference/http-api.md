@@ -199,7 +199,7 @@ registered is folded into that checkout: it appears as one of its worktrees, not
 as a project, so `/api/projects/<that-namespace>` returns 404.
 
 `last_activity` is derived from process uptime, so it is the start time of the
-longest-running daemon currently up. A project with nothing running reports
+most recently started daemon currently up. A project with nothing running reports
 `null` even if its daemons ran earlier; the supervisor keeps no start timestamp
 for a stopped daemon.
 

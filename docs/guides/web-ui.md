@@ -198,8 +198,9 @@ project rather than as a project of its own, so open the checkout to reach it.
 
 Opening a project shows each worktree with its namespace, running and stopped
 daemon counts, last activity, and a link to that worktree's stack. Last activity
-comes from process uptime, so a worktree with nothing running shows none even if
-its daemons ran earlier. A project whose registered directory has been deleted
+comes from process uptime, so it is when the most recently started daemon came
+up, and a worktree with nothing running shows none even if its daemons ran
+earlier. A project whose registered directory has been deleted
 is listed and marked "missing" rather than silently looking healthy. Worktrees
 that pitchfork knows about but has never started are listed too, with their
 daemons marked available. The primary checkout's stack is shown on the same
@@ -212,9 +213,9 @@ the namespace registry. A worktree in neither is still listed with its daemons,
 but marked "not startable" and the start and restart actions for exactly those
 daemons are disabled, because they would fail with "Daemon config not found";
 a restart would stop a running one and then fail to bring it back. Stopping
-needs no config, so it stays available. Its stack page offers a **Register
-worktree** button that adds the namespace; `pitchfork proxy add` registers one
-too, as does adding it under `[namespaces]` in the user config.
+needs no config, so it stays available. To register the worktree, add it under
+`[namespaces]` in the user config or run `pitchfork proxy add` from it, then
+reload the page.
 
 A stack page shows the groups declared by the config loaded for that worktree,
 in the order they appear, except that a group named `default` comes first and
