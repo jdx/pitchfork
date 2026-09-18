@@ -661,9 +661,10 @@ impl Procs {
     /// Signals by PID number, so callers must have pinned the process
     /// identity first; on Linux the pidfd path in
     /// `kill_if_start_time_matches` is used instead. When
-    /// `expected_start_time` is given, the start token is re-checked before
-    /// the SIGKILL escalation: if the process exited during the stop timeout
-    /// and its PID was recycled, the newcomer is left alone.
+    /// `expected_start_time` is given, the start token is re-checked
+    /// immediately before the first signal and again before the SIGKILL
+    /// escalation: if the process exited and its PID was recycled in either
+    /// window, the newcomer is left alone.
     #[cfg(not(target_os = "linux"))]
     fn kill(
         &self,
@@ -722,6 +723,15 @@ impl Procs {
         {
             let sysinfo_pid = sysinfo::Pid::from_u32(pid);
             let signal_name = signal_name(stop_signal);
+            // Without pidfds there is no way to bind a signal to a process
+            // generation, so re-verify the start token immediately before
+            // the first signal. This shrinks the check-to-signal window to
+            // the two adjacent syscalls, the tightest this platform allows.
+            if let Some(expected) = expected_start_time
+                && !self.verify_start_time_before_signal(pid, expected)?
+            {
+                return Ok(false);
+            }
             // Send stop signal for graceful shutdown using libc::kill directly
             // so we can distinguish EPERM (permission denied) from ESRCH
             // (process already gone — possible in a narrow race window).
