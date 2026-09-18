@@ -110,8 +110,10 @@ because starting a completed task runs it again.
 - **A supervisor restart** loses a running task's exit code: the new supervisor
   adopts the process but cannot read the exit status of something that is not
   its own child. Such a run is recorded as `stopped` rather than `completed` or
-  `errored`, so nothing re-runs it automatically and no dependent is told it
-  failed. Start it again if you need the task to have definitely run. A task
-  that had already completed keeps that status across a restart.
+  `errored`, so it is not retried automatically and does not show as failed.
+  A start that was already waiting on that task is a different matter: it
+  cannot be told the task succeeded, so it reports a failure and does not start
+  the dependents. Start the task again if you need it to have definitely run. A
+  task that had already completed keeps that status across a restart.
 - **`retry`** applies as it does to any daemon: a nonzero exit is retried, and
   the attempts share the one `oneshot_timeout` budget described above.

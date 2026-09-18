@@ -207,6 +207,7 @@ pub fn build_placeholder_daemon(
     Daemon {
         id: id.clone(),
         status: DaemonStatus::Stopped,
+        oneshot: daemon_config.is_oneshot(),
         port: daemon_config.port.clone(),
         depends: vec![],
         env: None,

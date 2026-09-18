@@ -440,7 +440,7 @@ TOML
   [[ $count -eq 2 ]]
 }
 
-@test "status --json reports completed and the oneshot flag" {
+@test "json output identifies a oneshot before and after it runs" {
   create_pitchfork_toml <<TOML
 [daemons.migrate]
 run = "echo migration done"
@@ -451,6 +451,17 @@ run = "echo api started && $(default_shell_sleep_command)"
 ready_delay = 1
 TOML
 
+  # Before anything runs the flag has to come from config: there is no state
+  # record yet, and identifying a task before its first run is what the field
+  # is for. One daemon at a time, so each assertion names its own subject.
+  run pitchfork status migrate --json
+  assert_success
+  assert_output --partial '"oneshot": true'
+
+  run pitchfork status api --json
+  assert_success
+  assert_output --partial '"oneshot": false'
+
   run pitchfork start migrate
   assert_success
 
@@ -458,11 +469,6 @@ TOML
   assert_success
   assert_output --partial '"status": "completed"'
   assert_output --partial '"oneshot": true'
-
-  # A service is distinguishable from a task even before either has run.
-  run pitchfork list --json
-  assert_success
-  assert_output --partial '"oneshot": false'
 }
 
 @test "a plain service still retries through the per-attempt ownership check" {
