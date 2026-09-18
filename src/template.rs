@@ -93,7 +93,7 @@ impl TemplateContext {
                 id,
                 &global_slugs,
             ),
-            host: crate::proxy::hostname::host_for_daemon(id, Some(daemon_config), &global_slugs),
+            host: host_of(id, daemon_config),
             dir,
         };
 
@@ -649,6 +649,32 @@ mod tests {
         assert_eq!(
             render_template("{{ proxy_url | default(value=\"none\") }}", &ctx).unwrap(),
             "none"
+        );
+    }
+
+    /// The daemon being rendered and a daemon it references resolve their
+    /// hostnames the same way, so `{{ host }}` is never populated while
+    /// `{{ daemons.*.host }}` is null — whether or not the proxy is enabled.
+    #[test]
+    fn test_self_and_referenced_hosts_agree() {
+        let id = DaemonId::try_new("myproj", "api").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "server".to_string(),
+            port: Some(crate::config_types::PortConfig {
+                expect: vec![3000],
+                ..Default::default()
+            }),
+            ..PitchforkTomlDaemon::default()
+        };
+        let mut configs = IndexMap::new();
+        configs.insert(id.clone(), config.clone());
+        let mut resolved = HashMap::new();
+        resolved.insert(id.clone(), vec![3000]);
+
+        let ctx = TemplateContext::new(&id, &config, &resolved, &configs);
+        assert_eq!(
+            ctx.self_state.host,
+            ctx.daemon_states.get("api").unwrap().host
         );
     }
 
