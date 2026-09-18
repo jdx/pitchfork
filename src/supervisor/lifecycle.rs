@@ -483,8 +483,23 @@ impl Supervisor {
             info!("daemon {id} is an in-flight oneshot (pid {pid}); waiting for it to finish");
             drop(stop_guard.take());
             return Ok(Some(
-                self.await_running_oneshot(id, opts.oneshot_wait).await,
+                self.await_running_oneshot(id, opts.oneshot_wait, pid).await,
             ));
+        }
+        // A record can name a PID that has already exited: `stop` leaves the
+        // terminal state to a monitor that still owns the daemon, and that
+        // monitor writes it only after draining the process's output. Rejecting
+        // a start against a dead PID would fail an ordinary stop-then-start for
+        // the length of that drain, so confirm the process is really there
+        // before refusing. The oneshot branch above deliberately comes first: a
+        // task whose process has exited is about to be recorded as completed,
+        // and starting a second copy of it is exactly what waiting prevents.
+        PROCS.refresh_pids(&[pid]);
+        if !PROCS.is_running(pid) {
+            debug!(
+                "daemon {id}: record still names pid {pid}, which has exited; its monitor has not finalized yet"
+            );
+            return Ok(None);
         }
         warn!("daemon {id} already running with pid {pid}");
         Ok(Some(IpcResponse::DaemonAlreadyRunning))
@@ -496,7 +511,12 @@ impl Supervisor {
     /// Polls the state file because the terminal state is written by the
     /// monitoring task of the *other* run; this call has no readiness channel
     /// of its own to await.
-    async fn await_running_oneshot(&self, id: &DaemonId, wait: Option<OneshotWait>) -> IpcResponse {
+    async fn await_running_oneshot(
+        &self,
+        id: &DaemonId,
+        wait: Option<OneshotWait>,
+        watched_pid: u32,
+    ) -> IpcResponse {
         let interval = settings().supervisor_ready_check_interval();
         // The caller resolved this from the project's settings and sent it, so
         // both processes wait exactly as long. Falling back to this process's
@@ -517,10 +537,26 @@ impl Supervisor {
             .unwrap_or_else(|| settings().supervisor_oneshot_wait())
             .duration()
             .map(|d| tokio::time::Instant::now() + d);
+        // Which run this wait is reporting on. A terminal state is only that
+        // run's while the record still names its PID or names none at all; once
+        // another PID appears, something else has started the task and the
+        // outcome that follows belongs to that run, not this one. Following the
+        // handoff keeps the answer useful to a dependent — it still learns
+        // whether the task succeeded — without quietly attributing an unrelated
+        // run's failure to the one it asked about.
+        let mut watched_pid = watched_pid;
         loop {
             let Some(daemon) = self.get_daemon(id).await else {
                 return IpcResponse::DaemonNotFound;
             };
+            if let Some(current) = daemon.pid
+                && current != watched_pid
+            {
+                info!(
+                    "daemon {id}: the run being waited on (pid {watched_pid}) was replaced by pid {current}; following it"
+                );
+                watched_pid = current;
+            }
             match &daemon.status {
                 DaemonStatus::Completed => {
                     info!("daemon {id}: the in-flight oneshot completed");
