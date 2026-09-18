@@ -155,9 +155,15 @@ https://api.fix-login.myproject.localhost  # worktree at ../fix-login
 | Daemon | The daemon's name, or its `proxy = "<name>"` override |
 
 Every label is lowercased and reduced to `a-z`, `0-9` and `-`, so a worktree
-directory named `Fix Login` becomes `fix-login`. Two checkouts of one project
-whose labels reduce to the same string are a configuration error: neither is
-routed, and the supervisor log names both directories.
+directory named `Fix Login` becomes `fix-login`.
+
+Two names that reduce to the same label are a configuration error, and pitchfork
+routes neither of them rather than guess which one you meant. This applies to
+two projects claiming one project label, two worktrees of a project claiming one
+worktree label, and two daemons in a checkout claiming one daemon label, such as
+`foo_bar` beside `foo-bar`. The supervisor log names both sides, no URL is
+advertised for either, and the fix is to rename one or set an explicit
+`namespace`, `worktree_label` or `proxy` label.
 
 To pin a worktree's label, set it in that worktree's own `pitchfork.toml`:
 
@@ -195,6 +201,15 @@ One consequence: when a worktree label and a daemon name are the same word, the
 worktree wins. With a worktree labelled `api`, `api.myproject.localhost` is that
 stack's address, and the primary checkout's `api` daemon is reached through a
 different spelling or by renaming one of the two.
+
+### Give each checkout its own namespace
+
+A daemon's identity is its namespace and name, and pitchfork keeps one record
+per identity. When a project declares an explicit top-level `namespace`, every
+worktree inherits it, so the same daemon in two checkouts is one identity and
+only one copy can run at a time. Requesting the other checkout's hostname then
+returns an error explaining the clash instead of quietly serving the running
+copy's content. Give each worktree its own `namespace` to run both.
 
 ### Slugs (legacy)
 

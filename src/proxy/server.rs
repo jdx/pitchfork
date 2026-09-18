@@ -1849,11 +1849,21 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
     let registry = get_cached_host_registry().await;
     match registry.resolve(subdomain, settings().proxy.wildcard) {
         crate::proxy::hostname::HostTarget::Daemon {
-            dir,
-            namespace,
-            daemon,
+            ref project,
+            ref dir,
+            ref namespace,
+            ref daemon,
             ..
-        } => resolve_registry_daemon(subdomain, &dir, &namespace, &daemon).await,
+        } => {
+            // When several checkouts of this project share the namespace, the
+            // daemon's ID no longer says which checkout is running, so the
+            // request has to be matched to the directory it named.
+            let per_checkout = registry
+                .projects
+                .get(project)
+                .is_some_and(|p| p.shares_daemon_id(namespace, daemon));
+            resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout).await
+        }
         crate::proxy::hostname::HostTarget::ProjectPage { project } => {
             let daemons = registry
                 .projects
@@ -1908,6 +1918,7 @@ async fn resolve_registry_daemon(
     dir: &std::path::Path,
     namespace: &str,
     daemon: &str,
+    per_checkout: bool,
 ) -> ResolveResult {
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
@@ -1921,9 +1932,25 @@ async fn resolve_registry_daemon(
         })
         .map(|(_, d)| d)
         .collect();
-    matches.sort_by_key(|d| d.dir.as_deref() != Some(dir));
+    matches.sort_by_key(|d| !daemon_runs_in(d, dir));
 
     if let Some(d) = matches.first() {
+        // A running daemon from another checkout would serve that checkout's
+        // content under this one's hostname, so say what is wrong instead.
+        if per_checkout && !daemon_runs_in(d, dir) {
+            return ResolveResult::Error(format!(
+                "'{host}' belongs to the checkout at {}, but daemon '{namespace}/{daemon}' is \
+                 running from {}.\n\
+                 These checkouts share the namespace '{namespace}', so pitchfork cannot run \
+                 both copies at once.\n\
+                 Give each checkout its own top-level `namespace`, or stop the other one first.",
+                dir.display(),
+                d.dir
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "an unknown directory".to_string()),
+            ));
+        }
         return match d.active_port.or_else(|| d.resolved_port.first().copied()) {
             Some(port) => ResolveResult::Ready(port),
             None => ResolveResult::NotFound,
@@ -1939,6 +1966,18 @@ async fn resolve_registry_daemon(
         rejected_worktree_prefixes: std::collections::HashSet::new(),
     };
     try_auto_start(host, &cached, None, Some(namespace)).await
+}
+
+/// Whether a daemon's working directory lies inside a checkout.
+///
+/// A daemon with an explicit `dir` outside its project counts as running
+/// nowhere in particular, which keeps such a daemon reachable as long as its
+/// hostname is unambiguous.
+fn daemon_runs_in(daemon: &crate::daemon::Daemon, checkout: &std::path::Path) -> bool {
+    daemon
+        .dir
+        .as_deref()
+        .is_some_and(|d| d.starts_with(checkout))
 }
 
 /// Escape the five characters that change the meaning of HTML text.
@@ -2598,5 +2637,35 @@ mod tests {
         assert_eq!(host_port_suffix("[::1]"), "");
         // A non-numeric tail is not a port and must not reach a link.
         assert_eq!(host_port_suffix("host:notaport"), "");
+    }
+
+    /// A daemon counts as running in a checkout when its working directory is
+    /// inside it; an explicit `dir` elsewhere belongs to no checkout.
+    #[test]
+    fn test_daemon_runs_in() {
+        let mut daemon = crate::daemon::Daemon {
+            dir: Some(std::path::PathBuf::from("/repos/myproj/sub")),
+            ..Default::default()
+        };
+        assert!(daemon_runs_in(
+            &daemon,
+            std::path::Path::new("/repos/myproj")
+        ));
+        assert!(!daemon_runs_in(
+            &daemon,
+            std::path::Path::new("/repos/fix-1")
+        ));
+
+        daemon.dir = Some(std::path::PathBuf::from("/opt/app"));
+        assert!(!daemon_runs_in(
+            &daemon,
+            std::path::Path::new("/repos/myproj")
+        ));
+
+        daemon.dir = None;
+        assert!(!daemon_runs_in(
+            &daemon,
+            std::path::Path::new("/repos/myproj")
+        ));
     }
 }
