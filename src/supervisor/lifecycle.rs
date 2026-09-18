@@ -2307,13 +2307,21 @@ impl Supervisor {
                             .build(),
                     )
                     .await?;
-                } else if self.is_monitored(id, pid) {
-                    // The process is gone but its monitor is still running, so
-                    // it is on its way to writing the real outcome — which for
-                    // a task that finished on its own is `completed`. Writing
-                    // `stopped` over it would discard a success the daemon
-                    // actually achieved and report failure to anyone waiting
-                    // on it, purely because a stop arrived a moment late.
+                } else if daemon.oneshot && self.is_monitored(id, pid) {
+                    // The task's process is gone but its monitor is still
+                    // running, so it is on its way to writing the real
+                    // outcome — which for a task that finished on its own is
+                    // `completed`. Writing `stopped` over it would discard a
+                    // success the daemon actually achieved and report failure
+                    // to anyone waiting on it, purely because a stop arrived a
+                    // moment late.
+                    //
+                    // Only for a oneshot. A service has no successful exit to
+                    // preserve, and deferring for one would leave the monitor
+                    // writing `errored` for a daemon the user just stopped,
+                    // which the retry checker would then act on — the exact
+                    // case the arm below exists for. The drain can run for
+                    // five seconds, so that window is not narrow.
                     debug!(
                         "pid {pid} not running but daemon {id} is still monitored; leaving the terminal state to its monitor"
                     );
