@@ -27,6 +27,7 @@ function statusMeta(s: { type: string }) {
     case 'running': return { label: 'Running', cls: 'running' }
     case 'available': return { label: 'Available', cls: 'available' }
     case 'stopped': return { label: 'Stopped', cls: 'stopped' }
+    case 'completed': return { label: 'Completed', cls: 'completed' }
     case 'failed': return { label: 'Failed', cls: 'failed' }
     case 'errored': return { label: 'Errored', cls: 'errored' }
     case 'waiting': return { label: 'Waiting', cls: 'waiting' }
@@ -88,7 +89,8 @@ async function onToggle() {
         </div>
         <div class="detail-actions">
           <button
-            v-if="daemon.status.type === 'stopped' || daemon.status.type === 'failed'
+            v-if="daemon.status.type === 'stopped' || daemon.status.type === 'completed'
+              || daemon.status.type === 'failed'
               || daemon.status.type === 'errored' || daemon.status.type === 'available'"
             class="act-btn act-start"
             :disabled="isActing"
@@ -374,6 +376,7 @@ async function onToggle() {
   &.running   { background: @sf-success-10; color: @c-success; }
   &.available { background: @sf-4; color: @sf-35; }
   &.stopped   { background: @sf-4; color: @sf-30; }
+  &.completed { background: @sf-4; color: @c-success; }
   &.failed    { background: @sf-danger-8; color: @c-danger; }
   &.errored   { background: @sf-danger-8; color: @c-danger; }
   &.waiting   { background: @sf-warning-8; color: @c-warning; }

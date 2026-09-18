@@ -34,11 +34,14 @@ impl Stop {
             }
             KillOrStopOutcome::AlreadyDead => {
                 // Clean up the stale entry so subsequent commands don't see it.
+                // This also covers a PID that is alive but belongs to another
+                // process now (e.g. recycled after a reboot): nothing was
+                // signalled, and the record is what is stale.
                 if let Ok(mut sf) = StateFile::read(&*env::PITCHFORK_STATE_FILE) {
                     sf.daemons.remove(&DaemonId::pitchfork());
                     let _ = sf.write();
                 }
-                warn!("Pitchfork daemon with pid {pid} was already dead (cleaned up stale state)");
+                warn!("Pitchfork daemon with pid {pid} is not running (cleaned up stale state)");
             }
             KillOrStopOutcome::StillRunning => {
                 unreachable!("stop always passes force=true")

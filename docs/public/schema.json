@@ -495,6 +495,13 @@
             "null"
           ]
         },
+        "oneshot": {
+          "description": "Run this daemon as a task that must finish rather than a long-running\nservice. Readiness means the process exited with code 0, the daemon\nthen reports the `completed` status, and daemons that `depends` on it\nwait for that completion. Cannot be combined with any `ready_*` or\n`health_*` field.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "port": {
           "description": "Port configuration: expected ports and auto-bump settings",
           "anyOf": [
@@ -1411,6 +1418,13 @@
         },
         "log_flush_interval": {
           "description": "Daemon log buffer flush interval",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oneshot_timeout": {
+          "description": "Maximum time to wait for a oneshot daemon to finish",
           "type": [
             "string",
             "null"

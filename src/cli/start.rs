@@ -74,6 +74,11 @@ pub struct Start {
     all: bool,
     #[usage(long, hide = true)]
     shell_pid: Option<u32>,
+    /// Set by the shell hook and project sessions: this start came from
+    /// entering a directory, so a completed oneshot is left alone rather than
+    /// re-run, at any level of the dependency graph.
+    #[usage(long, hide = true)]
+    on_directory_enter: bool,
     /// Stop the daemon if it is already running
     #[usage(short, long)]
     force: bool,
@@ -155,6 +160,7 @@ impl Start {
 
         let opts = StartOptions {
             force: self.force,
+            on_directory_enter: self.on_directory_enter,
             shell_pid: self.shell_pid,
             delay: self.delay,
             output: self.output.clone(),

@@ -13,6 +13,7 @@ the behavior your workflow needs.
 | --- | --- |
 | Start services when I enter a directory | [Shell hooks and project sessions](/guides/shell-hook) |
 | Wait for dependencies to be ready | [Ready checks](/guides/ready-checks) |
+| Finish migrations or setup before starting a service | [Oneshot tasks](/guides/oneshot-tasks) |
 | Restart after editing source files | [File watching](/guides/file-watching) |
 | Recover from a crash | [Automatic retries](/guides/auto-restart) |
 | Detect a service that stops responding | [Health checks](/guides/health-checks) |

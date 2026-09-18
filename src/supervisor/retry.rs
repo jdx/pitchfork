@@ -17,18 +17,26 @@ impl Supervisor {
             state_file
                 .daemons
                 .iter()
-                .filter(|(_id, d)| {
+                .filter(|(id, d)| {
                     // Daemon is errored, not currently running, and has retries remaining
                     d.status.is_errored()
                         && d.pid.is_none()
                         && d.retry.count() > 0
                         && d.retry_count < d.retry.count()
+                        // ...and no foreground run is already working through
+                        // its retries. Starting an attempt out from under one
+                        // leaves its caller reporting on a run it does not own.
+                        && !self.is_retrying(id)
                 })
                 .map(|(id, _d)| id.clone())
                 .collect()
         };
 
         for id in ids_to_retry {
+            // Read before the checks below, so a stop that lands between here
+            // and the spawn is noticed: `run_retry` compares this under the
+            // daemon's lock, which the stop holds while it records itself.
+            let approved_at = self.stop_epoch(&id);
             // Look up daemon when needed and re-verify retry criteria
             // (state may have changed since we collected IDs)
             let daemon = {
@@ -38,7 +46,11 @@ impl Supervisor {
                         if d.status.is_errored()
                             && d.pid.is_none()
                             && d.retry.count() > 0
-                            && d.retry_count < d.retry.count() =>
+                            && d.retry_count < d.retry.count()
+                            // Re-checked here as well: a foreground run can
+                            // claim these retries while this loop is awaiting
+                            // `run` for an earlier daemon.
+                            && !self.is_retrying(&id) =>
                     {
                         d.clone()
                     }
@@ -86,7 +98,7 @@ impl Supervisor {
             .await;
             let mut retry_opts = daemon.to_run_options(cmd);
             retry_opts.retry_count = daemon.retry_count + 1;
-            if let Err(e) = self.run(retry_opts).await {
+            if let Err(e) = self.run_retry(retry_opts, approved_at).await {
                 error!("failed to retry daemon {id}: {e}");
             }
         }

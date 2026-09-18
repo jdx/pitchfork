@@ -406,7 +406,7 @@ Output:
         long_help #"""
 Filter daemons by status (repeatable for OR logic)
 
-Values: running, stopped, waiting, stopping, failed, errored, available, disabled
+Values: running, stopped, waiting, stopping, failed, errored, completed, available, disabled
 """#
         arg <STATUS> {
             choices {
@@ -416,6 +416,7 @@ Values: running, stopped, waiting, stopping, failed, errored, available, disable
                 choice stopping
                 choice failed
                 choice errored
+                choice completed
                 choice available
                 choice disabled
             }
@@ -1028,6 +1029,7 @@ Examples:
     flag --shell-pid hide=#true {
         arg <SHELL_PID>
     }
+    flag --on-directory-enter help="Set by the shell hook and project sessions: this start came from entering a directory, so a completed oneshot is left alone rather than re-run, at any level of the dependency graph." hide=#true
     flag "-f --force" help="Stop the daemon if it is already running"
     flag --delay help="Delay in seconds before considering daemon ready (default: 3 seconds)" {
         arg <DELAY>
@@ -1425,6 +1427,9 @@ config {
     prop "supervisor.restart_delay" type="duration" default="100ms" help="Delay between stop and start during restart" long_help="Delay between stop and start during restart\n\nBrief pause after stopping a daemon before starting it again. Helps ensure resources (like ports) are fully released." {
         env "PITCHFORK_RESTART_DELAY"
     }
+    prop "supervisor.oneshot_timeout" type="duration" default="1h" help="Maximum time to wait for a oneshot daemon to finish" long_help="Maximum time to wait for a oneshot daemon to finish\n\nA `oneshot = true` daemon is ready when its process exits `0`, so there is no readiness check to bound the wait. `pitchfork start` gives up after this long and reports a timeout; the task itself keeps running and is still recorded as `completed` if it later exits successfully. A nonzero exit remains a failure.\n\nSet to `0` for no limit. Raise it for long migrations, backfills, or seeds." {
+        env "PITCHFORK_ONESHOT_TIMEOUT"
+    }
     prop "supervisor.stop_timeout" type="duration" default="5s" help="Maximum time to wait for daemon to stop gracefully" long_help="Maximum time to wait for daemon to stop gracefully\n\nWhen stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long for the process to exit gracefully before sending SIGKILL.\n\nIncrease for daemons that need time to clean up (e.g., flush data)." {
         env "PITCHFORK_STOP_TIMEOUT"
     }
@@ -1478,10 +1483,10 @@ case "{{words[1]}}" in
     pitchfork ls --hide-header --status running | awk '{print $1}'
     ;;
   restart)
-    pitchfork ls --hide-header --status running --status stopped --status errored --status failed | awk '{print $1}'
+    pitchfork ls --hide-header --status running --status stopped --status completed --status errored --status failed | awk '{print $1}'
     ;;
   start)
-    pitchfork ls --hide-header --status available --status stopped --status errored --status failed | awk '{print $1}'
+    pitchfork ls --hide-header --status available --status stopped --status completed --status errored --status failed | awk '{print $1}'
     ;;
   enable)
     pitchfork ls --hide-header --status disabled | awk '{print $1}'

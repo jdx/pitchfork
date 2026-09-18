@@ -66,6 +66,10 @@ pub(crate) struct UpsertDaemonOpts {
     pub cmd: Option<Vec<String>>,
     pub run: Option<String>,
     pub autostop: bool,
+    /// Run-to-completion task rather than a long-running service.
+    /// `None` inherits the existing record's value, so a status-only upsert
+    /// (stop, exit finalization) does not reclassify the daemon.
+    pub oneshot: Option<bool>,
     pub cron_schedule: Option<String>,
     pub cron_retrigger: Option<CronRetrigger>,
     pub cron_immediate: Option<bool>,
@@ -157,6 +161,7 @@ impl UpsertDaemonOpts {
             o.cmd = Some(opts.cmd.clone());
             o.run = opts.run.clone();
             o.autostop = opts.autostop;
+            o.oneshot = Some(opts.oneshot);
             o.cron_schedule = opts.cron_schedule.clone();
             o.cron_retrigger = opts.cron_retrigger;
             o.cron_immediate = opts.cron_immediate;
@@ -241,6 +246,13 @@ impl Supervisor {
             status: opts.status,
             shell_pid: opts.shell_pid,
             autostop: opts.autostop || existing.is_some_and(|d| d.autostop),
+            // A start carries the current config value (including a removed
+            // `oneshot = true`, which must reclassify the daemon); every other
+            // upsert leaves it None and inherits, so finalizing a completed
+            // oneshot's exit does not forget what it is.
+            oneshot: opts
+                .oneshot
+                .unwrap_or_else(|| existing.is_some_and(|d| d.oneshot)),
             dir: opts.dir.or(existing.and_then(|d| d.dir.clone())),
             cmd: opts.cmd.or(existing.and_then(|d| d.cmd.clone())),
             run: opts.run.or(existing.and_then(|d| d.run.clone())),

@@ -171,6 +171,8 @@ struct PitchforkTomlDaemonRaw {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub auto: Vec<PitchforkTomlAuto>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub oneshot: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub cron: Option<PitchforkTomlCron>,
     #[serde(default)]
     pub retry: Retry,
@@ -1373,6 +1375,7 @@ impl PitchforkToml {
             let daemon = PitchforkTomlDaemon {
                 run: raw_daemon.run,
                 auto: raw_daemon.auto,
+                oneshot: raw_daemon.oneshot,
                 cron: raw_daemon.cron,
                 retry: raw_daemon.retry,
                 ready_delay: raw_daemon.ready_delay,
@@ -1406,6 +1409,17 @@ impl PitchforkToml {
                 logs: raw_daemon.logs,
                 path: Some(path.to_path_buf()),
             };
+            if daemon.is_oneshot() {
+                let conflicts = daemon.oneshot_conflicts();
+                if !conflicts.is_empty() {
+                    return Err(ConfigParseError::OneshotConflict {
+                        daemon: short_name.clone(),
+                        path: path.to_path_buf(),
+                        conflicts: conflicts.into_iter().map(str::to_string).collect(),
+                    }
+                    .into());
+                }
+            }
             pt.daemons.insert(id, daemon);
         }
 
@@ -1537,6 +1551,7 @@ impl PitchforkToml {
                 let raw_daemon = PitchforkTomlDaemonRaw {
                     run: daemon.run.clone(),
                     auto: daemon.auto.clone(),
+                    oneshot: daemon.oneshot,
                     cron: daemon.cron.clone(),
                     retry: daemon.retry,
                     ready_delay: daemon.ready_delay,
@@ -1962,6 +1977,12 @@ pub struct PitchforkTomlDaemon {
     /// Automatic start/stop behavior based on shell hooks
     #[schemars(default)]
     pub auto: Vec<PitchforkTomlAuto>,
+    /// Run this daemon as a task that must finish rather than a long-running
+    /// service. Readiness means the process exited with code 0, the daemon
+    /// then reports the `completed` status, and daemons that `depends` on it
+    /// wait for that completion. Cannot be combined with any `ready_*` or
+    /// `health_*` field.
+    pub oneshot: Option<bool>,
     /// Cron scheduling configuration for periodic execution
     pub cron: Option<PitchforkTomlCron>,
     /// Number of times to retry if the daemon fails.
@@ -2086,6 +2107,30 @@ impl PitchforkTomlDaemon {
         self.proxy_tls_port.or(self.proxy_port)
     }
 
+    /// Whether this daemon is a oneshot task (`oneshot = true`).
+    pub fn is_oneshot(&self) -> bool {
+        self.oneshot.unwrap_or(false)
+    }
+
+    /// Names of the readiness and health fields that are set on this daemon
+    /// and cannot be combined with `oneshot`. Empty when there is no conflict.
+    pub(crate) fn oneshot_conflicts(&self) -> Vec<&'static str> {
+        [
+            ("ready_delay", self.ready_delay.is_some()),
+            ("ready_output", self.ready_output.is_some()),
+            ("ready_http", self.ready_http.is_some()),
+            ("ready_port", self.ready_port.is_some()),
+            ("ready_cmd", self.ready_cmd.is_some()),
+            ("health_cmd", self.health_cmd.is_some()),
+            ("health_http", self.health_http.is_some()),
+            ("health_port", self.health_port.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, set)| *set)
+        .map(|(name, _)| name)
+        .collect()
+    }
+
     /// Effective user for this daemon: per-daemon `user` overrides `settings.supervisor.user`.
     ///
     /// Returns `None` when neither is set (inherit the supervisor's user).
@@ -2142,6 +2187,12 @@ impl PitchforkTomlDaemon {
             shell_pid: None,
             dir: Dir(dir),
             autostop: self.auto.contains(&PitchforkTomlAuto::Stop),
+            oneshot: self.is_oneshot(),
+            // Filled in by `build_run_options`, which resolves it against the
+            // daemon's own project rather than whatever directory this process
+            // happens to be in.
+            oneshot_wait: None,
+            on_directory_enter: false,
             cron_schedule: self.cron.as_ref().map(|c| c.schedule.clone()),
             cron_retrigger: self.cron.as_ref().map(|c| c.retrigger),
             cron_immediate: self.cron.as_ref().map(|c| c.immediate),

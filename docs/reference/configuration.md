@@ -12,7 +12,7 @@ logging and dashboard ports, see [settings](/reference/settings).
 | Task | Fields |
 | --- | --- |
 | Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
-| Order startup | [`depends`](#depends), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
+| Order startup | [`depends`](#depends), [`oneshot`](#oneshot), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
 | Recover and monitor | [`retry`](#retry), [`health_cmd`](#health-cmd), [`health_http`](#health-http), [`health_port`](#health-port), [`memory_limit`](#memory-limit), [`cpu_limit`](#cpu-limit) |
 | Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal) |
 | Configure ports and logs | [`port`](#port), [`logs`](#logs) |
@@ -252,6 +252,37 @@ run = "npm run server"
 auto = ["start", "stop"]  # Both auto-start and auto-stop
 ```
 
+### `oneshot`
+
+**Default:** `false`.
+
+Set to `true` for a task that runs to completion. An exit code of `0` marks it
+`completed` and allows dependent daemons to start. A nonzero exit is a failure
+and follows the configured [`retry`](#retry) policy.
+
+```toml
+[daemons.seed]
+run = "npm run seed"
+oneshot = true
+
+[daemons.api]
+run = "node server.js"
+depends = ["seed"]
+```
+
+- Cannot be combined with any `ready_*` or `health_*` field.
+- Runs again on subsequent starts, including when started as a dependency.
+  The command must be safe to repeat.
+- Not re-run by [`auto`](#auto) on directory entry once it has completed, since
+  entering a directory is not a request to run the task again. One that failed
+  or was interrupted is still started there.
+- Reports `stopped` if interrupted by `pitchfork stop`.
+- Uses `settings.supervisor.oneshot_timeout` to limit how long startup waits
+  (default `"1h"`; `"0"` disables the deadline). A timeout does not stop the task.
+
+See [Oneshot tasks](/guides/oneshot-tasks) for startup ordering, reruns, and
+failure handling.
+
 ### `ready_delay`
 
 Seconds to wait before considering the daemon ready. When started via `pitchfork start` or `pitchfork run`, defaults to `3` seconds if no other ready check is configured. The default can be changed globally via `[settings.general] ready_delay` (or the `PITCHFORK_READY_DELAY` environment variable); a daemon-level `ready_delay` always takes precedence. The global setting is a duration string and must be a whole number of seconds; subsecond values (e.g. `"500ms"`) are rejected with an error rather than silently truncated.
@@ -408,7 +439,8 @@ depends = ["postgres", "redis"]
 - **Auto-start**: Running `pitchfork start api` will automatically start `postgres` and `redis` first
 - **Transitive dependencies**: If `postgres` depends on `storage`, that will be started too
 - **Parallel starting**: Dependencies at the same level start in parallel for faster startup
-- **Skip running**: Already-running dependencies are skipped (not restarted)
+- **Skip running**: Already-running services are skipped (not restarted)
+- **Oneshot dependencies**: A [`oneshot`](#oneshot) dependency must complete successfully before its dependents start. Startup waits for an already-running task; a completed task runs again
 - **Circular detection**: Circular dependencies are detected and reported as errors
 - **Strict validation**: Invalid dependency IDs fail config parsing (they are not skipped)
 - **Force flag**: Using `-f` only restarts the explicitly requested daemon, not its dependencies

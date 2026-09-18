@@ -1,3 +1,4 @@
+use crate::config_types::OneshotWait;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{
@@ -153,6 +154,15 @@ pub struct Daemon {
     /// not yet started. Treated as "available" by list/status/stats.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub config_registered: bool,
+    /// Run-to-completion task rather than a long-running service. Readiness is
+    /// a zero exit code, and the terminal state is `completed` instead of
+    /// `stopped`. See `DaemonStatus::Completed`.
+    ///
+    /// Appended rather than grouped with `status`: IPC encodes this struct
+    /// positionally, so a field inserted in the middle shifts every field
+    /// after it for a peer that does not have it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub oneshot: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -228,6 +238,30 @@ pub struct RunOptions {
     /// Allocate a pseudo-terminal for the daemon process.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pty: Option<bool>,
+    /// Run-to-completion task rather than a long-running service.
+    ///
+    /// Appended rather than grouped with `autostop`: IPC encodes this struct
+    /// positionally, so a field inserted in the middle shifts every field
+    /// after it for a CLI or supervisor that does not have it, and a version
+    /// mismatch is only warned about, not refused.
+    #[serde(default)]
+    pub oneshot: bool,
+    /// How long to wait for a oneshot to finish, already resolved from the
+    /// project's `supervisor.oneshot_timeout`.
+    ///
+    /// Resolved by the client and carried on the request because the
+    /// supervisor is long-lived and may have started in another directory, so
+    /// its own `settings()` would not see the project's value. `None` leaves
+    /// the supervisor to fall back to whatever it can resolve.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub oneshot_wait: Option<OneshotWait>,
+    /// This start came from entering a directory rather than from a person
+    /// asking for it, so a completed `oneshot` is left alone. Decided by the
+    /// supervisor because only it holds authoritative state: the state file
+    /// lags it by up to the flush interval, which is exactly the window a
+    /// second directory entry lands in.
+    #[serde(default)]
+    pub on_directory_enter: bool,
 }
 
 impl Daemon {
@@ -260,6 +294,12 @@ impl Daemon {
             shell_pid: self.shell_pid,
             dir: Dir(self.dir.clone().unwrap_or_else(|| crate::env::CWD.clone())),
             autostop: self.autostop,
+            oneshot: self.oneshot,
+            // Re-resolved by the client on the paths that have a project to
+            // resolve it from; a supervisor-internal restart keeps None and
+            // falls back.
+            oneshot_wait: None,
+            on_directory_enter: false,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

@@ -22,6 +22,7 @@ const YELLOW: Color = Color::Rgb(234, 179, 8);
 const GRAY: Color = Color::Rgb(107, 114, 128);
 const DARK_GRAY: Color = Color::Rgb(55, 55, 55);
 const CYAN: Color = Color::Rgb(34, 211, 238); // #22d3ee - for available/config-only daemons
+const DIM_GREEN: Color = Color::Rgb(48, 164, 108); // #30a46c - completed oneshot tasks
 
 // Unicode block characters for bar rendering
 const BAR_FULL: char = '█';
@@ -429,6 +430,7 @@ fn status_display(status: &DaemonStatus) -> (String, Color) {
     match status {
         DaemonStatus::Running => ("running".to_string(), GREEN),
         DaemonStatus::Stopped => ("stopped".to_string(), GRAY),
+        DaemonStatus::Completed => ("completed".to_string(), DIM_GREEN),
         DaemonStatus::Waiting => ("waiting".to_string(), YELLOW),
         DaemonStatus::Stopping => ("stopping".to_string(), YELLOW),
         DaemonStatus::Failed(_) => ("failed".to_string(), RED),
@@ -1554,6 +1556,7 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                 Style::default().fg(match &d.status {
                     crate::daemon_status::DaemonStatus::Running => GREEN,
                     crate::daemon_status::DaemonStatus::Stopped => GRAY,
+                    crate::daemon_status::DaemonStatus::Completed => DIM_GREEN,
                     crate::daemon_status::DaemonStatus::Waiting => YELLOW,
                     crate::daemon_status::DaemonStatus::Stopping => YELLOW,
                     _ => RED,

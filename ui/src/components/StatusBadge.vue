@@ -47,6 +47,7 @@ function statusClass(s: string | null): string {
 
     &.running { background: @sf-success-12; color: @c-success; border-color: @sf-success-20; }
     &.stopped { background: @sf-3; color: @sf-30; border-color: @sf-8; }
+    &.completed { background: @sf-3; color: @c-success; border-color: @sf-success-20; }
     &.waiting, &.stopping { background: @sf-warning-8; color: @c-warning; border-color: @sf-warning-15; }
     &.failed, &.errored { background: @sf-danger-8; color: @c-danger; border-color: @sf-danger-15; }
     &.available { background: @sf-info-8; color: @c-info; border-color: @sf-info-15; }
@@ -59,6 +60,7 @@ function statusClass(s: string | null): string {
 
     &.running { background: @sf-success-10; color: @c-success; }
     &.stopped { background: @sf-4; color: @sf-30; }
+    &.completed { .status-completed(); }
     &.waiting, &.stopping { background: @sf-warning-8; color: @c-warning; }
     &.failed, &.errored { background: @sf-danger-8; color: @c-danger; }
     &.available { background: @sf-info-8; color: @c-info; }

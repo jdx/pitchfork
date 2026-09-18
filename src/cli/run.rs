@@ -90,6 +90,8 @@ impl Run {
 
         let opts = StartOptions {
             force: self.force,
+            // `run` is always a person asking for this command now.
+            on_directory_enter: false,
             shell_pid: None,
             delay: self.delay,
             output: self.output.clone(),

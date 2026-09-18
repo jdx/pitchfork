@@ -218,6 +218,7 @@ impl Supervisor {
                     daemon.boot_time,
                     boot_time,
                     true,
+                    daemon.oneshot,
                 );
                 warn!(
                     "daemon {} (pid {pid}) died while unmonitored; marking {status}",
@@ -253,6 +254,7 @@ impl Supervisor {
                     daemon.boot_time,
                     boot_time,
                     true,
+                    daemon.oneshot,
                 );
                 warn!(
                     "pid {pid} recorded for daemon {} belongs to a different process now (PID recycled); marking {status}",
@@ -463,6 +465,7 @@ impl Supervisor {
         let hook_resolved_ports = daemon.resolved_port.clone();
         let hook_retry = daemon.retry;
         let hook_retry_count = daemon.retry_count;
+        let is_oneshot = daemon.oneshot;
 
         tokio::spawn(async move {
             let token = guard.token();
@@ -599,15 +602,32 @@ impl Supervisor {
             if owns_pid {
                 let new_status = match exit_reason {
                     "stop" => DaemonStatus::Stopped,
+                    // An adopted process is not this supervisor's child, so its
+                    // exit code cannot be read. For a task that is the wrong
+                    // guess to make: `errored` is what `check_retry` looks for,
+                    // and it would re-run a migration or seed that may well
+                    // have succeeded. Record the run as ended without claiming
+                    // either outcome, and leave re-running to an explicit
+                    // start.
+                    _ if is_oneshot => DaemonStatus::Stopped,
                     _ => DaemonStatus::Errored(exit_code),
                 };
                 // The poll monitor did observe this process die (it just cannot
                 // read the exit code of a non-child), so unlike the unobserved
                 // startup/reconciler cases it is meaningful to record whether
                 // the run ended intentionally.
-                let last_exit_success = exit_reason == "stop";
+                // For a task recorded as stopped above, the run's outcome is
+                // genuinely unknown: `Some(false)` would fabricate a failure
+                // and break a `cron.retrigger = "success"` chain whose run may
+                // well have succeeded. `None` says unknown, as the unobserved
+                // paths do.
+                let last_exit_success = match exit_reason {
+                    "stop" => Some(true),
+                    _ if is_oneshot => None,
+                    _ => Some(false),
+                };
                 if !SUPERVISOR
-                    .finalize_monitored_exit(&id, pid, token, new_status, Some(last_exit_success))
+                    .finalize_monitored_exit(&id, pid, token, new_status, last_exit_success)
                     .await
                 {
                     return;

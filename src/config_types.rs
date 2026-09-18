@@ -1407,6 +1407,33 @@ impl JsonSchema for StopSignal {
 }
 
 // ---------------------------------------------------------------------------
+// OneshotWait
+// ---------------------------------------------------------------------------
+
+/// How long to wait for a `oneshot` daemon to run to completion.
+///
+/// `Unlimited` is a genuinely absent deadline rather than a very large one:
+/// `supervisor.oneshot_timeout = "0"` promises no limit, and a substitute
+/// duration would silently break that promise for any task that outlived it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum OneshotWait {
+    /// Wait for as long as the task takes.
+    Unlimited,
+    /// Give up after this long and report a timeout.
+    For(std::time::Duration),
+}
+
+impl OneshotWait {
+    /// The deadline to apply, or `None` when the wait is unlimited.
+    pub fn duration(self) -> Option<std::time::Duration> {
+        match self {
+            OneshotWait::Unlimited => None,
+            OneshotWait::For(d) => Some(d),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StopConfig (string-or-object pattern)
 // ---------------------------------------------------------------------------
 
