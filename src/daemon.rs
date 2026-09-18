@@ -2,7 +2,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::pitchfork_toml::{
     CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, PortConfig,
-    ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, WatchMode,
+    ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, WatchMode,
 };
 use indexmap::IndexMap;
 use std::fmt::Display;
@@ -107,12 +107,6 @@ pub struct Daemon {
     /// Whether to proxy this daemon (None = inherit global proxy.enable setting).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy: Option<bool>,
-    /// How the proxy handles TLS for this daemon (None = `terminate`).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy_tls: Option<ProxyTlsMode>,
-    /// Which of this daemon's ports the proxy hostname maps to (None = first port).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy_tls_port: Option<u16>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub depends: Vec<DaemonId>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -210,12 +204,6 @@ pub struct RunOptions {
     /// Whether to proxy this daemon (None = inherit global proxy.enable setting).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy: Option<bool>,
-    /// How the proxy handles TLS for this daemon (None = `terminate`).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy_tls: Option<ProxyTlsMode>,
-    /// Which of this daemon's ports the proxy hostname maps to (None = first port).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub proxy_tls_port: Option<u16>,
     /// Unix user to run this daemon as.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user: Option<String>,
@@ -295,8 +283,6 @@ impl Daemon {
             mise: self.mise,
             slug: self.slug.clone(),
             proxy: self.proxy,
-            proxy_tls: self.proxy_tls,
-            proxy_tls_port: self.proxy_tls_port,
             user: self.user.clone(),
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,

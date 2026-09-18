@@ -1911,9 +1911,11 @@ pub(crate) async fn resolve_tls_mode(host: &str, tld: &str) -> ProxyTlsMode {
 
 /// Pick which of a running daemon's ports a hostname forwards to.
 ///
-/// Without `proxy_tls_port` this is the port the process was detected
-/// listening on, falling back to the first resolved port — the historical
-/// behavior, and the right answer for a single-port daemon.
+/// Without `proxy_tls_port`, a terminating hostname uses the port the process
+/// was detected listening on, falling back to the first resolved port — the
+/// historical behavior, and the right answer for a single-port daemon. A
+/// passthrough hostname reverses that order, because the first detected
+/// listener of a multi-port daemon need not be the one speaking TLS.
 ///
 /// With `proxy_tls_port` set, the configured port is matched by *position* in
 /// the daemon's `port` list, so the mapping survives auto-bump: a daemon
@@ -1923,9 +1925,19 @@ pub(crate) async fn resolve_tls_mode(host: &str, tld: &str) -> ProxyTlsMode {
 /// without declaring.
 fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> Option<u16> {
     let Some(want) = route.port else {
-        return daemon
-            .active_port
-            .or_else(|| daemon.resolved_port.first().copied());
+        // A passthrough hostname has to reach the daemon's *TLS* listener.
+        // `active_port` is whichever port was detected first, which on a
+        // multi-port daemon can be a secondary plain-HTTP or status listener
+        // that came up earlier, so the declared first port wins there — as
+        // documented. A terminating hostname keeps preferring the detected
+        // port, which is what routes daemons that declare no ports at all.
+        return if route.mode.is_passthrough() {
+            daemon.resolved_port.first().copied().or(daemon.active_port)
+        } else {
+            daemon
+                .active_port
+                .or_else(|| daemon.resolved_port.first().copied())
+        };
     };
 
     let configured = daemon
@@ -2397,6 +2409,25 @@ mod tests {
         let route = ProxyTlsRoute::default();
         let d = make_daemon(&[8443, 9443], &[8443, 9443], Some(8443));
         assert_eq!(select_daemon_port(&route, &d), Some(8443));
+    }
+
+    /// A passthrough hostname without `proxy_tls_port` takes the daemon's
+    /// declared first port rather than whichever listener was detected first:
+    /// on a multi-port daemon the detected one can be a secondary plain-HTTP
+    /// listener that came up before the TLS one.
+    #[test]
+    fn test_select_daemon_port_passthrough_prefers_declared_first_port() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: None,
+        };
+        let d = make_daemon(&[8443, 9080], &[8443, 9080], Some(9080));
+        assert_eq!(select_daemon_port(&route, &d), Some(8443));
+
+        // With nothing resolved, the detected port is still better than
+        // refusing to route.
+        let detected_only = make_daemon(&[], &[], Some(9080));
+        assert_eq!(select_daemon_port(&route, &detected_only), Some(9080));
     }
 
     /// With no detected port yet, the first resolved port is used.

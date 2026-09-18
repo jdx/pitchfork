@@ -218,8 +218,6 @@ pub fn build_placeholder_daemon(
         active_port: None,
         slug: None,
         proxy: None,
-        proxy_tls: daemon_config.proxy_tls,
-        proxy_tls_port: daemon_config.proxy_tls_port,
         memory_limit: daemon_config.memory_limit,
         cpu_limit: daemon_config.cpu_limit,
         ..Daemon::default()

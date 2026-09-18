@@ -10,6 +10,7 @@ use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::error::FileError;
 use crate::pitchfork_toml::CpuLimit;
+use crate::pitchfork_toml::CronRetrigger;
 use crate::pitchfork_toml::HealthCmd;
 use crate::pitchfork_toml::HealthHttp;
 use crate::pitchfork_toml::HealthPort;
@@ -23,7 +24,6 @@ use crate::pitchfork_toml::ReadyPort;
 use crate::pitchfork_toml::Retry;
 use crate::pitchfork_toml::StopConfig;
 use crate::pitchfork_toml::WatchMode;
-use crate::pitchfork_toml::{CronRetrigger, ProxyTlsMode};
 use crate::procs::PROCS;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -92,10 +92,6 @@ pub(crate) struct UpsertDaemonOpts {
     pub slug: Option<String>,
     /// Whether to proxy this daemon (None = use global proxy.enable setting).
     pub proxy: Option<bool>,
-    /// How the proxy handles TLS for this daemon (None = `terminate`).
-    pub proxy_tls: Option<ProxyTlsMode>,
-    /// Which of this daemon's ports the proxy hostname maps to (None = first port).
-    pub proxy_tls_port: Option<u16>,
     pub depends: Option<Vec<DaemonId>>,
     pub env: Option<IndexMap<String, String>>,
     pub watch: Option<Vec<String>>,
@@ -175,8 +171,6 @@ impl UpsertDaemonOpts {
             o.health_http = opts.health_http.clone();
             o.health_port = opts.health_port.clone();
             o.port = opts.port.clone();
-            o.proxy_tls = opts.proxy_tls;
-            o.proxy_tls_port = opts.proxy_tls_port;
             o.depends = Some(opts.depends.clone());
             o.env = opts.env.clone();
             o.watch = Some(opts.watch.clone());
@@ -314,10 +308,6 @@ impl Supervisor {
             mise: opts.mise.or(existing.and_then(|d| d.mise)),
             user: opts.user.or(existing.and_then(|d| d.user.clone())),
             proxy: opts.proxy.or(existing.and_then(|d| d.proxy)),
-            proxy_tls: opts.proxy_tls.or(existing.and_then(|d| d.proxy_tls)),
-            proxy_tls_port: opts
-                .proxy_tls_port
-                .or(existing.and_then(|d| d.proxy_tls_port)),
             // active_port is intentionally NOT inherited from the existing daemon.
             // When a daemon restarts, the new process has not yet bound a port, so
             // carrying over the old process's active_port would cause the proxy to

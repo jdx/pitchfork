@@ -96,6 +96,13 @@ impl List {
         let ns_filter = NamespaceFilter::from_flags(&self.namespace, self.project)?;
         let mut entries = get_all_daemons(&client, &ns_filter).await?;
         let global_slugs = PitchforkToml::read_global_slugs();
+        // Only needed to report each daemon's TLS mode, which is a config
+        // value; the read is served from the merged-config cache.
+        let proxy_config = if s.proxy.enable {
+            PitchforkToml::all_merged_all_namespaces().unwrap_or_default()
+        } else {
+            PitchforkToml::default()
+        };
 
         if !self.status.is_empty() {
             entries.retain(|entry| {
@@ -157,7 +164,7 @@ impl List {
                         available: entry.is_available,
                         proxy_tls: proxy_url
                             .as_ref()
-                            .map(|_| proxy_tls_mode(&entry.daemon).to_string()),
+                            .map(|_| proxy_tls_mode(&proxy_config, &entry.id).to_string()),
                         proxy_url,
                         error: entry.daemon.status.error_message(),
                         active_port: entry.daemon.active_port,
@@ -220,7 +227,7 @@ impl List {
                 // Only the non-default mode is called out: annotating every
                 // terminating daemon would add a column's worth of noise to
                 // the common case.
-                let mode = proxy_tls_mode(&entry.daemon);
+                let mode = proxy_tls_mode(&proxy_config, &entry.id);
                 if mode.is_passthrough() {
                     extra_parts.push(format!("{url} ({mode})"));
                 } else {
@@ -255,10 +262,20 @@ impl List {
 
 /// The TLS mode the proxy uses for a daemon's hostname.
 ///
-/// Daemons recorded before this setting existed, and those that never set it,
-/// report `terminate` — the behavior they have.
-pub fn proxy_tls_mode(daemon: &crate::daemon::Daemon) -> crate::pitchfork_toml::ProxyTlsMode {
-    daemon.proxy_tls.unwrap_or_default()
+/// Read from the daemon's config rather than from its recorded state, because
+/// that is where the router reads it too: a daemon that was started while the
+/// setting said `passthrough` is routed by whatever its config says now, and
+/// the displayed mode has to agree. A daemon the config no longer describes
+/// reports `terminate`, the mode it would be routed with.
+pub fn proxy_tls_mode(
+    config: &PitchforkToml,
+    id: &crate::daemon_id::DaemonId,
+) -> crate::pitchfork_toml::ProxyTlsMode {
+    config
+        .daemons
+        .get(id)
+        .and_then(|d| d.proxy_tls)
+        .unwrap_or_default()
 }
 
 /// Build the proxy URL for a daemon based on its slug and proxy settings.

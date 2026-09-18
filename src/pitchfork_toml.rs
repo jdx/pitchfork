@@ -2087,8 +2087,6 @@ impl PitchforkTomlDaemon {
             mise: self.mise,
             slug,
             proxy: None,
-            proxy_tls: self.proxy_tls,
-            proxy_tls_port: self.proxy_tls_port,
             user: self.user.clone(),
             memory_limit: self.memory_limit,
             cpu_limit: self.cpu_limit,

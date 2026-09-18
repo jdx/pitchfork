@@ -43,6 +43,13 @@ impl Status {
             .enable
             .then(PitchforkToml::read_global_slugs)
             .unwrap_or_default();
+        // The TLS mode is a config value, read here from the same place the
+        // router reads it so the two cannot disagree.
+        let proxy_config = if settings().proxy.enable {
+            PitchforkToml::all_merged_all_namespaces().unwrap_or_default()
+        } else {
+            PitchforkToml::default()
+        };
 
         // Try state file first, then fall back to config for "available" daemons.
         let (daemon, is_available): (Daemon, bool) =
@@ -70,7 +77,7 @@ impl Status {
             };
             let proxy_tls = proxy_url
                 .as_ref()
-                .map(|_| proxy_tls_mode(&daemon).to_string());
+                .map(|_| proxy_tls_mode(&proxy_config, &qualified_id).to_string());
             let entry = JsonStatusEntry {
                 id: qualified_id.qualified(),
                 namespace: qualified_id.namespace().to_string(),
@@ -114,7 +121,10 @@ impl Status {
             let slug =
                 PitchforkToml::find_slug_for_daemon_in_registry(&qualified_id, &global_slugs);
             if let Some(url) = build_proxy_url(slug.as_deref(), &s) {
-                println!("Proxy: {url} ({})", proxy_tls_mode(&daemon));
+                println!(
+                    "Proxy: {url} ({})",
+                    proxy_tls_mode(&proxy_config, &qualified_id)
+                );
             }
         }
         Ok(())
