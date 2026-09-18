@@ -233,10 +233,13 @@ impl Procs {
     /// live start time differs from the recorded one. Returns `Ok(false)` when
     /// nothing was signalled.
     ///
-    /// On Linux the process is pinned with a pidfd before the identity check,
-    /// so the PID cannot be recycled between the check and the signal. Other
-    /// platforms re-verify immediately before signalling, leaving a window no
-    /// wider than the daemon kill path has there.
+    /// On Linux the identity check binds a pidfd to the expected generation
+    /// and every signal is sent through that pidfd, so a PID recycled after
+    /// the check can never be reached: the pidfd keeps referring to the dead
+    /// generation and the kernel answers `ESRCH`. Windows holds an open
+    /// process handle for the same effect. Other Unix platforms re-verify
+    /// immediately before signalling, leaving a window no wider than the
+    /// daemon kill path has there.
     pub async fn kill_if_start_time_matches_async(
         &self,
         pid: u32,
@@ -257,6 +260,7 @@ impl Procs {
         .into_diagnostic()?
     }
 
+    #[cfg(target_os = "linux")]
     fn kill_if_start_time_matches(
         &self,
         pid: u32,
@@ -264,36 +268,118 @@ impl Procs {
         stop_signal: i32,
         stop_timeout: Option<std::time::Duration>,
     ) -> Result<bool> {
-        // Holding a pidfd keeps the kernel's pid entry referenced, so the PID
-        // number cannot be reused by another process while `_pin` lives —
-        // which covers the plain `kill(pid)` calls below.
-        #[cfg(target_os = "linux")]
-        let _pin = match open_pidfd(pid) {
-            Ok(pidfd) => Some(pidfd),
+        let pidfd = match open_pidfd(pid) {
+            Ok(pidfd) => pidfd,
             Err(err) if err.raw_os_error() == Some(libc::ESRCH) => {
                 debug!("process {pid} no longer exists");
                 return Ok(false);
             }
             Err(err) => {
-                debug!("failed to open pidfd for {pid}: {err}; falling back to start-time check");
-                None
+                return Err(miette::miette!(
+                    "cannot securely identify process {pid}: {err}"
+                ));
             }
         };
-        // Same idea on Windows: an open handle keeps the process object, and
-        // with it the PID, from being recycled.
+        // The pidfd refers to whichever process owned the PID when it was
+        // opened. Checking the start token now proves that is the expected
+        // generation; from here on only the pidfd is signalled, never the
+        // number, so a later recycle of the PID cannot be reached.
+        if !self.verify_start_time_before_signal(pid, expected_start_time)? {
+            return Ok(false);
+        }
+        let target = [(pid, pidfd)];
+        let signal_name = signal_name(stop_signal);
+        debug!("sending {signal_name} to pinned process {pid}");
+        signal_pidfds(&target, stop_signal, signal_name)?;
+
+        // Same polling schedule as `kill`: fast checks first, then 50ms steps
+        // for the rest of the stop timeout, then SIGKILL.
+        let stop_timeout = stop_timeout.unwrap_or_else(|| settings().supervisor_stop_timeout());
+        let fast_ms = 10u64;
+        let slow_ms = 50u64;
+        let total_ms = stop_timeout.as_millis().max(1) as u64;
+        let fast_count = ((total_ms / fast_ms) as usize).min(10);
+        let fast_total_ms = fast_ms * fast_count as u64;
+        let slow_count = (total_ms.saturating_sub(fast_total_ms) / slow_ms) as usize;
+        for i in 0..fast_count {
+            std::thread::sleep(std::time::Duration::from_millis(fast_ms));
+            if !pidfd_is_running(&target[0].1) {
+                debug!(
+                    "process {pid} terminated after {signal_name} ({} ms)",
+                    (i + 1) as u64 * fast_ms
+                );
+                return Ok(true);
+            }
+        }
+        for i in 0..slow_count {
+            std::thread::sleep(std::time::Duration::from_millis(slow_ms));
+            if !pidfd_is_running(&target[0].1) {
+                debug!(
+                    "process {pid} terminated after {signal_name} ({} ms)",
+                    fast_total_ms + (i + 1) as u64 * slow_ms
+                );
+                return Ok(true);
+            }
+        }
+
+        warn!(
+            "process {pid} did not respond to {signal_name} after {}ms, sending SIGKILL",
+            stop_timeout.as_millis()
+        );
+        signal_pidfds(&target, libc::SIGKILL, "SIGKILL")?;
+        // Brief wait for SIGKILL to take effect
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        Ok(true)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn kill_if_start_time_matches(
+        &self,
+        pid: u32,
+        expected_start_time: u64,
+        stop_signal: i32,
+        stop_timeout: Option<std::time::Duration>,
+    ) -> Result<bool> {
+        // An open handle keeps the Windows process object, and with it the
+        // PID, from being recycled until the handle is closed, so the
+        // identity verified below still holds for the taskkill in `kill`.
         #[cfg(windows)]
         let _pin = open_process_handle(pid).ok();
 
+        if !self.verify_start_time_before_signal(pid, expected_start_time)? {
+            return Ok(false);
+        }
+        self.kill(pid, stop_signal, stop_timeout, Some(expected_start_time))
+    }
+
+    /// Confirm that `pid` is still the generation `expected_start_time`
+    /// describes, immediately before it is signalled.
+    ///
+    /// Three answers are possible and callers must not conflate them:
+    /// `Ok(true)` when the token matches; `Ok(false)` when the process is
+    /// gone or a different generation now owns the PID, meaning there is
+    /// nothing of ours left to signal; and `Err` when the process is alive
+    /// but its token cannot be read. The last case is *not* proof of
+    /// termination — treating it as such would let `supervisor stop` drop
+    /// the record of a supervisor that keeps running — so it is reported as
+    /// a failure and the record is left alone.
+    fn verify_start_time_before_signal(&self, pid: u32, expected_start_time: u64) -> Result<bool> {
         match self.start_time(pid) {
-            Some(current) if current == expected_start_time => {}
-            current => {
+            Some(current) if current == expected_start_time => Ok(true),
+            Some(current) => {
                 warn!(
-                    "pid {pid} is not the recorded process (start time {current:?}, expected {expected_start_time}); not signalling it"
+                    "pid {pid} is not the recorded process (start time {current}, expected {expected_start_time}); not signalling it"
                 );
-                return Ok(false);
+                Ok(false)
+            }
+            None if self.is_running(pid) => Err(miette::miette!(
+                "cannot verify the identity of pid {pid}: its start time is unreadable; not signalling it"
+            )),
+            None => {
+                debug!("process {pid} no longer exists");
+                Ok(false)
             }
         }
-        self.kill(pid, stop_signal, stop_timeout)
     }
 
     /// Kill an entire process group with graceful shutdown strategy:
@@ -559,18 +645,7 @@ impl Procs {
             return Ok(false);
         }
 
-        self.kill(pid, 0, None)
-    }
-
-    pub async fn kill_async(
-        &self,
-        pid: u32,
-        stop_signal: i32,
-        stop_timeout: Option<std::time::Duration>,
-    ) -> Result<bool> {
-        tokio::task::spawn_blocking(move || PROCS.kill(pid, stop_signal, stop_timeout))
-            .await
-            .into_diagnostic()?
+        self.kill(pid, 0, None, expected_start_time)
     }
 
     /// Kill a process with graceful shutdown strategy:
@@ -582,17 +657,28 @@ impl Procs {
     ///
     /// Returns `Err` if the signal could not be sent (e.g. permission denied
     /// when targeting a process owned by another user/root).
+    ///
+    /// Signals by PID number, so callers must have pinned the process
+    /// identity first; on Linux the pidfd path in
+    /// `kill_if_start_time_matches` is used instead. When
+    /// `expected_start_time` is given, the start token is re-checked before
+    /// the SIGKILL escalation: if the process exited during the stop timeout
+    /// and its PID was recycled, the newcomer is left alone.
+    #[cfg(not(target_os = "linux"))]
     fn kill(
         &self,
         pid: u32,
         stop_signal: i32,
         stop_timeout: Option<std::time::Duration>,
+        expected_start_time: Option<u64>,
     ) -> Result<bool> {
         debug!("killing process {pid}");
 
         #[cfg(windows)]
         {
-            let _ = (stop_signal, stop_timeout);
+            // The caller holds an open process handle while this runs, which
+            // keeps the PID from being recycled, so no re-check is needed.
+            let _ = (stop_signal, stop_timeout, expected_start_time);
             // Use taskkill /F /T to kill the entire process tree.
             // sysinfo's process.kill() only kills the main process, leaving
             // child processes (e.g. python3 spawned by sh -c) orphaned and
@@ -693,7 +779,18 @@ impl Procs {
                 }
             }
 
-            // SIGKILL as last resort after stop_timeout
+            // SIGKILL as last resort after stop_timeout. The PID may have been
+            // recycled while we waited: the original exited and an unrelated
+            // process took its number, which the liveness polls above cannot
+            // tell apart. Re-check the generation before escalating.
+            if let Some(expected) = expected_start_time
+                && !self.start_time_matches(pid, expected)
+            {
+                debug!(
+                    "process {pid} exited during the stop timeout and its PID was recycled; not sending SIGKILL"
+                );
+                return Ok(true);
+            }
             warn!(
                 "process {pid} did not respond to {signal_name} after {}ms, sending SIGKILL",
                 stop_timeout.as_millis()
@@ -715,7 +812,7 @@ impl Procs {
     /// Check if a process is terminated or is a zombie.
     /// On Linux, zombie processes still have /proc/[pid] entries but are effectively dead.
     /// This prevents unnecessary signal escalation for processes that have already exited.
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "linux")))]
     fn is_terminated_or_zombie(&self, sysinfo_pid: sysinfo::Pid) -> bool {
         let system = self.lock_system();
         match system.process(sysinfo_pid) {

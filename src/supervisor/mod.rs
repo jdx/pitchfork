@@ -185,6 +185,22 @@ pub(crate) fn supervisor_record_is_live(record: &crate::daemon::Daemon) -> bool 
     if !PROCS.is_running(pid) {
         return false;
     }
+    if record.start_time.is_none() && record.boot_time.is_none() {
+        // A record from a supervisor older than v2.18.0 carries no identity
+        // at all, so nothing can contradict it. Rather than trust any live
+        // PID, require the process to at least be a pitchfork binary: that
+        // rejects the reboot case (an unrelated system daemon on the PID)
+        // while a still-running old supervisor stays recognisable.
+        PROCS.refresh_pids(&[pid]);
+        let title = PROCS.title(pid);
+        if legacy_supervisor_title_matches(title.as_deref()) {
+            return true;
+        }
+        warn!(
+            "pid {pid} recorded for the supervisor by an older pitchfork is now {title:?}, not a pitchfork process; treating the record as stale"
+        );
+        return false;
+    }
     if supervisor_identity_matches(
         record.start_time,
         PROCS.start_time(pid),
@@ -203,29 +219,41 @@ pub(crate) fn supervisor_record_is_live(record: &crate::daemon::Daemon) -> bool 
     false
 }
 
+/// Whether a live process name can be a pitchfork supervisor. Only used for
+/// legacy records that carry no start or boot time (see
+/// [`supervisor_record_is_live`]); an unreadable name is not accepted, since
+/// the record has nothing else vouching for it.
+pub(crate) fn legacy_supervisor_title_matches(title: Option<&str>) -> bool {
+    title.is_some_and(|t| t.to_ascii_lowercase().starts_with("pitchfork"))
+}
+
 /// Whether a live process can be the supervisor a state-file record describes.
 ///
-/// Two independent signals are checked, and a record is rejected when either
-/// positively contradicts it:
+/// The kernel start token is the identity, as in [`process_identity_matches`]:
+/// when both the recorded and the live token can be read, they alone decide.
+/// Equal tokens mean the same process generation; different tokens mean the
+/// PID was recycled, within this boot or across a reboot.
 ///
-/// - the kernel start token, which differs for every process generation that
-///   reuses a PID within one boot (same rule as [`signalling_pid_is_authorized`])
-/// - the boot time recorded alongside the PID, which catches the reboot case
-///   even on platforms or in states where start tokens cannot be read: a
-///   record from a previous boot cannot describe any process alive now.
-///
-/// Records that predate either field (`None`) are not contradicted by it, so
-/// a supervisor started by an older binary can still be recognised and
-/// stopped instead of becoming unstoppable.
+/// The recorded boot time is only consulted when a token is missing on either
+/// side. It must not veto matching tokens: on Linux and macOS the reported
+/// boot time is derived from the realtime clock, so an NTP step or a
+/// sleep/resume moves it while the supervisor keeps running, and treating that
+/// as a reboot would spawn a second supervisor and orphan the first. Without
+/// tokens, though, a boot time from a previous boot is the one thing that can
+/// still prove the record stale, and a record predating both fields is not
+/// contradicted by anything (callers apply a weaker check to those).
 pub(crate) fn supervisor_identity_matches(
     recorded_start_time: Option<u64>,
     current_start_time: Option<u64>,
     recorded_boot_time: Option<u64>,
     current_boot_time: u64,
 ) -> bool {
-    let same_boot = recorded_boot_time
-        .is_none_or(|recorded| recorded.abs_diff(current_boot_time) <= BOOT_TIME_TOLERANCE_SECS);
-    same_boot && signalling_pid_is_authorized(recorded_start_time, current_start_time)
+    match (recorded_start_time, current_start_time) {
+        (Some(recorded), Some(current)) => recorded == current,
+        _ => recorded_boot_time.is_none_or(|recorded| {
+            recorded.abs_diff(current_boot_time) <= BOOT_TIME_TOLERANCE_SECS
+        }),
+    }
 }
 
 pub fn start_in_background() -> Result<()> {
@@ -1833,8 +1861,9 @@ fn chmod_recursive(dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOT_TIME_TOLERANCE_SECS, process_identity_matches, should_remove_liveness_session,
-        signalling_pid_is_authorized, supervisor_identity_matches, unobserved_exit_status,
+        BOOT_TIME_TOLERANCE_SECS, legacy_supervisor_title_matches, process_identity_matches,
+        should_remove_liveness_session, signalling_pid_is_authorized, supervisor_identity_matches,
+        unobserved_exit_status,
     };
     use crate::daemon_status::DaemonStatus;
     use crate::state_file::ProjectSession;
@@ -1916,56 +1945,78 @@ mod tests {
     }
 
     #[test]
-    fn supervisor_identity_matches_same_generation_same_boot() {
+    fn supervisor_identity_matches_same_generation() {
         assert!(supervisor_identity_matches(
             Some(100),
             Some(100),
             Some(BOOT),
             BOOT
         ));
-        // Windows boot-time jitter must not read as a reboot.
+    }
+
+    #[test]
+    fn supervisor_identity_survives_clock_steps_when_tokens_match() {
+        // An NTP step or sleep/resume moves the realtime-derived boot time by
+        // far more than the tolerance while the supervisor keeps running.
+        // Matching start tokens prove it is the same process; declaring it
+        // stale here would start a second supervisor.
         assert!(supervisor_identity_matches(
             Some(100),
             Some(100),
             Some(BOOT),
-            BOOT + BOOT_TIME_TOLERANCE_SECS
+            BOOT + 3600
+        ));
+        assert!(supervisor_identity_matches(
+            Some(100),
+            Some(100),
+            Some(BOOT + 3600),
+            BOOT
         ));
     }
 
     #[test]
-    fn supervisor_identity_rejects_recycled_pid_in_same_boot() {
-        // The supervisor died and something else got its PID during this boot.
+    fn supervisor_identity_rejects_recycled_pid() {
+        // The supervisor died and something else got its PID, within this
+        // boot or across a reboot: the token differs either way.
         assert!(!supervisor_identity_matches(
             Some(100),
             Some(200),
             Some(BOOT),
             BOOT
         ));
+        assert!(!supervisor_identity_matches(
+            Some(100),
+            Some(200),
+            Some(BOOT),
+            BOOT + 3600
+        ));
     }
 
     #[test]
-    fn supervisor_identity_rejects_record_from_previous_boot() {
+    fn supervisor_identity_uses_boot_time_when_a_token_is_missing() {
         // Discussion #877: the record survived a reboot and an early system
-        // daemon now owns the PID. The boot time alone must reject it, even
-        // when the start token happens to be unreadable or equal.
+        // daemon now owns the PID. With no live token to compare, the boot
+        // time is what proves the record stale.
         assert!(!supervisor_identity_matches(
             Some(100),
             None,
             Some(BOOT),
             BOOT + 3600
         ));
-        assert!(!supervisor_identity_matches(
+        // Same boot (within Windows boot-time jitter) and no contradiction.
+        assert!(supervisor_identity_matches(
             Some(100),
-            Some(100),
+            None,
             Some(BOOT),
-            BOOT + BOOT_TIME_TOLERANCE_SECS + 1
+            BOOT + BOOT_TIME_TOLERANCE_SECS
         ));
     }
 
     #[test]
     fn supervisor_identity_tolerates_legacy_records() {
         // A record written before either field existed is not contradicted by
-        // anything, so the supervisor it describes stays recognisable.
+        // anything here; `supervisor_record_is_live` applies the process-name
+        // check to those instead.
         assert!(supervisor_identity_matches(None, Some(100), None, BOOT));
         // A record with only a boot time is still rejected across a reboot.
         assert!(!supervisor_identity_matches(
@@ -1974,13 +2025,25 @@ mod tests {
             Some(BOOT),
             BOOT + 3600
         ));
-        // An unreadable live start token alone is not a contradiction.
         assert!(supervisor_identity_matches(
-            Some(100),
             None,
+            Some(100),
             Some(BOOT),
             BOOT
         ));
+    }
+
+    #[test]
+    fn legacy_supervisor_title_requires_a_pitchfork_process() {
+        assert!(legacy_supervisor_title_matches(Some("pitchfork")));
+        assert!(legacy_supervisor_title_matches(Some("pitchfork.exe")));
+        assert!(legacy_supervisor_title_matches(Some("Pitchfork")));
+        // Discussion #877: an Apple LaunchAgent inherited the PID after a reboot.
+        assert!(!legacy_supervisor_title_matches(Some(
+            "AMPDeviceDiscoveryAgent"
+        )));
+        assert!(!legacy_supervisor_title_matches(Some("sleep")));
+        assert!(!legacy_supervisor_title_matches(None));
     }
 
     #[test]

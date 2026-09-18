@@ -121,6 +121,29 @@ start_bystander() {
   wait "$bystander" 2>/dev/null || true
 }
 
+@test "supervisor stop does not trust a legacy record that names a non-pitchfork process" {
+  skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
+  pitchfork supervisor stop >/dev/null 2>&1 || true
+
+  local bystander
+  bystander="$(start_bystander)"
+  # No identity fields at all, as written by pitchfork before v2.18.0. The
+  # live process must at least be a pitchfork binary to be trusted.
+  write_stale_supervisor_record "$bystander"
+
+  run pitchfork supervisor stop
+  assert_success
+  assert_output --partial "not running"
+  refute_output --partial "Stopped pitchfork daemon"
+
+  pid_alive "$bystander"
+  run get_supervisor_pid
+  assert_output ""
+
+  kill "$bystander" 2>/dev/null || true
+  wait "$bystander" 2>/dev/null || true
+}
+
 @test "supervisor start replaces a stale supervisor record without --force" {
   skip_on_windows "background job PIDs are MSYS PIDs, not Windows PIDs"
   pitchfork supervisor stop >/dev/null 2>&1 || true

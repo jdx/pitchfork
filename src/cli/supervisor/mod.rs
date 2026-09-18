@@ -72,19 +72,15 @@ pub async fn kill_or_stop(record: &Daemon, force: bool) -> Result<KillOrStopOutc
     }
     debug!("killing pid {existing_pid}");
     let stop_signal: i32 = StopSignal::default().into();
-    let killed = match record.start_time {
-        // Bind the kill to the recorded process generation so a PID recycled
-        // between the check above and the signal is still refused.
-        Some(start_time) => {
-            PROCS
-                .kill_if_start_time_matches_async(existing_pid, Some(start_time), stop_signal, None)
-                .await
-        }
-        // A record written by a supervisor that predates start-time tracking
-        // has nothing to bind to; it was already accepted as live above (same
-        // boot, if known), so stop it the way it always was.
-        None => PROCS.kill_async(existing_pid, stop_signal, None).await,
-    };
+    // Bind the kill to a process generation so a PID recycled between the
+    // check above and the signal is still refused. A legacy record without a
+    // start time was just verified to be a live pitchfork process, so bind to
+    // the generation observed now; if no start token can be read at all the
+    // kill is refused rather than sent to a bare PID.
+    let expected_start_time = record.start_time.or_else(|| PROCS.start_time(existing_pid));
+    let killed = PROCS
+        .kill_if_start_time_matches_async(existing_pid, expected_start_time, stop_signal, None)
+        .await;
     match killed {
         Ok(true) => Ok(KillOrStopOutcome::Killed),
         Ok(false) => Ok(KillOrStopOutcome::AlreadyDead),
