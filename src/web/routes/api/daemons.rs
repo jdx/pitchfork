@@ -155,11 +155,13 @@ fn entry_to_api(
         memory_bytes: mem,
         uptime_secs: uptime,
         proxy_url: if d.status.is_running() {
-            let slug = crate::pitchfork_toml::PitchforkToml::find_slug_for_daemon_in_registry(
+            let config = crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok();
+            let host = crate::proxy::hostname::host_for_daemon(
                 &entry.id,
+                config.as_ref().and_then(|pt| pt.daemons.get(&entry.id)),
                 global_slugs,
             );
-            crate::proxy::build_proxy_url(slug.as_deref(), settings)
+            crate::proxy::build_proxy_url(host.as_deref(), settings)
         } else {
             None
         },

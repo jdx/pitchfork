@@ -91,7 +91,7 @@ The reverse proxy routes requests from stable URLs to the daemon's actual port.
 Without the proxy, you need to know the actual port your daemon is running on — which can change if ports are auto-bumped. With the proxy:
 
 ```
-https://myapp.localhost  →  http://localhost:3001
+https://api.myproject.localhost  →  http://localhost:3001
 ```
 
 The URL stays the same even if the port changes. This is especially useful for:
@@ -113,25 +113,94 @@ https = false
 port = 8088
 ```
 
-From a project that defines an `api` daemon:
+From a project directory named `myproject` that defines an `api` daemon with a
+port:
 
 ```sh
-pitchfork proxy add api
 pitchfork supervisor start --force
 pitchfork start api
 pitchfork proxy status
 ```
 
-Open `http://api.localhost:8088` in a browser that resolves `.localhost` names.
-The slug maps the URL to your project's `api` daemon. If its name is `server`
-instead, use `pitchfork proxy add api --daemon server` and start `server`.
+Open `http://api.myproject.localhost:8088` in a browser that resolves
+`.localhost` names. No registration step is needed: every daemon with a `port`
+gets a hostname.
 
 The supervisor reads proxy settings at startup; restart it after editing them.
 Continue below for standard ports, HTTPS, custom domains, and LAN access.
 
-### Slugs
+## Hostnames
 
-Slugs are defined in the global config (`~/.config/pitchfork/config.toml`) under `[slugs]`. Each slug maps to a project directory and (optionally) a specific daemon name:
+A hostname is built from three labels, read right to left:
+
+```
+<daemon>.<worktree>.<project>.<tld>   a daemon in a linked git worktree
+<daemon>.<project>.<tld>              a daemon in the primary checkout
+```
+
+The worktree label is omitted in the primary checkout, so the same daemon in a
+worktree and in the main checkout get distinct, predictable URLs:
+
+```
+https://api.myproject.localhost          # main checkout
+https://api.fix-login.myproject.localhost  # worktree at ../fix-login
+```
+
+### Where the labels come from
+
+| Label | Value |
+|-------|-------|
+| Project | The namespace's project name: the top-level `namespace` when the project declares one, otherwise the directory name of the primary checkout |
+| Worktree | The linked worktree's directory name, or its `worktree_label` |
+| Daemon | The daemon's name, or its `proxy = "<name>"` override |
+
+Every label is lowercased and reduced to `a-z`, `0-9` and `-`, so a worktree
+directory named `Fix Login` becomes `fix-login`. Two checkouts of one project
+whose labels reduce to the same string are a configuration error: neither is
+routed, and the supervisor log names both directories.
+
+To pin a worktree's label, set it in that worktree's own `pitchfork.toml`:
+
+```toml
+worktree_label = "fix-login"
+```
+
+### Opting out and renaming
+
+```toml
+[daemons.api]
+run = "node server.js"
+port = 3000
+
+[daemons.admin]
+run = "node admin.js"
+port = 3001
+proxy = false          # no hostname; reachable only on its port
+
+[daemons.web-frontend]
+run = "npm run dev"
+port = 5173
+proxy = "web"          # https://web.myproject.localhost
+```
+
+A daemon without a `port` is never routed.
+
+### Reserved addresses
+
+`<project>.<tld>` and `<worktree>.<project>.<tld>` belong to the project and
+stack pages, and never route to a daemon. Until those pages exist they serve a
+placeholder that lists the daemons in that checkout.
+
+One consequence: when a worktree label and a daemon name are the same word, the
+worktree wins. With a worktree labelled `api`, `api.myproject.localhost` is that
+stack's address, and the primary checkout's `api` daemon is reached through a
+different spelling or by renaming one of the two.
+
+### Slugs (legacy)
+
+Slugs predate hostnames and still work. They are defined in the global config
+(`~/.config/pitchfork/config.toml`) under `[slugs]`, and each maps to a project
+directory and (optionally) a specific daemon name:
 
 ```toml
 # ~/.config/pitchfork/config.toml
@@ -143,19 +212,9 @@ frontend = { dir = "/home/user/my-app", daemon = "dev" }
 docs = { dir = "/home/user/docs-site" }  # defaults daemon = "docs"
 ```
 
-### URL format
-
-Proxy URLs use this shape:
-
-```
-https://<slug>.<tld>
-```
-
-Examples:
-- `https://myapp.localhost` — standard HTTPS port 443, by default
-- `https://api.localhost:7777` — custom port
-
-### Managing slugs
+A slug is resolved before any hostname, so a slug that spells the same thing as
+a project label wins. New projects should use hostnames instead; `pitchfork
+proxy add` remains for the ones that already rely on a slug.
 
 ```bash
 # Add a slug for current directory
@@ -168,7 +227,7 @@ pitchfork proxy add api --dir /home/user/api --daemon server
 pitchfork proxy remove api
 # or: pitchfork proxy rm api
 
-# Show all slugs and their status
+# Show hostnames and slugs with their status
 pitchfork proxy status
 ```
 
@@ -177,8 +236,8 @@ pitchfork proxy status
 To use standard HTTP/HTTPS ports without the port number in URLs:
 
 ```
-http://api.localhost   (port 80)
-https://api.localhost  (port 443)
+http://api.myproject.localhost   (port 80)
+https://api.myproject.localhost  (port 443)
 ```
 
 ### Binding to Privileged Ports
@@ -329,8 +388,10 @@ pitchfork will maintain matching `/etc/hosts` entries such as:
 127.0.0.1 docs.test
 ```
 
-This works for registered slugs only. It is not wildcard DNS for arbitrary
-`*.test` names.
+This works for registered slugs only. Automatic hostnames are not written to
+`/etc/hosts`, and this is not wildcard DNS for arbitrary `*.test` names. With
+the default `.localhost` TLD, browsers resolve hostnames on their own, so this
+matters only for a custom TLD.
 
 If pitchfork cannot write `/etc/hosts`, you still need to provide DNS
 resolution yourself, for example with `dnsmasq` or platform-specific resolver
@@ -340,9 +401,10 @@ configuration.
 ## Wildcard Subdomain Matching
 
 When `proxy.wildcard = true` (the default), the proxy matches not only exact
-slug hostnames but also their subdomains. For example, with slug `myapp`
-registered, both `myapp.localhost` and `tenant.myapp.localhost` route to the
-same daemon.
+hostnames but also their subdomains. Extra labels on the left route to the same
+daemon, so `api.myproject.localhost` and `tenant.api.myproject.localhost` reach
+the same place. The same holds for a legacy slug: `myapp.localhost` and
+`tenant.myapp.localhost` both route to `myapp`.
 
 However, whether the subdomain actually resolves depends on the TLD:
 
@@ -488,21 +550,28 @@ auto_start_timeout = "60s"
 
 Illustrative output with HTTPS on the default port:
 
-Proxy URLs are shown in CLI output when the proxy is enabled and the daemon has a registered slug:
+Proxy URLs are shown in CLI output when the proxy is enabled and the daemon is routable:
 
 ```bash
 $ pitchfork start api
 Daemon 'myproject/api' started on port(s): 3000
-  → Proxy: https://api.localhost
+  → Proxy: https://api.myproject.localhost
 
 $ pitchfork list
 Name   PID    Status   Proxy URL
-api    12345  running  https://api.localhost
+api    12345  running  https://api.myproject.localhost
 
 $ pitchfork status api
 Name: myproject/api
 PID: 12345
 Status: running
 Port: 3000 (active)
-Proxy: https://api.localhost
+Proxy: https://api.myproject.localhost
 ```
+
+`pitchfork proxy status` lists every hostname grouped by project and worktree,
+and `pitchfork status --json` carries the same URL in a `url` field. The daemon
+itself receives it as `PITCHFORK_URL`, and configuration templates can reference
+it as <code v-pre>{{ url }}</code> or another daemon's as
+<code v-pre>{{ daemons.api.url }}</code>. See
+[configuration templates](configuration-templates.md#proxy-url).

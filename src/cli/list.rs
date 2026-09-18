@@ -96,6 +96,13 @@ impl List {
         let ns_filter = NamespaceFilter::from_flags(&self.namespace, self.project)?;
         let mut entries = get_all_daemons(&client, &ns_filter).await?;
         let global_slugs = PitchforkToml::read_global_slugs();
+        // Hostnames are derived from where each daemon's config lives, so the
+        // full cross-namespace config is needed to build them.
+        let host_config = s
+            .proxy
+            .enable
+            .then(PitchforkToml::all_merged_all_namespaces)
+            .and_then(|r| r.ok());
 
         if !self.status.is_empty() {
             entries.retain(|entry| {
@@ -139,11 +146,14 @@ impl List {
                         && (entry.daemon.active_port.is_some()
                             || !entry.daemon.resolved_port.is_empty())
                     {
-                        let slug = PitchforkToml::find_slug_for_daemon_in_registry(
+                        let host = crate::proxy::hostname::host_for_daemon(
                             &entry.id,
+                            host_config
+                                .as_ref()
+                                .and_then(|pt| pt.daemons.get(&entry.id)),
                             &global_slugs,
                         );
-                        build_proxy_url(slug.as_deref(), &s)
+                        build_proxy_url(host.as_deref(), &s)
                     } else {
                         None
                     };
@@ -155,7 +165,8 @@ impl List {
                         status: status_text,
                         disabled: entry.is_disabled,
                         available: entry.is_available,
-                        proxy_url,
+                        proxy_url: proxy_url.clone(),
+                        url: proxy_url,
                         error: entry.daemon.status.error_message(),
                         active_port: entry.daemon.active_port,
                         port: entry.daemon.resolved_port.clone(),
@@ -200,9 +211,14 @@ impl List {
             // co-occur, so color follows priority: error > disabled > proxy.
             let error_msg = entry.daemon.status.error_message().unwrap_or_default();
             let proxy_url = if s.proxy.enable {
-                let slug =
-                    PitchforkToml::find_slug_for_daemon_in_registry(&entry.id, &global_slugs);
-                build_proxy_url(slug.as_deref(), &s).filter(|_| {
+                let host = crate::proxy::hostname::host_for_daemon(
+                    &entry.id,
+                    host_config
+                        .as_ref()
+                        .and_then(|pt| pt.daemons.get(&entry.id)),
+                    &global_slugs,
+                );
+                build_proxy_url(host.as_deref(), &s).filter(|_| {
                     entry.daemon.active_port.is_some() || !entry.daemon.resolved_port.is_empty()
                 })
             } else {

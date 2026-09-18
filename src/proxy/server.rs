@@ -236,6 +236,56 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
     new_entries
 }
 
+// ─── Hostname registry cache ────────────────────────────────────────────────
+//
+// The automatic `<daemon>.<worktree>.<project>` hostnames are resolved against
+// a registry built from every project pitchfork knows about.  Building it reads
+// configuration files and enumerates git worktrees, so the result is cached
+// with the same short TTL as the slug table.
+
+struct RegistryCache {
+    registry: Arc<crate::proxy::hostname::HostRegistry>,
+    expires_at: std::time::Instant,
+}
+
+static HOST_REGISTRY: once_cell::sync::Lazy<tokio::sync::Mutex<RegistryCache>> =
+    once_cell::sync::Lazy::new(|| {
+        tokio::sync::Mutex::new(RegistryCache {
+            registry: Arc::new(crate::proxy::hostname::HostRegistry::default()),
+            expires_at: std::time::Instant::now(), // expired -> built on first access
+        })
+    });
+
+/// Return a snapshot of the cached hostname registry, rebuilding if expired.
+pub async fn get_cached_host_registry() -> Arc<crate::proxy::hostname::HostRegistry> {
+    {
+        let cache = HOST_REGISTRY.lock().await;
+        if std::time::Instant::now() < cache.expires_at {
+            return Arc::clone(&cache.registry);
+        }
+    } // lock released before disk I/O
+
+    let registry = Arc::new(
+        tokio::task::spawn_blocking(crate::proxy::hostname::HostRegistry::build)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to refresh hostname registry: {e}");
+                crate::proxy::hostname::HostRegistry::default()
+            }),
+    );
+    for err in &registry.errors {
+        log::warn!("{err}");
+    }
+
+    {
+        let mut cache = HOST_REGISTRY.lock().await;
+        cache.registry = Arc::clone(&registry);
+        cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
+    }
+
+    registry
+}
+
 /// Try to match a subdomain against a slug table, with optional wildcard fallback.
 ///
 /// When `wildcard` is true and no exact match is found, progressively strips
@@ -346,6 +396,15 @@ enum ResolveResult {
     Starting { slug: String },
     /// No matching slug or daemon found.
     NotFound,
+    /// The hostname is reserved for a project or stack page, which a later
+    /// change will serve.  It must never fall through to a daemon.
+    Page {
+        project: String,
+        worktree: Option<String>,
+        daemons: Vec<String>,
+    },
+    /// The hostname named a project or daemon that does not exist.
+    Unknown { heading: String, known: Vec<String> },
     /// Routing refused with a descriptive reason.
     Error(String),
 }
@@ -1287,6 +1346,22 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
             ResolveResult::Starting { slug } => {
                 return starting_html_response(&slug, &raw_host);
             }
+            ResolveResult::Page {
+                project,
+                worktree,
+                daemons,
+            } => {
+                return page_placeholder_response(
+                    &project,
+                    worktree.as_deref(),
+                    &daemons,
+                    &state.tld,
+                    &host_port_suffix(&raw_host),
+                );
+            }
+            ResolveResult::Unknown { heading, known } => {
+                return unknown_host_response(&host, &heading, &known);
+            }
             ResolveResult::NotFound => {
                 return error_response(
                     StatusCode::BAD_GATEWAY,
@@ -1489,7 +1564,9 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
     };
 
     let Some(cached) = cached_slug_lookup(&subdomain).await else {
-        return ResolveResult::NotFound;
+        // No legacy slug matched; fall through to the automatic
+        // `<daemon>.<worktree>.<project>` hostnames.
+        return resolve_registry_target(&subdomain).await;
     };
 
     // ─── Worktree prefix extraction ──────────────────────────────────────
@@ -1762,6 +1839,243 @@ async fn try_auto_start_inner(
 
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+/// Resolve a hostname against the automatic hostname registry.
+///
+/// Runs only after the legacy `[slugs]` registry found no match, so a slug
+/// keeps precedence over an automatic hostname that spells the same thing.
+async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
+    let registry = get_cached_host_registry().await;
+    match registry.resolve(subdomain, settings().proxy.wildcard) {
+        crate::proxy::hostname::HostTarget::Daemon {
+            dir,
+            namespace,
+            daemon,
+            ..
+        } => resolve_registry_daemon(subdomain, &dir, &namespace, &daemon).await,
+        crate::proxy::hostname::HostTarget::ProjectPage { project } => {
+            let daemons = registry
+                .projects
+                .get(&project)
+                .map(|p| p.primary.labels())
+                .unwrap_or_default();
+            ResolveResult::Page {
+                project,
+                worktree: None,
+                daemons,
+            }
+        }
+        crate::proxy::hostname::HostTarget::WorktreePage { project, worktree } => {
+            let daemons = registry
+                .projects
+                .get(&project)
+                .and_then(|p| p.worktrees.get(&worktree))
+                .map(|c| c.labels())
+                .unwrap_or_default();
+            ResolveResult::Page {
+                project,
+                worktree: Some(worktree),
+                daemons,
+            }
+        }
+        crate::proxy::hostname::HostTarget::UnknownProject { known } => ResolveResult::Unknown {
+            heading: "Unknown project".to_string(),
+            known,
+        },
+        crate::proxy::hostname::HostTarget::UnknownDaemon {
+            project,
+            worktree,
+            known,
+        } => ResolveResult::Unknown {
+            heading: match worktree {
+                Some(wt) => format!("Unknown daemon in '{wt}' of project '{project}'"),
+                None => format!("Unknown daemon in project '{project}'"),
+            },
+            known,
+        },
+    }
+}
+
+/// Find the running daemon behind an automatic hostname, auto-starting it when
+/// it is not running.
+///
+/// Several checkouts of one project can share a namespace when the project
+/// declares one explicitly, so a daemon running in the matching directory is
+/// preferred over one that merely shares the name.
+async fn resolve_registry_daemon(
+    host: &str,
+    dir: &std::path::Path,
+    namespace: &str,
+    daemon: &str,
+) -> ResolveResult {
+    let daemons = {
+        let state_file = SUPERVISOR.state_file.lock().await;
+        state_file.daemons.clone()
+    };
+
+    let mut matches: Vec<&crate::daemon::Daemon> = daemons
+        .iter()
+        .filter(|(id, d)| {
+            id.name() == daemon && id.namespace() == namespace && d.status.is_running()
+        })
+        .map(|(_, d)| d)
+        .collect();
+    matches.sort_by_key(|d| d.dir.as_deref() != Some(dir));
+
+    if let Some(d) = matches.first() {
+        return match d.active_port.or_else(|| d.resolved_port.first().copied()) {
+            Some(port) => ResolveResult::Ready(port),
+            None => ResolveResult::NotFound,
+        };
+    }
+
+    let cached = CachedSlugEntry {
+        slug: host.to_string(),
+        namespace: Some(namespace.to_string()),
+        daemon_name: daemon.to_string(),
+        dir: dir.to_path_buf(),
+        worktrees: vec![],
+        rejected_worktree_prefixes: std::collections::HashSet::new(),
+    };
+    try_auto_start(host, &cached, None, Some(namespace)).await
+}
+
+/// Escape the five characters that change the meaning of HTML text.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+/// Wrap body markup in the shared pitchfork page chrome.
+fn html_page(status: StatusCode, title: &str, body: String) -> Response {
+    let html = format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} — pitchfork</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0f1117;
+            color: #e1e4e8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }}
+        .container {{ max-width: 640px; padding: 2rem; }}
+        h1 {{ font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem; }}
+        p {{ color: #8b949e; font-size: 0.9rem; margin-bottom: 0.75rem; }}
+        ul {{ list-style: none; margin: 0.5rem 0 1rem; }}
+        li {{ margin: 0.25rem 0; }}
+        code, a {{
+            color: #58a6ff;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            text-decoration: none;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">{body}</div>
+</body>
+</html>"##
+    );
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .unwrap_or_else(|_| (status, title.to_string()).into_response())
+}
+
+/// The `:port` part of a Host header, or an empty string when it carries none.
+///
+/// Links on pitchfork's own pages keep the port the request arrived on, so they
+/// still work when the proxy listens somewhere other than 80 or 443.
+fn host_port_suffix(raw_host: &str) -> String {
+    let port = if raw_host.starts_with('[') {
+        raw_host.split_once("]:").map(|(_, port)| port)
+    } else {
+        raw_host.rsplit_once(':').map(|(_, port)| port)
+    };
+    port.filter(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty())
+        .map(|p| format!(":{p}"))
+        .unwrap_or_default()
+}
+
+/// Serve the placeholder for a reserved project or stack hostname.
+///
+/// `<project>.<tld>` and `<worktree>.<project>.<tld>` belong to the project and
+/// stack pages.  Until those pages exist this placeholder stands in, so the
+/// hostname never resolves to whichever daemon shares its name.
+fn page_placeholder_response(
+    project: &str,
+    worktree: Option<&str>,
+    daemons: &[String],
+    tld: &str,
+    port_suffix: &str,
+) -> Response {
+    let heading = match worktree {
+        Some(wt) => format!("{} · {}", escape_html(project), escape_html(wt)),
+        None => escape_html(project),
+    };
+    let suffix = match worktree {
+        Some(wt) => format!(
+            "{}.{}.{}",
+            escape_html(wt),
+            escape_html(project),
+            escape_html(tld)
+        ),
+        None => format!("{}.{}", escape_html(project), escape_html(tld)),
+    };
+    let list = if daemons.is_empty() {
+        "<p>No daemon in this checkout has a port configured.</p>".to_string()
+    } else {
+        let items: String = daemons
+            .iter()
+            .map(|d| {
+                let d = escape_html(d);
+                format!("<li><a href=\"//{d}.{suffix}{port_suffix}\">{d}.{suffix}</a></li>")
+            })
+            .collect();
+        format!("<p>Daemons here:</p><ul>{items}</ul>")
+    };
+    let body = format!(
+        "<h1>{heading}</h1>\
+         <p>This address is reserved for the {page} page, which is not built yet.</p>\
+         {list}",
+        page = if worktree.is_some() {
+            "stack"
+        } else {
+            "project"
+        },
+    );
+    html_page(StatusCode::OK, "pitchfork", body)
+}
+
+/// Serve the 404 page for a hostname whose project or daemon does not exist.
+fn unknown_host_response(host: &str, heading: &str, known: &[String]) -> Response {
+    let list = if known.is_empty() {
+        "<p>Nothing is registered under this name yet.</p>".to_string()
+    } else {
+        let items: String = known
+            .iter()
+            .map(|k| format!("<li><code>{}</code></li>", escape_html(k)))
+            .collect();
+        format!("<p>Known names:</p><ul>{items}</ul>")
+    };
+    let body = format!(
+        "<h1>{heading}</h1><p>No route for <code>{host}</code>.</p>{list}",
+        heading = escape_html(heading),
+        host = escape_html(host),
+    );
+    html_page(StatusCode::NOT_FOUND, "Not found", body)
 }
 
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
@@ -2274,5 +2588,15 @@ mod tests {
         join_cookie_fields(&mut headers);
 
         assert!(headers.get(COOKIE).is_none());
+    }
+
+    #[test]
+    fn test_host_port_suffix() {
+        assert_eq!(host_port_suffix("api.myproj.localhost:8088"), ":8088");
+        assert_eq!(host_port_suffix("api.myproj.localhost"), "");
+        assert_eq!(host_port_suffix("[::1]:8088"), ":8088");
+        assert_eq!(host_port_suffix("[::1]"), "");
+        // A non-numeric tail is not a port and must not reach a link.
+        assert_eq!(host_port_suffix("host:notaport"), "");
     }
 }

@@ -663,7 +663,7 @@ impl Supervisor {
         );
 
         // Inject proxy-related environment variables
-        inject_proxy_env(&mut cmd, &opts.slug);
+        inject_proxy_env(&mut cmd, &daemon_proxy_host(&opts));
 
         #[cfg(unix)]
         {
@@ -2666,18 +2666,18 @@ mod tests {
 /// - `NODE_EXTRA_CA_CERTS` — path to the pitchfork CA cert (if HTTPS enabled)
 /// - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` — `.<tld>` for Vite host allowlisting
 /// - `PITCHFORK_LAN` — set to `"1"` when LAN mode is active
-fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
+fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
     let s = crate::settings::settings();
     let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
 
-    if should_force_loopback_host(slug) && !lan_enabled {
-        // Only force loopback binding for daemons that are actually routed via a slug.
+    if s.proxy.enable && host.is_some() && !lan_enabled {
+        // Only force loopback binding for daemons the proxy actually routes to.
         // In LAN mode, daemons need to bind to 0.0.0.0 to be reachable from the network.
         cmd.env("HOST", "127.0.0.1");
     }
 
-    // PITCHFORK_URL: the daemon's public proxy URL (only if it has a slug and proxy is enabled)
-    if let Some(url) = build_pitchfork_url(slug, &s) {
+    // PITCHFORK_URL: the daemon's public proxy URL (only if it is routed and proxy is enabled)
+    if let Some(url) = build_pitchfork_url(host, &s) {
         cmd.env("PITCHFORK_URL", &url);
     }
 
@@ -2705,18 +2705,18 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
     }
 }
 
-fn should_force_loopback_host(slug: &Option<String>) -> bool {
-    let Some(slug) = slug.as_deref() else {
-        return false;
-    };
-
-    let s = crate::settings::settings();
-    if !s.proxy.enable {
-        return false;
+/// The hostname the proxy routes to this daemon, without the TLD.
+///
+/// A daemon registered under a legacy `[slugs]` entry keeps that spelling,
+/// because the proxy resolves slugs first. Otherwise the hostname is derived
+/// from where the daemon's configuration lives.
+fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
+    if opts.slug.is_some() {
+        return opts.slug.clone();
     }
-
-    let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    slugs.contains_key(slug)
+    let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(&opts.dir.0).ok()?;
+    let config = pt.daemons.get(&opts.id)?;
+    crate::proxy::hostname::auto_host_for_daemon(&opts.id, config)
 }
 
 /// Compute the public proxy URL for a daemon.

@@ -28,6 +28,8 @@ pub struct DaemonTemplateState {
     pub name: String,
     pub namespace: String,
     pub slug: Option<String>,
+    /// Hostname the proxy routes to this daemon, without the TLD.
+    pub host: Option<String>,
     pub dir: PathBuf,
 }
 
@@ -82,6 +84,7 @@ impl TemplateContext {
                 id,
                 &global_slugs,
             ),
+            host: crate::proxy::hostname::host_for_daemon(id, Some(daemon_config), &global_slugs),
             dir,
         };
 
@@ -101,6 +104,11 @@ impl TemplateContext {
                     namespace: dep_id.namespace().to_string(),
                     slug: crate::pitchfork_toml::PitchforkToml::find_slug_for_daemon_in_registry(
                         dep_id,
+                        &global_slugs,
+                    ),
+                    host: crate::proxy::hostname::host_for_daemon(
+                        dep_id,
+                        Some(config),
                         &global_slugs,
                     ),
                     dir: dep_dir,
@@ -140,6 +148,7 @@ impl TemplateContext {
         ctx.insert("namespace", &self.self_state.namespace);
         ctx.insert("id", &self.self_state.id);
         ctx.insert("slug", &self.self_state.slug);
+        ctx.insert("host", &self.self_state.host);
         ctx.insert("dir", &self.self_state.dir.to_string_lossy().to_string());
 
         // Daemons
@@ -168,8 +177,10 @@ impl TemplateContext {
 
         // Always expose proxy_url so templates can distinguish an unroutable daemon
         // via a strict null value instead of an undefined-variable error.
-        let proxy_url = build_proxy_url(self.self_state.slug.as_deref(), &s);
+        let proxy_url = build_proxy_url(self.self_state.host.as_deref(), &s);
         ctx.insert("proxy_url", &proxy_url);
+        // `url` is the current spelling; `proxy_url` stays for existing configs.
+        ctx.insert("url", &proxy_url);
 
         // Rendered env for this daemon (set via set_env after env rendering)
         if let Some(ref env) = self.env {
@@ -192,6 +203,8 @@ fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
         "name": state.name,
         "namespace": state.namespace,
         "slug": state.slug,
+        "host": state.host,
+        "url": build_proxy_url(state.host.as_deref(), &settings()),
         "dir": state.dir.to_string_lossy(),
     })
 }

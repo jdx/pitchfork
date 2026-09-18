@@ -4,10 +4,12 @@
 - **Usage:** `pitchfork proxy add [FLAGS] <SLUG>`
 - **Effect:** modifies state
 
-Add a slug mapping to the global config
+Add a slug mapping to the global config (legacy)
 
 Registers a slug in ~/.config/pitchfork/config.toml that maps to a project
-directory and daemon name. The proxy uses this to route requests.
+directory and daemon name. The proxy resolves slugs before the automatic
+per-daemon hostnames, such as api.myproject.localhost, which need no
+registration.
 
 If --dir is not specified, uses the current directory.
 If --daemon is not specified, defaults to the slug name.

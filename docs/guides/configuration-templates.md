@@ -68,7 +68,9 @@ The current daemon's own metadata is always available:
 | <code v-pre>{{ name }}</code> | Daemon short name | `"api"` |
 | <code v-pre>{{ namespace }}</code> | Daemon namespace | `"myproj"` |
 | <code v-pre>{{ id }}</code> | Qualified ID | `"myproj/api"` |
-| <code v-pre>{{ slug }}</code> | Proxy slug alias (or null) | `"myapi"` |
+| <code v-pre>{{ slug }}</code> | Legacy proxy slug alias (or null) | `"myapi"` |
+| <code v-pre>{{ host }}</code> | Proxy hostname without the TLD (or null) | `"api.myproj"` |
+| <code v-pre>{{ url }}</code> | Full proxy URL (or null) | `"https://api.myproj.localhost"` |
 | <code v-pre>{{ dir }}</code> | Resolved working directory | `"/home/user/myproj"` |
 
 ### Daemon References
@@ -83,7 +85,9 @@ Reference same-namespace daemons by their short name:
 | <code v-pre>{{ daemons.redis.id }}</code> | Qualified ID | `"myproj/redis"` |
 | <code v-pre>{{ daemons.redis.name }}</code> | Short name | `"redis"` |
 | <code v-pre>{{ daemons.redis.namespace }}</code> | Namespace | `"myproj"` |
-| <code v-pre>{{ daemons.redis.slug }}</code> | Slug alias | `"myredis"` |
+| <code v-pre>{{ daemons.redis.slug }}</code> | Legacy slug alias | `"myredis"` |
+| <code v-pre>{{ daemons.redis.host }}</code> | Proxy hostname without the TLD | `"redis.myproj"` |
+| <code v-pre>{{ daemons.redis.url }}</code> | Full proxy URL | `"https://redis.myproj.localhost"` |
 | <code v-pre>{{ daemons.redis.dir }}</code> | Working directory | `"/home/user/myproj"` |
 
 ::: tip
@@ -136,13 +140,25 @@ Global proxy settings are available:
 
 ### Proxy URL
 
-<code v-pre>{{ proxy_url }}</code> provides the full proxy URL for the current daemon when it has a registered slug:
+<code v-pre>{{ url }}</code> is the full proxy URL for the current daemon, and
+<code v-pre>{{ daemons.api.url }}</code> the URL of the daemon named `api`. Every
+daemon with a `port` has one; it is null for a daemon with no port or with
+`proxy = false`.
 
 ```toml
 [daemons.api]
-run = "echo {{ proxy_url }}"
-# Renders to: "echo https://myapi.localhost"
+run = "echo {{ url }}"
+# Renders to: "echo https://api.myproj.localhost"
+
+[daemons.worker]
+run = "./worker --api {{ daemons.api.url }}"
+# Renders to: "./worker --api https://api.myproj.localhost"
 ```
+
+The daemon's own URL also reaches it as `PITCHFORK_URL` in its environment,
+alongside `PORT`.
+
+<code v-pre>{{ proxy_url }}</code> is the former spelling of <code v-pre>{{ url }}</code> and still renders the same value.
 
 ## Resolution Order
 

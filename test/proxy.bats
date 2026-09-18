@@ -357,7 +357,9 @@ EOF
 # Proxy URL format tests
 # ============================================================================
 
-@test "daemons without slug never show proxy URL regardless of namespace" {
+# A hostname is derived from a daemon's `port`, so a daemon without one is not
+# routable and shows no URL, in any namespace.
+@test "daemons without a port never show proxy URL regardless of namespace" {
   # Test global namespace
   local proj_dir="$TEST_TEMP_DIR/proj-global"
   mkdir -p "$proj_dir"
@@ -451,4 +453,61 @@ EOF
   assert_success
   assert_output --partial "fields=1"
   assert_output --partial "cookie=_session=abc123; theme=dark"
+}
+
+# ============================================================================
+# Automatic hostname tests
+# ============================================================================
+
+@test "automatic hostname routes to a daemon without a registered slug" {
+  local proj="$TEST_TEMP_DIR/hostproj"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local http_script daemon_port proxy_port
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.api]
+run = 'python3 -u $http_script 0 $daemon_port'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/health"
+EOF
+
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT=$proxy_port \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run pitchfork start api
+  assert_success
+
+  # The hostname registry is cached for a couple of seconds, so the daemon's
+  # directory may not be in it the instant the daemon starts.
+  sleep 3
+
+  # <daemon>.<project>.<tld> reaches the daemon itself.
+  run curl -s -o /dev/null -w "%{http_code}" \
+    -H "Host: api.hostproj.localhost" \
+    "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output "200"
+
+  # <project>.<tld> is reserved for the project page and never routes to a daemon.
+  run curl -s -H "Host: hostproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output --partial "reserved"
+  assert_output --partial "api.hostproj.localhost"
+
+  # An unknown daemon of a known project is a 404 that lists the known names.
+  run curl -s -H "Host: nope.hostproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output --partial "Unknown daemon"
+  assert_output --partial "api"
+
+  run pitchfork stop api || true
+  kill_port "$daemon_port"
 }

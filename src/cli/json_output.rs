@@ -10,7 +10,10 @@ pub struct JsonListEntry {
     pub status: String,
     pub disabled: bool,
     pub available: bool,
+    /// Deprecated alias of `url`, kept so existing consumers keep working.
     pub proxy_url: Option<String>,
+    /// The daemon's proxy URL.
+    pub url: Option<String>,
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_port: Option<u16>,
@@ -27,7 +30,10 @@ pub struct JsonStatusEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_port: Option<u16>,
     pub port: Vec<u16>,
+    /// Deprecated alias of `url`, kept so existing consumers keep working.
     pub proxy_url: Option<String>,
+    /// The daemon's proxy URL.
+    pub url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -97,6 +103,40 @@ pub struct JsonProxyStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trusted: Option<bool>,
     pub slugs: Vec<JsonSlugEntry>,
+    /// Automatic hostnames, grouped by project and worktree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<JsonProxyProject>,
+}
+
+#[derive(Serialize)]
+pub struct JsonProxyProject {
+    pub project: String,
+    pub dir: String,
+    /// URL of the project page.
+    pub url: String,
+    pub daemons: Vec<JsonProxyHost>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub worktrees: Vec<JsonProxyWorktree>,
+}
+
+#[derive(Serialize)]
+pub struct JsonProxyWorktree {
+    pub worktree: String,
+    pub dir: String,
+    /// URL of the stack page.
+    pub url: String,
+    pub daemons: Vec<JsonProxyHost>,
+}
+
+#[derive(Serialize)]
+pub struct JsonProxyHost {
+    pub daemon: String,
+    /// Hostname without the TLD.
+    pub host: String,
+    pub url: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 #[derive(Serialize)]

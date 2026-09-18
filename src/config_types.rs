@@ -2511,3 +2511,81 @@ health_port = { port = 8443, retries = 0 }
         assert!(serialized.contains("health_port = 8443"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// ProxyConfig (bool or string)
+// ---------------------------------------------------------------------------
+
+/// Per-daemon proxy opt-out / label override.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// proxy = false        # no hostname is assigned to this daemon
+/// proxy = "web"        # use "web" as the daemon label instead of the daemon name
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyConfig {
+    /// `proxy = false` — the daemon is not reachable through the proxy.
+    Disabled,
+    /// `proxy = true` — the default; a hostname is derived from the daemon name.
+    Enabled,
+    /// `proxy = "<name>"` — the daemon label to use instead of the daemon name.
+    Name(String),
+}
+
+impl ProxyConfig {
+    /// The daemon label override, if one was configured.
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            ProxyConfig::Name(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Whether this daemon opted out of proxy routing.
+    pub fn is_disabled(&self) -> bool {
+        matches!(self, ProxyConfig::Disabled)
+    }
+}
+
+impl Serialize for ProxyConfig {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ProxyConfig::Disabled => s.serialize_bool(false),
+            ProxyConfig::Enabled => s.serialize_bool(true),
+            ProxyConfig::Name(name) => s.serialize_str(name),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProxyConfig {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Name(String),
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Bool(true) => ProxyConfig::Enabled,
+            Raw::Bool(false) => ProxyConfig::Disabled,
+            Raw::Name(name) => ProxyConfig::Name(name),
+        })
+    }
+}
+
+impl JsonSchema for ProxyConfig {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ProxyConfig")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Proxy routing: false = no hostname, true = default hostname, string = daemon label override",
+            "oneOf": [
+                { "type": "boolean" },
+                { "type": "string" }
+            ]
+        })
+    }
+}
