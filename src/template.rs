@@ -68,6 +68,15 @@ impl TemplateContext {
         daemon_configs: &IndexMap<DaemonId, PitchforkTomlDaemon>,
     ) -> Self {
         let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        // Deriving a hostname reads configuration and walks the project's
+        // checkouts. With the proxy off there is no URL to render either way,
+        // so `{{ host }}` and `{{ url }}` are null and the work is skipped.
+        let proxy_enabled = settings().proxy.enable;
+        let host_of = |id: &DaemonId, config: &PitchforkTomlDaemon| {
+            proxy_enabled
+                .then(|| crate::proxy::hostname::host_for_daemon(id, Some(config), &global_slugs))
+                .flatten()
+        };
         let effective_user = daemon_config.effective_user();
         let dir = crate::ipc::batch::resolve_daemon_dir(
             daemon_config.dir.as_deref(),
@@ -106,11 +115,7 @@ impl TemplateContext {
                         dep_id,
                         &global_slugs,
                     ),
-                    host: crate::proxy::hostname::host_for_daemon(
-                        dep_id,
-                        Some(config),
-                        &global_slugs,
-                    ),
+                    host: host_of(dep_id, config),
                     dir: dep_dir,
                 };
 

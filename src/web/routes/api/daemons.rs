@@ -214,6 +214,9 @@ fn entry_to_api(
 async fn proxy_hosts_for(
     ids: Vec<crate::daemon_id::DaemonId>,
 ) -> std::collections::HashMap<crate::daemon_id::DaemonId, String> {
+    if !crate::settings::settings().proxy.enable {
+        return std::collections::HashMap::new();
+    }
     tokio::task::spawn_blocking(move || {
         let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
         let config = crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok();

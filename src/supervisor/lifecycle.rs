@@ -2711,6 +2711,11 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
 /// because the proxy resolves slugs first. Otherwise the hostname is derived
 /// from where the daemon's configuration lives.
 async fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
+    // Nothing consumes a hostname while the proxy is off, and deriving one
+    // reads configuration and walks the project, so daemon starts skip it.
+    if !crate::settings::settings().proxy.enable {
+        return None;
+    }
     if opts.slug.is_some() {
         return opts.slug.clone();
     }
