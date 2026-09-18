@@ -109,7 +109,7 @@ fn api_status(status: &DaemonStatus, is_available: bool) -> ApiDaemonStatus {
 fn entry_to_api(
     entry: &DaemonListEntry,
     stats_map: &std::collections::HashMap<u32, crate::procs::ProcessStats>,
-    global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
+    hosts: &std::collections::HashMap<crate::daemon_id::DaemonId, String>,
     settings: &crate::settings::Settings,
 ) -> ApiDaemonEntry {
     let d = &entry.daemon;
@@ -155,13 +155,7 @@ fn entry_to_api(
         memory_bytes: mem,
         uptime_secs: uptime,
         proxy_url: if d.status.is_running() {
-            let config = crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok();
-            let host = crate::proxy::hostname::host_for_daemon(
-                &entry.id,
-                config.as_ref().and_then(|pt| pt.daemons.get(&entry.id)),
-                global_slugs,
-            );
-            crate::proxy::build_proxy_url(host.as_deref(), settings)
+            crate::proxy::build_proxy_url(hosts.get(&entry.id).map(String::as_str), settings)
         } else {
             None
         },
@@ -212,6 +206,32 @@ fn entry_to_api(
     }
 }
 
+/// The proxy hostname of each daemon, resolved once on a blocking worker.
+///
+/// Reading the slug registry and every project's configuration is file I/O, and
+/// deriving a hostname walks the project's checkouts, so it must not run on the
+/// thread serving the request.
+async fn proxy_hosts_for(
+    ids: Vec<crate::daemon_id::DaemonId>,
+) -> std::collections::HashMap<crate::daemon_id::DaemonId, String> {
+    tokio::task::spawn_blocking(move || {
+        let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        let config = crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces().ok();
+        ids.into_iter()
+            .filter_map(|id| {
+                let host = crate::proxy::hostname::host_for_daemon(
+                    &id,
+                    config.as_ref().and_then(|pt| pt.daemons.get(&id)),
+                    &global_slugs,
+                )?;
+                Some((id, host))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
     let entries = get_all_daemons_direct(&SUPERVISOR).await?;
 
@@ -227,13 +247,12 @@ async fn build_daemon_entries() -> crate::Result<Vec<ApiDaemonEntry>> {
         std::collections::HashMap::new()
     };
 
-    // Pre-load global slug registry once for proxy URL lookups
-    let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let hosts = proxy_hosts_for(entries.iter().map(|e| e.id.clone()).collect()).await;
     let settings = crate::settings::settings();
 
     Ok(entries
         .iter()
-        .map(|e| entry_to_api(e, &stats_map, &global_slugs, &settings))
+        .map(|e| entry_to_api(e, &stats_map, &hosts, &settings))
         .collect())
 }
 
@@ -267,15 +286,10 @@ pub async fn show(Path(id): Path<String>) -> Result<Json<ApiDaemonEntry>, axum::
         std::collections::HashMap::new()
     };
 
-    let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    let hosts = proxy_hosts_for(vec![entry.id.clone()]).await;
     let settings = crate::settings::settings();
 
-    Ok(Json(entry_to_api(
-        &entry,
-        &stats_map,
-        &global_slugs,
-        &settings,
-    )))
+    Ok(Json(entry_to_api(&entry, &stats_map, &hosts, &settings)))
 }
 
 pub async fn start(

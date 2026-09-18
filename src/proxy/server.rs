@@ -1932,19 +1932,21 @@ async fn resolve_registry_daemon(
         state_file.daemons.clone()
     };
 
-    let mut matches: Vec<&crate::daemon::Daemon> = daemons
+    let mut matches: Vec<crate::daemon::Daemon> = daemons
         .iter()
         .filter(|(id, d)| {
             id.name() == daemon && id.namespace() == namespace && d.status.is_running()
         })
-        .map(|(_, d)| d)
+        .map(|(_, d)| d.clone())
         .collect();
-    matches.sort_by_key(|d| !daemon_runs_in(d, dir));
+    // Attributing a daemon to a checkout walks the filesystem, so it happens off
+    // the request's worker thread.
+    matches = sort_by_checkout(matches, dir).await;
 
     if let Some(d) = matches.first() {
         // A running daemon from another checkout would serve that checkout's
         // content under this one's hostname, so say what is wrong instead.
-        if per_checkout && !daemon_runs_in(d, dir) {
+        if per_checkout && !runs_in_checkout(d.clone(), dir).await {
             return ResolveResult::Error(format!(
                 "'{host}' belongs to the checkout at {}, but daemon '{namespace}/{daemon}' is \
                  running from {}.\n\
@@ -1987,7 +1989,7 @@ async fn resolve_registry_daemon(
                 .map(|(_, d)| d.clone())
         };
         if let Some(d) = started
-            && !daemon_runs_in(&d, dir)
+            && !runs_in_checkout(d.clone(), dir).await
         {
             return ResolveResult::Error(format!(
                 "'{host}' belongs to the checkout at {}, but daemon '{namespace}/{daemon}' is \
@@ -2020,6 +2022,32 @@ fn daemon_runs_in(daemon: &crate::daemon::Daemon, checkout: &std::path::Path) ->
         .dir
         .as_deref()
         .is_some_and(|d| crate::proxy::hostname::checkout_root_of(d) == checkout)
+}
+
+/// [`daemon_runs_in`] off the async worker, since it walks the filesystem.
+async fn runs_in_checkout(daemon: crate::daemon::Daemon, checkout: &std::path::Path) -> bool {
+    let checkout = checkout.to_path_buf();
+    tokio::task::spawn_blocking(move || daemon_runs_in(&daemon, &checkout))
+        .await
+        .unwrap_or(false)
+}
+
+/// Order the candidates so that daemons running in this checkout come first.
+async fn sort_by_checkout(
+    daemons: Vec<crate::daemon::Daemon>,
+    checkout: &std::path::Path,
+) -> Vec<crate::daemon::Daemon> {
+    if daemons.len() < 2 {
+        return daemons;
+    }
+    let checkout = checkout.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut daemons = daemons;
+        daemons.sort_by_key(|d| !daemon_runs_in(d, &checkout));
+        daemons
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Escape the five characters that change the meaning of HTML text.

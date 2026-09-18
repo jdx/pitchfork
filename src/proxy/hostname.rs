@@ -1388,8 +1388,10 @@ mod tests {
             "{}",
             registry.errors[0]
         );
+        // The error names the checkout as the registry resolved it, which is
+        // not always how the test spelled the path.
         assert!(
-            registry.errors[0].contains(&b.display().to_string()),
+            registry.errors[0].contains(&canonical(&b).display().to_string()),
             "{}",
             registry.errors[0]
         );
