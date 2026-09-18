@@ -498,9 +498,10 @@ export function useProcessTree(id: Ref<string>, pollInterval = 3000) {
 /**
  * Poll a JSON endpoint, keeping the last good value on transient errors.
  *
- * Requests are serialized: a tick that fires while one is still in flight is
- * skipped rather than overlapping it, so an endpoint slower than the interval
- * still delivers its responses instead of having every one superseded.
+ * Requests never overlap, and a request made while one is in flight is not
+ * dropped: it runs as soon as the current one finishes. That matters after a
+ * start or stop, where the refresh must observe the new state rather than let
+ * an older in-flight poll write the pre-action one back.
  */
 function usePolledResource<T>(
   path: Ref<string | null>,
@@ -512,13 +513,13 @@ function usePolledResource<T>(
   // Bumped when the polled path changes, so a response for the previous
   // target is dropped instead of rendering under the new one.
   let generation = 0
-  let inFlight = false
+  let active: Promise<void> | null = null
+  let queued = false
 
-  async function refresh() {
+  async function fetchOnce() {
     const target = path.value
-    if (!target || inFlight) return
+    if (!target) return
     const current = generation
-    inFlight = true
     try {
       const value = await api<T>(target)
       if (current !== generation) return
@@ -528,9 +529,29 @@ function usePolledResource<T>(
       if (current !== generation) return
       error.value = e.message ?? 'Unknown error'
     } finally {
-      inFlight = false
+      // A response for an earlier path must not clear the new one's spinner.
       if (current === generation) loading.value = false
     }
+  }
+
+  function refresh(): Promise<void> {
+    if (active) {
+      // Coalesce concurrent callers into a single follow-up fetch.
+      queued = true
+      return active
+    }
+    active = (async () => {
+      try {
+        do {
+          queued = false
+          await fetchOnce()
+        } while (queued)
+      } finally {
+        active = null
+        queued = false
+      }
+    })()
+    return active
   }
 
   watchEffect((onCleanup) => {
@@ -538,9 +559,9 @@ function usePolledResource<T>(
     // These views are reused across routes, so drop the previous target's
     // payload before fetching the new one. Otherwise the old project's
     // worktrees stay on screen under the new title, and a 404 renders the
-    // previous page next to the error.
+    // previous page next to the error. An in-flight request is left to finish
+    // and discard its result: the generation bump makes it a no-op.
     generation++
-    inFlight = false
     data.value = null
     error.value = null
     loading.value = true
