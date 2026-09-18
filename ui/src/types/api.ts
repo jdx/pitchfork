@@ -122,6 +122,8 @@ export interface DaemonCounts {
   total: number
   running: number
   stopped: number
+  /** On the way up or down: waiting or stopping. */
+  transitioning: number
   failed: number
   available: number
 }
@@ -130,6 +132,8 @@ export interface ProjectSummary {
   name: string
   dir: string
   worktree_count: number
+  /** False when the registered directory no longer exists. */
+  dir_exists: boolean
   daemons: DaemonCounts
   last_activity: string | null
   url: string
@@ -144,6 +148,8 @@ export interface WorktreeSummary {
   is_primary: boolean
   /** False when the supervisor cannot resolve config for some of its daemons. */
   can_start: boolean
+  /** False when the worktree directory no longer exists. */
+  dir_exists: boolean
   group_count: number
   daemons: DaemonCounts
   last_activity: string | null
@@ -171,8 +177,12 @@ export interface Stack {
   is_primary: boolean
   /** False when `unresolvable_daemons` is non-empty. */
   can_start: boolean
-  /** Listed daemons the supervisor has no config or saved command for. */
+  /** Listed daemons the supervisor has no config for. */
   unresolvable_daemons: string[]
+  /** False when the worktree directory no longer exists. */
+  dir_exists: boolean
+  /** Why the worktree's config could not be read, when it could not be. */
+  config_error?: string
   groups: StackGroup[]
   ungrouped: DaemonEntry[]
   daemons: DaemonCounts
@@ -182,6 +192,7 @@ export interface Stack {
 export interface Project {
   name: string
   dir: string
+  dir_exists: boolean
   daemons: DaemonCounts
   last_activity: string | null
   worktrees: WorktreeSummary[]

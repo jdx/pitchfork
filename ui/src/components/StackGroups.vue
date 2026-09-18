@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import DaemonTable from './DaemonTable.vue'
-import { api, useGroupActions } from '@/composables/useApi'
-import { toast } from 'vue-sonner'
-import type { NamespaceEntry, Stack } from '@/types/api'
+import { useGroupActions } from '@/composables/useApi'
+import type { Stack } from '@/types/api'
 
 const props = defineProps<{ stack: Stack; prefersCard: boolean }>()
 const emit = defineEmits<{ refresh: [] }>()
@@ -17,7 +16,6 @@ const groups = computed(() => props.stack.groups)
 // The supervisor resolves daemon configs from its own project and from the
 // namespace registry. A worktree in neither is listed, but starting its
 // daemons would fail, so its actions stay disabled until it is registered.
-const startable = computed(() => props.stack.can_start)
 const unresolvable = computed(() => props.stack.unresolvable_daemons)
 const blockedReason =
   'The supervisor has no config for this daemon, so it cannot be started or restarted. '
@@ -28,42 +26,7 @@ const blockedReason =
 // This gates Start and Restart only: stopping works from the daemon's tracked
 // state and needs no config, so a running stack can always be taken down.
 function groupBlocked(groupName: string): boolean {
-  return ids(groupName).some(id => unresolvable.value.includes(id))
-}
-
-const registering = ref(false)
-async function registerWorktree() {
-  if (registering.value) return
-  registering.value = true
-  try {
-    // Registering under a name that is already bound elsewhere would silently
-    // repoint it, so the other directory's daemons would resolve from this
-    // worktree instead. Refuse rather than move someone else's namespace.
-    const existing = await api<NamespaceEntry[]>('/namespaces')
-    const clash = existing.find(
-      n => n.name === props.stack.namespace && n.dir !== props.stack.dir,
-    )
-    if (clash) {
-      toast.error(`Namespace ${clash.name} is already registered`, {
-        duration: 6000,
-        description:
-          `It points at ${clash.dir}. Give this worktree its own namespace in its `
-          + 'pitchfork.toml, then register it again.',
-      })
-      return
-    }
-    const res = await api<{ ok: boolean; name?: string; error?: string }>('/namespaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dir: props.stack.dir }),
-    })
-    toast.success(`Registered ${res.name ?? props.stack.namespace}`, { duration: 2000 })
-    emit('refresh')
-  } catch (e: any) {
-    toast.error('Register worktree failed', { duration: 4000, description: e.message })
-  } finally {
-    registering.value = false
-  }
+  return !props.stack.dir_exists || ids(groupName).some(id => unresolvable.value.includes(id))
 }
 
 function key(groupName: string): string {
@@ -100,17 +63,23 @@ async function onRestart(groupName: string) {
 
 <template>
   <div class="stack-groups">
-    <div v-if="!startable" class="unregistered">
-      <p>
-        The supervisor has no config for
-        <code>{{ stack.unresolvable_daemons.join(', ') }}</code>, so starting or restarting
-        them would fail. Stopping still works. Register this worktree as namespace
-        <code>{{ stack.namespace }}</code> to enable the rest.
-      </p>
-      <button class="act-btn" :disabled="registering" @click="registerWorktree">
-        Register worktree
-      </button>
-    </div>
+    <p v-if="!stack.dir_exists" class="notice">
+      <code>{{ stack.dir }}</code> no longer exists. Remove the
+      <code>[namespaces]</code> entry from your user config, or restore the directory.
+    </p>
+
+    <p v-else-if="stack.config_error" class="notice">
+      This worktree's config could not be read, so its groups are missing:
+      <code>{{ stack.config_error }}</code>
+    </p>
+
+    <p v-if="stack.dir_exists && unresolvable.length" class="notice">
+      The supervisor has no config for
+      <code>{{ unresolvable.join(', ') }}</code>, so starting or restarting them would
+      fail; stopping still works. Register <code>{{ stack.dir }}</code> as namespace
+      <code>{{ stack.namespace }}</code> under <code>[namespaces]</code> in your user
+      config, or run <code>pitchfork proxy add</code> from it, then reload.
+    </p>
 
     <section v-for="group in groups" :key="group.name" class="group" :class="{ primary: group.is_default }">
       <header class="group-header">
@@ -226,17 +195,9 @@ async function onRestart(groupName: string) {
 .act-start:hover:not(:disabled) { color: @c-success; }
 .act-stop:hover:not(:disabled) { color: @c-danger; }
 
-.unregistered {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: @space-md;
-  flex-wrap: wrap;
-
-  p {
-    margin: 0;
-    .font-sans(0.78rem; @c-warning; 500);
-  }
+.notice {
+  margin: 0;
+  .font-sans(0.78rem; @c-warning; 500);
 
   code { .font-mono(0.75rem; @sf-45); }
 }

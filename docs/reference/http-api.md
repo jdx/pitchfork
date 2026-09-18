@@ -193,8 +193,19 @@ curl http://127.0.0.1:3120/api/proxies
 ## GET /api/projects
 
 List every registered project with its worktree count and daemon totals.
-`last_activity` is the start time of the most recently started daemon in the
-project, or `null` when none of its daemons are running.
+
+A namespace registered on a linked worktree whose main checkout is also
+registered is folded into that checkout: it appears as one of its worktrees, not
+as a project, so `/api/projects/<that-namespace>` returns 404.
+
+`last_activity` is derived from process uptime, so it is the start time of the
+longest-running daemon currently up. A project with nothing running reports
+`null` even if its daemons ran earlier; the supervisor keeps no start timestamp
+for a stopped daemon.
+
+`dir_exists` is `false` when the registered directory is gone, which happens
+when a checkout is deleted and its `[namespaces]` entry is left behind. Such a
+project is still listed, with `can_start: false` on its worktrees.
 
 ```bash
 curl http://127.0.0.1:3120/api/projects
@@ -208,7 +219,7 @@ curl http://127.0.0.1:3120/api/projects
     "name": "shop",
     "dir": "/home/user/shop",
     "worktree_count": 2,
-    "daemons": { "total": 5, "running": 2, "stopped": 2, "failed": 0, "available": 1 },
+    "daemons": { "total": 5, "running": 2, "stopped": 2, "transitioning": 0, "failed": 0, "available": 1 },
     "last_activity": "2026-05-31T10:00:00+02:00",
     "url": "/projects/shop",
     "api_url": "/api/projects/shop"
@@ -243,7 +254,7 @@ curl http://127.0.0.1:3120/api/projects/shop
 {
   "name": "shop",
   "dir": "/home/user/shop",
-  "daemons": { "total": 5, "running": 2, "stopped": 2, "failed": 0, "available": 1 },
+  "daemons": { "total": 5, "running": 2, "stopped": 2, "transitioning": 0, "failed": 0, "available": 1 },
   "last_activity": "2026-05-31T10:00:00+02:00",
   "worktrees": [
     {
@@ -254,7 +265,7 @@ curl http://127.0.0.1:3120/api/projects/shop
       "is_primary": true,
       "can_start": true,
       "group_count": 2,
-      "daemons": { "total": 3, "running": 2, "stopped": 1, "failed": 0, "available": 0 },
+      "daemons": { "total": 3, "running": 2, "stopped": 1, "transitioning": 0, "failed": 0, "available": 0 },
       "last_activity": "2026-05-31T10:00:00+02:00",
       "url": "/projects/shop/main",
       "api_url": "/api/projects/shop/main"
@@ -301,7 +312,7 @@ curl http://127.0.0.1:3120/api/projects/shop/main
     }
   ],
   "ungrouped": [],
-  "daemons": { "total": 3, "running": 1, "stopped": 2, "failed": 0, "available": 0 },
+  "daemons": { "total": 3, "running": 1, "stopped": 2, "transitioning": 0, "failed": 0, "available": 0 },
   "url": "/projects/shop/main"
 }
 ```

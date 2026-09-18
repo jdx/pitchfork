@@ -364,6 +364,9 @@ pub async fn start(
             if let Some(msg) = result.error_message {
                 json["error"] = serde_json::Value::String(msg);
             } else if !result.started {
+                // Already in the requested state: callers acting on a group
+                // treat this as a no-op rather than a failed member.
+                json["noop"] = serde_json::Value::Bool(true);
                 json["error"] = serde_json::Value::String("daemon is already running".into());
             }
             Ok(Json(json))
@@ -397,6 +400,7 @@ pub async fn stop(
         }))),
         Ok(false) => Ok(Json(serde_json::json!({
             "ok": false,
+            "noop": true,
             "error": "daemon is not running",
         }))),
         Err(e) => {
@@ -459,6 +463,7 @@ pub async fn enable(
         }))),
         Ok(false) => Ok(Json(serde_json::json!({
             "ok": false,
+            "noop": true,
             "error": "daemon is already enabled",
         }))),
         Err(e) => {
@@ -490,6 +495,7 @@ pub async fn disable(
         }))),
         Ok(false) => Ok(Json(serde_json::json!({
             "ok": false,
+            "noop": true,
             "error": "daemon is already disabled",
         }))),
         Err(e) => {

@@ -175,6 +175,9 @@ test('project pages list projects, worktrees, and stack groups without auto-star
         `[groups.default]`,
         `daemons = ["api", "worker"]`,
         ``,
+        `[groups.partial]`,
+        `daemons = ["api", "ghost"]`,
+        ``,
       ].join('\n'),
       blog: [
         `[daemons.site]`,
@@ -209,11 +212,15 @@ test('project pages list projects, worktrees, and stack groups without auto-star
     await page.goto(stackUrl)
     await expect(page.getByRole('heading', { name: 'default', level: 1 })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'default', level: 3 })).toBeVisible()
-    await expect(page.getByText('0/2 running')).toBeVisible()
+    // Scoped to the default group: other groups show their own counts.
+    const stack = page.locator('section').filter({
+      has: page.getByRole('heading', { name: 'default', level: 3 }),
+    })
+    await expect(stack.getByText('0/2 running')).toBeVisible()
 
     // Starting is a click.
     await page.getByRole('button', { name: 'Start stack', exact: true }).click()
-    await expect(page.getByText('2/2 running')).toBeVisible()
+    await expect(stack.getByText('2/2 running')).toBeVisible()
 
     // Starting an already-running stack is a no-op per member, not a failure.
     // Wait for the first action's toast to clear so the assertions below can
@@ -222,10 +229,20 @@ test('project pages list projects, worktrees, and stack groups without auto-star
     await page.getByRole('button', { name: 'Start stack', exact: true }).click()
     await expect(page.getByText(/ started$/)).toBeVisible()
     await expect(page.getByText(/partially started|Start .* failed/)).toHaveCount(0)
-    await expect(page.getByText('2/2 running')).toBeVisible()
+    await expect(stack.getByText('2/2 running')).toBeVisible()
 
     await page.getByRole('button', { name: 'Stop stack', exact: true }).click()
-    await expect(page.getByText('0/2 running')).toBeVisible()
+    await expect(stack.getByText('0/2 running')).toBeVisible()
+
+    // A group member no daemon matches is reported, not counted as success.
+    const partial = page.locator('section').filter({
+      has: page.getByRole('heading', { name: 'partial', level: 3 }),
+    })
+    await expect(partial.getByText(/Not defined in this worktree/)).toBeVisible()
+    // The group's own action, not the member row's Start button.
+    await partial.locator('.group-actions').getByRole('button', { name: 'Start', exact: true }).click()
+    await expect(page.getByText(/partially started/)).toBeVisible()
+    await expect(page.getByText(/ghost/).first()).toBeVisible()
 
     expect(failures).toEqual([])
   } finally {

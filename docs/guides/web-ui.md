@@ -193,8 +193,14 @@ The **Projects** tab lists every project registered in the namespace registry.
 A project is one registered namespace; its worktrees are the git worktrees or
 jj workspaces found under the project directory.
 
+A namespace registered on a linked worktree is shown under its main checkout's
+project rather than as a project of its own, so open the checkout to reach it.
+
 Opening a project shows each worktree with its namespace, running and stopped
-daemon counts, last activity, and a link to that worktree's stack. Worktrees
+daemon counts, last activity, and a link to that worktree's stack. Last activity
+comes from process uptime, so a worktree with nothing running shows none even if
+its daemons ran earlier. A project whose registered directory has been deleted
+is listed and marked "missing" rather than silently looking healthy. Worktrees
 that pitchfork knows about but has never started are listed too, with their
 daemons marked available. The primary checkout's stack is shown on the same
 page under "Stack · primary checkout". Per-worktree disk usage is only shown

@@ -597,17 +597,24 @@ export function useStack(project: Ref<string>, worktree: Ref<string>, pollInterv
 }
 
 /**
- * A daemon state the group action would be a no-op for. The per-daemon
- * endpoints answer `{ok: false, error: "daemon is already running"}` (or
- * "daemon is not running") in that case, which is not a failure of the group
- * action: the member already is where the click wants it.
+ * Send one daemon control request, distinguishing a real failure from a member
+ * that is already in the requested state. The endpoints answer the latter with
+ * `{ok: false, noop: true}`, which is not a failure of the group action.
  */
-function isNoOpResult(message: string): boolean {
-  const m = message.toLowerCase()
-  return m.includes('already running')
-    || m.includes('already enabled')
-    || m.includes('already disabled')
-    || m.includes('is not running')
+async function daemonAction(id: string, endpoint: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/daemons/${encodeURIComponent(id)}/${endpoint}`,
+      { method: 'POST', headers: getAuthHeaders() },
+    )
+    const body = await res.json().catch(() => null) as
+      { ok?: boolean; noop?: boolean; error?: string } | null
+    if (!res.ok) return body?.error ?? `HTTP ${res.status}`
+    if (body?.ok === false && body.noop !== true) return body.error ?? 'unknown error'
+    return null
+  } catch (e: any) {
+    return e.message ?? 'unknown error'
+  }
 }
 
 /**
@@ -645,14 +652,8 @@ export function useGroupActions() {
     const failures: string[] = []
     try {
       for (const id of order) {
-        try {
-          await api(`/daemons/${encodeURIComponent(id)}/${endpoint}`, { method: 'POST' })
-        } catch (e: any) {
-          const message = e.message ?? 'unknown error'
-          // A member that is already in the target state is not a failure.
-          if (isNoOpResult(message)) continue
-          failures.push(`${daemonName(id)}: ${message}`)
-        }
+        const failure = await daemonAction(id, endpoint)
+        if (failure) failures.push(`${daemonName(id)}: ${failure}`)
       }
       toast.dismiss(toastId)
       const skipped = missing.map(id => `${daemonName(id)}: no matching daemon`)

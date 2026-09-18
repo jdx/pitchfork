@@ -33,7 +33,10 @@ const { projects, loading, error, refresh } = useProjects()
             <router-link class="project-link" :to="`/projects/${encodeURIComponent(p.name)}`">
               {{ p.name }}
             </router-link>
-            <div class="cell-dir">{{ p.dir }}</div>
+            <div class="cell-dir">
+              {{ p.dir }}
+              <span v-if="!p.dir_exists" class="tag-warn" title="This directory no longer exists">missing</span>
+            </div>
           </td>
           <td class="cell-n">{{ p.worktree_count }}</td>
           <td class="cell-n">{{ p.daemons.running }}</td>
@@ -72,6 +75,7 @@ const { projects, loading, error, refresh } = useProjects()
 .cell-name { padding: 0.55rem 0.75rem; }
 .project-link { .font-sans(0.9rem; @c-white; 600); text-decoration: none; &:hover { color: @c-accent-dim; } }
 .cell-dir { .font-mono(0.72rem; @sf-30); }
+.tag-warn { margin-left: 0.3rem; .font-sans(0.62rem; @c-warning; 600); text-transform: uppercase; }
 .cell-n { text-align: center; .font-sans(0.82rem; @sf-45; 500); font-variant-numeric: tabular-nums; }
 .cell-since { text-align: right; padding-right: 0.75rem; .font-sans(0.78rem; @sf-30; 500); }
 
