@@ -971,6 +971,30 @@ fn group_member_ids(worktrees: &[WorktreeView]) -> Vec<DaemonId> {
         .collect()
 }
 
+/// The canonical page path for a checkout directory, when a project page
+/// covers it.
+///
+/// The proxy's reserved hostnames redirect here, and its labels are sanitized
+/// and can be overridden, so the directory the hostname resolved to is what
+/// identifies the page. Returns `None` when no registered project covers that
+/// directory, which leaves the proxy to explain the situation rather than send
+/// a browser to a 404.
+pub(crate) fn page_path_for_dir(dir: &StdPath) -> Option<String> {
+    let target = canonical(dir);
+    collect_project_views_blocking().into_iter().find_map(|p| {
+        p.worktrees.iter().find_map(|wt| {
+            if canonical(&wt.path) != target {
+                return None;
+            }
+            Some(if wt.is_primary {
+                format!("/projects/{}", p.name)
+            } else {
+                format!("/projects/{}/{}", p.name, wt.name)
+            })
+        })
+    })
+}
+
 // ─── handlers ────────────────────────────────────────────────────────────────
 
 pub async fn list() -> Result<Json<Vec<ApiProjectSummary>>, StatusCode> {
@@ -1656,6 +1680,53 @@ mod tests {
         let (groups, error) = groups_for_dir(&project);
         assert!(groups.is_empty());
         assert!(error.is_some());
+    }
+
+    /// The proxy redirects a reserved hostname by the checkout it resolved to,
+    /// so the mapping must return that checkout's own page URL rather than
+    /// anything derived from the hostname's labels.
+    #[test]
+    fn page_path_maps_a_checkout_to_its_own_url() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("shop");
+        std::fs::create_dir_all(&repo).unwrap();
+        if !git(&repo, &["init", "-q", "-b", "main", "."]) {
+            return; // no usable git here
+        }
+        std::fs::write(
+            repo.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n",
+        )
+        .unwrap();
+        assert!(git(&repo, &["add", "-A"]));
+        assert!(git(&repo, &["commit", "-qm", "init"]));
+        // A directory name that differs from the branch, which is what the
+        // hostname label would otherwise be built from.
+        assert!(git(
+            &repo,
+            &["worktree", "add", "-q", "../main-dir", "-b", "release"]
+        ));
+
+        let views = worktree_views(&repo);
+        let project = ProjectView {
+            name: "shop".into(),
+            dir: repo.clone(),
+            dir_exists: true,
+            worktrees: views,
+        };
+
+        let linked = temp.path().join("main-dir");
+        let path = project.worktrees.iter().find_map(|wt| {
+            (canonical(&wt.path) == canonical(&linked)).then(|| {
+                if wt.is_primary {
+                    format!("/projects/{}", project.name)
+                } else {
+                    format!("/projects/{}/{}", project.name, wt.name)
+                }
+            })
+        });
+        // The branch, not the directory: that is the name the page uses.
+        assert_eq!(path.as_deref(), Some("/projects/shop/release"));
     }
 
     /// Group members are collected across worktrees and deduplicated, so the

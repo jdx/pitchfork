@@ -402,6 +402,10 @@ enum ResolveResult {
         project: String,
         worktree: Option<String>,
         daemons: Vec<String>,
+        /// The checkout the hostname resolved to, which is what maps the page
+        /// back to its URL in the web UI: hostname labels are sanitized and can
+        /// be overridden, so they are not the names those URLs use.
+        dir: Option<std::path::PathBuf>,
     },
     /// The hostname named a project or daemon that does not exist.
     Unknown { heading: String, known: Vec<String> },
@@ -1358,6 +1362,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 project,
                 worktree,
                 daemons,
+                dir,
             } => {
                 // A reserved name answers 200 while an unknown one answers 404,
                 // which tells anything on the network which projects exist. Off
@@ -1367,8 +1372,20 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 }
                 // The project and stack pages live in the web UI, which is
                 // their canonical location, so this hostname redirects there.
-                if let Some(base) = crate::web::url() {
-                    return page_redirect_response(&base, &project, worktree.as_deref());
+                // The page is found by the checkout the hostname resolved
+                // to, because its URL is built from the registered project
+                // name and the worktree's own name, neither of which has to
+                // match the sanitized, overridable labels in the hostname.
+                if let Some(base) = crate::web::url()
+                    && let Some(resolved) = dir.clone()
+                    && let Some(path) = tokio::task::spawn_blocking(move || {
+                        crate::web::routes::api::projects::page_path_for_dir(&resolved)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    return page_redirect_response(&base, &path);
                 }
                 return page_placeholder_response(
                     &project,
@@ -1935,28 +1952,24 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
             resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout).await
         }
         crate::proxy::hostname::HostTarget::ProjectPage { project } => {
-            let daemons = registry
-                .projects
-                .get(&project)
-                .map(|p| p.primary.labels())
-                .unwrap_or_default();
+            let entry = registry.projects.get(&project);
             ResolveResult::Page {
+                daemons: entry.map(|p| p.primary.labels()).unwrap_or_default(),
+                dir: entry.map(|p| p.primary.dir.clone()),
                 project,
                 worktree: None,
-                daemons,
             }
         }
         crate::proxy::hostname::HostTarget::WorktreePage { project, worktree } => {
-            let daemons = registry
+            let checkout = registry
                 .projects
                 .get(&project)
-                .and_then(|p| p.worktrees.get(&worktree))
-                .map(|c| c.labels())
-                .unwrap_or_default();
+                .and_then(|p| p.worktrees.get(&worktree));
             ResolveResult::Page {
+                daemons: checkout.map(|c| c.labels()).unwrap_or_default(),
+                dir: checkout.map(|c| c.dir.clone()),
                 project,
                 worktree: Some(worktree),
-                daemons,
             }
         }
         crate::proxy::hostname::HostTarget::UnknownProject { known } => ResolveResult::Unknown {
@@ -2220,22 +2233,14 @@ fn host_port_suffix(raw_host: &str) -> String {
 /// The page lives at `/projects/<project>[/<worktree>]`, which is its canonical
 /// location. Both labels come from hostname labels, so they are already limited
 /// to characters that need no escaping in a path.
-fn page_redirect_response(base: &str, project: &str, worktree: Option<&str>) -> Response {
-    let target = match worktree {
-        Some(worktree) => format!("{base}/projects/{project}/{worktree}"),
-        None => format!("{base}/projects/{project}"),
-    };
+fn page_redirect_response(base: &str, path: &str) -> Response {
+    let target = format!("{base}{path}");
     Response::builder()
         .status(StatusCode::FOUND)
         .header(axum::http::header::LOCATION, &target)
         .header(axum::http::header::CACHE_CONTROL, "no-store")
         .body(axum::body::Body::from(format!(
-            "The {} page has moved to {target}\n",
-            if worktree.is_some() {
-                "stack"
-            } else {
-                "project"
-            }
+            "This page is at {target}\n"
         )))
         .unwrap_or_else(|_| {
             html_page(
@@ -2520,7 +2525,7 @@ mod tests {
     /// the web UI, which is where those pages live.
     #[test]
     fn test_page_redirect_targets_the_web_ui() {
-        let response = page_redirect_response("http://127.0.0.1:3120", "shop", Some("feature-a"));
+        let response = page_redirect_response("http://127.0.0.1:3120", "/projects/shop/feature-a");
         assert_eq!(response.status(), StatusCode::FOUND);
         assert_eq!(
             response
@@ -2530,7 +2535,7 @@ mod tests {
             "http://127.0.0.1:3120/projects/shop/feature-a"
         );
 
-        let project = page_redirect_response("http://127.0.0.1:3120/ps", "shop", None);
+        let project = page_redirect_response("http://127.0.0.1:3120/ps", "/projects/shop");
         assert_eq!(
             project.headers().get(axum::http::header::LOCATION).unwrap(),
             // The base carries the web UI's path prefix when one is set.
