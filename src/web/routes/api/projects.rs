@@ -980,16 +980,21 @@ fn group_member_ids(worktrees: &[WorktreeView]) -> Vec<DaemonId> {
 /// directory, which leaves the proxy to explain the situation rather than send
 /// a browser to a 404.
 pub(crate) fn page_path_for_dir(dir: &StdPath) -> Option<String> {
+    page_path_in(&collect_project_views_blocking(), dir)
+}
+
+/// The page path for `dir` among these projects, if one covers it.
+fn page_path_in(projects: &[ProjectView], dir: &StdPath) -> Option<String> {
     let target = canonical(dir);
-    collect_project_views_blocking().into_iter().find_map(|p| {
-        p.worktrees.iter().find_map(|wt| {
+    projects.iter().find_map(|project| {
+        project.worktrees.iter().find_map(|wt| {
             if canonical(&wt.path) != target {
                 return None;
             }
             Some(if wt.is_primary {
-                format!("/projects/{}", p.name)
+                format!("/projects/{}", project.name)
             } else {
-                format!("/projects/{}/{}", p.name, wt.name)
+                format!("/projects/{}/{}", project.name, wt.name)
             })
         })
     })
@@ -1707,26 +1712,28 @@ mod tests {
             &["worktree", "add", "-q", "../main-dir", "-b", "release"]
         ));
 
-        let views = worktree_views(&repo);
         let project = ProjectView {
             name: "shop".into(),
             dir: repo.clone(),
             dir_exists: true,
-            worktrees: views,
+            worktrees: worktree_views(&repo),
         };
+        let projects = [project];
 
-        let linked = temp.path().join("main-dir");
-        let path = project.worktrees.iter().find_map(|wt| {
-            (canonical(&wt.path) == canonical(&linked)).then(|| {
-                if wt.is_primary {
-                    format!("/projects/{}", project.name)
-                } else {
-                    format!("/projects/{}/{}", project.name, wt.name)
-                }
-            })
-        });
         // The branch, not the directory: that is the name the page uses.
-        assert_eq!(path.as_deref(), Some("/projects/shop/release"));
+        let linked = temp.path().join("main-dir");
+        assert_eq!(
+            page_path_in(&projects, &linked).as_deref(),
+            Some("/projects/shop/release")
+        );
+        // The primary checkout maps to the project page itself.
+        assert_eq!(
+            page_path_in(&projects, &repo).as_deref(),
+            Some("/projects/shop")
+        );
+        // A directory no project covers has no page, which is what tells the
+        // proxy to explain itself instead of redirecting.
+        assert_eq!(page_path_in(&projects, temp.path()), None);
     }
 
     /// Group members are collected across worktrees and deduplicated, so the

@@ -248,7 +248,8 @@ proxy returns an error identifying the conflicting checkouts. See
 stack pages in the [web UI](/guides/web-ui), at `/projects/<project>` and
 `/projects/<project>/<worktree>`. They do not route to an individual daemon.
 When the web UI is not running, they show that checkout's daemons and explain
-how to enable it.
+how to enable it. A checkout the proxy knows but no registered project covers
+has no page, and the address says how to register it.
 
 A worktree label takes precedence over a daemon label. If a worktree is named
 `api`, `api.myproject.localhost` displays the worktree page. Rename the worktree

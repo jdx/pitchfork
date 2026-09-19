@@ -1393,6 +1393,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                     &daemons,
                     &state.tld,
                     &host_port_suffix(&raw_host),
+                    crate::web::url().as_deref(),
                 );
             }
             ResolveResult::Unknown { heading, known } => {
@@ -2263,6 +2264,7 @@ fn page_placeholder_response(
     daemons: &[String],
     tld: &str,
     port_suffix: &str,
+    web_url: Option<&str>,
 ) -> Response {
     let heading = match worktree {
         Some(wt) => format!("{} · {}", escape_html(project), escape_html(wt)),
@@ -2289,18 +2291,25 @@ fn page_placeholder_response(
             .collect();
         format!("<p>Daemons here:</p><ul>{items}</ul>")
     };
-    let body = format!(
-        "<h1>{heading}</h1>\
-         <p>This address is reserved for the {page} page, which the web UI serves. \
-         Enable it with <code>[settings.web] auto_start = true</code> to open this \
-         address.</p>\
-         {list}",
-        page = if worktree.is_some() {
-            "stack"
-        } else {
-            "project"
-        },
-    );
+    let page = if worktree.is_some() {
+        "stack"
+    } else {
+        "project"
+    };
+    // The web UI has a page for a checkout only when a registered namespace
+    // covers its directory, while a hostname is reserved for any checkout the
+    // proxy knows, including ones known only from a slug or the state file. The
+    // two cases need different advice.
+    let explanation = match web_url {
+        Some(url) => format!(
+            "<p>This address is reserved for the {page} page, which the web UI serves.              No registered project covers this checkout, so it has no page yet: add its              directory under <code>[namespaces]</code> in your user config, or run              <code>pitchfork proxy add</code> from it.              <a href=\"{url}/projects\">Open the project list</a>.</p>",
+            url = escape_html(url),
+        ),
+        None => format!(
+            "<p>This address is reserved for the {page} page, which the web UI serves.              Enable it with <code>[settings.web] auto_start = true</code> to open this              address.</p>"
+        ),
+    };
+    let body = format!("<h1>{heading}</h1>{explanation}{list}");
     html_page(StatusCode::OK, "pitchfork", body)
 }
 
@@ -2520,6 +2529,37 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The placeholder has to say why there is no page: the web UI being off is
+    /// a different problem from a checkout no registered project covers, and
+    /// the advice differs.
+    #[tokio::test]
+    async fn test_page_placeholder_explains_which_step_is_missing() {
+        async fn body_of(response: Response) -> String {
+            let (_, body) = response.into_parts();
+            let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+            String::from_utf8(bytes.to_vec()).unwrap()
+        }
+
+        let disabled = page_placeholder_response("shop", None, &[], "localhost", "", None);
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let disabled = body_of(disabled).await;
+        assert!(disabled.contains("auto_start"), "{disabled}");
+        assert!(!disabled.contains("[namespaces]"));
+
+        let running = page_placeholder_response(
+            "shop",
+            Some("feature-a"),
+            &[],
+            "localhost",
+            "",
+            Some("http://127.0.0.1:3120"),
+        );
+        let running = body_of(running).await;
+        assert!(running.contains("[namespaces]"), "{running}");
+        assert!(running.contains("http://127.0.0.1:3120/projects"));
+        assert!(!running.contains("auto_start"));
+    }
 
     /// A reserved project or stack hostname sends the browser to the page in
     /// the web UI, which is where those pages live.
