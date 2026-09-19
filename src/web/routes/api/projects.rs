@@ -486,21 +486,59 @@ fn canonical(path: &StdPath) -> PathBuf {
 /// directory, so including them would show the same groups under every
 /// worktree of every project and let "Start stack" there start unrelated
 /// global daemons.
-fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<String>) {
+fn groups_for_dir(dir: &StdPath) -> GroupsResult {
+    // Every file the answer depends on, with its identity, so a change to any
+    // of them invalidates the entry. A file's namespace is derived from its
+    // whole directory family, so a `namespace` added to a sibling requalifies
+    // the group members even though the file holding them did not change.
+    let paths = PitchforkToml::list_paths_from(dir);
+    let snapshot: SourceSnapshot = paths
+        .iter()
+        .map(|path| (path.clone(), crate::pitchfork_toml::current_meta(path)))
+        .collect();
+
+    let cache = groups_cache();
+    if let Ok(cache) = cache.lock()
+        && let Some((cached_snapshot, groups)) = cache.get(dir)
+        && *cached_snapshot == snapshot
+    {
+        return groups.clone();
+    }
+
+    let groups = read_groups(&paths);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(dir.to_path_buf(), (snapshot, groups.clone()));
+    }
+    groups
+}
+
+type GroupsResult = (IndexMap<String, Vec<DaemonId>>, Option<String>);
+type SourceSnapshot = Vec<(PathBuf, Option<(std::time::SystemTime, u64)>)>;
+
+#[allow(clippy::type_complexity)]
+fn groups_cache() -> &'static Mutex<HashMap<PathBuf, (SourceSnapshot, GroupsResult)>> {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<PathBuf, (SourceSnapshot, GroupsResult)>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Merge the groups declared by these config files, skipping the user and
+/// system ones.
+fn read_groups(paths: &[PathBuf]) -> GroupsResult {
     let mut groups: IndexMap<String, Vec<DaemonId>> = IndexMap::new();
 
-    for path in PitchforkToml::list_paths_from(dir) {
-        if path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
-            || path == *crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
+    for path in paths {
+        if *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_USER
+            || *path == *crate::env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
             || !path.exists()
         {
             continue;
         }
-        match groups_in_file(&path) {
+        match PitchforkToml::read(path) {
             // Later files override earlier ones, as in the normal merge.
-            Ok(file_groups) => {
-                for (name, daemons) in file_groups {
-                    groups.insert(name, daemons);
+            Ok(config) => {
+                for (name, group) in config.groups {
+                    groups.insert(name, group.daemons);
                 }
             }
             Err(e) => {
@@ -509,51 +547,12 @@ fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<Str
                 // those groups, and acting on a superseded `default` group
                 // would stop or start daemons the worktree no longer means.
                 log::warn!("Failed to load config {}: {e}", path.display());
-                return (IndexMap::new(), Some(e));
+                return (IndexMap::new(), Some(e.to_string()));
             }
         }
     }
 
     (groups, None)
-}
-
-type FileGroups = Result<IndexMap<String, Vec<DaemonId>>, String>;
-
-/// Groups declared by one config file, cached per file.
-///
-/// `PitchforkToml::read` locks and re-parses the file on every call, and these
-/// pages poll, so an uncached read would lock every config file of every
-/// worktree every few seconds. The cache is invalidated the way the config
-/// cache is, by the file's modification time and size.
-fn groups_in_file(path: &StdPath) -> FileGroups {
-    #[allow(clippy::type_complexity)]
-    static CACHE: std::sync::OnceLock<
-        Mutex<HashMap<PathBuf, (Option<(std::time::SystemTime, u64)>, FileGroups)>>,
-    > = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    let meta = crate::pitchfork_toml::current_meta(path);
-    if let Ok(cache) = cache.lock()
-        && let Some((cached_meta, groups)) = cache.get(path)
-        && *cached_meta == meta
-    {
-        return groups.clone();
-    }
-
-    let groups: FileGroups = PitchforkToml::read(path)
-        .map(|config| {
-            config
-                .groups
-                .into_iter()
-                .map(|(name, group)| (name, group.daemons))
-                .collect()
-        })
-        .map_err(|e| e.to_string());
-
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(path.to_path_buf(), (meta, groups.clone()));
-    }
-    groups
 }
 
 /// A URL name for a worktree that no other worktree of this project uses.
@@ -1428,35 +1427,53 @@ mod tests {
         assert_eq!(views[0].branch, "feature-a");
     }
 
-    /// Repeated reads come from the cache, and an edit invalidates it: the
-    /// pages poll, so this path must neither re-lock every config file nor
-    /// serve a stale stack after a change.
+    /// Repeated reads come from the cache, and any file the answer depends on
+    /// invalidates it. The pages poll, so this must neither re-lock every
+    /// config file nor serve a stale stack after a change.
     #[test]
-    fn group_reads_are_cached_until_the_file_changes() {
+    fn group_reads_are_cached_until_a_source_changes() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("shop");
         std::fs::create_dir_all(&project).unwrap();
-        let config = project.join("pitchfork.toml");
         std::fs::write(
-            &config,
+            project.join("pitchfork.toml"),
             "[daemons.api]\nrun = \"true\"\n\n[groups.web]\ndaemons = [\"api\"]\n",
         )
         .unwrap();
 
-        let first = groups_in_file(&config).unwrap();
-        assert!(first.contains_key("web"));
-        assert_eq!(groups_in_file(&config).unwrap(), first);
+        let (first, error) = groups_for_dir(&project);
+        assert!(error.is_none());
+        assert_eq!(
+            first.get("web").map(|ids| ids[0].qualified()),
+            Some("shop/api".to_string())
+        );
+        assert_eq!(groups_for_dir(&project).0, first);
 
-        // A different size, so the (mtime, size) check sees the change even
-        // where the clock is coarse.
+        // A sibling file can rename the namespace the group members resolve
+        // in, without the file declaring them changing at all.
         std::fs::write(
-            &config,
+            project.join("pitchfork.local.toml"),
+            "namespace = \"renamed\"\n",
+        )
+        .unwrap();
+        let (second, _) = groups_for_dir(&project);
+        assert_eq!(
+            second.get("web").map(|ids| ids[0].qualified()),
+            Some("renamed/api".to_string()),
+            "a namespace declared in a sibling file must requalify group members"
+        );
+
+        // An edit to the declaring file is picked up too. The content differs
+        // in size, so the (mtime, size) check sees it even where the clock is
+        // coarse.
+        std::fs::write(
+            project.join("pitchfork.toml"),
             "[daemons.api]\nrun = \"true\"\n\n[groups.backend]\ndaemons = [\"api\"]\n\n# changed\n",
         )
         .unwrap();
-        let second = groups_in_file(&config).unwrap();
-        assert!(second.contains_key("backend"));
-        assert!(!second.contains_key("web"));
+        let (third, _) = groups_for_dir(&project);
+        assert!(third.contains_key("backend"));
+        assert!(!third.contains_key("web"));
     }
 
     /// A config file that cannot be read must not leave the groups the files
