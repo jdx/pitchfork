@@ -30,5 +30,7 @@ docs again after rendering and review staged changes before committing.
 
 ## mbx build cache
 
-mise wraps `cargo` with [mbx](https://mr-boxington.jdx.dev), so plain Cargo
-commands and `mise run` tasks share compiled work across checkouts.
+mise wraps `cargo` with [mbx](https://mr-boxington.jdx.dev), so compiled work
+is shared across checkouts. `mise run` tasks and `mise exec -- cargo …` always
+use the wrapper; plain `cargo` does too once mise is activated in your shell
+(`mise activate`).
