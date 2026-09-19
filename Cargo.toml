@@ -120,6 +120,9 @@ exec = "0.3"
 libc = "0.2"
 nix = { version = "0.31", features = ["signal", "process", "user", "net", "ioctl"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
@@ -128,6 +131,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# Parses launchd registrations; exercised on every platform by unit tests.
+plist = "1"
 tempfile = "3"
 # `test-util` for `#[tokio::test(start_paused = true)]`, so tests that assert a
 # timeout holds do not have to sleep through it. Features are additive, and a

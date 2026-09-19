@@ -18,9 +18,13 @@ When run as a normal user: creates a user-level entry
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
 
-If you want the supervisor to run as root but keep state files and IPC sockets
-under a specific user's home directory, configure `settings.supervisor.user`
-in your pitchfork configuration.
+Through sudo, the system-level entry records the invoking user so the root
+supervisor uses that user's configuration, state directory, and identity at
+boot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`
+to choose a different user for state and daemons.
+
+If an entry already exists at this level, it is rewritten with the current
+binary path and invoking user.
 
 ## Flags
 - **`-h --help`** — Print help

@@ -1147,3 +1147,20 @@ EOF
   assert_success
   assert_output --partial "stopped"
 }
+
+# A system boot service records the user who ran `sudo pitchfork boot enable`
+# as `supervisor run --invoking-user`, because launchd and systemd start it
+# without SUDO_USER/SUDO_UID/SUDO_GID. The recorded user may only be used by a
+# root supervisor; anywhere else startup must fail instead of silently running
+# with a different configuration.
+@test "supervisor run --invoking-user without sudo environment requires root" {
+  skip_on_windows "--invoking-user is Unix-only"
+  if [[ "$(id -u)" == "0" ]]; then
+    skip "must run as a non-root user"
+  fi
+
+  run env -u SUDO_USER -u SUDO_UID -u SUDO_GID \
+    pitchfork supervisor run --boot --invoking-user "$(id -un)"
+  assert_failure
+  assert_output --partial "--invoking-user $(id -un) requires the supervisor to run as root"
+}
