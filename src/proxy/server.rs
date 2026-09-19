@@ -2264,14 +2264,9 @@ fn resolve_tls_mode_in(
     // Otherwise the automatic `<daemon>.<worktree>.<project>` hostnames, whose
     // mode lives in the config of the checkout the name points at.
     match registry.resolve(&subdomain, wildcard) {
-        crate::proxy::hostname::HostTarget::Daemon {
-            ref dir,
-            ref namespace,
-            ref daemon,
-            ..
-        } => read_proxy_tls_route(dir, Some(namespace), daemon)
-            .map(|route| route.mode)
-            .unwrap_or_default(),
+        crate::proxy::hostname::HostTarget::Daemon { proxy_tls, .. } => {
+            proxy_tls.unwrap_or_default()
+        }
         // A project or stack page, an unknown name: the proxy answers those
         // itself over its own certificate.
         _ => ProxyTlsMode::Terminate,
@@ -2320,6 +2315,10 @@ fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> 
         .unwrap_or(&[]);
     if let Some(idx) = configured.iter().position(|&p| p == want)
         && let Some(&resolved) = daemon.resolved_port.get(idx)
+        // A recorded 0 is a port the daemon asked the operating system to
+        // choose and nothing has detected yet, so it is no more connectable
+        // here than on the path that takes the daemon's first port.
+        && resolved != 0
     {
         return Some(resolved);
     }
@@ -2571,16 +2570,23 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
             ref dir,
             ref namespace,
             ref daemon,
+            proxy_tls,
+            proxy_tls_port,
             ..
         } => {
+            // The mode and port were captured with the hostname, from one read
+            // of the checkout's config, so a config that has since become
+            // unreadable cannot turn a passthrough daemon into a terminated
+            // one.
+            let route = ProxyTlsRoute {
+                mode: proxy_tls.unwrap_or_default(),
+                port: proxy_tls_port,
+            };
             // When several checkouts share this daemon's namespace — in this
             // project or in another one, since namespaces come from directory
             // names — the ID no longer says which checkout is running, so the
             // request has to be matched to the directory it named.
             let per_checkout = registry.shares_daemon_id(namespace, daemon);
-            // The TLS mode and port belong to the daemon's own config, in the
-            // checkout this hostname names.
-            let route = read_proxy_tls_route(dir, Some(namespace), daemon).unwrap_or_default();
             resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout, &route).await
         }
         crate::proxy::hostname::HostTarget::ProjectPage { project } => {
@@ -3304,6 +3310,25 @@ mod tests {
         assert_eq!(select_daemon_port(&route, &d), Some(9444));
     }
 
+    /// A configured `proxy_tls_port` whose resolved port is still the
+    /// placeholder 0 does not route either: the position matches, but nothing
+    /// is listening there yet.
+    #[test]
+    fn test_select_daemon_port_skips_a_configured_port_resolved_to_zero() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(9443),
+        };
+        // Declared [8443, 9443], but the second slot has not been resolved to
+        // a real port yet.
+        let pending = make_daemon(&[8443, 9443], &[8443, 0], Some(8443));
+        assert_eq!(select_daemon_port(&route, &pending), None);
+
+        // Once it resolves, the same hostname routes to it.
+        let ready = make_daemon(&[8443, 9443], &[8443, 9444], Some(8443));
+        assert_eq!(select_daemon_port(&route, &ready), Some(9444));
+    }
+
     /// A daemon whose recorded ports contradict `proxy_tls_port` — a state
     /// record left by an older config — is not routed to a port it never
     /// bound. Config validation stops this combination from being written in
@@ -3772,6 +3797,12 @@ mod tests {
 
         assert_eq!(mode("secure.autoproj.localhost"), ProxyTlsMode::Passthrough);
         assert_eq!(mode("plain.autoproj.localhost"), ProxyTlsMode::Terminate);
+
+        // The mode travels with the registry entry, so a config that becomes
+        // unreadable after the registry was built cannot turn the passthrough
+        // daemon into a terminated one.
+        std::fs::write(project.join("pitchfork.toml"), "this is not toml = [\n").unwrap();
+        assert_eq!(mode("secure.autoproj.localhost"), ProxyTlsMode::Passthrough);
         // The project page is served by the proxy itself, over its own
         // certificate, as is a name nothing claims.
         assert_eq!(mode("autoproj.localhost"), ProxyTlsMode::Terminate);
