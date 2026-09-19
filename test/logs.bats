@@ -419,11 +419,11 @@ EOF
 
   # stdout only: with PITCHFORK_LOG=debug the CLI's stderr quotes the state
   # dir, and a random name such as /tmp/pf-test-d20pWf would trip a substring
-  # check. Look for the timestamp shape instead of the year.
+  # check. Match the default `%m-%d %H:%M:%S` prefix shape instead.
   run --separate-stderr pitchfork logs notime --no-timestamp
   assert_success
   assert_output --partial "testline"
-  refute_output --regexp '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
+  refute_output --regexp '[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 
   pitchfork stop notime
 }
