@@ -319,6 +319,25 @@ pub struct PitchforkToml {
     pub namespaces: IndexMap<String, NamespaceEntry>,
     #[schemars(skip)]
     pub path: Option<PathBuf>,
+    /// Top-level `[env]` of the registered project each daemon merged in from
+    /// another namespace came from, keyed by that daemon.
+    ///
+    /// Such a daemon renders against its own project's defaults, not those of
+    /// the checkout that requested it. Daemons from the requesting checkout's
+    /// own config chain are absent and use [`Self::env`], which carries every
+    /// override along that chain.
+    #[schemars(skip)]
+    pub(crate) foreign_env: IndexMap<DaemonId, Option<IndexMap<String, String>>>,
+}
+
+impl PitchforkToml {
+    /// The top-level `[env]` defaults `id` renders against: its own project's
+    /// when it came from another registered project, otherwise this config's.
+    pub(crate) fn env_for(&self, id: &DaemonId) -> Option<&IndexMap<String, String>> {
+        self.foreign_env
+            .get(id)
+            .map_or(self.env.as_ref(), |env| env.as_ref())
+    }
 }
 
 pub fn is_global_config(path: &Path) -> bool {
@@ -1091,6 +1110,8 @@ impl PitchforkToml {
                 Ok(ns_config) => {
                     for (daemon_id, daemon_config) in ns_config.daemons {
                         if !pt.daemons.contains_key(&daemon_id) {
+                            pt.foreign_env
+                                .insert(daemon_id.clone(), ns_config.env.clone());
                             pt.daemons.insert(daemon_id, daemon_config);
                         }
                     }
@@ -1255,6 +1276,7 @@ impl PitchforkToml {
             groups: IndexMap::new(),
             namespaces: IndexMap::new(),
             path: Some(path),
+            foreign_env: IndexMap::new(),
         }
     }
 
