@@ -58,12 +58,18 @@ impl Supervisor {
             }
             IpcRequest::Connect => {
                 debug!("received connect message (legacy, no version info)");
+                self.restore_own_record().await;
                 IpcResponse::Ok
             }
             IpcRequest::ConnectV2 {
                 version: client_version,
             } => {
                 debug!("received connect message (client version: {client_version})");
+                // A client may have connected because the state file does not
+                // show this supervisor (see `start_if_not_running`); put the
+                // record back before it goes looking again, e.g. for
+                // `supervisor stop`.
+                self.restore_own_record().await;
                 if client_version != VERSION && version_mismatch_should_warn(&client_version) {
                     warn!(
                         "Client version {client_version} differs from supervisor version {VERSION}. \

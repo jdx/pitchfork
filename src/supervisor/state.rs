@@ -207,6 +207,47 @@ impl UpsertDaemonOptsBuilder {
 }
 
 impl Supervisor {
+    /// Rewrite the state file if it no longer records this supervisor.
+    ///
+    /// The CLI decides whether a supervisor is running, and which process
+    /// `supervisor stop` signals, from this record. The supervisor only
+    /// writes the file when its own state changes, so if the file is replaced
+    /// or rewritten by something else the record could stay missing
+    /// indefinitely, leaving this supervisor running but unaccounted for.
+    /// The in-memory state is authoritative, so it is written back whole.
+    pub(crate) async fn restore_own_record(&self) {
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
+        let pitchfork_id = DaemonId::pitchfork();
+        let state = self.state_file.lock().await;
+        let Some(own_pid) = state.daemons.get(&pitchfork_id).and_then(|d| d.pid) else {
+            return;
+        };
+        let recorded_pid = crate::state_file::StateFile::read(&state.path)
+            .ok()
+            .and_then(|sf| sf.daemons.get(&pitchfork_id).and_then(|d| d.pid));
+        if recorded_pid == Some(own_pid) {
+            return;
+        }
+        if state.is_dirty() {
+            // Not flushed yet (e.g. a client connecting right after startup):
+            // this is just an early flush.
+            debug!("flushing state file early to record this supervisor");
+        } else {
+            warn!(
+                "state file {} no longer records this supervisor (pid {own_pid}); restoring it",
+                state.path.display()
+            );
+        }
+        if let Err(e) = state.rewrite() {
+            warn!("failed to restore the supervisor record in the state file: {e}");
+        }
+    }
+
     /// Upsert a daemon's state, merging with existing values
     pub(crate) async fn upsert_daemon(&self, opts: UpsertDaemonOpts) -> Result<Daemon> {
         info!(

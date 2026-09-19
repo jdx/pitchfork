@@ -1,5 +1,8 @@
 use crate::Result;
-use crate::cli::supervisor::{KillOrStopOutcome, resolve_existing_supervisor};
+use crate::cli::supervisor::{
+    KillOrStopOutcome, resolve_existing_supervisor, unidentified_supervisor_error,
+};
+use crate::ipc::socket_display;
 use crate::supervisor::SUPERVISOR;
 
 /// Runs the internal pitchfork daemon in the foreground
@@ -26,6 +29,16 @@ impl Run {
     pub async fn run(&self) -> Result<()> {
         let (existing_pid, outcome) = resolve_existing_supervisor(self.force).await?;
         match outcome {
+            KillOrStopOutcome::Unidentified if self.force => {
+                return Err(unidentified_supervisor_error());
+            }
+            KillOrStopOutcome::Unidentified => {
+                warn!(
+                    "A pitchfork supervisor is already running (listening on {}).",
+                    socket_display()
+                );
+                return Ok(());
+            }
             KillOrStopOutcome::StillRunning => {
                 let pid = existing_pid.expect("StillRunning implies a pid exists");
                 warn!(

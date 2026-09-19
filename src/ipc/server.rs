@@ -1,7 +1,6 @@
 use crate::Result;
-#[cfg(unix)]
 use crate::env;
-use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize, socket_display};
 use crate::settings::settings;
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
@@ -58,27 +57,51 @@ pub struct IpcServer {
 /// Handle for triggering graceful shutdown of the IPC server
 pub struct IpcServerHandle {
     shutdown_tx: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl IpcServerHandle {
-    /// Signal the IPC server to shut down gracefully
-    pub fn shutdown(&mut self) {
+    /// Signal the IPC server to shut down gracefully and wait (briefly) for it
+    /// to stop accepting connections and remove its socket file. A supervisor
+    /// replacing this one waits for the socket to go away before binding it,
+    /// so it must be gone before this process exits.
+    pub async fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+        if let Some(task) = self.task.take() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
         }
     }
 }
 
 impl IpcServer {
     pub fn new() -> Result<(Self, IpcServerHandle)> {
-        // Unix: create the socket directory and remove any stale socket file.
+        #[cfg(unix)]
+        xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
+        // Serialize the check-then-bind below across supervisors starting at
+        // the same time, so the second one sees the first listening instead
+        // of both finding the socket free.
+        let _lock = xx::fslock::get(&env::IPC_SOCK_DIR, false)?;
+        // Never displace a live supervisor: replacing its socket would leave
+        // it running, unreachable, and invisible to `supervisor stop`.
+        if super::supervisor_listening() {
+            bail!(
+                "another pitchfork supervisor is already listening on {}",
+                socket_display()
+            );
+        }
+        // Unix: remove any stale socket file (it refused the connection above).
         // Windows: named pipes exist in a flat kernel namespace — no files to create or clean up.
         #[cfg(unix)]
-        {
-            xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
-            let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
-        }
-        let opts = ListenerOptions::new().name(fs_name("main")?);
+        let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
+        // The socket file is removed explicitly on graceful shutdown while the
+        // listener is still accepting. Reclaiming it again when the listener
+        // is dropped could unlink the socket of a supervisor that started in
+        // between.
+        let opts = ListenerOptions::new()
+            .name(fs_name("main")?)
+            .reclaim_name(false);
         #[cfg(unix)]
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         #[cfg(windows)]
@@ -119,7 +142,7 @@ impl IpcServer {
             }
         }
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     biased;
@@ -152,14 +175,19 @@ impl IpcServer {
                     }
                 }
             }
-            // Clean up socket file on graceful shutdown (Unix only)
+            // Clean up the socket file on graceful shutdown (Unix only) while
+            // the listener still accepts: until then a replacement supervisor
+            // sees this one listening and waits, so it cannot have bound the
+            // path yet. Only then stop listening.
             #[cfg(unix)]
             let _ = std::fs::remove_file(&*env::IPC_SOCK_MAIN);
+            drop(listener);
             debug!("IPC server shut down cleanly");
         });
         let server = Self { rx };
         let handle = IpcServerHandle {
             shutdown_tx: Some(shutdown_tx),
+            task: Some(task),
         };
         Ok((server, handle))
     }

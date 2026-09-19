@@ -423,6 +423,13 @@ impl StateFile {
         Ok(())
     }
 
+    /// Write the full state to disk even if it matches what this instance
+    /// last wrote, e.g. because the file was changed by someone else since.
+    pub(crate) fn rewrite(&self) -> Result<()> {
+        *self.last_content.lock().unwrap() = None;
+        self.write()
+    }
+
     /// Write the state file without acquiring the lock.
     /// Used internally when the lock is already held (e.g., during migration in read()).
     fn write_unlocked(&self) -> Result<()> {
