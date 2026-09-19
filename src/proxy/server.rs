@@ -3119,22 +3119,29 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 // it splicing to a daemon that is about to be stopped.
                 let cancel = state.cancel.clone();
                 state.tunnels.spawn(async move {
-                    if let (Ok(client_upgraded), Ok(backend_upgraded)) =
-                        (client_upgrade.await, backend_upgrade.await)
-                    {
-                        let mut client_io = hyper_util::rt::TokioIo::new(client_upgraded);
-                        let mut backend_io = hyper_util::rt::TokioIo::new(backend_upgraded);
-                        // No application-level timeout here: tokio::time::timeout would be a
-                        // hard wall-clock deadline for the entire tunnel, not an idle timeout.
-                        // Long-lived connections (Vite/webpack HMR, SSE-over-WS) would be
-                        // silently terminated after the deadline even if data is actively
-                        // flowing.  The OS TCP keepalive is sufficient to reap truly dead
-                        // connections; a proper idle timeout would require a custom
-                        // AsyncRead/AsyncWrite wrapper that resets the timer on each I/O op.
-                        tokio::select! {
-                            _ = tokio::io::copy_bidirectional(&mut client_io, &mut backend_io) => {}
-                            _ = cancel.cancelled() => {}
+                    let splice = async move {
+                        if let (Ok(client_upgraded), Ok(backend_upgraded)) =
+                            (client_upgrade.await, backend_upgrade.await)
+                        {
+                            let mut client_io = hyper_util::rt::TokioIo::new(client_upgraded);
+                            let mut backend_io = hyper_util::rt::TokioIo::new(backend_upgraded);
+                            // No application-level timeout here: tokio::time::timeout would be a
+                            // hard wall-clock deadline for the entire tunnel, not an idle timeout.
+                            // Long-lived connections (Vite/webpack HMR, SSE-over-WS) would be
+                            // silently terminated after the deadline even if data is actively
+                            // flowing.  The OS TCP keepalive is sufficient to reap truly dead
+                            // connections; a proper idle timeout would require a custom
+                            // AsyncRead/AsyncWrite wrapper that resets the timer on each I/O op.
+                            let _ = tokio::io::copy_bidirectional(&mut client_io, &mut backend_io)
+                                .await;
                         }
+                    };
+                    // The whole splice, upgrade waits included: an abandoned
+                    // handshake leaves those pending, and the tracker never
+                    // aborts, so only the token ends it at shutdown.
+                    tokio::select! {
+                        _ = splice => {}
+                        _ = cancel.cancelled() => {}
                     }
                 });
                 return Response::from_parts(parts, Body::empty());
