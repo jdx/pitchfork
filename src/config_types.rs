@@ -2114,6 +2114,47 @@ impl Default for Dir {
         Self(crate::env::CWD.clone())
     }
 }
+
+// ---------------------------------------------------------------------------
+// ProxyTlsMode
+// ---------------------------------------------------------------------------
+
+/// How the reverse proxy handles TLS for a daemon's hostname.
+#[derive(
+    Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyTlsMode {
+    /// The proxy terminates TLS with its own certificate and forwards plain
+    /// HTTP to the daemon (the historical behavior).
+    #[default]
+    Terminate,
+    /// The proxy reads the SNI hostname from the TLS ClientHello and splices
+    /// the raw TCP stream to the daemon, which terminates TLS itself.
+    Passthrough,
+}
+
+impl ProxyTlsMode {
+    /// Whether this mode splices the raw TLS stream to the daemon.
+    pub fn is_passthrough(self) -> bool {
+        matches!(self, Self::Passthrough)
+    }
+
+    /// The mode name as it is written in `pitchfork.toml`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Terminate => "terminate",
+            Self::Passthrough => "passthrough",
+        }
+    }
+}
+
+impl std::fmt::Display for ProxyTlsMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

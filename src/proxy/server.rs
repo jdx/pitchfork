@@ -40,9 +40,10 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::daemon_id::DaemonId;
+use crate::pitchfork_toml::ProxyTlsMode;
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
 
@@ -59,6 +60,20 @@ use crate::supervisor::SUPERVISOR;
 
 /// How long to cache the slug resolution table before re-reading from disk.
 const SLUG_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How a hostname's TLS is handled, and which daemon port it maps to.
+///
+/// Read from the daemon's `pitchfork.toml` (`proxy_tls`, `proxy_tls_port`) when
+/// the slug table is refreshed, so the routing decision needs no disk I/O and
+/// is available whether or not the daemon is currently running.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProxyTlsRoute {
+    /// `terminate` (default) or `passthrough`.
+    pub mode: ProxyTlsMode,
+    /// The daemon port this hostname maps to. `None` means the first port,
+    /// which is what a single-port daemon always wants.
+    pub port: Option<u16>,
+}
 
 /// Cached slug entry: pre-resolved namespace + daemon name for a slug.
 #[derive(Clone, Debug)]
@@ -77,6 +92,52 @@ pub struct CachedSlugEntry {
     /// are ambiguous, kept so a request naming one is refused rather than
     /// falling through to the parent slug as an unknown wildcard prefix.
     pub rejected_worktree_prefixes: std::collections::HashSet<String>,
+    /// TLS route for the slug's main checkout.
+    pub tls: ProxyTlsRoute,
+    /// TLS routes per worktree, keyed by ASCII-lowercased sanitized branch.
+    /// A worktree can configure its own `proxy_tls`, since each checkout has
+    /// its own `pitchfork.toml`.
+    pub worktree_tls: std::collections::HashMap<String, ProxyTlsRoute>,
+}
+
+impl CachedSlugEntry {
+    /// The route this entry recorded for its main checkout, provided the slug
+    /// still names the same daemon in the same directory and namespace. A slug
+    /// repointed elsewhere must not carry the old daemon's mode and port over
+    /// to a new target whose config cannot be read.
+    fn known_route(
+        &self,
+        dir: &std::path::Path,
+        namespace: Option<&str>,
+        daemon_name: &str,
+    ) -> Option<ProxyTlsRoute> {
+        (self.dir == dir
+            && self.namespace.as_deref() == namespace
+            && self.daemon_name == daemon_name)
+            .then_some(self.tls)
+    }
+
+    /// The route this entry recorded for a worktree, provided the same daemon
+    /// was known there at the same path and namespace.
+    fn known_worktree_route(
+        &self,
+        wt: &crate::proxy::worktree::WorktreeEntry,
+        daemon_name: &str,
+    ) -> Option<ProxyTlsRoute> {
+        if self.daemon_name != daemon_name {
+            return None;
+        }
+        let branch = wt.sanitized_branch.to_ascii_lowercase();
+        self.worktrees
+            .iter()
+            .any(|known| {
+                known.sanitized_branch.eq_ignore_ascii_case(&branch)
+                    && known.path == wt.path
+                    && known.namespace == wt.namespace
+            })
+            .then(|| self.worktree_tls.get(&branch).copied())
+            .flatten()
+    }
 }
 
 /// In-memory cache for the global slug registry + derived namespaces.
@@ -85,13 +146,53 @@ struct SlugCache {
     expires_at: std::time::Instant,
 }
 
-static SLUG_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<SlugCache>> =
+/// The cached slug table.
+///
+/// A `std::sync::RwLock` rather than an async one on purpose: `rustls` calls
+/// its certificate resolver from a synchronous trait method, and that resolver
+/// has to know whether a hostname is passthrough before it issues a certificate
+/// for it. One lock means routing and the resolver read the same table by
+/// construction, so they cannot disagree about a hostname's mode. Every
+/// critical section is a clone of an `Arc` or a comparison of two `Instant`s,
+/// with the disk I/O deliberately outside, and nothing awaits while holding it.
+static SLUG_CACHE: once_cell::sync::Lazy<std::sync::RwLock<SlugCache>> =
     once_cell::sync::Lazy::new(|| {
-        tokio::sync::Mutex::new(SlugCache {
+        std::sync::RwLock::new(SlugCache {
             entries: Arc::new(std::collections::HashMap::new()),
             expires_at: std::time::Instant::now(), // expired → will be populated on first access
         })
     });
+
+/// Read the cached slug table without awaiting.
+///
+/// Empty until the table has been populated once, which every TLS connection
+/// does before reaching the certificate resolver. An empty table resolves every
+/// hostname to `terminate`, which is the behavior of a proxy with no slugs.
+fn slug_snapshot() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
+    let guard = SLUG_CACHE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(&guard.entries)
+}
+
+/// Serializes refreshes of [`SLUG_CACHE`], so at most one build is in flight.
+///
+/// Without it, every request arriving on an expired cache builds its own table
+/// and publishes it, which both duplicates the work — the build runs
+/// subprocesses to discover worktrees — and leaves each caller holding a
+/// different generation than the one the certificate resolver reads. With it,
+/// the first arrival builds and the rest wait and take that table, so one
+/// generation is live at a time.
+static SLUG_REFRESH: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// The cached table if it has not expired.
+fn fresh_slugs() -> Option<Arc<std::collections::HashMap<String, CachedSlugEntry>>> {
+    let cache = SLUG_CACHE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (std::time::Instant::now() < cache.expires_at).then(|| Arc::clone(&cache.entries))
+}
 
 /// Drop every worktree whose sanitized branch is ambiguous under
 /// case-insensitive host matching, keeping the unambiguous ones.
@@ -135,13 +236,78 @@ fn reject_case_colliding_worktrees(
     (kept, collisions)
 }
 
+/// Read a daemon's TLS route (`proxy_tls`, `proxy_tls_port`) from the config
+/// that applies in `dir`.
+///
+/// `Ok(None)` means that directory says nothing about the daemon: its config
+/// does not describe it. That is deliberately not the same as a route of
+/// `terminate`: a worktree the proxy knows nothing about inherits its slug's
+/// mode, where a synthesized `terminate` would silently stop splicing a
+/// passthrough daemon and answer with the proxy's certificate instead. A
+/// directory that *does* describe the daemon is authoritative, including when
+/// it leaves `proxy_tls` out and so terminates.
+///
+/// `Err` means the config could not be read at all, which says nothing about
+/// the daemon either way. The merged config fails as a whole, so an error in
+/// an unrelated daemon lands here too; callers that already know a route keep
+/// it rather than treat the error as `terminate`.
+///
+/// Any other way of resolving a hostname to a daemon can reuse this to get the
+/// same TLS decision, since the mode belongs to the daemon rather than to the
+/// hostname that reached it.
+///
+/// The config read goes through the merged-config cache, so a refresh that
+/// finds nothing changed costs a `stat` per config file rather than a reparse.
+pub(crate) fn read_proxy_tls_route(
+    dir: &std::path::Path,
+    namespace: Option<&str>,
+    daemon_name: &str,
+) -> miette::Result<Option<ProxyTlsRoute>> {
+    let Some(id) = namespace.and_then(|ns| DaemonId::try_new(ns, daemon_name).ok()) else {
+        return Ok(None);
+    };
+    let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(dir)?;
+    Ok(pt.daemons.get(&id).map(|cfg| ProxyTlsRoute {
+        mode: cfg.proxy_tls.unwrap_or_default(),
+        port: cfg.effective_proxy_tls_port(),
+    }))
+}
+
+/// The result of [`read_proxy_tls_route`], falling back to `known` — the route
+/// recorded by the previous slug-table refresh — when the config is unreadable.
+///
+/// The warning is logged once per distinct error, since the table refreshes
+/// every couple of seconds and the error persists until the config is fixed.
+fn route_or_last_known(
+    read: miette::Result<Option<ProxyTlsRoute>>,
+    known: Option<ProxyTlsRoute>,
+    dir: &std::path::Path,
+    daemon_name: &str,
+) -> Option<ProxyTlsRoute> {
+    read.unwrap_or_else(|e| {
+        crate::proxy::hostname::warn_once(&format!(
+            "Proxy TLS route for daemon '{daemon_name}': could not read config in {}; \
+             keeping its last known TLS mode until the config is fixed: {e}",
+            dir.display()
+        ));
+        known
+    })
+}
+
 /// Build the slug lookup table from disk (expensive — involves file I/O + subprocesses).
 /// Called outside the cache lock via `spawn_blocking` to avoid blocking the Tokio runtime.
 ///
 /// Keys are ASCII-lowercased, and slugs that collide once folded are left out
 /// entirely — see [`reject_case_colliding_worktrees`] for why ambiguity is
 /// rejected rather than resolved.
-fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
+///
+/// `previous` is the table being replaced. When a directory's config cannot be
+/// read, the route recorded there is kept, so a config error — even one in an
+/// unrelated daemon — cannot quietly turn a running passthrough daemon into a
+/// terminated one that answers with the proxy's certificate.
+fn build_slug_entries(
+    previous: &std::collections::HashMap<String, CachedSlugEntry>,
+) -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
     let collisions = crate::proxy::ascii_case_collisions(global_slugs.keys().map(String::as_str));
     let mut folded: Vec<&String> = collisions.iter().collect();
@@ -187,38 +353,78 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
         } else {
             (vec![], std::collections::HashSet::new())
         };
+        let dir = entry.resolve_dir().unwrap_or_default();
+        let prev = previous.get(&key);
+        // The slug's own directory has nothing to inherit from, so silence
+        // there is the default route. An unreadable config keeps the last
+        // known route; with none known yet, there is nothing else to go on.
+        let tls = route_or_last_known(
+            read_proxy_tls_route(&dir, ns.as_deref(), &daemon_name),
+            prev.and_then(|p| p.known_route(&dir, ns.as_deref(), &daemon_name)),
+            &dir,
+            &daemon_name,
+        )
+        .unwrap_or_default();
+        // A worktree only gets an entry when its own config describes the
+        // daemon, or when it did last time and cannot be read now; the rest
+        // inherit the slug's route at lookup time.
+        let worktree_tls = worktrees
+            .iter()
+            .filter_map(|wt| {
+                let branch = wt.sanitized_branch.to_ascii_lowercase();
+                route_or_last_known(
+                    read_proxy_tls_route(&wt.path, wt.namespace.as_deref(), &daemon_name),
+                    prev.and_then(|p| p.known_worktree_route(wt, &daemon_name)),
+                    &wt.path,
+                    &daemon_name,
+                )
+                .map(|route| (branch, route))
+            })
+            .collect();
         entries.insert(
             key,
             CachedSlugEntry {
                 slug: slug.clone(),
                 namespace: ns,
                 daemon_name,
-                dir: entry.resolve_dir().unwrap_or_default(),
+                dir,
                 worktrees,
                 rejected_worktree_prefixes,
+                tls,
+                worktree_tls,
             },
         );
     }
     entries
 }
 
-/// Return a snapshot of the cached slug table, refreshing from disk if expired.
+/// Return the cached slug table, refreshing from disk if expired.
 ///
-/// The disk I/O happens *outside* the mutex to avoid blocking concurrent requests
-/// during the refresh.  A short race window exists where two threads may both
-/// refresh, but that is harmless (last writer wins with identical data).
+/// The disk I/O happens *outside* the cache lock so a refresh does not block
+/// readers, and refreshes are serialized against each other so only one build
+/// runs at a time. Every caller therefore returns the one table that is
+/// published, which is what keeps routing and the certificate resolver from
+/// disagreeing about a hostname: a caller holding its own build could route a
+/// hostname as terminating while the resolver, reading the published table,
+/// refuses to issue for it and the handshake is dropped rather than spliced.
 pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedSlugEntry>> {
     // Fast path: cache still valid — just clone the Arc.
-    {
-        let cache = SLUG_CACHE.lock().await;
-        if std::time::Instant::now() < cache.expires_at {
-            return Arc::clone(&cache.entries);
-        }
-    } // lock released before disk I/O
+    if let Some(entries) = fresh_slugs() {
+        return entries;
+    }
 
-    // Slow path: refresh from disk on a blocking thread (involves subprocess calls).
+    // Slow path: one refresh at a time.
+    let _refreshing = SLUG_REFRESH.lock().await;
+
+    // Another caller may have refreshed while this one waited for the lock.
+    if let Some(entries) = fresh_slugs() {
+        return entries;
+    }
+
+    // Build from disk on a blocking thread (involves subprocess calls).
+    let previous = slug_snapshot();
     let new_entries = Arc::new(
-        tokio::task::spawn_blocking(build_slug_entries)
+        tokio::task::spawn_blocking(move || build_slug_entries(&previous))
             .await
             .unwrap_or_else(|e| {
                 log::warn!("Failed to refresh slug cache: {e}");
@@ -226,13 +432,11 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
             }),
     );
 
-    // Store the refreshed entries.
-    {
-        let mut cache = SLUG_CACHE.lock().await;
-        cache.entries = Arc::clone(&new_entries);
-        cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
-    }
-
+    let mut cache = SLUG_CACHE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.entries = Arc::clone(&new_entries);
+    cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
     new_entries
 }
 
@@ -248,22 +452,56 @@ struct RegistryCache {
     expires_at: std::time::Instant,
 }
 
-static HOST_REGISTRY: once_cell::sync::Lazy<tokio::sync::Mutex<RegistryCache>> =
+/// The cached hostname registry.
+///
+/// A `std::sync::RwLock` for the same reason as [`SLUG_CACHE`]: the certificate
+/// resolver runs in a synchronous trait method and has to know whether a
+/// hostname is passthrough before it issues a certificate for it. Both readers
+/// share one registry, so routing and the resolver cannot disagree.
+static HOST_REGISTRY: once_cell::sync::Lazy<std::sync::RwLock<RegistryCache>> =
     once_cell::sync::Lazy::new(|| {
-        tokio::sync::Mutex::new(RegistryCache {
+        std::sync::RwLock::new(RegistryCache {
             registry: Arc::new(crate::proxy::hostname::HostRegistry::default()),
             expires_at: std::time::Instant::now(), // expired -> built on first access
         })
     });
 
+/// Serializes registry refreshes, so one build runs at a time and every caller
+/// returns the table that was published. See [`SLUG_REFRESH`].
+static REGISTRY_REFRESH: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// The cached registry if it has not expired.
+fn fresh_registry() -> Option<Arc<crate::proxy::hostname::HostRegistry>> {
+    let cache = HOST_REGISTRY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (std::time::Instant::now() < cache.expires_at).then(|| Arc::clone(&cache.registry))
+}
+
+/// Read the cached hostname registry without awaiting.
+///
+/// Empty until it has been built once, which every TLS connection does before
+/// reaching the certificate resolver. An empty registry resolves every hostname
+/// to `terminate`, the behavior of a proxy that knows no projects.
+fn registry_snapshot() -> Arc<crate::proxy::hostname::HostRegistry> {
+    let cache = HOST_REGISTRY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(&cache.registry)
+}
+
 /// Return a snapshot of the cached hostname registry, rebuilding if expired.
 pub async fn get_cached_host_registry() -> Arc<crate::proxy::hostname::HostRegistry> {
-    {
-        let cache = HOST_REGISTRY.lock().await;
-        if std::time::Instant::now() < cache.expires_at {
-            return Arc::clone(&cache.registry);
-        }
-    } // lock released before disk I/O
+    if let Some(registry) = fresh_registry() {
+        return registry;
+    }
+
+    // One refresh at a time; the rest wait and take its result.
+    let _refreshing = REGISTRY_REFRESH.lock().await;
+    if let Some(registry) = fresh_registry() {
+        return registry;
+    }
 
     let registry = Arc::new(
         tokio::task::spawn_blocking(crate::proxy::hostname::HostRegistry::build)
@@ -277,12 +515,11 @@ pub async fn get_cached_host_registry() -> Arc<crate::proxy::hostname::HostRegis
         crate::proxy::hostname::warn_once(err);
     }
 
-    {
-        let mut cache = HOST_REGISTRY.lock().await;
-        cache.registry = Arc::clone(&registry);
-        cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
-    }
-
+    let mut cache = HOST_REGISTRY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.registry = Arc::clone(&registry);
+    cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
     registry
 }
 
@@ -344,6 +581,30 @@ fn match_worktree_prefix<'a>(cached: &'a CachedSlugEntry, prefix: &str) -> Prefi
         return PrefixMatch::Ambiguous;
     }
     PrefixMatch::Unknown
+}
+
+/// The TLS route for a worktree of `cached`.
+///
+/// A worktree whose own config describes the daemon is authoritative. One the
+/// proxy knows nothing about — an unreadable or momentarily invalid config, a
+/// checkout that predates the daemon — inherits the slug's *mode* but not its
+/// port.
+///
+/// Inheriting the mode is what keeps a passthrough slug from quietly being
+/// terminated with the proxy's certificate while its config is unreadable. The
+/// port is deliberately not inherited: `proxy_tls_port` names a position in one
+/// daemon's port list, and the daemon behind a worktree hostname is a different
+/// process with its own ports, so the hostname falls back to that daemon's own
+/// first port rather than to a number chosen for another checkout.
+fn worktree_route(cached: &CachedSlugEntry, sanitized_branch: &str) -> ProxyTlsRoute {
+    cached
+        .worktree_tls
+        .get(&sanitized_branch.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(ProxyTlsRoute {
+            mode: cached.tls.mode,
+            port: None,
+        })
 }
 
 /// Strip a trailing `.{suffix}` from `s`, ignoring ASCII case.
@@ -500,7 +761,16 @@ pub async fn serve(
     let addr = SocketAddr::from((bind_ip, effective_port));
 
     if s.proxy.https {
-        serve_https_with_http_fallback(app, addr, &s, effective_port, bind_tx, cancel).await
+        serve_https_with_http_fallback(
+            app,
+            addr,
+            &s,
+            effective_port,
+            effective_tld,
+            bind_tx,
+            cancel,
+        )
+        .await
     } else {
         serve_http(app, addr, effective_port, bind_tx, cancel).await
     }
@@ -558,6 +828,7 @@ async fn serve_https_with_http_fallback(
     addr: SocketAddr,
     s: &crate::settings::Settings,
     effective_port: u16,
+    effective_tld: String,
     bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
@@ -580,7 +851,7 @@ async fn serve_https_with_http_fallback(
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Build the SNI resolver (loads CA, caches per-domain certs)
-    let resolver = SniCertResolver::new(&ca_cert_path, &ca_key_path)?;
+    let resolver = SniCertResolver::new(&ca_cert_path, &ca_key_path, effective_tld.clone())?;
 
     let mut tls_config = ServerConfig::builder()
         .with_no_client_auth()
@@ -644,6 +915,7 @@ async fn serve_https_with_http_fallback(
                     .clone()
                     .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
                 let redirect_app = redirect_app.clone();
+                let tld = effective_tld.clone();
 
                 conn_tasks.spawn(async move {
                     // Peek at the first byte without consuming it.
@@ -655,6 +927,39 @@ async fn serve_https_with_http_fallback(
                     }
 
                     if peek_buf[0] == 0x16 {
+                        // A TLS connection whose SNI names a `proxy_tls = "passthrough"`
+                        // daemon is spliced through untouched, so the daemon's own
+                        // certificate, ALPN and client-certificate request reach the
+                        // client. Everything else is terminated here as before.
+                        match peek_sni_host(&stream, SNI_PEEK_TIMEOUT).await {
+                            SniProbe::Host(host) => {
+                                if resolve_tls_mode(&host, &tld).await.is_passthrough() {
+                                    serve_passthrough(stream, &host, &tld).await;
+                                    return;
+                                }
+                            }
+                            SniProbe::NoHost => {}
+                            // The hostname could not be read here, so this
+                            // connection is handed to the TLS acceptor like any
+                            // other: rustls defragments the handshake itself
+                            // and hands the real host name to the certificate
+                            // resolver, which refuses to issue for a
+                            // passthrough hostname rather than answering with
+                            // the proxy's certificate. Unrelated terminating
+                            // hostnames are served normally.
+                            SniProbe::Undetermined => {
+                                log::debug!(
+                                    "Could not read the ClientHello of a TLS connection; \
+                                     handing it to the TLS acceptor, which refuses to terminate \
+                                     a passthrough hostname."
+                                );
+                                // Make sure the resolver's synchronous snapshots
+                                // have been populated before it has to decide.
+                                let _ = get_cached_slugs().await;
+                                let _ = get_cached_host_registry().await;
+                            }
+                        }
+
                         // TLS handshake → HTTP/2 or HTTP/1.1 (negotiated via ALPN)
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
@@ -702,6 +1007,250 @@ async fn serve_https_with_http_fallback(
     Ok(())
 }
 
+/// How long to wait for a complete ClientHello before giving up on reading SNI.
+///
+/// A client sends its ClientHello immediately after the TCP handshake, so this
+/// only ever expires on a stalled or malicious connection.
+#[cfg(feature = "proxy-tls")]
+const SNI_PEEK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How much of the connection's opening bytes to examine while looking for SNI.
+///
+/// A ClientHello with a realistic extension set is well under 2 KiB; the cap
+/// bounds the work done for a connection that never sends a parseable one.
+#[cfg(feature = "proxy-tls")]
+const SNI_PEEK_MAX_BYTES: usize = 16 * 1024;
+
+/// What peeking at a connection's opening bytes established about its hostname.
+///
+/// The third case is the one that matters: "no hostname" and "hostname unknown"
+/// must not be treated alike, because a connection whose hostname could not be
+/// read may well belong to a passthrough daemon.
+#[cfg(feature = "proxy-tls")]
+#[derive(Debug, PartialEq, Eq)]
+enum SniProbe {
+    /// The ClientHello named this host.
+    Host(String),
+    /// A complete ClientHello carried no SNI, or the connection is not a TLS
+    /// handshake at all. Either way it cannot name a passthrough daemon.
+    NoHost,
+    /// No verdict: the hello stalled, exceeded the inspection window, or never
+    /// reconciled its own length fields. Passthrough cannot be ruled out.
+    Undetermined,
+}
+
+/// Read the SNI hostname from a connection's ClientHello *without consuming
+/// it*, so the same bytes are still available to whichever path handles the
+/// connection.
+///
+/// `timeout` bounds the whole probe, including a read that never completes:
+/// a peer that opens a connection and then sends nothing more is given up on
+/// rather than holding the connection task open. A client that sends part of
+/// a hello and then closes is noticed as soon as its close arrives, even
+/// though `peek` keeps returning the buffered bytes rather than end of file,
+/// and is reported as [`SniProbe::Undetermined`] without waiting out the
+/// timeout.
+#[cfg(feature = "proxy-tls")]
+async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniProbe {
+    use crate::proxy::sni::{SniPeek, parse_sni};
+
+    const MIN_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+    const MAX_PAUSE: std::time::Duration = std::time::Duration::from_millis(200);
+
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut buf = vec![0u8; 2048];
+    let mut last_n = 0;
+    let mut pause = MIN_PAUSE;
+
+    loop {
+        // The deadline has to bound the read itself: a peer that opens a
+        // connection and then stops sending leaves `peek` waiting forever, and
+        // the check further down never runs to end it.
+        let n = match tokio::time::timeout_at(deadline, stream.peek(&mut buf)).await {
+            // End of file with nothing buffered: the client hung up before
+            // saying anything, so there is nothing to route and nothing to
+            // downgrade.
+            Ok(Ok(0)) => return SniProbe::NoHost,
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                log::debug!("Failed to peek at a TLS connection: {e}");
+                return SniProbe::Undetermined;
+            }
+            Err(_elapsed) => {
+                log::debug!("Timed out waiting for a client that sent no ClientHello");
+                return SniProbe::Undetermined;
+            }
+        };
+        match parse_sni(&buf[..n]) {
+            SniPeek::Found(host) => return SniProbe::Host(host),
+            SniPeek::Absent | SniPeek::NotTls => return SniProbe::NoHost,
+            SniPeek::Incomplete => {}
+        }
+
+        // The hello may simply be longer than the window we looked at.
+        if n == buf.len() && buf.len() < SNI_PEEK_MAX_BYTES {
+            buf.resize((buf.len() * 2).min(SNI_PEEK_MAX_BYTES), 0);
+            continue;
+        }
+        if n >= SNI_PEEK_MAX_BYTES {
+            log::debug!("Giving up on SNI after {n} bytes without a complete ClientHello");
+            return SniProbe::Undetermined;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            log::debug!("Timed out waiting for a complete ClientHello ({n} bytes read)");
+            return SniProbe::Undetermined;
+        }
+        // Peeked data stays in the socket buffer, so the socket always reads as
+        // readable and waiting on that would spin. Its readiness does record
+        // the peer's close, though, which `peek` cannot report while bytes are
+        // still buffered: a client that sent part of a hello and hung up will
+        // never finish it.
+        match stream.ready(tokio::io::Interest::READABLE).await {
+            Ok(ready) if ready.is_read_closed() => {
+                log::debug!("Client closed after {n} bytes of an incomplete ClientHello");
+                return SniProbe::Undetermined;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::debug!("Failed to poll a TLS connection: {e}");
+                return SniProbe::Undetermined;
+            }
+        }
+        // Re-peek soon while the hello is still arriving, and back off while
+        // it has stalled, so a slow client is not polled hundreds of times.
+        pause = if n > last_n {
+            MIN_PAUSE
+        } else {
+            (pause * 2).min(MAX_PAUSE)
+        };
+        last_n = n;
+        tokio::time::sleep_until((tokio::time::Instant::now() + pause).min(deadline)).await;
+    }
+}
+
+/// Splice a TLS connection straight through to its daemon.
+///
+/// Neither direction is inspected or rewritten, so the daemon terminates TLS
+/// with its own certificate, negotiates its own ALPN (HTTP/2 and gRPC included)
+/// and can require client certificates — none of which survive termination at
+/// the proxy.
+///
+/// A stopped daemon is auto-started first and the connection is held until it
+/// is ready, bounded by `proxy.auto_start_timeout`: a raw TLS stream has no
+/// equivalent of the HTML "Starting…" page. When routing fails there is
+/// likewise nothing to reply with, so the connection is closed and the reason
+/// is logged.
+#[cfg(feature = "proxy-tls")]
+async fn serve_passthrough(mut stream: TcpStream, host: &str, tld: &str) {
+    let port = match resolve_passthrough_port(host, tld).await {
+        Ok(port) => port,
+        Err(msg) => {
+            log::warn!("TLS passthrough for '{host}' failed: {msg}");
+            return;
+        }
+    };
+
+    let addr = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut backend = match connect_backend(addr).await {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("TLS passthrough for '{host}': failed to connect to {addr}: {e}");
+            return;
+        }
+    };
+
+    log::debug!("TLS passthrough: splicing '{host}' to {addr}");
+    if let Err(e) = tokio::io::copy_bidirectional(&mut stream, &mut backend).await {
+        // A client or daemon closing one half mid-stream is ordinary.
+        log::debug!("TLS passthrough for '{host}' ended: {e}");
+    }
+}
+
+/// How long to keep retrying a refused connection to a daemon that has just
+/// been reported ready.
+///
+/// A daemon can be recorded as running and holding a port a moment before its
+/// listener actually accepts. This window covers that gap without making a
+/// genuinely dead port hang the client for the full auto-start budget.
+#[cfg(feature = "proxy-tls")]
+const PASSTHROUGH_CONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Connect to a daemon's port, retrying a refused connection briefly.
+#[cfg(feature = "proxy-tls")]
+async fn connect_backend(addr: SocketAddr) -> std::io::Result<TcpStream> {
+    let deadline = tokio::time::Instant::now() + PASSTHROUGH_CONNECT_GRACE;
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                let retryable = e.kind() == std::io::ErrorKind::ConnectionRefused;
+                if !retryable || tokio::time::Instant::now() >= deadline {
+                    return Err(e);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+/// Resolve the daemon port a passthrough hostname splices to, starting the
+/// daemon if it is not running.
+///
+/// Waiting replaces the "Starting…" page that the HTTP path shows, and the
+/// whole resolution — waiting behind another connection's start *and* running
+/// one of its own — is bounded by a single `proxy.auto_start_timeout` budget,
+/// which is what the documentation promises.
+#[cfg(feature = "proxy-tls")]
+async fn resolve_passthrough_port(host: &str, tld: &str) -> std::result::Result<u16, String> {
+    let budget = settings().proxy_auto_start_timeout();
+    match tokio::time::timeout(budget, resolve_passthrough_port_inner(host, tld)).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(format!(
+            "no daemon was ready for '{host}' within proxy.auto_start_timeout ({budget:?})"
+        )),
+    }
+}
+
+/// Inner loop of [`resolve_passthrough_port`], wrapped by the caller so that
+/// waiting and starting share one deadline.
+#[cfg(feature = "proxy-tls")]
+async fn resolve_passthrough_port_inner(host: &str, tld: &str) -> std::result::Result<u16, String> {
+    loop {
+        match resolve_target(host, tld).await {
+            ResolveResult::Ready(port) => return Ok(port),
+            // Another connection is already auto-starting this daemon; wait
+            // for it rather than starting a second copy. The caller's timeout
+            // ends this wait.
+            ResolveResult::Starting { slug: _ } => {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            ResolveResult::NotFound => {
+                return Err(
+                    "no running daemon with a port matched this hostname, and it could not \
+                     be auto-started"
+                        .to_string(),
+                );
+            }
+            // A project or stack page is HTML the proxy serves itself, and an
+            // unknown name has a page listing what does exist. Neither is
+            // something a spliced TLS stream can carry, so the connection is
+            // closed with the reason logged.
+            ResolveResult::Page {
+                project, worktree, ..
+            } => {
+                return Err(match worktree {
+                    Some(worktree) => {
+                        format!("'{worktree}' of project '{project}' is a stack page, not a daemon")
+                    }
+                    None => format!("'{project}' is a project page, not a daemon"),
+                });
+            }
+            ResolveResult::Unknown { heading, .. } => return Err(heading),
+            ResolveResult::Error(msg) => return Err(msg),
+        }
+    }
+}
+
 /// Fallback when proxy-tls feature is not enabled.
 #[cfg(not(feature = "proxy-tls"))]
 async fn serve_https_with_http_fallback(
@@ -709,6 +1258,7 @@ async fn serve_https_with_http_fallback(
     _addr: SocketAddr,
     _s: &crate::settings::Settings,
     _effective_port: u16,
+    _effective_tld: String,
     bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
     _cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
@@ -835,6 +1385,9 @@ pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> c
 struct SniCertResolver {
     /// The CA issuer (key + parsed cert params, used to sign leaf certs).
     issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
+    /// The TLD hostnames are resolved against, so a passthrough hostname can
+    /// be recognized before a certificate is issued for it.
+    tld: String,
     /// Directory where per-domain PEM files are cached on disk.
     host_certs_dir: std::path::PathBuf,
     /// L1 cache: domain → certified key (in-memory).
@@ -857,7 +1410,11 @@ impl std::fmt::Debug for SniCertResolver {
 #[cfg(feature = "proxy-tls")]
 impl SniCertResolver {
     /// Load the CA from disk and prepare the resolver.
-    fn new(ca_cert_path: &std::path::Path, ca_key_path: &std::path::Path) -> crate::Result<Self> {
+    fn new(
+        ca_cert_path: &std::path::Path,
+        ca_key_path: &std::path::Path,
+        tld: String,
+    ) -> crate::Result<Self> {
         let ca_key_pem = std::fs::read_to_string(ca_key_path)
             .map_err(|e| miette::miette!("Failed to read CA key {}: {e}", ca_key_path.display()))?;
         let ca_cert_pem = std::fs::read_to_string(ca_cert_path).map_err(|e| {
@@ -886,6 +1443,7 @@ impl SniCertResolver {
 
         Ok(Self {
             issuer,
+            tld,
             host_certs_dir,
             cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             pending: std::sync::Mutex::new(std::collections::HashSet::new()),
@@ -1172,6 +1730,24 @@ impl rustls::server::ResolvesServerCert for SniCertResolver {
         client_hello: rustls::server::ClientHello<'_>,
     ) -> Option<Arc<rustls::sign::CertifiedKey>> {
         let domain = client_hello.server_name()?;
+
+        // This is the last point where a passthrough hostname can still be
+        // caught, and the first where the host name is authoritative: rustls
+        // has reassembled the handshake itself. Issuing here would answer with
+        // the proxy's certificate in place of the daemon's and drop the
+        // client-certificate request, so the handshake is failed instead.
+        // Reached only when the pre-handshake peek could not read the hello.
+        if resolve_tls_mode_in(domain, &self.tld, &slug_snapshot(), &registry_snapshot())
+            .is_passthrough()
+        {
+            log::warn!(
+                "Refusing to terminate TLS for '{domain}', which is configured for \
+                 proxy_tls = \"passthrough\": its ClientHello could not be inspected before the \
+                 handshake, so the stream could not be spliced to the daemon."
+            );
+            return None;
+        }
+
         self.get_or_create(domain)
     }
 }
@@ -1353,6 +1929,15 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     let target_port = if let Some(port) = target_port {
         port
     } else {
+        // A passthrough hostname must never be forwarded as plain HTTP: the
+        // daemon expects a TLS handshake on that port, so the request would
+        // fail deep inside the daemon with nothing to point at the cause.
+        if resolve_tls_mode(&host, &state.tld).await.is_passthrough() {
+            return error_response(
+                StatusCode::BAD_GATEWAY,
+                &passthrough_unroutable_message(&host, state.is_tls),
+            );
+        }
         match resolve_target(&host, &state.tld).await {
             ResolveResult::Ready(port) => port,
             ResolveResult::Starting { slug } => {
@@ -1593,6 +2178,37 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     }
 }
 
+/// Explain why a request for a `proxy_tls = "passthrough"` hostname arrived on
+/// the HTTP path, where it cannot be served.
+///
+/// Passthrough routes on the hostname in the TLS ClientHello, so there are two
+/// ways to end up here: the proxy is not serving TLS at all, or the TLS
+/// connection named one host and the request inside it named another.
+///
+/// A connection with no SNI at all never reaches this point: the certificate
+/// resolver has no name to issue for, so the handshake fails outright.
+fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
+    if is_tls {
+        format!(
+            "'{host}' uses proxy_tls = \"passthrough\", which routes on the host name \
+             in the TLS ClientHello.\n\
+             This connection's TLS handshake named a different host, so it was \
+             terminated here and the request inside it cannot be spliced to the \
+             daemon.\n\
+             Make the connection itself name '{host}' rather than overriding the Host \
+             header of a connection opened to something else."
+        )
+    } else {
+        format!(
+            "'{host}' uses proxy_tls = \"passthrough\", but the proxy is serving \
+             plain HTTP.\n\
+             Passthrough splices a TLS stream to the daemon, so it requires \
+             settings.proxy.https = true.\n\
+             Enable HTTPS on the proxy, or set proxy_tls = \"terminate\" on the daemon."
+        )
+    }
+}
+
 /// Resolve the target for a given hostname.
 ///
 /// Slug-based routing using the global config's `[slugs]` section:
@@ -1612,8 +2228,70 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
+    let ctx = match resolve_route_context(host, tld).await {
+        Ok(ctx) => ctx,
+        Err(result) => return result,
+    };
+
+    let daemons = {
+        let state_file = SUPERVISOR.state_file.lock().await;
+        state_file.daemons.clone()
+    };
+
+    let daemon_name = &ctx.cached.daemon_name;
+    let running_matches: Vec<(&DaemonId, &crate::daemon::Daemon)> = daemons
+        .iter()
+        .filter(|(id, d)| {
+            id.name() == daemon_name
+                && d.status.is_running()
+                && match &ctx.expected_namespace {
+                    Some(ns) => id.namespace() == ns,
+                    None => true,
+                }
+        })
+        .collect();
+
+    match running_matches.as_slice() {
+        [] => {
+            try_auto_start(
+                &ctx.cached.slug,
+                &ctx.cached,
+                ctx.worktree_dir.as_deref(),
+                ctx.expected_namespace.as_deref(),
+                &ctx.route,
+            )
+            .await
+        }
+        // With more than one namespace running a daemon of this name and no
+        // namespace to narrow by, the first match is used — as before.
+        [(_, d), ..] => match select_daemon_port(&ctx.route, d) {
+            Some(port) => ResolveResult::Ready(port),
+            None => ResolveResult::NotFound,
+        },
+    }
+}
+
+/// What a hostname resolves to before the daemon's running state is consulted:
+/// the slug it matched, the namespace and worktree it names, and how its TLS
+/// is handled.
+struct RouteContext {
+    cached: CachedSlugEntry,
+    expected_namespace: Option<String>,
+    worktree_dir: Option<std::path::PathBuf>,
+    route: ProxyTlsRoute,
+}
+
+/// Resolve a hostname to its slug, worktree and TLS route.
+///
+/// This is the part of routing that does not depend on whether the daemon is
+/// running, which is what lets the 443 listener decide between terminating TLS
+/// and splicing the raw stream before anything is started.
+///
+/// Returns `Err(ResolveResult)` when the host does not route at all, carrying
+/// the response the caller should produce.
+async fn resolve_route_context(host: &str, tld: &str) -> Result<RouteContext, ResolveResult> {
     let Some(subdomain) = strip_tld(host, tld) else {
-        return ResolveResult::NotFound;
+        return Err(ResolveResult::NotFound);
     };
 
     let cached = cached_slug_lookup(&subdomain).await.filter(|cached| {
@@ -1633,13 +2311,14 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
     let Some(cached) = cached else {
         // No legacy slug matched; fall through to the automatic
         // `<daemon>.<worktree>.<project>` hostnames.
-        return resolve_registry_target(&subdomain).await;
+        return Err(resolve_registry_target(&subdomain).await);
     };
 
     // ─── Worktree prefix extraction ──────────────────────────────────────
     // When a wildcard subdomain like "feature-a.myapp" matched slug "myapp",
     // the prefix "feature-a" may correspond to a git worktree or jj workspace.
-    let (expected_namespace, worktree_dir) = if !subdomain.eq_ignore_ascii_case(&cached.slug) {
+    let (expected_namespace, worktree_dir, route) = if !subdomain.eq_ignore_ascii_case(&cached.slug)
+    {
         let prefix = strip_dot_suffix_ignore_case(&subdomain, &cached.slug);
         match prefix {
             Some(ref p) => match match_worktree_prefix(&cached, p) {
@@ -1652,71 +2331,155 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
                         );
                         cached.namespace.clone()
                     });
-                    (ns, Some(wt.path.clone()))
+                    let route = worktree_route(&cached, &wt.sanitized_branch);
+                    (ns, Some(wt.path.clone()), route)
                 }
                 PrefixMatch::Ambiguous => {
-                    return ResolveResult::Error(format!(
+                    return Err(ResolveResult::Error(format!(
                         "'{host}' is ambiguous: more than one branch or workspace of '{slug}' \
                          sanitizes to the prefix '{p}', and host names are case-insensitive.\n\
                          Rename one of them so the prefixes differ by more than case, then \
                          reload.\n\
                          The supervisor log lists the colliding branches.",
                         slug = cached.slug,
-                    ));
+                    )));
                 }
-                PrefixMatch::Unknown => (cached.namespace.clone(), None),
+                PrefixMatch::Unknown => (cached.namespace.clone(), None, cached.tls),
             },
-            None => (cached.namespace.clone(), None),
+            None => (cached.namespace.clone(), None, cached.tls),
         }
     } else {
-        (cached.namespace.clone(), None)
+        (cached.namespace.clone(), None, cached.tls)
     };
 
-    let daemon_name = &cached.daemon_name;
+    Ok(RouteContext {
+        cached,
+        expected_namespace,
+        worktree_dir,
+        route,
+    })
+}
 
-    let daemons = {
-        let state_file = SUPERVISOR.state_file.lock().await;
-        state_file.daemons.clone()
+/// How the proxy should handle TLS for `host`.
+///
+/// Answered from the slug cache alone, so it is cheap enough to call on every
+/// TLS connection. Anything that does not resolve to a daemon — an unknown
+/// host, the built-in web UI, a bare IP — keeps today's behavior and
+/// terminates.
+pub(crate) async fn resolve_tls_mode(host: &str, tld: &str) -> ProxyTlsMode {
+    let entries = get_cached_slugs().await;
+    let registry = get_cached_host_registry().await;
+    resolve_tls_mode_in(host, tld, &entries, &registry)
+}
+
+/// [`resolve_tls_mode`] against a given slug table, without awaiting.
+///
+/// Used by the certificate resolver, which runs in a synchronous trait method
+/// and reads [`slug_snapshot`].
+fn resolve_tls_mode_in(
+    host: &str,
+    tld: &str,
+    entries: &std::collections::HashMap<String, CachedSlugEntry>,
+    registry: &crate::proxy::hostname::HostRegistry,
+) -> ProxyTlsMode {
+    let Some(subdomain) = strip_tld(host, tld) else {
+        return ProxyTlsMode::Terminate;
     };
+    let wildcard = settings().proxy.wildcard;
 
-    let running_matches: Vec<(&DaemonId, &crate::daemon::Daemon)> = daemons
-        .iter()
-        .filter(|(id, d)| {
-            id.name() == daemon_name
-                && d.status.is_running()
-                && match &expected_namespace {
-                    Some(ns) => id.namespace() == ns,
-                    None => true,
-                }
-        })
-        .collect();
-
-    match running_matches.as_slice() {
-        [] => {
-            try_auto_start(
-                &cached.slug,
-                &cached,
-                worktree_dir.as_deref(),
-                expected_namespace.as_deref(),
-            )
-            .await
+    // Legacy slugs resolve first, exactly as routing resolves them.
+    if let Some(cached) = wildcard_slug_lookup(&subdomain, entries, wildcard)
+        && crate::proxy::hostname::hostname_fits(&cached.slug)
+    {
+        // A wildcard match may name a worktree, which carries its own setting.
+        if !subdomain.eq_ignore_ascii_case(&cached.slug)
+            && let Some(prefix) = strip_dot_suffix_ignore_case(&subdomain, &cached.slug)
+            && let PrefixMatch::Worktree(wt) = match_worktree_prefix(cached, &prefix)
+        {
+            return worktree_route(cached, &wt.sanitized_branch).mode;
         }
-        [(_, d)] => {
-            if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
-                ResolveResult::Ready(port)
-            } else {
-                ResolveResult::NotFound
-            }
-        }
-        _ => {
-            let d = running_matches[0].1;
-            if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
-                ResolveResult::Ready(port)
-            } else {
-                ResolveResult::NotFound
-            }
-        }
+        return cached.tls.mode;
     }
+
+    // Otherwise the automatic `<daemon>.<worktree>.<project>` hostnames, whose
+    // mode lives in the config of the checkout the name points at.
+    match registry.resolve(&subdomain, wildcard) {
+        crate::proxy::hostname::HostTarget::Daemon { proxy_tls, .. } => {
+            proxy_tls.unwrap_or_default()
+        }
+        // A project or stack page, an unknown name: the proxy answers those
+        // itself over its own certificate.
+        _ => ProxyTlsMode::Terminate,
+    }
+}
+
+/// Pick which of a running daemon's ports a hostname forwards to.
+///
+/// Without `proxy_tls_port`, a terminating hostname uses the port the process
+/// was detected listening on, falling back to the first resolved port — the
+/// historical behavior, and the right answer for a single-port daemon. A
+/// passthrough hostname reverses that order, because the first detected
+/// listener of a multi-port daemon need not be the one speaking TLS.
+///
+/// With `proxy_tls_port` set, the configured port is matched by *position* in
+/// the daemon's `port` list, so the mapping survives auto-bump: a daemon
+/// configured for `[8443, 9443]` whose ports bumped to `[8444, 9444]` still
+/// routes `proxy_tls_port = 9443` to 9444. Config validation rejects a
+/// `proxy_tls_port` the daemon does not declare, so the only way the position
+/// lookup can miss is a state record that predates the current config; the
+/// port is then used as written only while the daemon has no resolved ports to
+/// contradict it.
+fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> Option<u16> {
+    let Some(want) = route.port else {
+        // A passthrough hostname has to reach the daemon's *TLS* listener.
+        // `active_port` is whichever port was detected first, which on a
+        // multi-port daemon can be a secondary plain-HTTP or status listener
+        // that came up earlier, so the declared first port wins there — as
+        // documented. A terminating hostname keeps preferring the detected
+        // port, which is what routes daemons that declare no ports at all.
+        // Port 0 is what a daemon carries when it asked the operating system
+        // to choose and nothing has been detected yet; it is not connectable.
+        let detected = daemon.active_port.filter(|&p| p != 0);
+        let first_declared = daemon.resolved_port.iter().copied().find(|&p| p != 0);
+        return if route.mode.is_passthrough() {
+            first_declared.or(detected)
+        } else {
+            detected.or(first_declared)
+        };
+    };
+
+    let configured = daemon
+        .port
+        .as_ref()
+        .map(|p| p.expect.as_slice())
+        .unwrap_or(&[]);
+    if let Some(idx) = configured.iter().position(|&p| p == want)
+        && let Some(&resolved) = daemon.resolved_port.get(idx)
+    {
+        // A recorded 0 is a port the daemon asked the operating system to
+        // choose and nothing has detected yet, so it is no more connectable
+        // here than on the path that takes the daemon's first port. That is a
+        // daemon still starting, not a mismatch, so it is not warned about:
+        // auto-start polls through this state several times a second.
+        return (resolved != 0).then_some(resolved);
+    }
+    if daemon.resolved_port.contains(&want) {
+        return Some(want);
+    }
+    if daemon.resolved_port.is_empty() {
+        // Nothing recorded to place the port against — the config is the only
+        // information there is, so use it.
+        return Some(want);
+    }
+    // Every request to the hostname lands here until the daemon restarts, so
+    // the warning is logged once per daemon and port set, not per request.
+    crate::proxy::hostname::warn_once(&format!(
+        "Daemon {} has proxy_tls_port {want}, which is not among its resolved ports {:?}; \
+         refusing to route rather than forwarding to a port it never bound. \
+         Restart the daemon if its ports changed.",
+        daemon.id, daemon.resolved_port,
+    ));
+    None
 }
 
 /// RAII guard that removes a `DaemonId` from `AUTO_START_IN_PROGRESS` on drop.
@@ -1756,6 +2519,7 @@ async fn try_auto_start(
     cached: &CachedSlugEntry,
     worktree_dir: Option<&std::path::Path>,
     expected_namespace: Option<&str>,
+    route: &ProxyTlsRoute,
 ) -> ResolveResult {
     let s = settings();
     if !s.proxy.auto_start {
@@ -1788,7 +2552,7 @@ async fn try_auto_start(
 
     match tokio::time::timeout(
         timeout,
-        try_auto_start_inner(slug, cached, &daemon_id, worktree_dir),
+        try_auto_start_inner(slug, cached, &daemon_id, worktree_dir, route),
     )
     .await
     {
@@ -1813,6 +2577,7 @@ async fn try_auto_start_inner(
     cached: &CachedSlugEntry,
     daemon_id: &DaemonId,
     worktree_dir: Option<&std::path::Path>,
+    route: &ProxyTlsRoute,
 ) -> ResolveResult {
     let config_dir = worktree_dir.unwrap_or(&cached.dir);
 
@@ -1899,7 +2664,11 @@ async fn try_auto_start_inner(
 
         if let Some(d) = daemons.get(daemon_id) {
             if d.status.is_running() {
-                if let Some(port) = d.active_port.or_else(|| d.resolved_port.first().copied()) {
+                // Selected through the same route as an already-running daemon,
+                // so a hostname with `proxy_tls_port` lands on its configured
+                // port on the request that started the daemon, not only on
+                // later ones.
+                if let Some(port) = select_daemon_port(route, d) {
                     log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
                     return ResolveResult::Ready(port);
                 }
@@ -1943,14 +2712,24 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
             ref dir,
             ref namespace,
             ref daemon,
+            proxy_tls,
+            proxy_tls_port,
             ..
         } => {
+            // The mode and port were captured with the hostname, from one read
+            // of the checkout's config, so a config that has since become
+            // unreadable cannot turn a passthrough daemon into a terminated
+            // one.
+            let route = ProxyTlsRoute {
+                mode: proxy_tls.unwrap_or_default(),
+                port: proxy_tls_port,
+            };
             // When several checkouts share this daemon's namespace — in this
             // project or in another one, since namespaces come from directory
             // names — the ID no longer says which checkout is running, so the
             // request has to be matched to the directory it named.
             let per_checkout = registry.shares_daemon_id(namespace, daemon);
-            resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout).await
+            resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout, &route).await
         }
         crate::proxy::hostname::HostTarget::ProjectPage { project } => {
             let entry = registry.projects.get(&project);
@@ -2003,6 +2782,7 @@ async fn resolve_registry_daemon(
     namespace: &str,
     daemon: &str,
     per_checkout: bool,
+    route: &ProxyTlsRoute,
 ) -> ResolveResult {
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
@@ -2037,7 +2817,7 @@ async fn resolve_registry_daemon(
                     .unwrap_or_else(|| "an unknown directory".to_string()),
             ));
         }
-        return match d.active_port.or_else(|| d.resolved_port.first().copied()) {
+        return match select_daemon_port(route, d) {
             Some(port) => ResolveResult::Ready(port),
             None => ResolveResult::NotFound,
         };
@@ -2050,8 +2830,10 @@ async fn resolve_registry_daemon(
         dir: dir.to_path_buf(),
         worktrees: vec![],
         rejected_worktree_prefixes: std::collections::HashSet::new(),
+        tls: *route,
+        worktree_tls: std::collections::HashMap::new(),
     };
-    let result = try_auto_start(host, &cached, None, Some(namespace)).await;
+    let result = try_auto_start(host, &cached, None, Some(namespace), route).await;
 
     // The start can land on a record another checkout already owns, because the
     // supervisor refuses to run a second daemon under the same ID. Serving that
@@ -2336,14 +3118,18 @@ fn unknown_host_response(host: &str, heading: &str, known: &[String]) -> Respons
 ///
 /// Host names are case-insensitive (RFC 4343) and a browser passes on whatever
 /// the user typed, so `API.MyProject.LOCALHOST` has to lose its TLD like any
-/// other spelling.
+/// other spelling. A trailing root dot names the same host and is accepted too:
+/// this is the one place every routing path passes a host name through, whether
+/// it came from a `Host` header, an HTTP/2 `:authority`, a peeked ClientHello,
+/// or rustls handing over the SNI name it parsed, and only some of those are
+/// normalized by the time they arrive.
 ///
 /// Examples:
 /// - `api.myproject.localhost` with tld `localhost` → `api.myproject`
-/// - `api.LOCALHOST` with tld `localhost` → `api`
+/// - `API.LocalHost.` with tld `localhost` → `API`
 /// - `localhost` with tld `localhost` → `None` (no subdomain)
 fn strip_tld(host: &str, tld: &str) -> Option<String> {
-    strip_dot_suffix_ignore_case(host, tld)
+    strip_dot_suffix_ignore_case(host.trim_end_matches('.'), tld)
 }
 
 /// Build a human-friendly error message for port binding failures.
@@ -2603,6 +3389,23 @@ mod tests {
             Some("api".to_string())
         );
         assert_eq!(strip_tld("localhost", "localhost"), None);
+        // Host names are case-insensitive, and a trailing root dot names the
+        // same host. rustls hands over the SNI name as the client wrote it, so
+        // both spellings have to resolve or a passthrough hostname would be
+        // read as terminating.
+        assert_eq!(
+            strip_tld("API.LocalHost", "localhost"),
+            Some("API".to_string())
+        );
+        assert_eq!(
+            strip_tld("api.localhost.", "localhost"),
+            Some("api".to_string())
+        );
+        assert_eq!(
+            strip_tld("API.MyProject.LOCALHOST.", "localhost"),
+            Some("API.MyProject".to_string())
+        );
+        assert_eq!(strip_tld("localhost.", "localhost"), None);
         assert_eq!(
             strip_tld("api.myproject.test", "test"),
             Some("api.myproject".to_string())
@@ -2618,7 +3421,365 @@ mod tests {
             dir: std::path::PathBuf::from(format!("/tmp/{name}")),
             worktrees: vec![],
             rejected_worktree_prefixes: std::collections::HashSet::new(),
+            tls: ProxyTlsRoute::default(),
+            worktree_tls: std::collections::HashMap::new(),
         }
+    }
+
+    /// A stopped daemon record with the given configured and resolved ports.
+    fn make_daemon(
+        configured: &[u16],
+        resolved: &[u16],
+        active: Option<u16>,
+    ) -> crate::daemon::Daemon {
+        crate::daemon::Daemon {
+            id: DaemonId::try_new("proj", "api").unwrap(),
+            port: crate::config_types::PortConfig::from_parts(
+                configured.to_vec(),
+                crate::config_types::PortBump(0),
+            ),
+            resolved_port: resolved.to_vec(),
+            active_port: active,
+            ..crate::daemon::Daemon::default()
+        }
+    }
+
+    /// Without `proxy_tls_port`, the detected listening port wins, exactly as
+    /// before this setting existed.
+    #[test]
+    fn test_select_daemon_port_prefers_active_port() {
+        let route = ProxyTlsRoute::default();
+        let d = make_daemon(&[8443, 9443], &[8443, 9443], Some(8443));
+        assert_eq!(select_daemon_port(&route, &d), Some(8443));
+    }
+
+    /// A port of 0 is not connectable — it is what a daemon carries when it
+    /// asked the operating system to choose and nothing has been detected yet
+    /// — so it is skipped rather than spliced to.
+    #[test]
+    fn test_select_daemon_port_skips_port_zero() {
+        for mode in [ProxyTlsMode::Passthrough, ProxyTlsMode::Terminate] {
+            let route = ProxyTlsRoute { mode, port: None };
+
+            // A later real port is used in place of the placeholder.
+            let mixed = make_daemon(&[0, 8443], &[0, 8443], None);
+            assert_eq!(select_daemon_port(&route, &mixed), Some(8443));
+
+            // A placeholder in the detected port must not shadow a real one
+            // further down: it is skipped, not treated as the answer.
+            let detected_placeholder = make_daemon(&[0, 8443], &[0, 8443], Some(0));
+            assert_eq!(
+                select_daemon_port(&route, &detected_placeholder),
+                Some(8443)
+            );
+
+            // With nothing but placeholders there is no route.
+            let unresolved = make_daemon(&[0], &[0], Some(0));
+            assert_eq!(select_daemon_port(&route, &unresolved), None);
+        }
+    }
+
+    /// A passthrough hostname without `proxy_tls_port` takes the daemon's
+    /// declared first port rather than whichever listener was detected first:
+    /// on a multi-port daemon the detected one can be a secondary plain-HTTP
+    /// listener that came up before the TLS one.
+    #[test]
+    fn test_select_daemon_port_passthrough_prefers_declared_first_port() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: None,
+        };
+        let d = make_daemon(&[8443, 9080], &[8443, 9080], Some(9080));
+        assert_eq!(select_daemon_port(&route, &d), Some(8443));
+
+        // With nothing resolved, the detected port is still better than
+        // refusing to route.
+        let detected_only = make_daemon(&[], &[], Some(9080));
+        assert_eq!(select_daemon_port(&route, &detected_only), Some(9080));
+    }
+
+    /// With no detected port yet, the first resolved port is used.
+    #[test]
+    fn test_select_daemon_port_falls_back_to_first_resolved() {
+        let route = ProxyTlsRoute::default();
+        let d = make_daemon(&[8443, 9443], &[8443, 9443], None);
+        assert_eq!(select_daemon_port(&route, &d), Some(8443));
+
+        // A daemon with no ports at all does not route.
+        let none = make_daemon(&[], &[], None);
+        assert_eq!(select_daemon_port(&route, &none), None);
+    }
+
+    /// `proxy_tls_port` picks a later port of a multi-port daemon, overriding
+    /// the detected first port.
+    #[test]
+    fn test_select_daemon_port_honors_configured_port() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(9443),
+        };
+        let d = make_daemon(&[8443, 9443], &[8443, 9443], Some(8443));
+        assert_eq!(select_daemon_port(&route, &d), Some(9443));
+    }
+
+    /// Auto-bump shifts the ports a daemon actually binds. The hostname still
+    /// maps to the same *position* in its port list, so it follows the bump
+    /// instead of pointing at a port nothing is listening on.
+    #[test]
+    fn test_select_daemon_port_follows_auto_bump() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(9443),
+        };
+        let d = make_daemon(&[8443, 9443], &[8444, 9444], Some(8444));
+        assert_eq!(select_daemon_port(&route, &d), Some(9444));
+    }
+
+    /// A configured `proxy_tls_port` whose resolved port is still the
+    /// placeholder 0 does not route either: the position matches, but nothing
+    /// is listening there yet.
+    #[test]
+    fn test_select_daemon_port_skips_a_configured_port_resolved_to_zero() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(9443),
+        };
+        // Declared [8443, 9443], but the second slot has not been resolved to
+        // a real port yet.
+        let pending = make_daemon(&[8443, 9443], &[8443, 0], Some(8443));
+        assert_eq!(select_daemon_port(&route, &pending), None);
+
+        // Once it resolves, the same hostname routes to it.
+        let ready = make_daemon(&[8443, 9443], &[8443, 9444], Some(8443));
+        assert_eq!(select_daemon_port(&route, &ready), Some(9444));
+    }
+
+    /// A daemon whose recorded ports contradict `proxy_tls_port` — a state
+    /// record left by an older config — is not routed to a port it never
+    /// bound. Config validation stops this combination from being written in
+    /// the first place.
+    #[test]
+    fn test_select_daemon_port_refuses_a_port_the_daemon_never_bound() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(9443),
+        };
+        let stale = make_daemon(&[8443], &[8443], Some(8443));
+        assert_eq!(select_daemon_port(&route, &stale), None);
+
+        // With nothing recorded to contradict it, the configured port is all
+        // the information there is, so it is used.
+        let bare = make_daemon(&[], &[], None);
+        assert_eq!(select_daemon_port(&route, &bare), Some(9443));
+    }
+
+    /// `proxy_tls_port` selects the forwarded port in terminate mode too, not
+    /// only for passthrough hostnames.
+    #[test]
+    fn test_select_daemon_port_honors_configured_port_when_terminating() {
+        let route = ProxyTlsRoute {
+            mode: ProxyTlsMode::Terminate,
+            port: Some(9080),
+        };
+        let d = make_daemon(&[8080, 9080], &[8080, 9080], Some(8080));
+        assert_eq!(select_daemon_port(&route, &d), Some(9080));
+
+        // Following auto-bump by position, as in passthrough mode.
+        let bumped = make_daemon(&[8080, 9080], &[8081, 9081], Some(8081));
+        assert_eq!(select_daemon_port(&route, &bumped), Some(9081));
+    }
+
+    /// A directory that says nothing about the daemon reads as no route at
+    /// all, so a worktree the proxy cannot read inherits its slug's mode
+    /// instead of being recorded as terminating and quietly ending a splice.
+    #[test]
+    fn test_read_proxy_tls_route_absent_without_config() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A directory with no config at all.
+        assert_eq!(
+            read_proxy_tls_route(dir.path(), Some("proj"), "api").unwrap(),
+            None
+        );
+
+        // A config that describes some other daemon.
+        std::fs::write(
+            dir.path().join("pitchfork.toml"),
+            "[daemons.other]\nrun = \"serve\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_proxy_tls_route(dir.path(), Some("proj"), "api").unwrap(),
+            None,
+            "a config without this daemon says nothing about it"
+        );
+
+        // No namespace to resolve the daemon against.
+        assert_eq!(read_proxy_tls_route(dir.path(), None, "api").unwrap(), None);
+    }
+
+    /// A config that cannot be read — here because an unrelated daemon is
+    /// invalid — is an error, not a route of `terminate`, and a refresh keeps
+    /// the route it already knew instead of downgrading a passthrough daemon.
+    #[test]
+    fn test_unreadable_config_keeps_the_last_known_route() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"serve\"\nport = 8443\nproxy_tls = \"passthrough\"\n\n\
+             [daemons.broken]\nrun = \"serve\"\nproxy_tls = \"passthrough\"\n",
+        )
+        .unwrap();
+        let read = read_proxy_tls_route(dir.path(), Some("proj"), "api");
+        assert!(
+            read.is_err(),
+            "an invalid sibling makes the config unreadable"
+        );
+
+        let known = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        assert_eq!(
+            route_or_last_known(read, Some(known), dir.path(), "api"),
+            Some(known)
+        );
+
+        // A readable answer replaces what was known, even when it is silence.
+        assert_eq!(
+            route_or_last_known(Ok(None), Some(known), dir.path(), "api"),
+            None
+        );
+    }
+
+    /// A route is only carried over while the slug still points at the same
+    /// daemon, directory and namespace; a repointed slug starts from nothing.
+    #[test]
+    fn test_known_route_requires_the_same_target() {
+        let known = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        let mut entry = make_entry("api");
+        entry.namespace = Some("proj".to_string());
+        entry.tls = known;
+        let dir = entry.dir.clone();
+
+        assert_eq!(entry.known_route(&dir, Some("proj"), "api"), Some(known));
+        assert_eq!(entry.known_route(&dir, Some("proj"), "web"), None);
+        assert_eq!(entry.known_route(&dir, Some("other"), "api"), None);
+        assert_eq!(
+            entry.known_route(std::path::Path::new("/elsewhere"), Some("proj"), "api"),
+            None
+        );
+
+        let wt = make_worktree("feature/x", "feature-x");
+        entry.worktrees = vec![wt.clone()];
+        entry.worktree_tls.insert("feature-x".to_string(), known);
+        assert_eq!(entry.known_worktree_route(&wt, "api"), Some(known));
+        assert_eq!(entry.known_worktree_route(&wt, "web"), None);
+        let moved = crate::proxy::worktree::WorktreeEntry {
+            path: std::path::PathBuf::from("/elsewhere/feature-x"),
+            ..wt
+        };
+        assert_eq!(entry.known_worktree_route(&moved, "api"), None);
+    }
+
+    /// A worktree whose own config describes the daemon is authoritative,
+    /// including when it leaves `proxy_tls` out, and one the proxy knows
+    /// nothing about inherits the slug's route.
+    #[test]
+    fn test_worktree_route_inherits_when_unknown() {
+        let mut entry = make_entry("spliced");
+        entry.tls = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        entry.worktrees = vec![
+            make_worktree("feature/known", "feature-known"),
+            make_worktree("feature/unknown", "feature-unknown"),
+        ];
+        // Only the worktree whose config was readable gets an entry.
+        entry.worktree_tls.insert(
+            "feature-known".to_string(),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Terminate,
+                port: None,
+            },
+        );
+        let mut entries = std::collections::HashMap::new();
+        entries.insert("spliced".to_string(), entry);
+
+        let mode =
+            |host: &str| resolve_tls_mode_in(host, "localhost", &entries, &Default::default());
+        assert_eq!(
+            mode("feature-known.spliced.localhost"),
+            ProxyTlsMode::Terminate,
+            "an explicit worktree setting wins"
+        );
+        assert_eq!(
+            mode("feature-unknown.spliced.localhost"),
+            ProxyTlsMode::Passthrough,
+            "a worktree with nothing recorded inherits the slug"
+        );
+
+        // The port is not inherited with the mode: it names a position in one
+        // daemon's port list, and a worktree hostname reaches a different
+        // process with its own ports.
+        let cached = entries.get("spliced").unwrap();
+        assert_eq!(
+            worktree_route(cached, "feature-unknown"),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Passthrough,
+                port: None,
+            }
+        );
+        // An explicit worktree route is taken whole, port included.
+        assert_eq!(
+            worktree_route(cached, "feature-known"),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Terminate,
+                port: None,
+            }
+        );
+    }
+
+    /// The route of a wildcard worktree host comes from that worktree's own
+    /// config, and falls back to the slug's when the worktree has none.
+    #[test]
+    fn test_worktree_route_lookup() {
+        let mut entry = make_entry("myapp");
+        entry.tls = ProxyTlsRoute {
+            mode: ProxyTlsMode::Terminate,
+            port: None,
+        };
+        entry.worktrees = vec![
+            make_worktree("feature/b", "feature-b"),
+            make_worktree("feature/c", "feature-c"),
+        ];
+        entry.worktree_tls.insert(
+            "feature-b".to_string(),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Passthrough,
+                port: Some(9443),
+            },
+        );
+
+        let lookup = |prefix: &str| match match_worktree_prefix(&entry, prefix) {
+            PrefixMatch::Worktree(wt) => entry
+                .worktree_tls
+                .get(&wt.sanitized_branch.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(entry.tls),
+            _ => entry.tls,
+        };
+
+        assert_eq!(lookup("feature-b").mode, ProxyTlsMode::Passthrough);
+        assert_eq!(lookup("feature-b").port, Some(9443));
+        // A worktree without its own setting inherits the slug's mode.
+        assert_eq!(lookup("feature-c").mode, ProxyTlsMode::Terminate);
+        // So does an ordinary wildcard subdomain.
+        assert_eq!(lookup("tenant").mode, ProxyTlsMode::Terminate);
     }
 
     #[test]
@@ -2800,6 +3961,166 @@ mod tests {
         ));
     }
 
+    /// Each way of reaching the HTTP path with a passthrough hostname names its
+    /// own remedy, since the fixes are different.
+    #[test]
+    fn test_passthrough_unroutable_message() {
+        let no_tls = passthrough_unroutable_message("api.localhost", false);
+        assert!(no_tls.contains("api.localhost"), "{no_tls}");
+        assert!(no_tls.contains("settings.proxy.https = true"), "{no_tls}");
+
+        // Over TLS this branch is reached when the handshake named a
+        // different host than the request did — a connection with no host
+        // name at all fails in the certificate resolver and never gets here.
+        let mismatch = passthrough_unroutable_message("api.localhost", true);
+        assert!(mismatch.contains("named a different host"), "{mismatch}");
+        assert!(
+            !mismatch.contains("settings.proxy.https"),
+            "a host mismatch is not an HTTPS configuration problem: {mismatch}"
+        );
+    }
+
+    /// Routing and the certificate resolver read one table, so they cannot
+    /// disagree about a hostname's mode: the synchronous read returns the very
+    /// same allocation the async one does.
+    #[tokio::test]
+    async fn test_slug_snapshot_is_the_cached_table() {
+        let from_async = get_cached_slugs().await;
+        let from_sync = slug_snapshot();
+        assert!(
+            Arc::ptr_eq(&from_async, &from_sync),
+            "the synchronous read must see the same table routing does"
+        );
+    }
+
+    /// Callers arriving together on an expired cache share one table rather
+    /// than each building and holding its own. A caller holding its own build
+    /// would route a hostname by a table the certificate resolver does not
+    /// read.
+    #[tokio::test]
+    async fn test_concurrent_refresh_returns_the_published_table() {
+        // The cache starts expired, so both calls take the refresh path; the
+        // second waits for the first rather than building a second table.
+        let (first, second) = tokio::join!(get_cached_slugs(), get_cached_slugs());
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "overlapping refreshes must agree on one table"
+        );
+        assert!(
+            Arc::ptr_eq(&first, &slug_snapshot()),
+            "and it must be the published one"
+        );
+    }
+
+    /// The synchronous mode lookup the certificate resolver uses agrees with
+    /// the async one: exact hosts, wildcard subdomains, worktree prefixes with
+    /// their own setting, and anything that is not a slug at all.
+    #[test]
+    fn test_resolve_tls_mode_in() {
+        let mut entries = std::collections::HashMap::new();
+
+        let mut spliced = make_entry("spliced");
+        spliced.tls = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        spliced.worktrees = vec![
+            make_worktree("feature/b", "feature-b"),
+            make_worktree("feature/c", "feature-c"),
+        ];
+        spliced.worktree_tls.insert(
+            "feature-b".to_string(),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Terminate,
+                port: None,
+            },
+        );
+        entries.insert("spliced".to_string(), spliced);
+        entries.insert("plain".to_string(), make_entry("plain"));
+
+        let mode =
+            |host: &str| resolve_tls_mode_in(host, "localhost", &entries, &Default::default());
+
+        assert_eq!(mode("spliced.localhost"), ProxyTlsMode::Passthrough);
+        // Host names are case-insensitive, including the TLD, and a trailing
+        // root dot names the same host — rustls passes the SNI name through
+        // exactly as the client wrote it.
+        assert_eq!(mode("SPLICED.localhost"), ProxyTlsMode::Passthrough);
+        assert_eq!(mode("Spliced.LocalHost"), ProxyTlsMode::Passthrough);
+        assert_eq!(mode("spliced.localhost."), ProxyTlsMode::Passthrough);
+        assert_eq!(
+            mode("FEATURE-C.Spliced.LOCALHOST."),
+            ProxyTlsMode::Passthrough
+        );
+        // A wildcard subdomain inherits the slug's mode.
+        assert_eq!(mode("tenant.spliced.localhost"), ProxyTlsMode::Passthrough);
+        // A worktree with its own setting overrides the slug's …
+        assert_eq!(mode("feature-b.spliced.localhost"), ProxyTlsMode::Terminate);
+        // … and one without it inherits.
+        assert_eq!(
+            mode("feature-c.spliced.localhost"),
+            ProxyTlsMode::Passthrough
+        );
+        // Everything else terminates: another slug, an unknown host, the
+        // bare TLD, and a host outside the TLD.
+        assert_eq!(mode("plain.localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("unknown.localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("spliced.example.com"), ProxyTlsMode::Terminate);
+    }
+
+    /// A daemon reached through its automatic `<daemon>.<project>` hostname
+    /// gets the mode from its own config, the same as one reached through a
+    /// legacy slug. Automatic hostnames are the common case, so passthrough
+    /// has to work without a slug registration.
+    #[test]
+    fn test_resolve_tls_mode_in_uses_the_hostname_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("autoproj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.secure]\nrun = \"serve\"\nport = 8443\nproxy_tls = \"passthrough\"\n\
+             [daemons.plain]\nrun = \"serve\"\nport = 8080\n",
+        )
+        .unwrap();
+
+        let registry =
+            crate::proxy::hostname::HostRegistry::from_dirs(std::slice::from_ref(&project));
+        let slugs = std::collections::HashMap::new();
+        let mode = |host: &str| resolve_tls_mode_in(host, "localhost", &slugs, &registry);
+
+        assert_eq!(mode("secure.autoproj.localhost"), ProxyTlsMode::Passthrough);
+        assert_eq!(mode("plain.autoproj.localhost"), ProxyTlsMode::Terminate);
+
+        // The mode travels with the registry entry, so a config that becomes
+        // unreadable after the registry was built cannot turn the passthrough
+        // daemon into a terminated one.
+        std::fs::write(project.join("pitchfork.toml"), "this is not toml = [\n").unwrap();
+        assert_eq!(mode("secure.autoproj.localhost"), ProxyTlsMode::Passthrough);
+        // The project page is served by the proxy itself, over its own
+        // certificate, as is a name nothing claims.
+        assert_eq!(mode("autoproj.localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("nothing.autoproj.localhost"), ProxyTlsMode::Terminate);
+        assert_eq!(mode("unknown.localhost"), ProxyTlsMode::Terminate);
+    }
+
+    /// An empty table — the snapshot before any refresh — terminates rather
+    /// than refusing certificates for hosts it knows nothing about.
+    #[test]
+    fn test_resolve_tls_mode_in_empty_table() {
+        let entries = std::collections::HashMap::new();
+        assert_eq!(
+            resolve_tls_mode_in(
+                "spliced.localhost",
+                "localhost",
+                &entries,
+                &Default::default()
+            ),
+            ProxyTlsMode::Terminate
+        );
+    }
+
     #[test]
     fn test_strip_dot_suffix_ignore_case() {
         assert_eq!(
@@ -2828,6 +4149,197 @@ mod tests {
             Some("café".to_string())
         );
         assert_eq!(strip_dot_suffix_ignore_case("café", "afé"), None);
+    }
+
+    /// Build a minimal ClientHello naming `host`, as it goes on the wire.
+    #[cfg(feature = "proxy-tls")]
+    fn client_hello_wire(host: &str) -> Vec<u8> {
+        let mut entry = vec![0u8];
+        entry.extend_from_slice(&(host.len() as u16).to_be_bytes());
+        entry.extend_from_slice(host.as_bytes());
+        let mut sni = (entry.len() as u16).to_be_bytes().to_vec();
+        sni.extend_from_slice(&entry);
+
+        let mut ext = vec![0x00, 0x00];
+        ext.extend_from_slice(&(sni.len() as u16).to_be_bytes());
+        ext.extend_from_slice(&sni);
+
+        let mut body = vec![0x03, 0x03];
+        body.extend_from_slice(&[0x22; 32]);
+        body.push(0);
+        body.extend_from_slice(&[0x00, 0x02, 0x13, 0x01]);
+        body.extend_from_slice(&[0x01, 0x00]);
+        body.extend_from_slice(&(ext.len() as u16).to_be_bytes());
+        body.extend_from_slice(&ext);
+
+        let mut msg = vec![0x01];
+        let len = body.len() as u32;
+        msg.extend_from_slice(&[(len >> 16) as u8, (len >> 8) as u8, len as u8]);
+        msg.extend_from_slice(&body);
+
+        let mut record = vec![0x16, 0x03, 0x01];
+        record.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+        record.extend_from_slice(&msg);
+        record
+    }
+
+    /// Accept one connection, hand the peeked verdict back, and report what a
+    /// reader sees afterwards.
+    #[cfg(feature = "proxy-tls")]
+    async fn probe_over_socket(
+        writes: Vec<Vec<u8>>,
+        gap: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> (SniProbe, Vec<u8>) {
+        probe_over_socket_then(writes, gap, timeout, false).await
+    }
+
+    /// [`probe_over_socket`], optionally shutting down the client's write side
+    /// once everything is sent.
+    #[cfg(feature = "proxy-tls")]
+    async fn probe_over_socket_then(
+        writes: Vec<Vec<u8>>,
+        gap: std::time::Duration,
+        timeout: std::time::Duration,
+        close_after: bool,
+    ) -> (SniProbe, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let total: usize = writes.iter().map(Vec::len).sum();
+
+        let client = tokio::spawn(async move {
+            let mut sock = TcpStream::connect(addr).await.unwrap();
+            for chunk in writes {
+                sock.write_all(&chunk).await.unwrap();
+                sock.flush().await.unwrap();
+                tokio::time::sleep(gap).await;
+            }
+            if close_after {
+                sock.shutdown().await.unwrap();
+            }
+            // Hold the connection open so the server can read back what it
+            // only peeked at.
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let probe = peek_sni_host(&stream, timeout).await;
+
+        // Whatever was peeked must still be readable, byte for byte.
+        let mut replayed = vec![0u8; total];
+        let mut stream = stream;
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            stream.read_exact(&mut replayed),
+        )
+        .await;
+        let replayed = match read {
+            Ok(Ok(_)) => replayed,
+            _ => vec![],
+        };
+        client.abort();
+        (probe, replayed)
+    }
+
+    /// The peek loop reassembles a hello that arrives in many small writes,
+    /// and leaves every byte in the socket for the path that handles the
+    /// connection.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_reads_a_hello_split_across_writes() {
+        let wire = client_hello_wire("api.localhost");
+        let writes: Vec<Vec<u8>> = wire.chunks(3).map(<[u8]>::to_vec).collect();
+        let (probe, replayed) = probe_over_socket(
+            writes,
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Host("api.localhost".to_string()));
+        assert_eq!(replayed, wire, "peeked bytes must still be readable");
+    }
+
+    /// A hello that stops half way is reported as undetermined once the
+    /// timeout expires, never as "no hostname": the caller must not terminate
+    /// a connection that might belong to a passthrough daemon.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_undetermined_when_a_hello_stalls() {
+        let wire = client_hello_wire("api.localhost");
+        let truncated = wire[..wire.len() / 2].to_vec();
+        let (probe, _) = probe_over_socket(
+            vec![truncated],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Undetermined);
+    }
+
+    /// A client that sends part of a hello and then closes is given up on as
+    /// soon as the close arrives, not after the whole timeout: `peek` keeps
+    /// returning the buffered bytes, so only the socket's readiness shows it.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_notices_a_client_that_closes_mid_hello() {
+        let wire = client_hello_wire("api.localhost");
+        let truncated = wire[..wire.len() / 2].to_vec();
+        let started = std::time::Instant::now();
+        let (probe, _) = probe_over_socket_then(
+            vec![truncated],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(5),
+            true,
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Undetermined);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the probe must end when the client closes, not at its deadline"
+        );
+    }
+
+    /// A peer that opens a connection and then sends nothing is given up on
+    /// at the deadline. Without the read itself being bounded this waits for
+    /// as long as the peer keeps the socket open.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_gives_up_on_a_silent_peer() {
+        let started = std::time::Instant::now();
+        let (probe, _) = probe_over_socket(
+            vec![],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Undetermined);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the probe must end at its deadline, not wait on the peer"
+        );
+    }
+
+    /// Something that is not a TLS handshake is a definite "no hostname", so
+    /// the connection is still served rather than dropped.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_reports_no_host_for_non_tls() {
+        let (probe, _) = probe_over_socket(
+            vec![b"GET / HTTP/1.1\r\n\r\n".to_vec()],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::NoHost);
     }
 
     #[cfg(feature = "proxy-tls")]

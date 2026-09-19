@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::cli::json_output::{JsonStatusEntry, print_json};
-use crate::cli::list::build_proxy_url;
+use crate::cli::list::{build_proxy_url, proxy_tls_mode};
 use crate::daemon::Daemon;
 use crate::daemon_list::build_placeholder_daemon;
 use crate::pitchfork_toml::PitchforkToml;
@@ -49,6 +49,20 @@ fn daemon_host(
     )
 }
 
+/// The TLS mode the proxy uses for a daemon's hostname, resolved the way the
+/// router resolves it rather than from the daemon's recorded state.
+fn daemon_proxy_tls_mode(
+    id: &crate::daemon_id::DaemonId,
+    global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
+) -> crate::pitchfork_toml::ProxyTlsMode {
+    let config = PitchforkToml::all_merged_all_namespaces().ok();
+    proxy_tls_mode(
+        id,
+        config.as_ref().and_then(|pt| pt.daemons.get(id)),
+        global_slugs,
+    )
+}
+
 impl Status {
     pub async fn run(&self) -> Result<()> {
         let qualified_id = PitchforkToml::resolve_id(&self.id)?;
@@ -80,6 +94,9 @@ impl Status {
             } else {
                 None
             };
+            let proxy_tls = proxy_url
+                .as_ref()
+                .map(|_| daemon_proxy_tls_mode(&qualified_id, &global_slugs).to_string());
             let entry = JsonStatusEntry {
                 id: qualified_id.qualified(),
                 namespace: qualified_id.namespace().to_string(),
@@ -95,6 +112,7 @@ impl Status {
                 port: daemon.resolved_port.clone(),
                 proxy_url: proxy_url.clone(),
                 url: proxy_url,
+                proxy_tls,
             };
             return print_json(&entry);
         }
@@ -122,7 +140,11 @@ impl Status {
         let s = settings();
         if s.proxy.enable && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty()) {
             match build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s) {
-                Some(url) => println!("Proxy: {url}"),
+                // Like `list`, only the non-default mode is called out.
+                Some(url) => match daemon_proxy_tls_mode(&qualified_id, &global_slugs) {
+                    mode if mode.is_passthrough() => println!("Proxy: {url} ({mode})"),
+                    _ => println!("Proxy: {url}"),
+                },
                 // A daemon with a port but no hostname either opted out or lost
                 // a label to a clash, which `proxy status` spells out.
                 None => println!("Proxy: not routed (see `pitchfork proxy status`)"),

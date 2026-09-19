@@ -15,6 +15,7 @@ pub mod hosts;
 pub mod lan_ip;
 pub mod mdns;
 pub mod server;
+pub mod sni;
 pub mod trust;
 pub mod worktree;
 
