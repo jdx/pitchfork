@@ -844,11 +844,16 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
             "nothing is published yet — add one with `pitchfork proxy add <slug>`",
         )),
         // The resolver is off and no slug is written anywhere, so automatic
-        // project hostnames have nothing to resolve them. A warning rather
-        // than a failure: browsers resolve `*.localhost` on their own.
+        // project hostnames have nothing to resolve them. Only a warning under
+        // `localhost`, which browsers resolve on their own; any other TLD has
+        // nothing at all and fails.
         SystemName::NonePublished => checks.push(Check::new(
             "system resolution",
-            Status::Warn,
+            if tld.eq_ignore_ascii_case("localhost") {
+                Status::Warn
+            } else {
+                Status::Fail
+            },
             format!(
                 "proxy.dns is false and no slug is published, so *.{tld} names resolve \
                  only where the system or browser does so itself — enable proxy.dns and \
