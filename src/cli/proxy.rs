@@ -244,6 +244,19 @@ impl Setup {
             // something left to reverse on a later run.
             setup::clear_record();
         } else {
+            // The supervisor binds its port once, at startup, so a redirect
+            // repointed at a new `proxy.port` reaches nothing until it restarts.
+            if let Some(previous) = recorded.last().map(|r| r.proxy_port)
+                && previous != ctx.proxy_port
+            {
+                println!();
+                println!(
+                    "proxy.port changed from {previous} to {}. Restart the supervisor so it \
+                     listens there:",
+                    ctx.proxy_port
+                );
+                println!("  pitchfork supervisor start --force");
+            }
             println!();
             println!("Check the result with: pitchfork proxy doctor");
         }
