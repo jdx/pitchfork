@@ -65,16 +65,18 @@ See [log management](/guides/logs) for filtering, retention, and export.
 
 ### Running with sudo
 
-When the supervisor runs as root and `settings.supervisor.user` is set, default
-state paths use that user's home and files are owned by that user. Otherwise,
-sudo invocations resolve the calling user's home through `SUDO_USER`.
-An explicit `PITCHFORK_STATE_DIR` takes precedence.
+For an interactive sudo launch, `SUDO_USER` selects the calling user's home for
+configuration lookup. A system service installed with `sudo pitchfork boot enable`
+records that account as `supervisor run --boot --invoking-user <user>`, so boot
+startup uses the same user configuration without a sudo environment.
 
-A system boot service has no sudo environment. `sudo pitchfork boot enable`
-therefore records the calling user in the service as
-`supervisor run --boot --invoking-user <user>`, and the service resolves
-configuration and state paths from that user's home exactly as `SUDO_USER`
-would. See [running the supervisor as root](/guides/boot-start#running-the-supervisor-as-root).
+State paths default to the invoking user's home. For a root supervisor,
+`settings.supervisor.user` can select a different account for state paths and
+ownership; it does not change which user's configuration was loaded.
+An explicit `PITCHFORK_STATE_DIR` overrides the state directory.
+
+See [system boot services](/guides/boot-start#running-the-supervisor-as-root)
+for account selection and upgrading an existing registration.
 
 Keep clients and the supervisor pointed at the same state directory. Different
 values mean different state files and IPC sockets.

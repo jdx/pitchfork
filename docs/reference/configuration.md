@@ -235,7 +235,7 @@ user = "501"
 - If `user` is set, the daemon runs as that user.
 - Otherwise, if `[settings.supervisor] user` is set, the daemon runs as that user.
 - When the supervisor is running as root and `[settings.supervisor] user` is set, the default state directory, logs, and IPC sockets are stored under that user's state directory unless `PITCHFORK_STATE_DIR` overrides it. Pitchfork also chowns those state files to the configured user so non-root clients can read and write them.
-- Otherwise, if the supervisor was started as root via `sudo`, daemons run as the sudo-calling user from `SUDO_UID`/`SUDO_GID`. A system boot service registered with `sudo pitchfork boot enable` records that user (`supervisor run --invoking-user <user>`) and behaves the same way, because launchd and systemd do not pass the sudo environment to it.
+- Otherwise, if the supervisor was started as root via `sudo`, daemons run as the sudo-calling user from `SUDO_UID`/`SUDO_GID`.
 - If no run user can be derived, the daemon runs as the supervisor's current user.
 - Switching to another user requires the supervisor to have root privileges; otherwise startup fails.
 
