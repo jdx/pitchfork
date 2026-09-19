@@ -3642,77 +3642,48 @@ async fn try_auto_start_inner(
 ) -> ResolveResult {
     let config_dir = worktree_dir.unwrap_or(&cached.dir);
 
-    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(config_dir) {
-        Ok(pt) => pt,
-        Err(e) => {
-            log::warn!(
-                "Auto-start: failed to load config from {}: {e}",
-                config_dir.display()
-            );
-            return ResolveResult::NotFound;
-        }
-    };
-
-    let mut daemon_config = match pt.daemons.get(daemon_id) {
-        Some(cfg) => cfg.clone(),
-        None => {
-            log::debug!(
-                "Auto-start: daemon {daemon_id} not found in config at {}",
-                config_dir.display()
-            );
-            return ResolveResult::NotFound;
-        }
-    };
-
-    // Render Tera templates and merge top-level env (per-daemon wins). Building
-    // the template context reads configuration and derives hostnames, so it
-    // runs on a blocking worker rather than on the thread serving the request.
-    let rendered = {
-        let id = daemon_id.clone();
-        let mut config = daemon_config.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::ipc::batch::render_daemon_config(&id, &mut config, &pt).map(|()| config)
-        })
-        .await
-    };
-    daemon_config = match rendered {
-        Ok(Ok(config)) => config,
+    // Load from the routed checkout, including registered foreign dependencies.
+    // The supervisor's cwd may be an unrelated project.
+    let config_dir = config_dir.to_path_buf();
+    let pt = match tokio::task::spawn_blocking(move || {
+        crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_from(&config_dir)
+    })
+    .await
+    {
+        Ok(Ok(pt)) => pt,
         Ok(Err(e)) => {
-            log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
-            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+            return ResolveResult::Error(format!("Failed to load daemon configuration: {e}"));
         }
-        Err(e) => {
-            log::warn!("Auto-start: template rendering task failed for {daemon_id}: {e}");
-            return ResolveResult::Error(format!("Failed to render templates: {e}"));
-        }
+        Err(e) => return ResolveResult::Error(format!("Failed to load daemon configuration: {e}")),
     };
-
-    let opts = crate::ipc::batch::StartOptions {
-        quiet: true,
-        ..crate::ipc::batch::StartOptions::default()
-    };
-    let mut run_opts =
-        match crate::ipc::batch::build_run_options(daemon_id, &daemon_config, Some(&opts)).await {
-            Ok(o) => o,
-            Err(e) => {
-                log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");
-                return ResolveResult::Error(format!("Failed to build run options: {e}"));
-            }
-        };
-
-    // Only set the working directory when the daemon config didn't specify one.
-    // If the config has an explicit `dir`, respect it even in a worktree context.
-    if run_opts.dir.0.as_os_str().is_empty() {
-        run_opts.dir = crate::config_types::Dir(config_dir.to_path_buf());
+    if !pt.daemons.contains_key(daemon_id) {
+        return ResolveResult::NotFound;
     }
 
-    log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
-
-    let run_result = SUPERVISOR.run(run_opts).await;
-
-    if let Err(e) = run_result {
-        log::warn!("Auto-start: failed to start daemon {daemon_id}: {e}");
-        return ResolveResult::Error(format!("Failed to start daemon: {e}"));
+    // Reuse CLI startup so dependencies, oneshots, readiness, and port
+    // templates have identical behavior for a cold browser request.
+    let client = match crate::ipc::client::IpcClient::connect(false).await {
+        Ok(client) => Arc::new(client),
+        Err(e) => return ResolveResult::Error(format!("Failed to connect to supervisor: {e}")),
+    };
+    let opts = crate::ipc::batch::StartOptions {
+        quiet: true,
+        ..Default::default()
+    };
+    log::info!("Auto-start: starting daemon {daemon_id} and dependencies for slug '{slug}'");
+    match client
+        .start_daemons_with_config(std::slice::from_ref(daemon_id), opts, pt)
+        .await
+    {
+        Ok(result) if !result.any_failed => {}
+        Ok(_) => {
+            return ResolveResult::Error(format!(
+                "Failed to start daemon '{daemon_id}' or its dependencies. Check their logs for errors."
+            ));
+        }
+        Err(e) => {
+            return ResolveResult::Error(format!("Failed to start daemon '{daemon_id}': {e}"));
+        }
     }
 
     let poll_interval = std::time::Duration::from_millis(250);
