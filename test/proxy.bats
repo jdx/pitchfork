@@ -1218,3 +1218,271 @@ EOF
   assert_output --partial "settings.proxy.https = true"
 }
 
+
+# ============================================================================
+# Auto-start with dependencies
+# ============================================================================
+
+# Start a plain-HTTP proxy with auto-start. Extra `NAME=value` settings are
+# passed to the supervisor, which is what reads them.
+_start_autostart_proxy() {
+  local proxy_port=$1
+  shift
+  env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    PITCHFORK_PROXY_AUTO_START=true \
+    "$@" \
+    pitchfork supervisor start --force >/dev/null 2>&1
+}
+
+# Register project directories in the global `[namespaces]` table, which is
+# how the proxy knows a project before any of its daemons has run.
+_register_projects() {
+  local name
+  : >"$PITCHFORK_CONFIG_DIR/config.toml"
+  for name in "$@"; do
+    cat >>"$PITCHFORK_CONFIG_DIR/config.toml" <<EOF
+[namespaces.$name]
+dir = "$(normalize_path "$TEST_TEMP_DIR/$name")"
+
+EOF
+  done
+}
+
+@test "requesting an app URL from a stopped state starts its dependencies first" {
+  local proj="$TEST_TEMP_DIR/depproj"
+  mkdir -p "$proj"
+  _register_projects depproj
+
+  local http_script app_port proxy_port order
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  app_port=$(_free_port)
+  proxy_port=$(_free_port)
+  order="$(to_shell_path "$proj/order.log")"
+
+  # db takes a moment to become ready, so a dependent started early would
+  # record itself first.
+  cat >"$proj/pitchfork.toml" <<EOF
+[daemons.db]
+run = "sleep 1 && echo db >> '$order' && echo 'db ready' && sleep 60"
+ready_output = "db ready"
+
+[daemons.migrate]
+run = "echo migrate >> '$order'"
+oneshot = true
+depends = ["db"]
+
+[daemons.app]
+run = "echo app >> '$order' && python3 -u $http_script 0 $app_port"
+port = $app_port
+ready_http = "http://127.0.0.1:$app_port/health"
+depends = ["migrate"]
+EOF
+
+  _start_autostart_proxy "$proxy_port"
+
+  # The project page is read-only: opening it starts nothing.
+  run curl -s -o /dev/null -w "%{http_code}" --max-time 20 \
+    -H "Host: depproj.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output "200"
+  sleep 1
+  assert_file_not_exist "$proj/order.log"
+  run pitchfork status depproj/db
+  refute_output --partial "running"
+
+  # The first request waits for the whole graph and is then served.
+  run curl -s -w '\n%{http_code}' --max-time 60 \
+    -H "Host: app.depproj.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_line --index 0 "OK"
+  assert_line --index 1 "200"
+
+  run cat "$proj/order.log"
+  assert_output "$(printf 'db\nmigrate\napp')"
+
+  run pitchfork status depproj/migrate
+  assert_output --partial "completed"
+  run pitchfork status depproj/db
+  assert_output --partial "running"
+
+  pitchfork stop --all || true
+  kill_port "$app_port"
+}
+
+@test "auto-start resolves a dependency in another registered project" {
+  mkdir -p "$TEST_TEMP_DIR/shared" "$TEST_TEMP_DIR/web"
+  _register_projects shared web
+
+  local http_script app_port proxy_port order
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  app_port=$(_free_port)
+  proxy_port=$(_free_port)
+  order="$(to_shell_path "$TEST_TEMP_DIR/order.log")"
+
+  cat >"$TEST_TEMP_DIR/shared/pitchfork.toml" <<EOF
+[daemons.db]
+run = "sleep 1 && echo db >> '$order' && echo 'db ready' && sleep 60"
+ready_output = "db ready"
+EOF
+  cat >"$TEST_TEMP_DIR/web/pitchfork.toml" <<EOF
+[daemons.app]
+run = "echo app >> '$order' && python3 -u $http_script 0 $app_port"
+port = $app_port
+ready_http = "http://127.0.0.1:$app_port/health"
+depends = ["shared/db"]
+EOF
+
+  _start_autostart_proxy "$proxy_port"
+
+  run curl -s -w '\n%{http_code}' --max-time 60 \
+    -H "Host: app.web.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_line --index 1 "200"
+
+  run cat "$TEST_TEMP_DIR/order.log"
+  assert_output "$(printf 'db\napp')"
+  run pitchfork status shared/db
+  assert_output --partial "running"
+
+  pitchfork stop --all || true
+  kill_port "$app_port"
+}
+
+@test "auto-start reports a failed dependency and leaves the app stopped" {
+  local proj="$TEST_TEMP_DIR/failproj"
+  mkdir -p "$proj"
+  _register_projects failproj
+
+  local app_port proxy_port order
+  app_port=$(_free_port)
+  proxy_port=$(_free_port)
+  order="$(to_shell_path "$proj/order.log")"
+
+  cat >"$proj/pitchfork.toml" <<EOF
+[daemons.migrate]
+run = "echo migrate >> '$order' && exit 3"
+oneshot = true
+
+[daemons.app]
+run = "echo app >> '$order' && sleep 60"
+port = $app_port
+depends = ["migrate"]
+EOF
+
+  _start_autostart_proxy "$proxy_port"
+
+  run curl -s -w '\n%{http_code}' --max-time 60 \
+    -H "Host: app.failproj.localhost" "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "dependency 'failproj/migrate' failed"
+  assert_line --index -1 "502"
+
+  run cat "$proj/order.log"
+  assert_output "migrate"
+  run pitchfork status failproj/app
+  refute_output --partial "running"
+}
+
+@test "concurrent auto-starts sharing a dependency wait for it to be ready" {
+  local proj="$TEST_TEMP_DIR/sharedeps"
+  mkdir -p "$proj"
+  _register_projects sharedeps
+
+  local http_script port1 port2 proxy_port order marker
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  port1=$(_free_port)
+  port2=$(_free_port)
+  proxy_port=$(_free_port)
+  order="$(to_shell_path "$proj/order.log")"
+  marker="$(to_shell_path "$proj/db.ready")"
+
+  # Each app refuses to start unless db has finished starting, so an app
+  # started against a db that is only "running" fails.
+  cat >"$proj/pitchfork.toml" <<EOF
+[daemons.db]
+run = "echo db >> '$order' && sleep 2 && touch '$marker' && echo 'db ready' && sleep 60"
+ready_output = "db ready"
+
+[daemons.one]
+run = "test -f '$marker' && echo one >> '$order' && python3 -u $http_script 0 $port1"
+port = $port1
+ready_http = "http://127.0.0.1:$port1/health"
+depends = ["db"]
+
+[daemons.two]
+run = "test -f '$marker' && echo two >> '$order' && python3 -u $http_script 0 $port2"
+port = $port2
+ready_http = "http://127.0.0.1:$port2/health"
+depends = ["db"]
+EOF
+
+  _start_autostart_proxy "$proxy_port"
+
+  curl -s -o "$TEST_TEMP_DIR/one.out" -w '%{http_code}' --max-time 60 \
+    -H "Host: one.sharedeps.localhost" "http://127.0.0.1:$proxy_port/health" \
+    >"$TEST_TEMP_DIR/one.code" &
+  local pid1=$!
+  curl -s -o "$TEST_TEMP_DIR/two.out" -w '%{http_code}' --max-time 60 \
+    -H "Host: two.sharedeps.localhost" "http://127.0.0.1:$proxy_port/health" \
+    >"$TEST_TEMP_DIR/two.code" &
+  local pid2=$!
+  wait "$pid1" "$pid2"
+
+  run cat "$TEST_TEMP_DIR/one.code"
+  assert_output "200"
+  run cat "$TEST_TEMP_DIR/two.code"
+  assert_output "200"
+
+  # db started once, before either app.
+  run grep -c '^db$' "$proj/order.log"
+  assert_output "1"
+  run head -n 1 "$proj/order.log"
+  assert_output "db"
+
+  pitchfork stop --all || true
+  kill_port "$port1"
+  kill_port "$port2"
+}
+
+@test "an auto-start that outlives its request keeps starting the graph" {
+  local proj="$TEST_TEMP_DIR/slowdeps"
+  mkdir -p "$proj"
+  _register_projects slowdeps
+
+  local http_script app_port proxy_port order
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  app_port=$(_free_port)
+  proxy_port=$(_free_port)
+  order="$(to_shell_path "$proj/order.log")"
+
+  cat >"$proj/pitchfork.toml" <<EOF
+[daemons.db]
+run = "sleep 4 && echo db >> '$order' && echo 'db ready' && sleep 60"
+ready_output = "db ready"
+
+[daemons.app]
+run = "echo app >> '$order' && python3 -u $http_script 0 $app_port"
+port = $app_port
+ready_http = "http://127.0.0.1:$app_port/health"
+depends = ["db"]
+EOF
+
+  _start_autostart_proxy "$proxy_port" PITCHFORK_PROXY_AUTO_START_TIMEOUT=1s
+
+  run curl -s -w '\n%{http_code}' --max-time 30 \
+    -H "Host: app.slowdeps.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output --partial "timed out"
+  assert_output --partial "continues in the background"
+
+  # No further request is made: the graph finishes on its own, in order.
+  wait_for_status slowdeps/app running
+  run cat "$proj/order.log"
+  assert_output "$(printf 'db\napp')"
+
+  pitchfork stop --all || true
+  kill_port "$app_port"
+}
