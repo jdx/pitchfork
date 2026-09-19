@@ -293,11 +293,26 @@ pub fn start_in_background() -> Result<()> {
             .append(true)
             .open(log_file)
             .into_diagnostic()?;
+        // Computed here rather than in the child: sysconf is not on the
+        // async-signal-safe list.
+        let max_fd = max_inherited_fd();
         cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
             .env_remove("PITCHFORK_CONFIG")
             .stdin_null()
             .stdout_null()
             .stderr_file(stderr_file)
+            .before_spawn(move |cmd| {
+                use std::os::unix::process::CommandExt;
+                // SAFETY: the hook only issues close_range/fcntl syscalls,
+                // which are async-signal-safe, and does not allocate.
+                unsafe {
+                    cmd.pre_exec(move || {
+                        cloexec_inherited_fds(max_fd);
+                        Ok(())
+                    });
+                }
+                Ok(())
+            })
             .start()
             .into_diagnostic()?;
     }
@@ -379,6 +394,94 @@ pub fn start_in_background() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Upper bound (exclusive) for the fd scan in [`cloexec_fd_scan`], used when
+/// `close_range` is unavailable (macOS, Linux < 5.11).
+#[cfg(unix)]
+fn max_inherited_fd() -> libc::c_int {
+    // SAFETY: sysconf has no preconditions.
+    let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+    // RLIMIT_NOFILE alone is not a safe bound: a caller can open a
+    // high-numbered descriptor and then lower the limit before running us.
+    // Also list the fds that are actually open (both macOS and Linux provide
+    // /dev/fd) so the scan reaches every one of them.
+    let open_fds = std::fs::read_dir("/dev/fd")
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok());
+    fd_scan_end(open_max, open_fds)
+}
+
+#[cfg(unix)]
+fn fd_scan_end(
+    open_max: libc::c_long,
+    open_fds: impl IntoIterator<Item = libc::c_int>,
+) -> libc::c_int {
+    // -1 means "no limit"; cap the scan so an unlimited or huge RLIMIT_NOFILE
+    // doesn't make spawning the supervisor noticeably slow.
+    let limit = if open_max <= 0 {
+        1 << 16
+    } else {
+        open_max.min(1 << 20) as libc::c_int
+    };
+    let past_highest_open = open_fds
+        .into_iter()
+        .max()
+        .map_or(0, |fd| fd.saturating_add(1));
+    limit.max(past_highest_open)
+}
+
+/// Keep descriptors the CLI inherited without O_CLOEXEC from leaking into the
+/// background supervisor (and from there into every daemon it spawns).
+///
+/// Callers routinely hand us such descriptors: bats' fd 3, or pipes from a
+/// wrapping script. The long-lived supervisor would otherwise hold them open
+/// forever, so whoever waits for EOF on the pipe (bats, `$(...)`, CI log
+/// capture) hangs even after the CLI has exited. This is the Unix counterpart
+/// of `bInheritHandles=FALSE` in the Windows branch of `start_in_background`.
+///
+/// Runs in the forked child after stdio has been set up on fds 0-2. It marks
+/// fds >= 3 close-on-exec instead of closing them outright so that std's
+/// internal exec-status pipe (already CLOEXEC) keeps working and exec failures
+/// are still reported to the parent. Must stay async-signal-safe: no
+/// allocation, no locks, syscalls only.
+#[cfg(unix)]
+fn cloexec_inherited_fds(max_fd: libc::c_int) {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // SAFETY: close_range takes plain integer arguments. CLOSE_RANGE_CLOEXEC
+        // needs Linux 5.11; older kernels return ENOSYS/EINVAL and we fall
+        // through to the scan below.
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                3 as libc::c_uint,
+                libc::c_uint::MAX,
+                libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+            )
+        };
+        if ret == 0 {
+            return;
+        }
+    }
+    cloexec_fd_scan(max_fd);
+}
+
+/// Fallback for [`cloexec_inherited_fds`]: mark fds `3..max_fd` close-on-exec
+/// one at a time. Async-signal-safe.
+#[cfg(unix)]
+fn cloexec_fd_scan(max_fd: libc::c_int) {
+    for fd in 3..max_fd {
+        // SAFETY: fcntl on an arbitrary fd number is safe; unused numbers
+        // just fail with EBADF.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
 }
 
 /// Decide whether a project session should be removed during refresh.
@@ -2208,5 +2311,55 @@ mod tests {
             Some("recorded_title"),
             true,
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fd_scan_end_reaches_open_fds_above_the_fd_limit() {
+        // A caller opened fd 900, then lowered RLIMIT_NOFILE to 256.
+        assert_eq!(super::fd_scan_end(256, [0, 1, 2, 900]), 901);
+        assert_eq!(super::fd_scan_end(256, [0, 1, 2, 10]), 256);
+        assert_eq!(super::fd_scan_end(-1, []), 1 << 16);
+        assert_eq!(super::fd_scan_end(libc::c_long::MAX, []), 1 << 20);
+    }
+
+    /// Exercises the fcntl fallback directly: on Linux >= 5.11 the spawn path
+    /// never reaches it, but it is the only implementation on macOS.
+    #[cfg(unix)]
+    #[test]
+    fn cloexec_fd_scan_hides_inherited_fds_from_children() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        // A pipe without O_CLOEXEC, like bats' fd 3 or a wrapper script's pipe.
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let fd = fds[1];
+        let child_sees_fd = |scan: bool| {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
+                .arg(format!("[ -e /dev/fd/{fd} ]"))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if scan {
+                let max_fd = super::max_inherited_fd();
+                unsafe {
+                    cmd.pre_exec(move || {
+                        super::cloexec_fd_scan(max_fd);
+                        Ok(())
+                    });
+                }
+            }
+            cmd.status().unwrap().success()
+        };
+        let without_scan = child_sees_fd(false);
+        let with_scan = child_sees_fd(true);
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        assert!(without_scan, "control: child should inherit fd {fd}");
+        assert!(!with_scan, "fd {fd} leaked past cloexec_fd_scan");
     }
 }
