@@ -2561,12 +2561,15 @@ fn resolve_effective_run_identity(daemon_user: Option<&str>) -> Result<RunIdenti
     let configured = daemon_user.or(settings_user);
     let current_uid = nix::unistd::Uid::effective().as_raw();
     let current_gid = nix::unistd::Gid::effective().as_raw();
+    // The recorded invoking user of a boot service stands in for the sudo
+    // environment that launchd and systemd do not provide.
+    let invoking = env::invoking_user_ids().map(|(uid, gid)| (uid.to_string(), gid.to_string()));
     resolve_run_identity(
         configured,
         current_uid,
         current_gid,
-        std::env::var("SUDO_UID").ok().as_deref(),
-        std::env::var("SUDO_GID").ok().as_deref(),
+        invoking.as_ref().map(|(uid, _)| uid.as_str()),
+        invoking.as_ref().map(|(_, gid)| gid.as_str()),
     )
 }
 

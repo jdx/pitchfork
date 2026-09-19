@@ -470,6 +470,11 @@ impl SinkPipe {
             .arg("--log-format")
             .arg(&self.log_format);
         cmd.args(self.watch_for.args(self.relay_token));
+        // Write to the supervisor's log store even when the sink could not
+        // resolve it alone: a boot service's `--invoking-user` is not passed
+        // down, and no sudo environment is there to fall back on.
+        cmd.env("PITCHFORK_STATE_DIR", &*crate::env::PITCHFORK_STATE_DIR)
+            .env("PITCHFORK_LOGS_DIR", &*crate::env::PITCHFORK_LOGS_DIR);
         cmd.stdin(std::process::Stdio::from(reader))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

@@ -62,10 +62,16 @@ When run as a normal user, registers a user-level entry:
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
 
-To run the supervisor as root but keep state files and IPC sockets in a
-specific user's home directory, set `settings.supervisor.user` in the global
-pitchfork configuration (~/.config/pitchfork/config.toml or
-/etc/pitchfork/config.toml).
+A system-level entry registered through sudo records the invoking user
+(`supervisor run --boot --invoking-user <user>`). At boot, the root supervisor
+behaves as if that user had started it with sudo: it reads their
+~/.config/pitchfork/config.toml, keeps state files and IPC sockets in their
+home directory, and runs daemons as that user unless `settings.supervisor.user`
+or a daemon's `user` says otherwise. A system-level entry registered from a
+root login shell records no user and runs entirely as root.
+
+Running `enable` again rewrites an existing entry, for example to record the
+invoking user in an entry created by an older version.
 
 Subcommands:
 
@@ -97,9 +103,13 @@ When run as a normal user: creates a user-level entry
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
 
-If you want the supervisor to run as root but keep state files and IPC sockets
-under a specific user's home directory, configure `settings.supervisor.user`
-in your pitchfork configuration.
+Through sudo, the system-level entry records the invoking user so the root
+supervisor uses that user's configuration, state directory, and identity at
+boot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`
+to choose a different user for state and daemons.
+
+If an entry already exists at this level, it is rewritten with the current
+binary path and invoking user.
 """#
         flag "-h --help" help="Print help" action=help builtin=#true
     }
@@ -1215,6 +1225,14 @@ cmd supervisor help="Start, stop, and check the status of the pitchfork supervis
         flag --web-path help="Serve web UI under a path prefix (e.g. \"ps\" serves at /ps/)" env=PITCHFORK_WEB_PATH {
             arg <WEB_PATH>
         }
+        flag --invoking-user help="Run as root on behalf of this user, as if started with sudo by them" {
+            long_help #"""
+Run as root on behalf of this user, as if started with sudo by them
+
+`sudo pitchfork boot enable` records this flag in the system service, because launchd and systemd do not pass SUDO_USER to it. The user's home locates configuration, state, and the IPC socket; state is owned by the user; and daemons run as the user unless `supervisor.user` or a daemon's `user` says otherwise. Accepts a user name or numeric UID. Requires root, and the supervisor refuses to start if the account does not exist.
+"""#
+            arg <USER>
+        }
         flag "-h --help" help="Print help" action=help builtin=#true
     }
     cmd start help="Starts the internal pitchfork daemon in the background" {
@@ -1507,7 +1525,7 @@ config {
     prop "supervisor.stop_timeout" type="duration" default="5s" help="Maximum time to wait for daemon to stop gracefully" long_help="Maximum time to wait for daemon to stop gracefully\n\nWhen stopping a daemon, pitchfork sends its configured signal (SIGTERM by default) and waits this long for the process to exit gracefully before sending SIGKILL.\n\nIncrease for daemons that need time to clean up (e.g., flush data)." {
         env "PITCHFORK_STOP_TIMEOUT"
     }
-    prop "supervisor.user" type="string" default="" help="Default user to run daemon processes as" long_help="Default user to run daemon processes as\n\nDefault Unix user for daemon processes spawned by the supervisor.\n\nWhen set, all daemons run as this user unless an individual daemon sets `user = \"...\"`. The value may be a username (for example `\"postgres\"`) or a numeric UID (for example `\"501\"`).\n\nIf unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root." {
+    prop "supervisor.user" type="string" default="" help="Default user to run daemon processes as" long_help="Default user to run daemon processes as\n\nDefault Unix user for daemon processes spawned by the supervisor.\n\nWhen set, all daemons run as this user unless an individual daemon sets `user = \"...\"`. The value may be a username (for example `\"postgres\"`) or a numeric UID (for example `\"501\"`).\n\nIf unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root. A system boot service registered with `sudo pitchfork boot enable` records that user as `--invoking-user` and defaults to them in the same way." {
         env "PITCHFORK_USER"
     }
     prop "supervisor.watch_interval" type="duration" default="10s" help="File watcher config refresh interval" long_help="File watcher config refresh interval\n\nHow often the supervisor refreshes file watch configuration when using `watch` patterns.\n\nThis controls how quickly newly started/stopped daemons with watch patterns are reflected in the active watcher set.\n\nFor polling watcher cadence, use `supervisor.watch_poll_interval`.\n\nLower values react faster to configuration/runtime changes but use more CPU. The default `\"10s\"` is appropriate for most environments." {

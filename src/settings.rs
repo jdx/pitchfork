@@ -952,6 +952,8 @@ pub struct SettingsSupervisor {
     ///
     /// If unset and the supervisor is running as root via `sudo`, daemons default to
     /// the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
+    /// A system boot service registered with `sudo pitchfork boot enable` records
+    /// that user as `--invoking-user` and defaults to them in the same way.
     #[usage(env = "PITCHFORK_USER", default = "")]
     pub user: String,
 

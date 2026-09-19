@@ -13,7 +13,8 @@ pitchfork boot enable
 
 This registers pitchfork to start automatically when you log in.
 
-To register a **system-level** entry (starts for all users, requires root):
+To register a **system-level** entry that starts at boot, before anyone logs
+in (requires root):
 
 ```bash
 sudo pitchfork boot enable
@@ -42,16 +43,70 @@ The registration mode is determined automatically based on whether the command r
 
 ## Running the Supervisor as Root
 
-If you need the supervisor to run as root (e.g. to manage system-level processes), use `sudo pitchfork boot enable`.
+Use `sudo pitchfork boot enable` when the supervisor needs root, for example so
+the [proxy](/guides/port-management) can bind ports 80 and 443 at boot.
 
-However, if you still want state files, IPC sockets and daemon processes to belong to a specific user rather than root, set `settings.supervisor.user` in your global config (`/etc/pitchfork/config.toml` or `~/.config/pitchfork/config.toml`):
+launchd and systemd start the system service without the `SUDO_USER`,
+`SUDO_UID` and `SUDO_GID` variables that `sudo` sets. So that the service
+still knows whose configuration to use, `sudo pitchfork boot enable` records
+your account in the service command:
+
+```text
+/usr/local/bin/pitchfork supervisor run --boot --invoking-user alice
+```
+
+At boot, the root supervisor behaves the same as `sudo pitchfork supervisor start`
+run by `alice`:
+
+- It reads `~alice/.config/pitchfork/config.toml` (as well as
+  `/etc/pitchfork/config.toml`), including its daemons, proxy settings and
+  namespaces.
+- State, logs and the IPC socket live under `~alice/.local/state/pitchfork`,
+  owned by `alice`, so `pitchfork` commands run as `alice` reach the root
+  supervisor.
+- Daemons run as `alice` unless `settings.supervisor.user` or a daemon's `user`
+  says otherwise.
+
+To keep state and daemons under a different account, set
+`settings.supervisor.user` in `~alice/.config/pitchfork/config.toml` or
+`/etc/pitchfork/config.toml`:
 
 ```toml
 [settings.supervisor]
-user = "alice"
+user = "devservices"
 ```
 
-With this setting, the supervisor process runs as root but spawns daemons and writes state under the specified user's home directory.
+If the recorded account is later deleted, the service refuses to start instead
+of falling back to root. Run `sudo pitchfork boot enable` again from the account
+that should own the supervisor.
+
+A system-level entry registered from a root login shell (with no `SUDO_USER`)
+records no account. It runs entirely as root, reading `/etc/pitchfork/config.toml`
+and root's own configuration.
+
+`pitchfork boot status` shows which account the system-level entry uses.
+
+### Updating an existing system-level entry
+
+System-level entries created before pitchfork recorded the invoking user start
+with root's configuration, so they miss your `~/.config/pitchfork/config.toml`.
+Run `sudo pitchfork boot enable` again to add your account to the existing
+entry, then reload the service or restart the machine:
+
+::: code-group
+
+```bash [macOS]
+sudo pitchfork boot enable
+sudo launchctl bootout system /Library/LaunchDaemons/pitchfork.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/pitchfork.plist
+```
+
+```bash [Linux]
+sudo pitchfork boot enable
+sudo systemctl restart pitchfork
+```
+
+:::
 
 ## Configure Boot Daemons
 

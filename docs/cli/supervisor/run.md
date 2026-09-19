@@ -17,4 +17,7 @@ Runs the internal pitchfork daemon in the foreground
 - **`--web-path <WEB_PATH>`** — Serve web UI under a path prefix (e.g. "ps" serves at /ps/)
 
   **Environment Variable:** `PITCHFORK_WEB_PATH`
+- **`--invoking-user <USER>`** — Run as root on behalf of this user, as if started with sudo by them
+
+  `sudo pitchfork boot enable` records this flag in the system service, because launchd and systemd do not pass SUDO_USER to it. The user's home locates configuration, state, and the IPC socket; state is owned by the user; and daemons run as the user unless `supervisor.user` or a daemon's `user` says otherwise. Accepts a user name or numeric UID. Requires root, and the supervisor refuses to start if the account does not exist.
 - **`-h --help`** — Print help
