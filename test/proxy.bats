@@ -219,6 +219,34 @@ _free_port() {
   python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()"
 }
 
+# The DNS resolver binds its port for both UDP and TCP. A TCP-only probe can
+# return a port inside a Windows excluded UDP range (bind fails with os error
+# 10013), so ask the OS for a UDP port and confirm TCP can bind it too.
+_free_dns_port() {
+  python3 - <<'PY'
+import socket
+import sys
+
+for _ in range(20):
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        udp.bind(("127.0.0.1", 0))
+        port = udp.getsockname()[1]
+        tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            tcp.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+        finally:
+            tcp.close()
+    finally:
+        udp.close()
+    print(port)
+    sys.exit(0)
+sys.exit("no port free for both UDP and TCP")
+PY
+}
+
 @test "list shows proxy URL when proxy is enabled" {
   local proj="$TEST_TEMP_DIR/proxy-list"
   mkdir -p "$proj"
@@ -666,7 +694,7 @@ _start_proxy_with_dns() {
   local daemon_port proxy_port dns_port query
   daemon_port=$(_free_port)
   proxy_port=$(_free_port)
-  dns_port=$(_free_port)
+  dns_port=$(_free_dns_port)
   query="$(to_shell_path "$(script_path dns_query.py)")"
 
   create_pitchfork_toml <<EOF
@@ -734,7 +762,7 @@ EOF
 @test "proxy serves a PAC file routing the tld through the proxy" {
   local proxy_port dns_port
   proxy_port=$(_free_port)
-  dns_port=$(_free_port)
+  dns_port=$(_free_dns_port)
 
   _start_proxy_with_dns "$proxy_port" "$dns_port"
 
@@ -749,7 +777,7 @@ EOF
 @test "proxy doctor reports the resolver and the listener" {
   local proxy_port dns_port
   proxy_port=$(_free_port)
-  dns_port=$(_free_port)
+  dns_port=$(_free_dns_port)
 
   _start_proxy_with_dns "$proxy_port" "$dns_port"
 
@@ -772,7 +800,7 @@ EOF
   # on this command does not read a broken proxy as a healthy one.
   local proxy_port dns_port
   proxy_port=$(_free_port)
-  dns_port=$(_free_port)
+  dns_port=$(_free_dns_port)
 
   # Nothing is started, so the listener check fails whatever the host's DNS
   # does. That makes the exit code the same everywhere this runs.
@@ -819,7 +847,7 @@ EOF
   local daemon_port proxy_port dns_port
   daemon_port=$(_free_port)
   proxy_port=$(_free_port)
-  dns_port=$(_free_port)
+  dns_port=$(_free_dns_port)
 
   create_pitchfork_toml <<EOF
 [daemons.pac-web]
@@ -875,7 +903,7 @@ EOF
   local daemon_port proxy_port dns_port
   daemon_port=$(_free_port)
   proxy_port=$(_free_port)
-  dns_port=$(_free_port)
+  dns_port=$(_free_dns_port)
 
   create_pitchfork_toml <<EOF
 [daemons.pac-host-web]
