@@ -1638,7 +1638,7 @@ pub fn ensure_ca(
     // Leaves cached from a previous CA would still load — they are only
     // checked for expiry — and be served for names the new CA never signed.
     // They are all stale now, so they go.
-    clear_host_certs(&host_certs_dir_for(cert_path));
+    clear_host_certs(&host_certs_dir_for(cert_path), None);
     Ok(true)
 }
 
@@ -1651,17 +1651,50 @@ fn host_certs_dir_for(ca_cert_path: &std::path::Path) -> std::path::PathBuf {
         .join("host-certs")
 }
 
-/// Remove every cached leaf certificate in `dir`, leaving other files alone.
+/// Name of the cache subdirectory for leaves signed by the CA `ca_cert_pem`.
+///
+/// Leaves are kept per CA so that one signed by a replaced CA is never looked
+/// up again, even if a running supervisor writes it after the cache was
+/// cleared: loading only checks expiry, not the issuer. FNV-1a rather than
+/// `DefaultHasher`, whose output may change between Rust releases and would
+/// orphan the cache on every upgrade.
 #[cfg(feature = "proxy-tls")]
-fn clear_host_certs(dir: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+fn ca_cache_id(ca_cert_pem: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in ca_cert_pem.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("ca-{hash:016x}")
+}
+
+/// Remove cached leaves under `root` that do not belong to the CA `keep`
+/// names: loose `*.pem` files from the older flat layout, and every other
+/// CA's subdirectory. Other files are left alone.
+#[cfg(feature = "proxy-tls")]
+fn clear_host_certs(root: &std::path::Path, keep: Option<&str>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
-    for path in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
-        if path.extension().is_some_and(|x| x == "pem")
-            && let Err(e) = std::fs::remove_file(&path)
-        {
-            log::debug!("Could not remove stale cached cert {}: {e}", path.display());
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let result = if path.is_dir() {
+            let is_ca_dir = name.to_str().is_some_and(|n| n.starts_with("ca-"));
+            if !is_ca_dir || keep.is_some_and(|k| name == k) {
+                continue;
+            }
+            std::fs::remove_dir_all(&path)
+        } else if path.extension().is_some_and(|x| x == "pem") {
+            std::fs::remove_file(&path)
+        } else {
+            continue;
+        };
+        if let Err(e) = result {
+            log::debug!(
+                "Could not remove stale cached certs {}: {e}",
+                path.display()
+            );
         }
     }
 }
@@ -1968,8 +2001,12 @@ impl SniCertResolver {
         let issuer = rcgen::Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)
             .map_err(|e| miette::miette!("Failed to parse CA cert: {e}"))?;
 
-        // Ensure the host-certs directory exists
-        let host_certs_dir = host_certs_dir_for(ca_cert_path);
+        // Leaves live in a subdirectory for this CA, and those of any other CA
+        // are cleared, so a leaf from a replaced CA can never be served.
+        let host_certs_root = host_certs_dir_for(ca_cert_path);
+        let cache_id = ca_cache_id(&ca_cert_pem);
+        clear_host_certs(&host_certs_root, Some(&cache_id));
+        let host_certs_dir = host_certs_root.join(&cache_id);
         std::fs::create_dir_all(&host_certs_dir)
             .map_err(|e| miette::miette!("Failed to create host-certs dir: {e}"))?;
         // The in-memory cache starts empty on every run, so without this the
@@ -4438,6 +4475,32 @@ mod tests {
 
     #[cfg(feature = "proxy-tls")]
     #[test]
+    fn leaves_are_cached_per_ca_so_a_replaced_ca_is_never_served() {
+        // A running supervisor can write a leaf after a new CA cleared the
+        // cache. Loading only checks expiry, so the leaf has to live where the
+        // new CA never looks.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        ensure_ca(&cert, &key, || false).unwrap();
+        let first = SniCertResolver::new(&cert, &key, "localhost".into()).unwrap();
+        assert!(first.get_or_create_checked("api.localhost").is_some());
+        let old_dir = first.host_certs_dir.clone();
+        assert!(std::fs::read_dir(&old_dir).unwrap().count() > 0);
+
+        ensure_ca(&cert, &key, || false).unwrap();
+        // The old CA's resolver writes after the rotation.
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::write(old_dir.join("late.localhost.pem"), "old leaf").unwrap();
+
+        let second = SniCertResolver::new(&cert, &key, "localhost".into()).unwrap();
+        assert_ne!(second.host_certs_dir, old_dir);
+        // Starting under the new CA clears the other CA's leaves outright.
+        assert!(!old_dir.exists());
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
     fn cert_cache_file_names_do_not_collide() {
         // `.` used to become `_`, so these two shared a file.
         assert_ne!(
@@ -4513,8 +4576,8 @@ mod tests {
     fn the_ca_refuses_to_sign_for_a_name_outside_the_tld() {
         use rustls::server::ResolvesServerCert;
 
-        let (resolver, dir) = test_resolver("localhost");
-        let cache = dir.path().join("host-certs");
+        let (resolver, _dir) = test_resolver("localhost");
+        let cache = resolver.host_certs_dir.clone();
 
         // The CA is installed in the machine's trust store and the proxy
         // answers on loopback, so minting for an arbitrary SNI would hand out a
@@ -4560,8 +4623,8 @@ mod tests {
     fn the_certificate_cache_is_bounded_and_evicts_the_oldest() {
         // The set of names under a TLD is unbounded, and each one costs a key
         // generation and a file, so the cache must not grow with it.
-        let (resolver, dir) = test_resolver("localhost");
-        let host_certs = dir.path().join("host-certs");
+        let (resolver, _dir) = test_resolver("localhost");
+        let host_certs = resolver.host_certs_dir.clone();
 
         for i in 0..MAX_HOST_CERTS + 8 {
             assert!(

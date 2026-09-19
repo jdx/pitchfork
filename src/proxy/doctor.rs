@@ -808,7 +808,12 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
     // not. LAN mode publishes one record per registered slug and no wildcard,
     // so a random name never resolves there however healthy the setup is, and
     // asking for one would make this check warn on every LAN machine.
-    let system_name = if lan {
+    //
+    // The same holds with `proxy.dns = false`: nothing answers wildcards then,
+    // and only names written to /etc/hosts (by `proxy.sync_hosts`, or by hand)
+    // resolve, which are the published slugs.
+    let published_only = lan || !s.proxy.dns;
+    let system_name = if published_only {
         // Off the async task and under the same budget as the rest: this reads
         // the global config behind a file lock, so a concurrent `proxy add` or
         // a wedged process holding it would otherwise hang the whole command
@@ -850,7 +855,16 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
                     .map_err(|e| e.to_string())
             })
             .await;
-            checks.push(resolution_check(&lookup, &tld, pac_ready, lan, resolved));
+            let mut check = resolution_check(&lookup, &tld, pac_ready, lan, resolved);
+            // Setup installs no resolver route when the resolver is off, so
+            // "run setup" would not help; say what would.
+            if !s.proxy.dns && !lan && check.status == Status::Fail {
+                check.detail = format!(
+                    "{lookup} does not resolve, and proxy.dns is false — enable proxy.dns \
+                     and run `pitchfork proxy setup`, or keep proxy.sync_hosts on"
+                );
+            }
+            checks.push(check);
         }
     }
 
