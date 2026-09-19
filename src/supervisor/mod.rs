@@ -293,11 +293,26 @@ pub fn start_in_background() -> Result<()> {
             .append(true)
             .open(log_file)
             .into_diagnostic()?;
+        // Computed here rather than in the child: sysconf is not on the
+        // async-signal-safe list.
+        let max_fd = max_inherited_fd();
         cmd!(&*env::PITCHFORK_BIN, "supervisor", "run")
             .env_remove("PITCHFORK_CONFIG")
             .stdin_null()
             .stdout_null()
             .stderr_file(stderr_file)
+            .before_spawn(move |cmd| {
+                use std::os::unix::process::CommandExt;
+                // SAFETY: the hook only issues close_range/fcntl syscalls,
+                // which are async-signal-safe, and does not allocate.
+                unsafe {
+                    cmd.pre_exec(move || {
+                        cloexec_inherited_fds(max_fd);
+                        Ok(())
+                    });
+                }
+                Ok(())
+            })
             .start()
             .into_diagnostic()?;
     }
@@ -379,6 +394,66 @@ pub fn start_in_background() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Upper bound (exclusive) for the fd scan in [`cloexec_inherited_fds`] when
+/// `close_range` is unavailable.
+#[cfg(unix)]
+fn max_inherited_fd() -> libc::c_int {
+    // SAFETY: sysconf has no preconditions.
+    let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
+    // -1 means "no limit"; cap the scan so an unlimited or huge RLIMIT_NOFILE
+    // doesn't make spawning the supervisor noticeably slow.
+    if open_max <= 0 {
+        1 << 16
+    } else {
+        open_max.min(1 << 20) as libc::c_int
+    }
+}
+
+/// Keep descriptors the CLI inherited without O_CLOEXEC from leaking into the
+/// background supervisor (and from there into every daemon it spawns).
+///
+/// Callers routinely hand us such descriptors: bats' fd 3, or pipes from a
+/// wrapping script. The long-lived supervisor would otherwise hold them open
+/// forever, so whoever waits for EOF on the pipe (bats, `$(...)`, CI log
+/// capture) hangs even after the CLI has exited. This is the Unix counterpart
+/// of `bInheritHandles=FALSE` in the Windows branch of `start_in_background`.
+///
+/// Runs in the forked child after stdio has been set up on fds 0-2. It marks
+/// fds >= 3 close-on-exec instead of closing them outright so that std's
+/// internal exec-status pipe (already CLOEXEC) keeps working and exec failures
+/// are still reported to the parent. Must stay async-signal-safe: no
+/// allocation, no locks, syscalls only.
+#[cfg(unix)]
+fn cloexec_inherited_fds(max_fd: libc::c_int) {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // SAFETY: close_range takes plain integer arguments. CLOSE_RANGE_CLOEXEC
+        // needs Linux 5.11; older kernels return ENOSYS/EINVAL and we fall
+        // through to the scan below.
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_close_range,
+                3 as libc::c_uint,
+                libc::c_uint::MAX,
+                libc::CLOSE_RANGE_CLOEXEC as libc::c_uint,
+            )
+        };
+        if ret == 0 {
+            return;
+        }
+    }
+    for fd in 3..max_fd {
+        // SAFETY: fcntl on an arbitrary fd number is safe; unused numbers
+        // just fail with EBADF.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
 }
 
 /// Decide whether a project session should be removed during refresh.

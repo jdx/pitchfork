@@ -50,6 +50,37 @@ get_supervisor_pid() {
   assert_success
 }
 
+# A caller's non-CLOEXEC descriptors (bats' fd 3, pipes from a wrapping
+# script) must not leak into the long-lived background supervisor: it would
+# hold the pipe open forever and whoever waits for EOF on it (bats itself,
+# `$(...)`) hangs after the CLI exits.
+@test "background supervisor does not inherit the caller's file descriptors" {
+  [[ "$(uname -s)" == Linux ]] || skip "inspects /proc/<pid>/fd"
+
+  exec 7> >(cat >/dev/null)
+  local leaked_pipe
+  leaked_pipe="$(readlink "/proc/$$/fd/7")"
+  [[ "$leaked_pipe" == pipe:* ]]
+
+  run pitchfork supervisor start --force
+  exec 7>&-
+  assert_success
+
+  local pid
+  pid="$(get_supervisor_pid)"
+  [[ -n "$pid" ]]
+  [[ -d "/proc/$pid/fd" ]]
+
+  local fd target
+  for fd in /proc/"$pid"/fd/*; do
+    target="$(readlink "$fd" 2>/dev/null)" || continue
+    if [[ "$target" == "$leaked_pipe" ]]; then
+      echo "supervisor $pid holds the caller's pipe as ${fd##*/} ($target)" >&2
+      return 1
+    fi
+  done
+}
+
 # Write a state file whose supervisor entry points at $1 with a process
 # identity that cannot match it: a bogus start time and/or a boot time from a
 # previous boot. This reproduces the record left behind by a reboot (see
