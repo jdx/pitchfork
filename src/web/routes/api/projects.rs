@@ -496,11 +496,11 @@ fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<Str
         {
             continue;
         }
-        match PitchforkToml::read(&path) {
+        match groups_in_file(&path) {
             // Later files override earlier ones, as in the normal merge.
-            Ok(config) => {
-                for (name, group) in config.groups {
-                    groups.insert(name, group.daemons);
+            Ok(file_groups) => {
+                for (name, daemons) in file_groups {
+                    groups.insert(name, daemons);
                 }
             }
             Err(e) => {
@@ -509,12 +509,51 @@ fn groups_for_dir(dir: &StdPath) -> (IndexMap<String, Vec<DaemonId>>, Option<Str
                 // those groups, and acting on a superseded `default` group
                 // would stop or start daemons the worktree no longer means.
                 log::warn!("Failed to load config {}: {e}", path.display());
-                return (IndexMap::new(), Some(e.to_string()));
+                return (IndexMap::new(), Some(e));
             }
         }
     }
 
     (groups, None)
+}
+
+type FileGroups = Result<IndexMap<String, Vec<DaemonId>>, String>;
+
+/// Groups declared by one config file, cached per file.
+///
+/// `PitchforkToml::read` locks and re-parses the file on every call, and these
+/// pages poll, so an uncached read would lock every config file of every
+/// worktree every few seconds. The cache is invalidated the way the config
+/// cache is, by the file's modification time and size.
+fn groups_in_file(path: &StdPath) -> FileGroups {
+    #[allow(clippy::type_complexity)]
+    static CACHE: std::sync::OnceLock<
+        Mutex<HashMap<PathBuf, (Option<(std::time::SystemTime, u64)>, FileGroups)>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    let meta = crate::pitchfork_toml::current_meta(path);
+    if let Ok(cache) = cache.lock()
+        && let Some((cached_meta, groups)) = cache.get(path)
+        && *cached_meta == meta
+    {
+        return groups.clone();
+    }
+
+    let groups: FileGroups = PitchforkToml::read(path)
+        .map(|config| {
+            config
+                .groups
+                .into_iter()
+                .map(|(name, group)| (name, group.daemons))
+                .collect()
+        })
+        .map_err(|e| e.to_string());
+
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(path.to_path_buf(), (meta, groups.clone()));
+    }
+    groups
 }
 
 /// A URL name for a worktree that no other worktree of this project uses.
@@ -1387,6 +1426,37 @@ mod tests {
         assert_eq!(views.len(), 1, "got {:?}", views);
         assert_eq!(canonical(&views[0].path), canonical(&linked));
         assert_eq!(views[0].branch, "feature-a");
+    }
+
+    /// Repeated reads come from the cache, and an edit invalidates it: the
+    /// pages poll, so this path must neither re-lock every config file nor
+    /// serve a stale stack after a change.
+    #[test]
+    fn group_reads_are_cached_until_the_file_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = project.join("pitchfork.toml");
+        std::fs::write(
+            &config,
+            "[daemons.api]\nrun = \"true\"\n\n[groups.web]\ndaemons = [\"api\"]\n",
+        )
+        .unwrap();
+
+        let first = groups_in_file(&config).unwrap();
+        assert!(first.contains_key("web"));
+        assert_eq!(groups_in_file(&config).unwrap(), first);
+
+        // A different size, so the (mtime, size) check sees the change even
+        // where the clock is coarse.
+        std::fs::write(
+            &config,
+            "[daemons.api]\nrun = \"true\"\n\n[groups.backend]\ndaemons = [\"api\"]\n\n# changed\n",
+        )
+        .unwrap();
+        let second = groups_in_file(&config).unwrap();
+        assert!(second.contains_key("backend"));
+        assert!(!second.contains_key("web"));
     }
 
     /// A config file that cannot be read must not leave the groups the files
