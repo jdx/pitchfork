@@ -586,17 +586,30 @@ fn worktree_view_for(
 fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     let project_canonical = canonical(project_dir);
 
-    // A namespace registered on a linked worktree stands for that directory
-    // alone. The repository's other checkouts belong to the project registered
-    // on its main checkout, which this one is folded into when it exists; if it
-    // does not, enumerating them here would repeat the same worktrees and
-    // totals under every registered sibling. Discovery from a secondary jj
-    // workspace also mislabels the main one, so it is not used at all here.
-    if !is_main_checkout(project_dir) {
+    // A namespace registered on a linked worktree or a secondary jj workspace
+    // stands for that directory alone. The repository's other checkouts belong
+    // to the project registered on its main checkout, which this one is folded
+    // into when it exists; if it does not, enumerating them here would repeat
+    // the same worktrees and totals under every registered sibling.
+    //
+    // `main_checkout_root` is the gate rather than the shape of `.git`: a
+    // submodule and a `--separate-git-dir` checkout also have a `.git` file,
+    // and both are checkouts in their own right whose worktrees must still be
+    // listed.
+    if main_checkout_root(project_dir).is_some() {
+        // Keep this checkout's own branch and URL name: discovery lists every
+        // worktree of the repository, so take the entry for this directory.
+        let own = discover_cached(project_dir)
+            .into_iter()
+            .find(|wt| canonical(&wt.path) == project_canonical);
+        let (branch, name) = match own {
+            Some(wt) => (wt.branch, wt.sanitized_branch),
+            None => (DEFAULT_WORKTREE.to_string(), DEFAULT_WORKTREE.to_string()),
+        };
         return vec![worktree_view_for(
             project_dir.to_path_buf(),
-            DEFAULT_WORKTREE.to_string(),
-            DEFAULT_WORKTREE.to_string(),
+            branch,
+            name,
             &project_canonical,
         )];
     }
@@ -632,22 +645,6 @@ fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     }
 
     views
-}
-
-/// Whether `dir` is a repository's main checkout rather than a linked
-/// worktree. A linked git worktree has a `.git` *file* pointing at the common
-/// git directory; a secondary jj workspace has a `.jj/repo` file pointing at
-/// the main repository. A directory that is neither is its own root.
-fn is_main_checkout(dir: &StdPath) -> bool {
-    let jj = dir.join(".jj");
-    if jj.exists() {
-        return jj.join("repo").is_dir();
-    }
-    let git = dir.join(".git");
-    if git.exists() {
-        return git.is_dir();
-    }
-    true
 }
 
 /// The main checkout of the repository `dir` belongs to, when `dir` is a
@@ -713,14 +710,9 @@ fn collect_project_views_blocking() -> Vec<ProjectView> {
             let worktrees = worktree_views(&entry.dir);
             // Where this project's repository really lives, so a registration
             // that points at a linked worktree is folded into its checkout.
-            let main = main_checkout_root(&entry.dir)
-                .map(|r| canonical(&r))
-                .or_else(|| {
-                    worktrees
-                        .iter()
-                        .find(|w| is_main_checkout(&w.path))
-                        .map(|w| canonical(&w.path))
-                });
+            // `None` for a checkout that is its own root, which is never
+            // folded away.
+            let main = main_checkout_root(&entry.dir).map(|r| canonical(&r));
             (
                 ProjectView {
                     name: name.clone(),
@@ -1149,8 +1141,6 @@ mod tests {
         assert_eq!(main_checkout_root(&linked), Some(main.clone()));
         // The main checkout itself is not a linked worktree.
         assert_eq!(main_checkout_root(&main), None);
-        assert!(is_main_checkout(&main));
-        assert!(!is_main_checkout(&linked));
     }
 
     #[test]
@@ -1168,7 +1158,6 @@ mod tests {
 
         assert_eq!(main_checkout_root(&secondary), Some(main.clone()));
         assert_eq!(main_checkout_root(&main), None);
-        assert!(!is_main_checkout(&secondary));
     }
 
     /// A running daemon whose config the supervisor cannot resolve is still
@@ -1233,9 +1222,66 @@ mod tests {
         assert_eq!(views.len(), 1, "got {:?}", views);
         assert_eq!(canonical(&views[0].path), canonical(&linked));
         assert!(views[0].is_primary);
+        // Restricting the project to its own checkout keeps that checkout's
+        // identity, so its URL and the documented branch lookup still work.
+        assert_eq!(views[0].branch, "feature-a");
+        assert_eq!(views[0].name, "feature-a");
+
+        let project = ProjectView {
+            name: "shop-feat".into(),
+            dir: linked.clone(),
+            dir_exists: true,
+            worktrees: views,
+        };
+        assert!(find_worktree(&project, "feature-a").is_some());
 
         // The main checkout still lists the whole repository.
         assert_eq!(worktree_views(&repo).len(), 2);
+    }
+
+    /// A checkout whose `.git` is a file but not a linked worktree — a
+    /// `--separate-git-dir` clone, or a submodule — is a checkout in its own
+    /// right, so its worktrees must still be listed.
+    #[test]
+    fn separate_git_dir_checkout_still_lists_its_worktrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("shop");
+        let gitdir = temp.path().join("shop.git");
+        std::fs::create_dir_all(&repo).unwrap();
+        if !git(
+            &repo,
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                gitdir.to_str().unwrap(),
+                ".",
+            ],
+        ) {
+            return; // no usable git here
+        }
+        std::fs::write(
+            repo.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n",
+        )
+        .unwrap();
+        assert!(git(&repo, &["add", "-A"]));
+        assert!(git(&repo, &["commit", "-qm", "init"]));
+        assert!(git(
+            &repo,
+            &["worktree", "add", "-q", "../shop-feat", "-b", "feature-a"]
+        ));
+
+        // `.git` here is a file, but it points at a repository, not at a
+        // `worktrees/` entry, so this is not a linked worktree.
+        assert!(repo.join(".git").is_file());
+        assert_eq!(main_checkout_root(&repo), None);
+
+        let names: Vec<String> = worktree_views(&repo).into_iter().map(|w| w.name).collect();
+        assert!(names.contains(&"main".to_string()), "got {names:?}");
+        assert!(names.contains(&"feature-a".to_string()), "got {names:?}");
     }
 
     /// A config file that cannot be read must not leave the groups the files
