@@ -2027,8 +2027,8 @@ impl SniCertResolver {
 
     /// Where the cached certificate for `domain` lives.
     fn disk_path(&self, domain: &str) -> std::path::PathBuf {
-        let safe_name = domain.replace('.', "_").replace('*', "wildcard");
-        self.host_certs_dir.join(format!("{safe_name}.pem"))
+        self.host_certs_dir
+            .join(format!("{}.pem", cert_cache_file_stem(domain)))
     }
 
     /// Load a `CertifiedKey` from a combined cert+key PEM file on disk.
@@ -2226,6 +2226,25 @@ impl rustls::server::ResolvesServerCert for SniCertResolver {
         // handshake and writes nothing to the on-disk cache.
         self.get_or_create_checked(domain)
     }
+}
+
+/// A file name for `domain`'s cached certificate, distinct for distinct names.
+///
+/// Letters, digits, `-` and `.` are kept, since they are safe in a file name
+/// and make the cache readable; every other byte is percent-encoded. Mapping
+/// `.` to `_`, as this once did, sent `a_b.localhost` and `a.b.localhost` to
+/// the same file, so one name's certificate could be served for the other.
+#[cfg(feature = "proxy-tls")]
+fn cert_cache_file_stem(domain: &str) -> String {
+    let mut out = String::with_capacity(domain.len());
+    for b in domain.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// State for the plain-HTTP side of the TLS listener.
@@ -4206,6 +4225,24 @@ mod tests {
             "routed",
             "`any` did not deliver the POST to the handler"
         );
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn cert_cache_file_names_do_not_collide() {
+        // `.` used to become `_`, so these two shared a file.
+        assert_ne!(
+            cert_cache_file_stem("a_b.localhost"),
+            cert_cache_file_stem("a.b.localhost")
+        );
+        assert_eq!(cert_cache_file_stem("api.localhost"), "api.localhost");
+        assert_eq!(cert_cache_file_stem("a_b.localhost"), "a%5Fb.localhost");
+        assert_eq!(
+            cert_cache_file_stem("*.proj.localhost"),
+            "%2A.proj.localhost"
+        );
+        // No path separators survive.
+        assert!(!cert_cache_file_stem("../x").contains('/'));
     }
 
     #[test]

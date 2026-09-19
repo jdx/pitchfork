@@ -320,6 +320,9 @@ pub enum Action {
     /// One step with the enable's resource, so a re-run that still uses pf
     /// does not release it only to take it again.
     ReleasePf { pf_conf: PathBuf, token: PathBuf },
+    /// Generate the local CA pair the supervisor would otherwise create on its
+    /// first HTTPS start, so it exists to be trusted. Skipped when it does.
+    GenerateCa { cert: PathBuf, key: PathBuf },
     /// Install the CA into the system trust store, in this process.
     TrustCa { path: PathBuf },
     /// Remove the CA from the system trust store.
@@ -391,7 +394,7 @@ impl Step {
             // macOS installs into the login keychain and prompts on its own;
             // on Linux the CA step is planned as a sudo'd re-invocation instead.
             Action::UntrustCa { sudo, .. } => *sudo,
-            Action::TrustCa { .. } | Action::Note => false,
+            Action::GenerateCa { .. } | Action::TrustCa { .. } | Action::Note => false,
         }
     }
 }
@@ -761,6 +764,18 @@ fn plan_ca(ctx: &SetupContext, plan: &mut Plan) {
         });
         return;
     }
+    // The supervisor generates the CA on its first HTTPS start, but the
+    // documented order runs setup before that, and there is nothing to trust
+    // until the file exists. Generating it here is the same work the
+    // supervisor would do; it then finds the pair and uses it.
+    plan.steps.push(Step {
+        summary: format!("generate the pitchfork CA at {}", ctx.ca_path.display()),
+        action: Action::GenerateCa {
+            cert: ctx.ca_path.clone(),
+            key: ctx.ca_path.with_file_name("ca-key.pem"),
+        },
+        resource: None,
+    });
     let summary = format!(
         "install the pitchfork CA at {} into the system trust store",
         ctx.ca_path.display()
@@ -2027,6 +2042,7 @@ fn already_done(action: &Action) -> bool {
         }
         // Both reload rules the other steps may just have changed.
         Action::EnablePf { .. } | Action::ReleasePf { .. } => false,
+        Action::GenerateCa { cert, key } => cert.exists() && key.exists(),
         Action::TrustCa { path } => crate::proxy::trust::is_ca_trusted(path),
         // Skipped only when the certificate is present and demonstrably not
         // trusted. Two absences are deliberately not enough. A missing PEM is
@@ -2203,6 +2219,7 @@ fn execute(step: &Step) -> Result<()> {
             release_pf(token)
         }
         Action::GrantBindCapability { binary } => grant_bind_capability(binary),
+        Action::GenerateCa { cert, key } => generate_ca(cert, key),
         Action::TrustCa { path } => crate::proxy::trust::install_cert(path),
         Action::UntrustCa { path, sudo } => {
             if *sudo && !is_root() {
@@ -2372,6 +2389,19 @@ fn check_grant(path: &Path, caps: Option<&[String]>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Generate the local CA pair, as the supervisor does on its first HTTPS start.
+fn generate_ca(cert: &Path, key: &Path) -> Result<()> {
+    #[cfg(feature = "proxy-tls")]
+    {
+        crate::proxy::server::generate_ca(cert, key)
+    }
+    #[cfg(not(feature = "proxy-tls"))]
+    {
+        let _ = (cert, key);
+        miette::bail!("HTTPS proxy support requires the `proxy-tls` feature")
+    }
 }
 
 /// Enable pf, loading `pf_conf`, and record the reference that holds it on.
@@ -2993,6 +3023,7 @@ mod tests {
             plan(&c).describe(),
             vec![
                 format!("[sudo] write {resolver} pointing *.test at 127.0.0.1:15353"),
+                "generate the pitchfork CA at /state/proxy/ca.pem".to_string(),
                 "install the pitchfork CA at /state/proxy/ca.pem into the system trust store"
                     .to_string(),
                 "[sudo] write /etc/pf.anchors/pitchfork redirecting port 443 to 8443".to_string(),
@@ -3015,6 +3046,7 @@ mod tests {
                 format!("[sudo] write {dropin} routing *.test to 127.0.0.1:15353"),
                 "[sudo] restart systemd-resolved to pick up the route (interrupts DNS briefly)"
                     .to_string(),
+                format!("generate the pitchfork CA at {ca}"),
                 format!("[sudo] install the pitchfork CA at {ca} into the system trust store"),
                 "[sudo] redirect loopback traffic for port 443 to 8443 (iptables)".to_string(),
             ]
