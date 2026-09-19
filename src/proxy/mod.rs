@@ -10,14 +10,98 @@
 //! myapp.localhost:7777          →  localhost:8080  (via slug)
 //! ```
 
+pub mod dns;
+pub mod doctor;
 pub mod hostname;
 pub mod hosts;
 pub mod lan_ip;
 pub mod mdns;
+pub mod pac;
 pub mod server;
+pub mod setup;
 pub mod sni;
 pub mod trust;
 pub mod worktree;
+
+/// Rate limiter for a log line that an outside party can trigger at will.
+///
+/// The proxy and the resolver both refuse work under load, and a client can
+/// provoke those refusals as fast as it can open sockets. Logging each one
+/// hands that client a way to fill the disk, so the message is emitted at most
+/// once per interval and carries the number suppressed since.
+pub(crate) struct LogThrottle {
+    last: std::sync::Mutex<Option<std::time::Instant>>,
+    suppressed: std::sync::atomic::AtomicU64,
+}
+
+impl LogThrottle {
+    pub(crate) const fn new() -> Self {
+        Self {
+            last: std::sync::Mutex::new(None),
+            suppressed: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Whether to log now, and how many were suppressed since the last time.
+    ///
+    /// `None` means stay quiet. A poisoned lock logs rather than goes silent,
+    /// since losing the message entirely is the worse failure.
+    pub(crate) fn allow(&self, every: std::time::Duration) -> Option<u64> {
+        use std::sync::atomic::Ordering;
+        let now = std::time::Instant::now();
+        let mut last = match self.last.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
+        match *last {
+            Some(t) if now.duration_since(t) < every => {
+                self.suppressed.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+            _ => {
+                *last = Some(now);
+                Some(self.suppressed.swap(0, Ordering::Relaxed))
+            }
+        }
+    }
+}
+
+/// Whether `name` is the TLD itself or a name beneath it.
+///
+/// One definition shared by the DNS responder, which uses it to decide what it
+/// is authoritative for, and the certificate resolver, which uses it to decide
+/// what the local CA is allowed to sign. Those two answers must agree: a name
+/// the proxy will not resolve is a name it must not issue a certificate for.
+///
+/// Comparison is ASCII case-insensitive, per RFC 4343, and a trailing root dot
+/// is ignored.
+pub(crate) fn owns_name(tld: &str, name: &str) -> bool {
+    let name = name.trim_end_matches('.');
+    let tld = tld.trim_matches('.');
+    if tld.is_empty() || name.is_empty() {
+        return false;
+    }
+    if name.eq_ignore_ascii_case(tld) {
+        return true;
+    }
+    // Byte comparison: a DNS label may hold non-UTF-8 data, so slicing a
+    // lossily-decoded string could land mid-character.
+    let (name, tld) = (name.as_bytes(), tld.as_bytes());
+    name.len() > tld.len() + 1
+        && name[name.len() - tld.len() - 1] == b'.'
+        && name[name.len() - tld.len()..].eq_ignore_ascii_case(tld)
+}
+
+/// Whether `name` sits strictly beneath `tld`, rather than being the TLD itself.
+///
+/// Used for the sibling wildcard on a minted certificate: `*.<tld>` would cover
+/// the entire TLD, which is broader than the one host the certificate is for.
+pub(crate) fn is_strictly_under_tld(tld: &str, name: &str) -> bool {
+    !name
+        .trim_end_matches('.')
+        .eq_ignore_ascii_case(tld.trim_matches('.'))
+        && owns_name(tld, name)
+}
 
 /// Lowercased keys that more than one spelling in `keys` maps to.
 ///
@@ -83,6 +167,50 @@ pub fn build_proxy_url(host: Option<&str>, s: &crate::settings::Settings) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_throttled_message_reports_what_it_suppressed() {
+        use std::time::Duration;
+        let throttle = LogThrottle::new();
+        // First call goes through, with nothing suppressed yet.
+        assert_eq!(throttle.allow(Duration::from_secs(60)), Some(0));
+        // Everything inside the window stays quiet.
+        for _ in 0..5 {
+            assert_eq!(throttle.allow(Duration::from_secs(60)), None);
+        }
+        // A zero window always allows, and reports the five it swallowed.
+        assert_eq!(throttle.allow(Duration::ZERO), Some(5));
+        // The count resets after being reported.
+        assert_eq!(throttle.allow(Duration::ZERO), Some(0));
+    }
+
+    #[test]
+    fn owns_name_matches_the_apex_and_names_beneath_it() {
+        assert!(owns_name("localhost", "localhost"));
+        assert!(owns_name("localhost", "api.localhost"));
+        assert!(owns_name("localhost", "core.fix-refs.proj.localhost"));
+        assert!(owns_name("localhost", "API.LocalHost"));
+        assert!(owns_name("localhost", "api.localhost."));
+        assert!(owns_name("dev.internal", "api.dev.internal"));
+
+        assert!(!owns_name("localhost", "example.com"));
+        // Ends with the letters but not at a label boundary.
+        assert!(!owns_name("localhost", "notlocalhost"));
+        assert!(!owns_name("localhost", "localhost.evil.com"));
+        assert!(!owns_name("localhost", ""));
+        assert!(!owns_name("", "api.localhost"));
+    }
+
+    #[test]
+    fn is_strictly_under_tld_excludes_the_apex() {
+        assert!(is_strictly_under_tld("localhost", "api.localhost"));
+        // The apex itself is not "under" the TLD: a wildcard there would cover
+        // every name in it.
+        assert!(!is_strictly_under_tld("localhost", "localhost"));
+        assert!(!is_strictly_under_tld("dev.internal", "dev.internal"));
+        assert!(is_strictly_under_tld("dev.internal", "a.dev.internal"));
+        assert!(!is_strictly_under_tld("localhost", "example.com"));
+    }
 
     #[test]
     fn test_ascii_case_collisions() {

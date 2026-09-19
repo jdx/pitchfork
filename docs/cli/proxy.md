@@ -24,6 +24,8 @@ Enable the proxy in your pitchfork.toml or settings:
 
 Subcommands:
 
+    setup     Point this machine's DNS, trust store and ports at the proxy
+    doctor    Check everything a proxy URL needs in order to work
     trust     Install the proxy's TLS certificate into the system trust store
     untrust   Remove the proxy's TLS certificate from the system trust store
     add       Add a slug mapping to the global config (legacy)
@@ -36,7 +38,9 @@ Subcommands:
 ## Subcommands
 
 - [`pitchfork proxy add [FLAGS] <SLUG>`](/cli/proxy/add.md)
+- [`pitchfork proxy doctor`](/cli/proxy/doctor.md)
 - [`pitchfork proxy remove <SLUG>`](/cli/proxy/remove.md)
+- [`pitchfork proxy setup [FLAGS]`](/cli/proxy/setup.md)
 - [`pitchfork proxy status [--json]`](/cli/proxy/status.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
 - [`pitchfork proxy untrust [--cert <CERT>]`](/cli/proxy/untrust.md)

@@ -1276,6 +1276,21 @@
             "null"
           ]
         },
+        "dns": {
+          "description": "Run a loopback DNS resolver for the proxy TLD",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dns_port": {
+          "description": "Port the loopback DNS resolver listens on",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "enable": {
           "description": "Enable the reverse proxy server for daemons",
           "type": [
@@ -1320,7 +1335,7 @@
           "format": "int64"
         },
         "sync_hosts": {
-          "description": "Automatically sync slug hostnames to /etc/hosts",
+          "description": "Automatically sync slug hostnames to /etc/hosts (deprecated)",
           "type": [
             "boolean",
             "null"

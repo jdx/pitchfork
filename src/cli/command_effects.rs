@@ -54,6 +54,10 @@ pub const EFFECTS: &[(&str, SpecCommandEffect)] = &[
     ("proxy add", Write),
     // Deletes a slug mapping the user wrote into the global config.
     ("proxy remove", Destructive),
+    ("proxy doctor", Read),
+    // Changes resolver files, the trust store and port redirects. `--undo`
+    // reverses exactly what it did, so neither direction destroys anything.
+    ("proxy setup", Write),
     ("proxy status", Read),
     // Both directions modify the system trust store, which is why neither is
     // `read`; each is undone by the other, so neither destroys anything.

@@ -29,6 +29,8 @@ Enable the proxy in your pitchfork.toml or settings:
 
 Subcommands:
 
+    setup     Point this machine's DNS, trust store and ports at the proxy
+    doctor    Check everything a proxy URL needs in order to work
     trust     Install the proxy's TLS certificate into the system trust store
     untrust   Remove the proxy's TLS certificate from the system trust store
     add       Add a slug mapping to the global config (legacy)
@@ -42,6 +44,8 @@ pub struct Proxy {
 
 #[derive(Debug, usage_rs::Subcommands)]
 enum ProxyCommands {
+    Setup(Setup),
+    Doctor(Doctor),
     Trust(Trust),
     Untrust(Untrust),
     Status(ProxyStatus),
@@ -53,6 +57,8 @@ enum ProxyCommands {
 impl Proxy {
     pub async fn run(&self) -> Result<()> {
         match &self.command {
+            ProxyCommands::Setup(setup) => setup.run().await,
+            ProxyCommands::Doctor(doctor) => doctor.run().await,
             ProxyCommands::Trust(trust) => trust.run().await,
             ProxyCommands::Untrust(untrust) => untrust.run().await,
             ProxyCommands::Status(status) => status.run().await,
@@ -62,11 +68,293 @@ impl Proxy {
     }
 }
 
+// ─── proxy setup ─────────────────────────────────────────────────────────────
+
+/// Configure local proxy DNS, HTTPS trust, and standard ports
+///
+/// Configure hostname resolution, HTTPS certificate trust, and access through
+/// port 443 (or 80 for HTTP). Prints a plan and asks for confirmation before
+/// applying changes. Use `--dry-run` to preview the plan without applying it.
+///
+/// The supervisor can run as your normal user. Setup uses sudo for system DNS
+/// files, Linux CA trust, and port redirects or Linux bind capabilities. On
+/// macOS, choose an unprivileged `proxy.port`, such as 8443, for the redirect.
+/// Linux can also grant permission to bind the default port, 443, directly.
+///
+/// With `--pac`, applications that honor proxy settings use pitchfork's proxy
+/// auto-config file instead of system DNS. This skips DNS changes and port
+/// redirects. Use an unprivileged listener port to avoid bind privileges;
+/// Linux still needs sudo for CA trust if the CA is not already trusted.
+/// macOS may request authorization for keychain or network settings changes.
+///
+/// Use `--undo` to reverse setup using its saved configuration records, even
+/// after proxy settings change. Files and proxy settings are checked for
+/// pitchfork ownership before removal.
+///
+/// Example:
+///
+/// ```text
+/// pitchfork proxy setup --dry-run
+/// pitchfork proxy setup
+/// pitchfork proxy doctor
+/// pitchfork proxy setup --undo
+/// ```
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+struct Setup {
+    /// Configure a proxy auto-config (PAC) file instead of the system resolver
+    #[usage(long)]
+    pac: bool,
+    /// Remove recorded setup resources and restore saved proxy settings
+    #[usage(long)]
+    undo: bool,
+    /// Apply without asking for confirmation
+    #[usage(long, short = 'y')]
+    yes: bool,
+    /// Print the plan and exit without changing anything
+    #[usage(long)]
+    dry_run: bool,
+}
+
+impl Setup {
+    async fn run(&self) -> Result<()> {
+        use crate::proxy::setup;
+
+        // Setup elevates only the steps that need it. Run whole under sudo, it
+        // would record its setups, generate the CA and pick paths in root's
+        // state directory, while the supervisor runs as the user from theirs:
+        // the CA trusted would not be the one served, and the records undo
+        // reads would be somewhere the user's `--undo` never looks.
+        if let Some(user) = setup::invoked_through_sudo() {
+            miette::bail!(
+                "Run `pitchfork proxy setup` as {user}, without sudo. It asks for sudo \
+                 itself for the steps that need it, and running it as root would set up \
+                 root's pitchfork instead of yours."
+            );
+        }
+
+        let s = crate::settings::settings();
+        if !s.proxy.enable && !self.undo {
+            println!("Proxy: disabled");
+            println!();
+            println!("Enable it first, then re-run setup:");
+            println!("  pitchfork settings set proxy.enable true");
+            return Ok(());
+        }
+
+        // Refuse a TLD that would steer a privileged write somewhere it does
+        // not belong, or a port the proxy itself would refuse to listen on,
+        // before any plan is built from them. The TLD checked is the one the
+        // plan uses: LAN mode always serves `local`, whatever `proxy.tld` says.
+        //
+        // Undoing is not refused for them. Changing `proxy.tld` or
+        // `proxy.port` to something invalid after a setup must not strand the
+        // resolver files, redirects and trust-store changes that setup really
+        // installed; those come from the records, which were validated when
+        // written. Only the current-settings half of the plan is dropped.
+        let settings_error = match setup::validate_tld(crate::proxy::effective_tld(&s))
+            .and_then(|()| setup::validate_proxy_port(s.proxy.port))
+        {
+            Ok(()) => None,
+            Err(e) if self.undo => Some(e),
+            Err(e) => return Err(e),
+        };
+
+        // Held for the whole run: reading the system, reading the records,
+        // building the plan, writing the record, applying it and clearing it
+        // are one transaction. A second run that read the records while this
+        // one was applying would plan against a state about to change.
+        let _lock = setup::lock_setup()?;
+
+        let ctx = setup::context_from_settings(&s, self.pac);
+        // Undo reverses what the last setup recorded, not what the settings
+        // happen to say now: `proxy.port`, `proxy.tld` or `proxy.tls_cert` may
+        // have changed since, and a plan built from the new values would probe
+        // for resources that were never installed while leaving the real ones
+        // behind.
+        let recorded = setup::load_records();
+        let plan = if self.undo {
+            if let Some(e) = &settings_error {
+                println!("Ignoring the current proxy settings: {e}");
+                println!("Undoing from the recorded setups only.");
+                println!();
+            }
+            setup::plan_undo_from(settings_error.is_none().then_some(&ctx), &recorded)
+        } else {
+            // Removes what an earlier setup installed that this one replaces,
+            // before installing the new configuration.
+            setup::plan_with_reconcile(&ctx, &recorded)
+        };
+
+        let heading = if self.undo {
+            "This will undo the following:"
+        } else {
+            "This will do the following:"
+        };
+        println!("{heading}");
+        println!();
+        for line in plan.describe() {
+            println!("  {line}");
+        }
+        println!();
+
+        if self.dry_run {
+            for note in &plan.manual {
+                println!("{note}");
+                println!();
+            }
+            return Ok(());
+        }
+
+        if plan.is_empty() {
+            println!("Nothing to change.");
+            for note in &plan.manual {
+                println!();
+                println!("{note}");
+            }
+            return Ok(());
+        }
+
+        if !self.yes && !confirm(plan.needs_sudo())? {
+            println!("Aborted. Nothing was changed.");
+            return Ok(());
+        }
+
+        println!();
+        if !self.undo {
+            // Recorded before the steps run, so a run that fails halfway still
+            // leaves something for `--undo` to reverse.
+            setup::save_record(&ctx);
+        }
+        // `apply` writes files and shells out to sudo, all of it blocking. The
+        // confirmation prompt above stays on this thread — interleaving other
+        // work with a password prompt would be worse, not better — but the
+        // steps themselves move off the runtime.
+        let plan_for_apply = plan.clone();
+        let report = tokio::task::spawn_blocking(move || setup::apply(&plan_for_apply))
+            .await
+            .map_err(|e| miette::miette!("`pitchfork proxy setup` panicked: {e}"))?;
+        println!();
+        println!(
+            "{} step(s) applied, {} already in place.",
+            report.applied, report.skipped
+        );
+        for note in &plan.manual {
+            println!();
+            println!("{note}");
+        }
+        if !report.failed.is_empty() {
+            println!();
+            println!("The following steps failed:");
+            for (summary, err) in &report.failed {
+                println!("  {summary}");
+                println!("    {err}");
+            }
+            miette::bail!("`pitchfork proxy setup` did not complete");
+        }
+        if self.undo {
+            // Only once everything came back cleanly; a partial undo still has
+            // something left to reverse on a later run.
+            setup::clear_record();
+        } else {
+            // The supervisor binds its port once, at startup, so a redirect
+            // repointed at a new `proxy.port` reaches nothing until it restarts.
+            if let Some(previous) = recorded.last().map(|r| r.proxy_port)
+                && previous != ctx.proxy_port
+            {
+                println!();
+                println!(
+                    "proxy.port changed from {previous} to {}. Restart the supervisor so it \
+                     listens there:",
+                    ctx.proxy_port
+                );
+                println!("  pitchfork supervisor start --force");
+            }
+            println!();
+            println!("Check the result with: pitchfork proxy doctor");
+        }
+        Ok(())
+    }
+}
+
+/// Ask for confirmation on stdin. A non-interactive stdin declines.
+fn confirm(needs_sudo: bool) -> Result<bool> {
+    use std::io::{BufRead, Write};
+
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        println!("Not running interactively — re-run with --yes to apply.");
+        return Ok(false);
+    }
+    if needs_sudo {
+        println!("Some steps need sudo and will prompt for your password.");
+    }
+    print!("Continue? [y/N] ");
+    std::io::stdout()
+        .flush()
+        .map_err(|e| miette::miette!("Failed to write prompt: {e}"))?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|e| miette::miette!("Failed to read confirmation: {e}"))?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+// ─── proxy doctor ────────────────────────────────────────────────────────────
+
+/// Diagnose proxy connectivity, hostname resolution, and HTTPS trust
+///
+/// Prints one line per check: the proxy listener, the loopback DNS resolver,
+/// whether a random name under your TLD resolves through the system resolver,
+/// certificate trust, and whether the standard port reaches the proxy. When
+/// system proxy settings use pitchfork's PAC URL, checks PAC availability
+/// instead of requiring system DNS resolution.
+///
+/// Exits with a nonzero status if any check fails. Warnings alone do not fail
+/// the command.
+///
+/// Example:
+///
+/// ```text
+/// pitchfork proxy doctor
+/// ```
+#[derive(Debug, usage_rs::Args)]
+#[usage(verbatim_doc_comment)]
+struct Doctor {}
+
+impl Doctor {
+    async fn run(&self) -> Result<()> {
+        let s = crate::settings::settings();
+        let checks = crate::proxy::doctor::run(&s).await;
+        for check in &checks {
+            println!("{}", check.line());
+        }
+        let failed = checks
+            .iter()
+            .filter(|c| c.status == crate::proxy::doctor::Status::Fail)
+            .count();
+        if failed > 0 {
+            println!();
+            println!("{failed} check(s) failed. Run `pitchfork proxy setup` to fix them.");
+            // Non-zero, so `pitchfork proxy doctor || setup-the-proxy` works
+            // and a CI step gating on this command does not read a broken
+            // proxy as a healthy one. Warnings do not count: they are the
+            // checks that could not reach a verdict, and failing on those
+            // would make the command unusable in a script.
+            miette::bail!("{failed} proxy check(s) failed");
+        }
+        Ok(())
+    }
+}
+
 // ─── proxy trust ─────────────────────────────────────────────────────────────
 
-/// Install the proxy's self-signed TLS certificate into the system trust store
+/// Install the proxy CA certificate into the system trust store
 ///
-/// This command installs pitchfork's auto-generated TLS certificate into your
+/// This command installs pitchfork's generated CA certificate into your
 /// system's trust store so that browsers and tools trust HTTPS proxy URLs
 /// without certificate warnings.
 ///
@@ -80,7 +368,7 @@ impl Proxy {
 ///   - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat
 ///   - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates
 ///
-/// This DOES require sudo on Linux.
+/// Requires sudo on Linux.
 ///
 /// Example:
 ///
@@ -91,7 +379,7 @@ impl Proxy {
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct Trust {
-    /// Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)
+    /// Path to the certificate file to trust (defaults to pitchfork's generated CA)
     #[usage(long)]
     cert: Option<std::path::PathBuf>,
 }
@@ -123,7 +411,7 @@ impl Trust {
 
 // ─── proxy untrust ───────────────────────────────────────────────────────────
 
-/// Remove the proxy's TLS certificate from the system trust store
+/// Remove the proxy CA certificate from the system trust store
 ///
 /// Removes the pitchfork CA certificate that was previously installed by
 /// `pitchfork proxy trust` or auto-trust.
@@ -141,7 +429,7 @@ impl Trust {
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct Untrust {
-    /// Path to the certificate file (defaults to pitchfork's auto-generated cert)
+    /// Path to the certificate file (defaults to pitchfork's generated CA)
     #[usage(long)]
     cert: Option<std::path::PathBuf>,
 }
@@ -628,6 +916,20 @@ impl Add {
             miette::bail!(
                 "Slug '{slug}' contains invalid characters. \
                  Slugs must be alphanumeric with '-' and '_' allowed."
+            );
+        }
+        // The slug becomes a single DNS label in `<slug>.<tld>`, so it has to
+        // fit a label (63 bytes) as well as leave the whole host name inside
+        // 253. A short TLD does not excuse an over-long label.
+        //
+        // Measured against the TLD actually in force, which LAN mode replaces
+        // with `local`; `proxy.tld` alone would check the wrong suffix.
+        let settings = crate::settings::settings();
+        let tld = crate::proxy::effective_tld(&settings);
+        if !crate::proxy::pac::hostname_fits(slug, tld) {
+            miette::bail!(
+                "Slug '{slug}' is too long: it must be at most 63 bytes as a DNS \
+                 label, and '{slug}.{tld}' at most 253 bytes as a host name."
             );
         }
 

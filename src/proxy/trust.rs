@@ -22,8 +22,23 @@ const INSTALLED_CERT_NAME: &str = "pitchfork-proxy.crt";
 /// user manually removes the cert from their keychain or CA directory — the
 /// check will reflect the actual state rather than a stale cached value.
 pub fn is_ca_trusted(cert_path: &std::path::Path) -> bool {
+    ca_trust_state(cert_path) == Some(true)
+}
+
+/// Whether the CA is trusted, or `None` when the trust store would not say.
+///
+/// `is_ca_trusted` collapses the unknown into `false`, which is the safe
+/// reading when deciding whether to *add* trust: the worst case is installing
+/// a certificate that was already there, and installing is idempotent.
+///
+/// It is the wrong reading in the other direction. A step that removes trust
+/// treats "not trusted" as already done, so folding a timed-out probe into
+/// `false` would quietly skip the removal and leave the CA trusted with
+/// nothing left to take it out. Callers that act on an absence use this and
+/// treat `None` as "not established", so the removal still runs.
+pub fn ca_trust_state(cert_path: &std::path::Path) -> Option<bool> {
     if !cert_path.exists() {
-        return false;
+        return Some(false);
     }
 
     #[cfg(target_os = "macos")]
@@ -32,16 +47,16 @@ pub fn is_ca_trusted(cert_path: &std::path::Path) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        is_ca_trusted_linux(cert_path)
+        Some(is_ca_trusted_linux(cert_path))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        false
+        Some(false)
     }
 }
 
 #[cfg(target_os = "macos")]
-fn is_ca_trusted_macos(cert_path: &std::path::Path) -> bool {
+fn is_ca_trusted_macos(cert_path: &std::path::Path) -> Option<bool> {
     use std::process::{Command, Stdio};
     // Use verify-cert without -L -p ssl. The SSL policy evaluates the cert as
     // a leaf certificate (checking for serverAuth EKU etc.), which a CA cert
@@ -51,14 +66,49 @@ fn is_ca_trusted_macos(cert_path: &std::path::Path) -> bool {
     // Suppress stdout/stderr to prevent security framework diagnostic messages
     // from leaking into the terminal (e.g. during `proxy status` or supervisor
     // startup when the cert is not yet trusted).
-    Command::new("security")
+    //
+    // Bounded, and the child is killed when the budget runs out. `verify-cert`
+    // can stall on a keychain prompt or a revocation check, and a caller that
+    // simply stops waiting — `proxy doctor` gives every probe a deadline —
+    // would otherwise leave a `security` process behind, possibly sitting on a
+    // dialog the user never asked for and cannot connect to anything.
+    let Ok(mut child) = Command::new("security")
         .args(["verify-cert", "-c", &cert_path.to_string_lossy()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .spawn()
+    else {
+        return None;
+    };
+    let deadline = std::time::Instant::now() + TRUST_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.success()),
+            Ok(None) => {}
+            Err(_) => return None,
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            // Reaped so it does not linger as a zombie.
+            let _ = child.wait();
+            log::debug!(
+                "`security verify-cert` did not finish within {TRUST_PROBE_TIMEOUT:?}; \
+                 the CA's trust state is unknown"
+            );
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
 }
+
+/// The longest [`ca_trust_state`] takes before giving up on its own.
+///
+/// Public because a caller that puts its own deadline on this has to allow
+/// more than this, not the same: the point of the inner deadline is to kill
+/// and reap the child, and an outer one that fires first would return, let the
+/// process exit, and leave the child running — the orphan this exists to
+/// prevent.
+pub const TRUST_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Linux distro CA trust configuration.
 #[cfg(target_os = "linux")]
@@ -346,7 +396,9 @@ fn uninstall_cert_macos(cert_path: &std::path::Path) -> Result<()> {
     }
 
     // Verify removal (only possible if cert file still exists)
-    if cert_path.exists() && is_ca_trusted_macos(cert_path) {
+    // Only when the store positively says it is still there. An unreadable
+    // answer is not evidence the removal failed.
+    if cert_path.exists() && is_ca_trusted_macos(cert_path) == Some(true) {
         miette::bail!("Could not remove CA from keychain. Try: sudo pitchfork proxy untrust");
     }
     Ok(())

@@ -26,7 +26,7 @@ const MAX_LABEL_LEN: usize = 63;
 
 /// Maximum length of a full host name (RFC 1035), which the labels share with
 /// the configured TLD.
-const MAX_HOSTNAME_LEN: usize = 253;
+pub(crate) const MAX_HOSTNAME_LEN: usize = 253;
 
 /// Whether a hostname's labels still leave room for the configured TLD.
 ///

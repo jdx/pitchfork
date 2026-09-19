@@ -4,7 +4,7 @@
 - **Usage:** `pitchfork proxy untrust [--cert <CERT>]`
 - **Effect:** modifies state
 
-Remove the proxy's TLS certificate from the system trust store
+Remove the proxy CA certificate from the system trust store
 
 Removes the pitchfork CA certificate that was previously installed by
 `pitchfork proxy trust` or auto-trust.
@@ -21,5 +21,5 @@ sudo pitchfork proxy untrust    # Linux only
 ```
 
 ## Flags
-- **`--cert <CERT>`** — Path to the certificate file (defaults to pitchfork's auto-generated cert)
+- **`--cert <CERT>`** — Path to the certificate file (defaults to pitchfork's generated CA)
 - **`-h --help`** — Print help

@@ -27,6 +27,70 @@ const PROXY_HOPS_HEADER: &str = "x-pitchfork-hops";
 /// Maximum number of proxy hops before rejecting as a loop.
 const MAX_PROXY_HOPS: u64 = 5;
 
+/// How long a new connection has to reveal whether it is TLS and, if it is, to
+/// finish the handshake.
+///
+/// Both steps happen before the connection is a request the server is willing
+/// to spend time on, so a client that stalls there is holding a socket and a
+/// task for nothing.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Maximum number of minted host certificates kept at once.
+///
+/// Every distinct SNI name under the TLD costs a key generation and a file, and
+/// the set of names under a TLD is unbounded. A real machine serves a handful;
+/// this is generous for that and still refuses to grow without limit when
+/// something walks the namespace. The oldest entry is evicted, in memory and on
+/// disk, so a busy name simply gets minted again.
+const MAX_HOST_CERTS: usize = 256;
+
+/// How often a refusal may be logged. See [`crate::proxy::LogThrottle`].
+const REFUSAL_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Throttle for the "too many connections negotiating" warning.
+static REFUSED_HANDSHAKE: crate::proxy::LogThrottle = crate::proxy::LogThrottle::new();
+
+/// Throttle for the "refusing to issue a certificate" warning.
+#[cfg(feature = "proxy-tls")]
+static REFUSED_SNI: crate::proxy::LogThrottle = crate::proxy::LogThrottle::new();
+
+/// Total time shutdown spends letting connections and tunnels finish.
+///
+/// Shared by both drain phases and kept inside what the supervisor waits for,
+/// so neither phase is cut off by a caller that has stopped listening.
+pub(crate) const SHUTDOWN_DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Maximum number of `CONNECT` tunnels open at once.
+///
+/// A tunnel holds two sockets for as long as the client keeps it, and nothing
+/// stops a client opening them in a loop — including through an existing
+/// tunnel, since the far end is this same listener. The handshake budget does
+/// not cover them, because a tunnel is established by then.
+const MAX_TUNNELS: usize = 256;
+
+/// Throttle for the "too many tunnels" warning.
+static REFUSED_TUNNEL: crate::proxy::LogThrottle = crate::proxy::LogThrottle::new();
+
+/// Throttle for connections abandoned before they said anything.
+///
+/// Debug-level, so silent by default, but `mise run install-dev` turns debug
+/// logging on and these are triggered by exactly the behaviour their
+/// warn-level siblings are throttled for: a client opening connections and
+/// walking away. One line each would let it fill the disk of whoever is
+/// debugging.
+static ABANDONED_HANDSHAKE: crate::proxy::LogThrottle = crate::proxy::LogThrottle::new();
+
+/// Throttle for `CONNECT` tunnels abandoned while being set up.
+static ABANDONED_TUNNEL: crate::proxy::LogThrottle = crate::proxy::LogThrottle::new();
+
+/// Maximum number of connections negotiating at once.
+///
+/// This bounds only protocol detection and the TLS handshake, both of which are
+/// brief for a real client. A connection stops counting against it the moment
+/// its handshake finishes, so long-lived sessions — keep-alive, HTTP/2,
+/// WebSocket, CONNECT tunnels — do not consume the budget.
+const MAX_PENDING_HANDSHAKES: usize = 512;
+
 /// HTTP/1.1 hop-by-hop headers that are forbidden in HTTP/2 responses.
 /// These must be stripped when proxying an HTTP/1.1 backend response back to an HTTP/2 client.
 const HOP_BY_HOP_HEADERS: &[&str] = &[
@@ -686,6 +750,22 @@ struct ProxyState {
     tld: String,
     /// Whether the proxy is serving HTTPS.
     is_tls: bool,
+    /// Address a `CONNECT` tunnel is spliced to: this proxy's own listener.
+    connect_target: Option<SocketAddr>,
+    /// Address a client on this machine uses to reach the listener, which the
+    /// PAC file names.
+    contact_ip: std::net::IpAddr,
+    /// Cancelled when the proxy is shutting down.
+    cancel: tokio_util::sync::CancellationToken,
+    /// Budget for concurrent `CONNECT` tunnels.
+    tunnel_slots: Arc<tokio::sync::Semaphore>,
+    /// Live `CONNECT` tunnels.
+    ///
+    /// A tunnel outlives the request that created it, so it cannot live in the
+    /// connection `JoinSet`. Tracking it here lets shutdown cancel the tunnels
+    /// and then wait for them, rather than returning while one still owns both
+    /// of its sockets.
+    tunnels: tokio_util::task::TaskTracker,
     /// Optional error callback invoked on proxy errors (e.g. for logging/alerting).
     on_error: Option<OnErrorFn>,
 }
@@ -704,11 +784,7 @@ pub async fn serve(
     let s = settings();
     let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
 
-    let effective_tld = if lan_enabled {
-        "local".to_string()
-    } else {
-        s.proxy.tld.clone()
-    };
+    let effective_tld = crate::proxy::effective_tld(&s).to_string();
 
     let Some(effective_port) = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0) else {
         let msg = format!(
@@ -731,15 +807,6 @@ pub async fn serve(
         .pool_idle_timeout(std::time::Duration::from_secs(30))
         .build(connector);
 
-    let state = ProxyState {
-        client: Arc::new(client),
-        tld: effective_tld.clone(),
-        is_tls: s.proxy.https,
-        on_error: None,
-    };
-
-    let app = Router::new().fallback(proxy_handler).with_state(state);
-
     // Resolve bind address from settings.
     // In LAN mode, default to 0.0.0.0 so the proxy is reachable from other
     // devices on the network.  Users can still override with proxy.host.
@@ -759,6 +826,41 @@ pub async fn serve(
         }
     };
     let addr = SocketAddr::from((bind_ip, effective_port));
+    // The address a local client should use to reach this listener. Derived
+    // from the bind address rather than assumed to be 127.0.0.1: with
+    // `proxy.host = "::1"` nothing is listening on IPv4 at all, so both the PAC
+    // file and the CONNECT tunnel have to name the IPv6 loopback instead.
+    let contact_ip = local_contact_ip(bind_ip);
+    let tunnels = tokio_util::task::TaskTracker::new();
+
+    let state = ProxyState {
+        client: Arc::new(client),
+        tld: effective_tld.clone(),
+        is_tls: s.proxy.https,
+        // CONNECT tunnels loop back into this same listener, so the TLS
+        // handshake inside the tunnel reaches the SNI resolver.
+        connect_target: Some(SocketAddr::from((contact_ip, effective_port))),
+        contact_ip,
+        cancel: cancel.clone(),
+        tunnel_slots: Arc::new(tokio::sync::Semaphore::new(MAX_TUNNELS)),
+        tunnels: tunnels.clone(),
+        on_error: None,
+    };
+
+    // `/proxy.pac` is served from the proxy's own listener because that is the
+    // one HTTP endpoint that always exists while the proxy runs. The handler
+    // falls through to normal proxying when the request is addressed to a
+    // hostname under the TLD, so a daemon can still own that path.
+    let plain_state = state.clone();
+    let app = Router::new()
+        // `any`, not `get`: axum answers a path match with no method match at
+        // the router, before `fallback` runs. Registering GET alone would turn
+        // a POST to `/proxy.pac` on *any* proxied hostname into a 405 that the
+        // backend daemon never sees, which is exactly the fall-through the
+        // comment above promises. The handler decides the method instead.
+        .route(crate::proxy::pac::PAC_PATH, axum::routing::any(pac_handler))
+        .fallback(proxy_handler)
+        .with_state(state);
 
     if s.proxy.https {
         serve_https_with_http_fallback(
@@ -767,13 +869,38 @@ pub async fn serve(
             &s,
             effective_port,
             effective_tld,
+            plain_state,
             bind_tx,
             cancel,
         )
         .await
     } else {
-        serve_http(app, addr, effective_port, bind_tx, cancel).await
+        // `plain_state` carries the tunnel tracker, which this path has to
+        // drain too: `proxy.https = false` still serves CONNECT through the
+        // PAC file, for `http://` and `ws://` URLs.
+        serve_http(app, addr, effective_port, plain_state, bind_tx, cancel).await
     }
+}
+
+/// Serve one accepted connection until it ends, asking it to close gracefully
+/// once `cancel` fires.
+///
+/// Shared by every listener path. Without the graceful request an idle
+/// keep-alive connection or an HTTP/2 session never ends on its own, so each
+/// one would run out the whole shutdown drain budget and then be aborted.
+macro_rules! serve_conn_until_cancelled {
+    ($io:expr, $svc:expr, $cancel:expr) => {{
+        let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+        let conn = builder.serve_connection_with_upgrades($io, $svc);
+        tokio::pin!(conn);
+        tokio::select! {
+            r = conn.as_mut() => r,
+            _ = $cancel.cancelled() => {
+                conn.as_mut().graceful_shutdown();
+                conn.await
+            }
+        }
+    }};
 }
 
 /// Serve plain HTTP.
@@ -781,6 +908,7 @@ async fn serve_http(
     app: Router,
     addr: SocketAddr,
     effective_port: u16,
+    proxy_state: ProxyState,
     bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
@@ -806,14 +934,62 @@ async fn serve_http(
              The supervisor must be started with sudo to bind to this port."
         );
     }
-    let shutdown_signal = cancel.clone().cancelled_owned();
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal)
+    // Served by hand rather than through `axum::serve`, for the same reason as
+    // the HTTPS path: axum spawns each connection as a free task, so once its
+    // shutdown wait is cut short the connections keep running — a `ws://`
+    // stream or a long response splicing on while the supervisor stops the
+    // daemons behind it. Here they live in a `JoinSet`, which aborts whatever
+    // is left when the drain budget runs out.
+    let mut conn_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    loop {
+        while conn_tasks.try_join_next().is_some() {}
+        tokio::select! {
+            accept_result = listener.accept() => {
+                let (stream, peer_addr) = match accept_result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        log::warn!("Accept error (will retry): {e}");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                // Handlers read the peer address to decide how much of this
+                // machine's configuration a response may describe.
+                let app = app
+                    .clone()
+                    .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
+                let cancel = cancel.clone();
+                conn_tasks.spawn(async move {
+                    let io = hyper_util::rt::TokioIo::new(stream);
+                    let svc = hyper_util::service::TowerToHyperService::new(app);
+                    if let Err(e) = serve_conn_until_cancelled!(io, svc, cancel) {
+                        log::debug!("Connection error: {e}");
+                    }
+                });
+            }
+            _ = cancel.cancelled() => break,
+        }
+    }
+
+    // One deadline for both drains, as the HTTPS path has: in-flight
+    // connections first, then the CONNECT tunnels.
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET;
+    if tokio::time::timeout_at(deadline, async {
+        while conn_tasks.join_next().await.is_some() {}
+    })
     .await
-    .map_err(|e| miette::miette!("Proxy server error: {e}"))?;
+    .is_err()
+    {
+        log::debug!("Proxy connections still open after {SHUTDOWN_DRAIN_BUDGET:?}; aborting them");
+    }
+    // Aborts whatever did not finish in time.
+    drop(conn_tasks);
+
+    // A CONNECT request's connection completes the moment it is upgraded; the
+    // tunnel it spawned outlives it, so without this the supervisor would go
+    // on to stop daemons while tunnels were still splicing bytes.
+    proxy_state.tunnels.close();
+    let _ = tokio::time::timeout_at(deadline, proxy_state.tunnels.wait()).await;
     Ok(())
 }
 
@@ -823,39 +999,56 @@ async fn serve_http(
 /// - `0x16` (TLS ClientHello) → hand off to the TLS acceptor (HTTP/2 + HTTP/1.1 via ALPN)
 /// - anything else → 302 redirect to HTTPS
 #[cfg(feature = "proxy-tls")]
+#[allow(clippy::too_many_arguments)]
 async fn serve_https_with_http_fallback(
     app: Router,
     addr: SocketAddr,
     s: &crate::settings::Settings,
     effective_port: u16,
     effective_tld: String,
+    plain_proxy_state: ProxyState,
     bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
     use rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
 
-    let (ca_cert_path, ca_key_path) = resolve_tls_paths(s);
-
-    // Generate CA if not present
-    if !ca_cert_path.exists() || !ca_key_path.exists() {
-        generate_ca(&ca_cert_path, &ca_key_path)?;
-        log::info!(
-            "Generated local CA certificate at {}",
-            ca_cert_path.display()
-        );
-        log::info!("To trust the CA in your browser, run: pitchfork proxy trust");
-    }
+    let (cert_path, key_path) = resolve_tls_paths(s)?;
 
     // Install ring as the default CryptoProvider if none has been set yet.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Build the SNI resolver (loads CA, caches per-domain certs)
-    let resolver = SniCertResolver::new(&ca_cert_path, &ca_key_path, effective_tld.clone())?;
+    // A configured `tls_cert` is served as-is: the user supplied a certificate
+    // for these host names, so pitchfork has no CA to mint from and no business
+    // replacing what they chose.  Otherwise the local CA signs a leaf per SNI
+    // host on demand, which is what makes names of any depth work.
+    let resolver: Arc<dyn rustls::server::ResolvesServerCert> = if s.proxy.tls_cert.is_empty() {
+        if ensure_ca(&cert_path, &key_path, || {
+            cert_path.exists() && key_path.exists()
+        })? {
+            log::info!("Generated local CA certificate at {}", cert_path.display());
+            log::info!("To trust the CA in your browser, run: pitchfork proxy trust");
+        }
+        Arc::new(SniCertResolver::new(
+            &cert_path,
+            &key_path,
+            effective_tld.clone(),
+        )?)
+    } else {
+        log::info!(
+            "Serving the configured certificate {} (no certificates are minted)",
+            cert_path.display()
+        );
+        Arc::new(StaticCertResolver::new(
+            &cert_path,
+            &key_path,
+            effective_tld.clone(),
+        )?)
+    };
 
     let mut tls_config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_cert_resolver(Arc::new(resolver));
+        .with_cert_resolver(resolver);
     // Advertise HTTP/2 and HTTP/1.1 via ALPN so browsers negotiate HTTP/2
     // for multiplexed requests (eliminates the 6-connection-per-host limit).
     tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
@@ -885,11 +1078,30 @@ async fn serve_https_with_http_fallback(
         );
     }
 
-    // Build a lightweight redirect app for plain-HTTP requests.
-    let redirect_app = Router::new().fallback(redirect_to_https_handler);
+    // Build a lightweight app for plain-HTTP requests arriving on the TLS port.
+    // Two things are exempt from the redirect to HTTPS:
+    //
+    //   * `/proxy.pac`, because the browser reads the PAC file before it has
+    //     any way to trust this listener's certificate.
+    //   * `CONNECT`, which is how a PAC-configured browser opens an `https://`
+    //     URL. Redirecting it would break the PAC path entirely.
+    let redirect_app = Router::new()
+        .route(
+            // `any` for the same reason as the TLS side: the method check
+            // belongs in the handler, so a proxied host keeps this path.
+            crate::proxy::pac::PAC_PATH,
+            axum::routing::any(plain_pac_handler),
+        )
+        .fallback(plain_fallback_handler)
+        .with_state(PlainState {
+            tld: effective_tld.clone(),
+            port: effective_port,
+            proxy: plain_proxy_state.clone(),
+        });
 
     // Accept connections and sniff the first byte to decide TLS vs plain HTTP.
     let mut conn_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    let handshake_slots = Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_HANDSHAKES));
     loop {
         // Reap finished connection tasks during normal operation so the JoinSet
         // does not retain one entry per historical connection.
@@ -906,6 +1118,27 @@ async fn serve_https_with_http_fallback(
                     }
                 };
 
+                // Refuse rather than queue without bound. A client can hold a
+                // connection in protocol detection or mid-handshake by simply
+                // not sending, and each one costs a task and a descriptor.
+                //
+                // The permit covers the handshake only and is released before
+                // the connection is served, so established sessions never
+                // occupy the budget.
+                let Ok(handshake_permit) = Arc::clone(&handshake_slots).try_acquire_owned() else {
+                    // Throttled: whoever is saturating the handshake budget can
+                    // provoke this line as fast as it can open sockets.
+                    if let Some(suppressed) = REFUSED_HANDSHAKE.allow(REFUSAL_LOG_INTERVAL) {
+                        log::warn!(
+                            "Proxy refused a connection: {MAX_PENDING_HANDSHAKES} \
+                             still negotiating \
+                             ({suppressed} similar refusals since the last message)"
+                        );
+                    }
+                    drop(stream);
+                    continue;
+                };
+
                 let acceptor = acceptor.clone();
                 // This loop serves the router itself rather than going through
                 // `into_make_service_with_connect_info`, so the peer address is
@@ -916,14 +1149,31 @@ async fn serve_https_with_http_fallback(
                     .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
                 let redirect_app = redirect_app.clone();
                 let tld = effective_tld.clone();
+                let cancel = cancel.clone();
 
                 conn_tasks.spawn(async move {
                     // Peek at the first byte without consuming it.
                     // TLS ClientHello always starts with 0x16 (content type "handshake").
+                    //
+                    // One deadline covers the peek and the handshake together,
+                    // so a client that trickles its first byte in just in time
+                    // does not start a second full budget.
+                    let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
                     let mut peek_buf = [0u8; 1];
-                    match stream.peek(&mut peek_buf).await {
-                        Ok(0) | Err(_) => return,
-                        _ => {}
+                    match tokio::time::timeout_at(handshake_deadline, stream.peek(&mut peek_buf)).await {
+                        Ok(Ok(0)) | Ok(Err(_)) => return,
+                        Err(_) => {
+                            if let Some(suppressed) =
+                                ABANDONED_HANDSHAKE.allow(REFUSAL_LOG_INTERVAL)
+                            {
+                                log::debug!(
+                                    "Connection sent nothing within the handshake timeout \
+                                     ({suppressed} similar since the last message)"
+                                );
+                            }
+                            return;
+                        }
+                        Ok(Ok(_)) => {}
                     }
 
                     if peek_buf[0] == 0x16 {
@@ -931,10 +1181,47 @@ async fn serve_https_with_http_fallback(
                         // daemon is spliced through untouched, so the daemon's own
                         // certificate, ALPN and client-certificate request reach the
                         // client. Everything else is terminated here as before.
-                        match peek_sni_host(&stream, SNI_PEEK_TIMEOUT).await {
+                        //
+                        // The peek counts against the same handshake deadline:
+                        // it is still negotiation, not a session.
+                        let sni_budget = SNI_PEEK_TIMEOUT.min(
+                            handshake_deadline.saturating_duration_since(tokio::time::Instant::now()),
+                        );
+                        match peek_sni_host(&stream, sni_budget).await {
                             SniProbe::Host(host) => {
-                                if resolve_tls_mode(&host, &tld).await.is_passthrough() {
-                                    serve_passthrough(stream, &host, &tld).await;
+                                // Also under the handshake deadline: on a cache
+                                // miss this rebuilds the slug and host
+                                // registries, which can be slow, and the
+                                // connection still holds a negotiation slot.
+                                let Ok(mode) = tokio::time::timeout_at(
+                                    handshake_deadline,
+                                    resolve_tls_mode(&host, &tld),
+                                )
+                                .await
+                                else {
+                                    if let Some(suppressed) =
+                                        ABANDONED_HANDSHAKE.allow(REFUSAL_LOG_INTERVAL)
+                                    {
+                                        log::debug!(
+                                            "Routing lookup for '{host}' did not finish within the \
+                                             handshake timeout ({suppressed} similar since the \
+                                             last message)"
+                                        );
+                                    }
+                                    return;
+                                };
+                                if mode.is_passthrough() {
+                                    // The splice is the session, however long
+                                    // it lasts; it must not keep a slot meant
+                                    // for connections still negotiating.
+                                    drop(handshake_permit);
+                                    // Ended by shutdown like any other
+                                    // connection, rather than by the drain
+                                    // budget running out.
+                                    tokio::select! {
+                                        _ = serve_passthrough(stream, &host, &tld) => {}
+                                        _ = cancel.cancelled() => {}
+                                    }
                                     return;
                                 }
                             }
@@ -955,20 +1242,44 @@ async fn serve_https_with_http_fallback(
                                 );
                                 // Make sure the resolver's synchronous snapshots
                                 // have been populated before it has to decide.
-                                let _ = get_cached_slugs().await;
-                                let _ = get_cached_host_registry().await;
+                                // Bounded like the rest of negotiation; if it
+                                // runs out, the accept below does too.
+                                let _ = tokio::time::timeout_at(handshake_deadline, async {
+                                    let _ = get_cached_slugs().await;
+                                    let _ = get_cached_host_registry().await;
+                                })
+                                .await;
                             }
                         }
 
                         // TLS handshake → HTTP/2 or HTTP/1.1 (negotiated via ALPN)
-                        match acceptor.accept(stream).await {
+                        let accepted = match tokio::time::timeout_at(
+                            handshake_deadline,
+                            acceptor.accept(stream),
+                        )
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                if let Some(suppressed) =
+                                    ABANDONED_HANDSHAKE.allow(REFUSAL_LOG_INTERVAL)
+                                {
+                                    log::debug!(
+                                        "TLS handshake did not complete in time \
+                                         ({suppressed} similar since the last message)"
+                                    );
+                                }
+                                return;
+                            }
+                        };
+                        // Negotiation is over either way; the session that
+                        // follows can last as long as it likes.
+                        drop(handshake_permit);
+                        match accepted {
                             Ok(tls_stream) => {
                                 let io = hyper_util::rt::TokioIo::new(tls_stream);
                                 let svc = hyper_util::service::TowerToHyperService::new(app);
-                                if let Err(e) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                                    .serve_connection_with_upgrades(io, svc)
-                                    .await
-                                {
+                                if let Err(e) = serve_conn_until_cancelled!(io, svc, cancel) {
                                     // HTTP/2 RST_STREAM errors from cancelled browser requests
                                     // (navigation, HMR) are normal — log at debug to avoid noise.
                                     log::debug!("Connection error: {e}");
@@ -979,12 +1290,12 @@ async fn serve_https_with_http_fallback(
                             }
                         }
                     } else {
-                        // Plain HTTP on the TLS port → 302 redirect to HTTPS
+                        // Plain HTTP on the TLS port → 302 redirect to HTTPS.
+                        // Nothing left to negotiate.
+                        drop(handshake_permit);
                         let io = hyper_util::rt::TokioIo::new(stream);
                         let svc = hyper_util::service::TowerToHyperService::new(redirect_app);
-                        let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                            .serve_connection_with_upgrades(io, svc)
-                            .await;
+                        let _ = serve_conn_until_cancelled!(io, svc, cancel);
                     }
                 });
 
@@ -997,12 +1308,22 @@ async fn serve_https_with_http_fallback(
         }
     }
 
-    // Drain in-flight connections with a timeout.
-    let drain_timeout = std::time::Duration::from_secs(10);
-    let _ = tokio::time::timeout(drain_timeout, async {
+    // One budget for both drains, not one each. The supervisor waits a fixed
+    // time for this task; two independent timeouts could together outlast it,
+    // so the second phase would be cut off rather than bounded.
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET;
+
+    // In-flight connections first.
+    let _ = tokio::time::timeout_at(deadline, async {
         while conn_tasks.join_next().await.is_some() {}
     })
     .await;
+
+    // Then the CONNECT tunnels. They were cancelled along with everything else
+    // when the token fired, so this is waiting for them to let go of their
+    // sockets rather than waiting for their peers to finish.
+    plain_proxy_state.tunnels.close();
+    let _ = tokio::time::timeout_at(deadline, plain_proxy_state.tunnels.wait()).await;
 
     Ok(())
 }
@@ -1253,12 +1574,14 @@ async fn resolve_passthrough_port_inner(host: &str, tld: &str) -> std::result::R
 
 /// Fallback when proxy-tls feature is not enabled.
 #[cfg(not(feature = "proxy-tls"))]
+#[allow(clippy::too_many_arguments)]
 async fn serve_https_with_http_fallback(
     _app: Router,
     _addr: SocketAddr,
     _s: &crate::settings::Settings,
     _effective_port: u16,
     _effective_tld: String,
+    _plain_proxy_state: ProxyState,
     bind_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
     _cancel: tokio_util::sync::CancellationToken,
 ) -> crate::Result<()> {
@@ -1273,8 +1596,18 @@ async fn serve_https_with_http_fallback(
 ///
 /// If `tls_cert` / `tls_key` are empty, falls back to the auto-generated
 /// CA paths in `$PITCHFORK_STATE_DIR/proxy/`.
+///
+/// Setting only one of the two is refused. Filling the other half from the
+/// generated CA would pair a user's key with pitchfork's certificate, or the
+/// reverse, and when the CA does not exist yet, generating it would write a
+/// new CA key over the user's file.
 #[cfg(feature = "proxy-tls")]
-fn resolve_tls_paths(s: &crate::settings::Settings) -> (std::path::PathBuf, std::path::PathBuf) {
+fn resolve_tls_paths(
+    s: &crate::settings::Settings,
+) -> crate::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    if let Some(problem) = tls_pair_problem(&s.proxy.tls_cert, &s.proxy.tls_key) {
+        miette::bail!("{problem}");
+    }
     let proxy_dir = crate::env::PITCHFORK_STATE_DIR.join("proxy");
     let resolve = |configured: &str, default: &str| {
         if configured.is_empty() {
@@ -1283,18 +1616,123 @@ fn resolve_tls_paths(s: &crate::settings::Settings) -> (std::path::PathBuf, std:
             std::path::PathBuf::from(configured)
         }
     };
-    (
+    Ok((
         resolve(&s.proxy.tls_cert, "ca.pem"),
         resolve(&s.proxy.tls_key, "ca-key.pem"),
-    )
+    ))
+}
+
+/// Why `proxy.tls_cert` and `proxy.tls_key` cannot be used as configured:
+/// they are a pair, so both are set or neither is.
+pub(crate) fn tls_pair_problem(cert: &str, key: &str) -> Option<String> {
+    match (cert.is_empty(), key.is_empty()) {
+        (false, true) => Some(
+            "proxy.tls_cert is set but proxy.tls_key is empty; set both, or neither to use \
+             the generated CA"
+                .to_string(),
+        ),
+        (true, false) => Some(
+            "proxy.tls_key is set but proxy.tls_cert is empty; set both, or neither to use \
+             the generated CA"
+                .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+/// Generate the CA pair unless `usable` says the one on disk will do.
+///
+/// `proxy setup` and a starting supervisor can both find the CA missing and
+/// generate one at once. The cert and key are separate files, so two writers
+/// interleaving can leave one's certificate beside the other's key: a pair
+/// that trusts fine and then signs nothing that verifies. The check and the
+/// write happen under one lock so only the first generation happens.
+///
+/// Returns whether a new pair was written.
+#[cfg(feature = "proxy-tls")]
+pub fn ensure_ca(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+    usable: impl FnOnce() -> bool,
+) -> crate::Result<bool> {
+    let _lock = xx::fslock::get(cert_path, false)
+        .map_err(|e| miette::miette!("Failed to lock {}: {e}", cert_path.display()))?;
+    if usable() {
+        return Ok(false);
+    }
+    generate_ca(cert_path, key_path)?;
+    // Leaves cached from a previous CA would still load — they are only
+    // checked for expiry — and be served for names the new CA never signed.
+    // They are all stale now, so they go.
+    clear_host_certs(&host_certs_dir_for(cert_path), None);
+    Ok(true)
+}
+
+/// Where leaves signed by the CA at `ca_cert_path` are cached.
+#[cfg(feature = "proxy-tls")]
+fn host_certs_dir_for(ca_cert_path: &std::path::Path) -> std::path::PathBuf {
+    ca_cert_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("host-certs")
+}
+
+/// Name of the cache subdirectory for leaves signed by the CA `ca_cert_pem`.
+///
+/// Leaves are kept per CA so that one signed by a replaced CA is never looked
+/// up again, even if a running supervisor writes it after the cache was
+/// cleared: loading only checks expiry, not the issuer. FNV-1a rather than
+/// `DefaultHasher`, whose output may change between Rust releases and would
+/// orphan the cache on every upgrade.
+#[cfg(feature = "proxy-tls")]
+fn ca_cache_id(ca_cert_pem: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in ca_cert_pem.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("ca-{hash:016x}")
+}
+
+/// Remove cached leaves under `root` that do not belong to the CA `keep`
+/// names: loose `*.pem` files from the older flat layout, and every other
+/// CA's subdirectory. Other files are left alone.
+#[cfg(feature = "proxy-tls")]
+fn clear_host_certs(root: &std::path::Path, keep: Option<&str>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let result = if path.is_dir() {
+            let is_ca_dir = name.to_str().is_some_and(|n| n.starts_with("ca-"));
+            if !is_ca_dir || keep.is_some_and(|k| name == k) {
+                continue;
+            }
+            std::fs::remove_dir_all(&path)
+        } else if path.extension().is_some_and(|x| x == "pem") {
+            std::fs::remove_file(&path)
+        } else {
+            continue;
+        };
+        if let Err(e) = result {
+            log::debug!(
+                "Could not remove stale cached certs {}: {e}",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Generate a local root CA certificate and private key using `rcgen`.
 ///
 /// The CA is used to sign per-domain certificates on demand (SNI).
-/// Files are written in PEM format to `cert_path` and `key_path`.
+/// Files are written in PEM format to `cert_path` and `key_path`. Callers go
+/// through [`ensure_ca`], which holds the CA lock around the check and this
+/// write.
 #[cfg(feature = "proxy-tls")]
-pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> crate::Result<()> {
+fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> crate::Result<()> {
     use rcgen::{
         BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose,
     };
@@ -1362,6 +1800,99 @@ pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> c
     Ok(())
 }
 
+/// Resolver that serves one configured certificate for every connection.
+///
+/// Used when `proxy.tls_cert` / `proxy.tls_key` are set. No certificate is
+/// minted: whatever the user configured is what clients see, for every SNI
+/// name.
+#[cfg(feature = "proxy-tls")]
+struct StaticCertResolver {
+    certified: Arc<rustls::sign::CertifiedKey>,
+    /// TLD hostnames are resolved against, so a passthrough hostname is
+    /// refused here too rather than answered with the configured certificate.
+    tld: String,
+}
+
+#[cfg(feature = "proxy-tls")]
+impl std::fmt::Debug for StaticCertResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticCertResolver").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "proxy-tls")]
+impl StaticCertResolver {
+    fn new(
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+        tld: String,
+    ) -> crate::Result<Self> {
+        use rustls::pki_types::CertificateDer;
+        use rustls_pemfile::{certs, private_key};
+
+        let cert_pem = std::fs::read(cert_path).map_err(|e| {
+            miette::miette!("Failed to read proxy.tls_cert {}: {e}", cert_path.display())
+        })?;
+        let key_pem = std::fs::read(key_path).map_err(|e| {
+            miette::miette!("Failed to read proxy.tls_key {}: {e}", key_path.display())
+        })?;
+
+        let cert_ders: Vec<CertificateDer<'static>> = certs(&mut cert_pem.as_slice())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| miette::miette!("Failed to parse {}: {e}", cert_path.display()))?;
+        if cert_ders.is_empty() {
+            miette::bail!("No certificates found in {}", cert_path.display());
+        }
+
+        let key_der = private_key(&mut key_pem.as_slice())
+            .map_err(|e| miette::miette!("Failed to parse {}: {e}", key_path.display()))?
+            .ok_or_else(|| miette::miette!("No private key found in {}", key_path.display()))?;
+        let signing_key = rustls::crypto::ring::sign::any_supported_type(&key_der)
+            .map_err(|e| miette::miette!("Failed to use the configured private key: {e}"))?;
+
+        let certified = rustls::sign::CertifiedKey::new(cert_ders, signing_key);
+        // `CertifiedKey::new` only packages the two; it does not check that the
+        // key belongs to the certificate. Without this the listener would start
+        // cleanly and then fail every single handshake.
+        certified.keys_match().map_err(|e| {
+            miette::miette!(
+                "proxy.tls_key {} does not match proxy.tls_cert {}: {e}",
+                key_path.display(),
+                cert_path.display()
+            )
+        })?;
+
+        Ok(Self {
+            certified: Arc::new(certified),
+            tld,
+        })
+    }
+}
+
+#[cfg(feature = "proxy-tls")]
+impl rustls::server::ResolvesServerCert for StaticCertResolver {
+    fn resolve(
+        &self,
+        client_hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        // As in `SniCertResolver::resolve`: a passthrough hostname whose hello
+        // could not be read before the handshake must fail rather than be
+        // answered with a certificate that is not the daemon's.
+        if let Some(domain) = client_hello.server_name()
+            && resolve_tls_mode_in(domain, &self.tld, &slug_snapshot(), &registry_snapshot())
+                .is_passthrough()
+        {
+            log::warn!(
+                "Refusing to terminate TLS for '{domain}', which is configured for \
+                 proxy_tls = \"passthrough\": its ClientHello could not be inspected before the \
+                 handshake, so the stream could not be spliced to the daemon."
+            );
+            return None;
+        }
+        Some(Arc::clone(&self.certified))
+    }
+}
+
 /// SNI-based certificate resolver.
 ///
 /// Holds the local CA and a two-level cache of per-domain certificates:
@@ -1385,19 +1916,82 @@ pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> c
 struct SniCertResolver {
     /// The CA issuer (key + parsed cert params, used to sign leaf certs).
     issuer: rcgen::Issuer<'static, rcgen::KeyPair>,
-    /// The TLD hostnames are resolved against, so a passthrough hostname can
-    /// be recognized before a certificate is issued for it.
+    /// TLD this CA is willing to sign for; anything else is refused. Also the
+    /// TLD hostnames are resolved against, so a passthrough hostname can be
+    /// recognized before a certificate is issued for it.
     tld: String,
     /// Directory where per-domain PEM files are cached on disk.
     host_certs_dir: std::path::PathBuf,
-    /// L1 cache: domain → certified key (in-memory).
-    cache: std::sync::Mutex<std::collections::HashMap<String, Arc<rustls::sign::CertifiedKey>>>,
+    /// L1 cache: domain → certified key (in-memory), with insertion order kept
+    /// alongside so the oldest can be evicted once the cache is full.
+    cache: std::sync::Mutex<CertCache>,
     /// Pending set: domains currently being generated (dedup concurrent requests).
     /// Using a `Condvar` so waiting threads are parked instead of spin-sleeping,
     /// which avoids blocking tokio worker threads.
     pending: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Condvar paired with `pending` — notified when a domain is removed from the set.
     pending_cv: std::sync::Condvar,
+}
+
+/// Delete the oldest cached certificates until at most [`MAX_HOST_CERTS`] remain.
+///
+/// Called at startup, because eviction during a run only knows about names that
+/// run has seen. Oldest is by modification time, which is when the certificate
+/// was minted, so the ones most recently useful survive.
+#[cfg(feature = "proxy-tls")]
+fn prune_host_certs(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "pem"))
+        .filter_map(|e| {
+            let modified = e.metadata().and_then(|m| m.modified()).ok()?;
+            Some((modified, e.path()))
+        })
+        .collect();
+    if files.len() <= MAX_HOST_CERTS {
+        return;
+    }
+    files.sort_by_key(|(t, _)| *t);
+    let excess = files.len() - MAX_HOST_CERTS;
+    for (_, path) in files.into_iter().take(excess) {
+        if let Err(e) = std::fs::remove_file(&path) {
+            log::debug!("Could not prune cached cert {}: {e}", path.display());
+        }
+    }
+}
+
+/// Minted certificates, bounded and evicted oldest-first.
+#[cfg(feature = "proxy-tls")]
+#[derive(Default)]
+struct CertCache {
+    by_domain: std::collections::HashMap<String, Arc<rustls::sign::CertifiedKey>>,
+    /// Insertion order, oldest first.
+    order: std::collections::VecDeque<String>,
+}
+
+#[cfg(feature = "proxy-tls")]
+impl CertCache {
+    fn get(&self, domain: &str) -> Option<&Arc<rustls::sign::CertifiedKey>> {
+        self.by_domain.get(domain)
+    }
+
+    /// Insert `key`, evicting the oldest entry when full.
+    ///
+    /// Returns the evicted domain, whose on-disk copy the caller removes.
+    fn insert(&mut self, domain: String, key: Arc<rustls::sign::CertifiedKey>) -> Option<String> {
+        if self.by_domain.insert(domain.clone(), key).is_none() {
+            self.order.push_back(domain);
+        }
+        if self.by_domain.len() <= MAX_HOST_CERTS {
+            return None;
+        }
+        let evicted = self.order.pop_front()?;
+        self.by_domain.remove(&evicted);
+        Some(evicted)
+    }
 }
 
 #[cfg(feature = "proxy-tls")]
@@ -1433,22 +2027,52 @@ impl SniCertResolver {
         let issuer = rcgen::Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key)
             .map_err(|e| miette::miette!("Failed to parse CA cert: {e}"))?;
 
-        // Ensure the host-certs directory exists
-        let host_certs_dir = ca_cert_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("host-certs");
+        // Leaves live in a subdirectory for this CA, and those of any other CA
+        // are cleared, so a leaf from a replaced CA can never be served.
+        let host_certs_root = host_certs_dir_for(ca_cert_path);
+        let cache_id = ca_cache_id(&ca_cert_pem);
+        clear_host_certs(&host_certs_root, Some(&cache_id));
+        let host_certs_dir = host_certs_root.join(&cache_id);
         std::fs::create_dir_all(&host_certs_dir)
             .map_err(|e| miette::miette!("Failed to create host-certs dir: {e}"))?;
+        // The in-memory cache starts empty on every run, so without this the
+        // directory would keep files from previous processes for ever and grow
+        // across restarts however well eviction works within one.
+        prune_host_certs(&host_certs_dir);
 
         Ok(Self {
             issuer,
             tld,
             host_certs_dir,
-            cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            cache: std::sync::Mutex::new(CertCache::default()),
             pending: std::sync::Mutex::new(std::collections::HashSet::new()),
             pending_cv: std::sync::Condvar::new(),
         })
+    }
+
+    /// `get_or_create`, but only for names this CA is allowed to sign.
+    ///
+    /// The CA is installed in the machine's trust store and the proxy answers on
+    /// 127.0.0.1, so without this check any name that resolves to loopback — an
+    /// /etc/hosts line, a rebinding answer, a poisoned resolver — could obtain a
+    /// browser-trusted certificate for itself and its parent wildcard just by
+    /// sending it as SNI. Returning `None` fails the handshake and writes
+    /// nothing to the on-disk cache.
+    fn get_or_create_checked(&self, domain: &str) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        if !crate::proxy::owns_name(&self.tld, domain) {
+            // Throttled for the same reason the refusal exists: anything that
+            // can reach the listener can ask for any name, repeatedly.
+            if let Some(suppressed) = REFUSED_SNI.allow(REFUSAL_LOG_INTERVAL) {
+                log::warn!(
+                    "Refusing to issue a certificate for {domain:?}: \
+                     the pitchfork CA only signs names under .{} \
+                     ({suppressed} similar refusals since the last message)",
+                    self.tld
+                );
+            }
+            return None;
+        }
+        self.get_or_create(domain)
     }
 
     /// Get or create a `CertifiedKey` for the given domain.
@@ -1539,16 +2163,13 @@ impl SniCertResolver {
 
     /// Inner implementation: check disk cache, then generate.
     fn get_or_create_inner(&self, domain: &str) -> Option<Arc<rustls::sign::CertifiedKey>> {
-        let safe_name = domain.replace('.', "_").replace('*', "wildcard");
-        let disk_path = self.host_certs_dir.join(format!("{safe_name}.pem"));
+        let disk_path = self.disk_path(domain);
 
         // L2: disk cache — try to load existing cert+key PEM
         if disk_path.exists() {
             if let Ok(ck) = self.load_from_disk(&disk_path) {
                 let ck = Arc::new(ck);
-                if let Ok(mut cache) = self.cache.lock() {
-                    cache.insert(domain.to_string(), Arc::clone(&ck));
-                }
+                self.remember(domain, &ck);
                 return Some(ck);
             }
             // Disk cache corrupt/expired — fall through to regenerate
@@ -1559,10 +2180,33 @@ impl SniCertResolver {
         let ck = self.sign_for_domain(domain).ok()?;
 
         let ck = Arc::new(ck);
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(domain.to_string(), Arc::clone(&ck));
-        }
+        self.remember(domain, &ck);
         Some(ck)
+    }
+
+    /// Cache `ck` for `domain`, dropping the oldest entry when full.
+    ///
+    /// The evicted certificate's file is removed too, so the on-disk cache
+    /// stays bounded alongside the in-memory one.
+    fn remember(&self, domain: &str, ck: &Arc<rustls::sign::CertifiedKey>) {
+        let evicted = match self.cache.lock() {
+            Ok(mut cache) => cache.insert(domain.to_string(), Arc::clone(ck)),
+            Err(_) => return,
+        };
+        if let Some(evicted) = evicted {
+            let path = self.disk_path(&evicted);
+            if let Err(e) = std::fs::remove_file(&path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                log::debug!("Could not evict cached cert {}: {e}", path.display());
+            }
+        }
+    }
+
+    /// Where the cached certificate for `domain` lives.
+    fn disk_path(&self, domain: &str) -> std::path::PathBuf {
+        self.host_certs_dir
+            .join(format!("{}.pem", cert_cache_file_stem(domain)))
     }
 
     /// Load a `CertifiedKey` from a combined cert+key PEM file on disk.
@@ -1649,11 +2293,15 @@ impl SniCertResolver {
             vec![SanType::DnsName(domain.to_string().try_into().map_err(
                 |e| miette::miette!("Invalid domain name '{domain}': {e}"),
             )?)];
-        // Add wildcard SAN for the parent domain (one level up)
+        // Sibling wildcard for the parent domain, one level up.
+        //
+        // Only when the parent is strictly inside the TLD. `*.<tld>` would cover
+        // every name the proxy serves, which is far broader than the one host
+        // this certificate is for, and a parent outside the TLD is not ours to
+        // claim at all.
         if let Some(dot_pos) = domain.find('.') {
             let parent = &domain[dot_pos + 1..];
-            // Only add wildcard if parent has at least one dot (not a bare TLD)
-            if parent.contains('.') {
+            if crate::proxy::is_strictly_under_tld(&self.tld, parent) {
                 let wildcard = format!("*.{parent}");
                 if let Ok(wc) = wildcard.try_into() {
                     sans.push(SanType::DnsName(wc));
@@ -1680,8 +2328,7 @@ impl SniCertResolver {
 
         // Persist cert + key to disk cache as combined PEM.
         // Use 0600 so the private key is not world-readable.
-        let safe_name = domain.replace('.', "_").replace('*', "wildcard");
-        let disk_path = self.host_certs_dir.join(format!("{safe_name}.pem"));
+        let disk_path = self.disk_path(domain);
         let combined_pem = format!("{}{}", leaf_cert.pem(), key_pem);
         {
             #[cfg(unix)]
@@ -1730,7 +2377,6 @@ impl rustls::server::ResolvesServerCert for SniCertResolver {
         client_hello: rustls::server::ClientHello<'_>,
     ) -> Option<Arc<rustls::sign::CertifiedKey>> {
         let domain = client_hello.server_name()?;
-
         // This is the last point where a passthrough hostname can still be
         // caught, and the first where the host name is authoritative: rustls
         // has reassembled the handshake itself. Issuing here would answer with
@@ -1748,8 +2394,398 @@ impl rustls::server::ResolvesServerCert for SniCertResolver {
             return None;
         }
 
-        self.get_or_create(domain)
+        // Refuse to sign for a name outside the proxy's own TLD.
+        //
+        // The CA is installed in the machine's trust store and the proxy answers
+        // on 127.0.0.1, so without this check any name that resolves to loopback
+        // — an /etc/hosts line, a rebinding answer, a poisoned resolver — could
+        // obtain a browser-trusted certificate for itself and its parent
+        // wildcard just by sending it as SNI. Returning `None` fails the
+        // handshake and writes nothing to the on-disk cache.
+        self.get_or_create_checked(domain)
     }
+}
+
+/// Why the CA pair at `cert` and `key` cannot sign certificates, if it cannot.
+///
+/// Existence is not enough: a truncated file or a key that belongs to another
+/// certificate stops the HTTPS listener from starting, and trusting such a
+/// certificate would install something the proxy never serves from.
+#[cfg(feature = "proxy-tls")]
+pub(crate) fn ca_pair_problem(cert: &std::path::Path, key: &std::path::Path) -> Option<String> {
+    use rcgen::PublicKeyData;
+
+    let cert_pem = match std::fs::read_to_string(cert) {
+        Ok(p) => p,
+        Err(e) => return Some(format!("cannot read {}: {e}", cert.display())),
+    };
+    let key_pem = match std::fs::read_to_string(key) {
+        Ok(p) => p,
+        Err(e) => return Some(format!("cannot read {}: {e}", key.display())),
+    };
+    let key_pair = match rcgen::KeyPair::from_pem(&key_pem) {
+        Ok(k) => k,
+        Err(e) => return Some(format!("cannot parse {}: {e}", key.display())),
+    };
+    let Some(Ok(der)) = rustls_pemfile::certs(&mut cert_pem.as_bytes()).next() else {
+        return Some(format!("no certificate in {}", cert.display()));
+    };
+    let parsed = match x509_parser::parse_x509_certificate(&der) {
+        Ok((_, c)) => c,
+        Err(e) => return Some(format!("cannot parse {}: {e}", cert.display())),
+    };
+    if parsed.public_key().subject_public_key.data.as_ref() != key_pair.der_bytes() {
+        return Some(format!(
+            "{} is not the key for {}",
+            key.display(),
+            cert.display()
+        ));
+    }
+    if let Err(e) = rcgen::Issuer::from_ca_cert_pem(&cert_pem, key_pair) {
+        return Some(format!("{} cannot sign certificates: {e}", cert.display()));
+    }
+    None
+}
+
+/// A file name for `domain`'s cached certificate, distinct for distinct names.
+///
+/// Letters, digits, `-` and `.` are kept, since they are safe in a file name
+/// and make the cache readable; every other byte is percent-encoded. Mapping
+/// `.` to `_`, as this once did, sent `a_b.localhost` and `a.b.localhost` to
+/// the same file, so one name's certificate could be served for the other.
+#[cfg(feature = "proxy-tls")]
+fn cert_cache_file_stem(domain: &str) -> String {
+    let mut out = String::with_capacity(domain.len());
+    for b in domain.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// State for the plain-HTTP side of the TLS listener.
+#[derive(Clone)]
+struct PlainState {
+    tld: String,
+    port: u16,
+    /// Carried so `CONNECT` can be tunnelled without re-deriving the routing
+    /// configuration.
+    proxy: ProxyState,
+}
+
+/// Plain HTTP arriving on the HTTPS port.
+///
+/// `CONNECT` is tunnelled, because that is how a PAC-configured browser opens
+/// an `https://` URL. Everything else is redirected to HTTPS.
+async fn plain_fallback_handler(State(state): State<PlainState>, req: Request) -> Response {
+    if req.method() == axum::http::Method::CONNECT {
+        let raw_host = get_request_host(&req).unwrap_or_default();
+        return connect_handler(&state.proxy, req, &raw_host).await;
+    }
+    redirect_to_https_handler(req).await
+}
+
+/// Render the PAC script, or an error page explaining why it could not be.
+/// Refuse a write method aimed at the PAC file.
+///
+/// A PAC file is fetched, never written, so anything but `GET` or `HEAD` is a
+/// mistake. Returning `Some` here rather than restricting the route keeps the
+/// path available to proxied hostnames under every method.
+fn reject_non_read(method: &axum::http::Method) -> Option<Response> {
+    if matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD) {
+        return None;
+    }
+    let mut res = error_response(
+        StatusCode::METHOD_NOT_ALLOWED,
+        "the proxy auto-config file is read-only\n",
+    );
+    res.headers_mut().insert(
+        axum::http::header::ALLOW,
+        HeaderValue::from_static("GET, HEAD"),
+    );
+    Some(res)
+}
+
+fn pac_response(tld: &str, host: &str, port: u16) -> Response {
+    match crate::proxy::pac::generate(tld, host, port) {
+        Ok(body) => (
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/x-ns-proxy-autoconfig",
+            )],
+            body,
+        )
+            .into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Serve `/proxy.pac` on the proxy listener.
+///
+/// A request addressed to a name *beneath* the TLD is a normal proxied request
+/// that happens to use this path, so it is forwarded to the backend instead.
+/// The TLD apex is not: no slug can route it, so `http://localhost/proxy.pac`
+/// with `proxy.tld = "localhost"` is a request for the PAC file.
+async fn pac_handler(State(state): State<ProxyState>, req: Request) -> Response {
+    let host = get_request_host(&req).unwrap_or_default();
+    let bare = host.split(':').next().unwrap_or("");
+    if !bare.is_empty() && crate::proxy::is_strictly_under_tld(&state.tld, bare) {
+        return proxy_handler(State(state), req).await;
+    }
+    // Only now is this known to be a request for the PAC file itself, so the
+    // method check belongs here rather than on the route.
+    if let Some(deny) = reject_non_read(req.method()) {
+        return deny;
+    }
+    let port = req
+        .uri()
+        .authority()
+        .and_then(|a| a.port_u16())
+        .or_else(|| host.rsplit(':').next().and_then(|p| p.parse().ok()))
+        .unwrap_or(if state.is_tls { 443 } else { 80 });
+    pac_response(&state.tld, &url_host(state.contact_ip), port)
+}
+
+/// Serve `/proxy.pac` over plain HTTP on the HTTPS listener.
+async fn plain_pac_handler(State(state): State<PlainState>, req: Request) -> Response {
+    // Same rule as the TLS side: a name beneath the TLD is a proxied request
+    // that happens to use this path, so it is redirected to HTTPS like any
+    // other. The apex is not routable, so it gets the PAC file.
+    let host = get_request_host(&req).unwrap_or_default();
+    let bare = host.split(':').next().unwrap_or("");
+    if !bare.is_empty() && crate::proxy::is_strictly_under_tld(&state.tld, bare) {
+        return redirect_to_https_handler(req).await;
+    }
+    if let Some(deny) = reject_non_read(req.method()) {
+        return deny;
+    }
+    pac_response(&state.tld, &url_host(state.proxy.contact_ip), state.port)
+}
+
+/// The address a client on this machine uses to reach a listener bound to
+/// `bind_ip`.
+///
+/// A wildcard bind is reachable over the loopback address of its own family; a
+/// specific address is reachable at exactly that address.
+fn local_contact_ip(bind_ip: std::net::IpAddr) -> std::net::IpAddr {
+    match bind_ip {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => {
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        }
+        ip => ip,
+    }
+}
+
+/// Format an address for a URL or PAC directive, bracketing IPv6 literals.
+fn url_host(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+        std::net::IpAddr::V4(ip) => ip.to_string(),
+    }
+}
+
+/// The port in a CONNECT authority (`host:port`, `[v6]:port`), if it names one.
+fn connect_port(authority: &str) -> Option<u16> {
+    let (host, port) = authority.rsplit_once(':')?;
+    // A bare IPv6 literal's last colon is inside the address, not before a port.
+    if host.contains(':') && !host.ends_with(']') {
+        return None;
+    }
+    port.parse().ok()
+}
+
+/// Handle a `CONNECT` request from a client using the PAC file.
+///
+/// A proxy auto-config file routes `*.<tld>` through this listener, and a
+/// browser opening an `https://` URL asks the proxy to tunnel with `CONNECT
+/// host:port`. Without this the PAC path would only ever work for plain HTTP.
+///
+/// The tunnel's far end is this same listener: the target host is a name only
+/// pitchfork resolves, and the TLS handshake inside the tunnel carries the SNI
+/// the certificate resolver needs in order to mint a certificate for it. So the
+/// connection is spliced back to the proxy's own address, where it arrives as an
+/// ordinary TLS connection and is routed by `Host` as usual.
+///
+/// Only names under the configured TLD are tunnelled. An open CONNECT proxy
+/// would let anything on the machine reach any host through pitchfork.
+async fn connect_handler(state: &ProxyState, req: Request, raw_host: &str) -> Response {
+    let authority = req
+        .uri()
+        .authority()
+        .map(|a| a.as_str().to_string())
+        .unwrap_or_else(|| raw_host.to_string());
+    let host = authority
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(&authority)
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+
+    // The shared rule rather than a hand-rolled pair of conditions; keeping a
+    // second copy of "is this name ours" is how several of these drifted apart.
+    if !crate::proxy::owns_name(&state.tld, &host) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "pitchfork only tunnels CONNECT for names under .{} — refusing {host}",
+                state.tld
+            ),
+        );
+    }
+
+    // With `proxy.https = false` the tunnel lands on a plain HTTP listener.
+    // That still carries `ws://` and `http://` traffic, which browsers send
+    // through CONNECT too, but a TLS handshake for an `https://` URL could
+    // only fail there, and with an error that names neither cause nor fix.
+    if !state.is_tls && connect_port(&authority) == Some(443) {
+        return error_response(
+            StatusCode::BAD_GATEWAY,
+            &format!(
+                "proxy.https is false, so pitchfork cannot serve https://{host}; \
+                 use http:// or enable proxy.https"
+            ),
+        );
+    }
+
+    let Some(target) = state.connect_target else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The proxy listener address is unknown, so CONNECT cannot be tunnelled",
+        );
+    };
+
+    // Refuse once shutdown has begun, so no tunnel is created after the drain
+    // has started looking for stragglers.
+    if state.cancel.is_cancelled() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "The proxy is shutting down",
+        );
+    }
+
+    // Bounded like the handshake phase and the DNS listener. The permit is
+    // held for the life of the tunnel, which is the resource being limited.
+    let Ok(permit) = Arc::clone(&state.tunnel_slots).try_acquire_owned() else {
+        if let Some(suppressed) = REFUSED_TUNNEL.allow(REFUSAL_LOG_INTERVAL) {
+            log::warn!(
+                "Proxy refused a CONNECT tunnel: {MAX_TUNNELS} already open \
+                 ({suppressed} similar refusals since the last message)"
+            );
+        }
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many CONNECT tunnels are open",
+        );
+    };
+    let cancel = state.cancel.clone();
+
+    // Reply 200 first, then take over the upgraded stream. hyper only hands the
+    // socket over once the response has been sent.
+    //
+    // Tracked so shutdown can wait for the splice to stop rather than leaving
+    // it holding two sockets.
+    state.tunnels.spawn(async move {
+        // Dropped with the task, releasing the slot when the tunnel closes.
+        let _permit = permit;
+
+        // Both of these happen before there is a tunnel to speak of, and
+        // neither is bounded by anything on its own. A client that never
+        // finishes reading the 200 leaves `upgrade::on` pending forever, and a
+        // target that accepts nothing leaves `connect` the same way — in each
+        // case holding one of the tunnel slots for good, so enough stalls
+        // permanently shrink the proxy's CONNECT capacity. Shutdown does not
+        // rescue them either: the drain gives up when its own timeout elapses
+        // and the tracker never aborts what is left.
+        //
+        // Racing the cancellation token as well as the clock means shutdown
+        // reaches a tunnel that is still being set up, not only one that is
+        // already running.
+        macro_rules! setup_step {
+            ($what:literal, $fut:expr) => {
+                tokio::select! {
+                    r = tokio::time::timeout(HANDSHAKE_TIMEOUT, $fut) => match r {
+                        Ok(Ok(v)) => v,
+                        Ok(Err(e)) => {
+                            if let Some(n) = ABANDONED_TUNNEL.allow(REFUSAL_LOG_INTERVAL) {
+                                log::debug!(
+                                    concat!(
+                                        "CONNECT {} for {target} failed: {e}",
+                                        " ({n} similar since the last message)"
+                                    ),
+                                    $what,
+                                    target = target,
+                                    e = e,
+                                    n = n
+                                );
+                            }
+                            return;
+                        }
+                        Err(_) => {
+                            if let Some(n) = ABANDONED_TUNNEL.allow(REFUSAL_LOG_INTERVAL) {
+                                log::debug!(
+                                    concat!(
+                                        "CONNECT {} for {target} did not finish within",
+                                        " {timeout:?}",
+                                        " ({n} similar since the last message)"
+                                    ),
+                                    $what,
+                                    target = target,
+                                    timeout = HANDSHAKE_TIMEOUT,
+                                    n = n
+                                );
+                            }
+                            return;
+                        }
+                    },
+                    // Not throttled: shutdown happens once, so the count is
+                    // bounded by the tunnels open at that moment.
+                    _ = cancel.cancelled() => {
+                        log::debug!("CONNECT {} for {target} abandoned by shutdown", $what);
+                        return;
+                    }
+                }
+            };
+        }
+
+        let upgraded = setup_step!("upgrade", hyper::upgrade::on(req));
+        let mut client = hyper_util::rt::TokioIo::new(upgraded);
+        let mut server = setup_step!("connect", tokio::net::TcpStream::connect(target));
+
+        // Straight byte splice: the payload is TLS pitchfork must not and
+        // cannot read here. Shutdown drops both sockets rather than waiting
+        // for the peers to finish, since a tunnel can legitimately stay open
+        // for hours.
+        tokio::select! {
+            r = tokio::io::copy_bidirectional(&mut client, &mut server) => {
+                // Throttled like the setup steps: a client can end tunnels
+                // with errors as fast as it can open them.
+                if let Err(e) = r
+                    && let Some(n) = ABANDONED_TUNNEL.allow(REFUSAL_LOG_INTERVAL)
+                {
+                    log::debug!(
+                        "CONNECT tunnel to {target} ended: {e} ({n} similar since the last message)"
+                    );
+                }
+            }
+            _ = cancel.cancelled() => {
+                log::debug!("CONNECT tunnel to {target} closed by shutdown");
+            }
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(PITCHFORK_HEADER, "1")
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Get the effective host from a request.
@@ -1864,6 +2900,13 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
     let Some(raw_host) = get_request_host(&req) else {
         return error_response(StatusCode::BAD_REQUEST, "Missing Host header");
     };
+
+    // A browser configured through the PAC file sends CONNECT for every
+    // `https://` URL, so this is the entry point for the whole PAC path under
+    // the default HTTPS configuration.
+    if req.method() == axum::http::Method::CONNECT {
+        return connect_handler(&state, req, &raw_host).await;
+    }
     // Strip port from host for routing.
     // IPv6 addresses in Host headers are bracketed per RFC 2732: `[::1]:port`.
     // Splitting naïvely on ':' would break on the colons inside the address.
@@ -1880,6 +2923,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         // IPv4 / hostname: "host:port" or "host"
         raw_host.split(':').next().unwrap_or(&raw_host).to_string()
     };
+    // A fully qualified name may end in the root dot (`api.localhost.`). The
+    // resolver and the certificate issuer already accept it through
+    // `owns_name`, so routing has to as well, or the name resolves and
+    // handshakes only to be answered "not found".
+    let host = host.trim_end_matches('.').to_string();
 
     // Loop detection: check hop count.
     //
@@ -2139,21 +3187,34 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 // top of proxy_handler (hops >= MAX_PROXY_HOPS check) before the request
                 // is forwarded.  A 101 response here means the backend accepted the
                 // upgrade, so the hop count was already within limits.
-                tokio::spawn(async move {
-                    if let (Ok(client_upgraded), Ok(backend_upgraded)) =
-                        (client_upgrade.await, backend_upgrade.await)
-                    {
-                        let mut client_io = hyper_util::rt::TokioIo::new(client_upgraded);
-                        let mut backend_io = hyper_util::rt::TokioIo::new(backend_upgraded);
-                        // No application-level timeout here: tokio::time::timeout would be a
-                        // hard wall-clock deadline for the entire tunnel, not an idle timeout.
-                        // Long-lived connections (Vite/webpack HMR, SSE-over-WS) would be
-                        // silently terminated after the deadline even if data is actively
-                        // flowing.  The OS TCP keepalive is sufficient to reap truly dead
-                        // connections; a proper idle timeout would require a custom
-                        // AsyncRead/AsyncWrite wrapper that resets the timer on each I/O op.
-                        let _ =
-                            tokio::io::copy_bidirectional(&mut client_io, &mut backend_io).await;
+                // Tracked with the CONNECT tunnels and raced against the
+                // cancellation token, so shutdown drains it instead of leaving
+                // it splicing to a daemon that is about to be stopped.
+                let cancel = state.cancel.clone();
+                state.tunnels.spawn(async move {
+                    let splice = async move {
+                        if let (Ok(client_upgraded), Ok(backend_upgraded)) =
+                            (client_upgrade.await, backend_upgrade.await)
+                        {
+                            let mut client_io = hyper_util::rt::TokioIo::new(client_upgraded);
+                            let mut backend_io = hyper_util::rt::TokioIo::new(backend_upgraded);
+                            // No application-level timeout here: tokio::time::timeout would be a
+                            // hard wall-clock deadline for the entire tunnel, not an idle timeout.
+                            // Long-lived connections (Vite/webpack HMR, SSE-over-WS) would be
+                            // silently terminated after the deadline even if data is actively
+                            // flowing.  The OS TCP keepalive is sufficient to reap truly dead
+                            // connections; a proper idle timeout would require a custom
+                            // AsyncRead/AsyncWrite wrapper that resets the timer on each I/O op.
+                            let _ = tokio::io::copy_bidirectional(&mut client_io, &mut backend_io)
+                                .await;
+                        }
+                    };
+                    // The whole splice, upgrade waits included: an abandoned
+                    // handshake leaves those pending, and the tracker never
+                    // aborts, so only the token ends it at shutdown.
+                    tokio::select! {
+                        _ = splice => {}
+                        _ = cancel.cancelled() => {}
                     }
                 });
                 return Response::from_parts(parts, Body::empty());
@@ -3137,8 +4198,9 @@ fn bind_error_message(port: u16, err: &std::io::Error) -> String {
     if port < 1024 {
         format!(
             "Failed to bind proxy server to port {port}: {err}\n\
-             Hint: ports below 1024 require elevated privileges. \
-             Try: sudo pitchfork supervisor start"
+             Hint: ports below 1024 require elevated privileges. Run \
+             `pitchfork proxy setup`, which grants the bind capability on Linux, \
+             or set an unprivileged proxy.port and let setup redirect {port} to it."
         )
     } else {
         format!(
@@ -3302,19 +4364,380 @@ async fn redirect_to_https_handler(req: Request) -> Response {
     let location = format!("https://{host_for_url}{https_port}{path}");
     (
         StatusCode::FOUND,
-        [(axum::http::header::LOCATION, location)],
+        [
+            (axum::http::header::LOCATION, location),
+            // Identifies the redirect as pitchfork's, so a probe on the port
+            // can tell this listener apart from an unrelated service.
+            (
+                axum::http::HeaderName::from_static(PITCHFORK_HEADER),
+                "1".to_string(),
+            ),
+        ],
     )
         .into_response()
 }
 
 /// Build a plain-text error response.
 fn error_response(status: StatusCode, message: &str) -> Response {
-    (status, message.to_string()).into_response()
+    // Carries the identification header like any other proxy response: a
+    // client — `pitchfork proxy doctor` included — should be able to tell that
+    // pitchfork answered even when the answer is an error.
+    (
+        status,
+        [(
+            axum::http::HeaderName::from_static(PITCHFORK_HEADER),
+            HeaderValue::from_static("1"),
+        )],
+        message.to_string(),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Axum answers a path match with no method match itself, so a route
+    /// registered for `GET` alone takes that path away from `fallback` for
+    /// every other method. `/proxy.pac` has to stay reachable on a proxied
+    /// hostname under any method, so it is registered with `any` and the
+    /// handler decides. This pins the router behaviour that choice rests on.
+    #[tokio::test]
+    async fn a_get_only_route_never_reaches_the_fallback() {
+        async fn routed() -> &'static str {
+            "routed"
+        }
+        async fn fell_through() -> &'static str {
+            "fell-through"
+        }
+
+        // A hand-written request over a plain socket: no HTTP client, so no
+        // TLS provider to install for a test that never uses TLS.
+        async fn post_to(app: Router) -> String {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            sock.write_all(
+                b"POST /proxy.pac HTTP/1.1\r\nHost: example\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+            let mut raw = Vec::new();
+            sock.read_to_end(&mut raw).await.unwrap();
+            server.abort();
+
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            let status = text.split_whitespace().nth(1).unwrap_or("").to_string();
+            if status == "405" {
+                return status;
+            }
+            text.rsplit("\r\n").next().unwrap_or("").to_string()
+        }
+
+        let get_only = Router::new()
+            .route("/proxy.pac", axum::routing::get(routed))
+            .fallback(fell_through);
+        assert_eq!(
+            post_to(get_only).await,
+            "405",
+            "axum reached the fallback on a method mismatch, so `any` is unnecessary"
+        );
+
+        let any_method = Router::new()
+            .route("/proxy.pac", axum::routing::any(routed))
+            .fallback(fell_through);
+        assert_eq!(
+            post_to(any_method).await,
+            "routed",
+            "`any` did not deliver the POST to the handler"
+        );
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn a_ca_pair_is_checked_not_just_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
+        generate_ca(&cert, &key).unwrap();
+        assert_eq!(ca_pair_problem(&cert, &key), None);
+
+        // A key from a different CA.
+        let (other_cert, other_key) = (dir.path().join("b.pem"), dir.path().join("b-key.pem"));
+        generate_ca(&other_cert, &other_key).unwrap();
+        assert!(ca_pair_problem(&cert, &other_key).is_some());
+
+        // A truncated certificate.
+        std::fs::write(&cert, "-----BEGIN CERTIFICATE-----\nAAAA\n").unwrap();
+        assert!(ca_pair_problem(&cert, &key).is_some());
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn a_new_ca_clears_leaves_signed_by_the_old_one() {
+        // Cached leaves are checked only for expiry when loaded, so after a
+        // regeneration they would be served for names the new CA never signed.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
+        let host_certs = host_certs_dir_for(&cert);
+        std::fs::create_dir_all(&host_certs).unwrap();
+        std::fs::write(host_certs.join("api.localhost.pem"), "old leaf").unwrap();
+        std::fs::write(host_certs.join("notes.txt"), "keep me").unwrap();
+
+        // Kept while the pair is usable.
+        assert!(!ensure_ca(&cert, &key, || true).unwrap());
+        assert!(host_certs.join("api.localhost.pem").exists());
+
+        // Gone once a new pair is written; unrelated files stay.
+        assert!(ensure_ca(&cert, &key, || false).unwrap());
+        assert!(!host_certs.join("api.localhost.pem").exists());
+        assert!(host_certs.join("notes.txt").exists());
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn leaves_are_cached_per_ca_so_a_replaced_ca_is_never_served() {
+        // A running supervisor can write a leaf after a new CA cleared the
+        // cache. Loading only checks expiry, so the leaf has to live where the
+        // new CA never looks.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        ensure_ca(&cert, &key, || false).unwrap();
+        let first = SniCertResolver::new(&cert, &key, "localhost".into()).unwrap();
+        assert!(first.get_or_create_checked("api.localhost").is_some());
+        let old_dir = first.host_certs_dir.clone();
+        assert!(std::fs::read_dir(&old_dir).unwrap().count() > 0);
+
+        ensure_ca(&cert, &key, || false).unwrap();
+        // The old CA's resolver writes after the rotation.
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::write(old_dir.join("late.localhost.pem"), "old leaf").unwrap();
+
+        let second = SniCertResolver::new(&cert, &key, "localhost".into()).unwrap();
+        assert_ne!(second.host_certs_dir, old_dir);
+        // Starting under the new CA clears the other CA's leaves outright.
+        assert!(!old_dir.exists());
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn cert_cache_file_names_do_not_collide() {
+        // `.` used to become `_`, so these two shared a file.
+        assert_ne!(
+            cert_cache_file_stem("a_b.localhost"),
+            cert_cache_file_stem("a.b.localhost")
+        );
+        assert_eq!(cert_cache_file_stem("api.localhost"), "api.localhost");
+        assert_eq!(cert_cache_file_stem("a_b.localhost"), "a%5Fb.localhost");
+        assert_eq!(
+            cert_cache_file_stem("*.proj.localhost"),
+            "%2A.proj.localhost"
+        );
+        // No path separators survive.
+        assert!(!cert_cache_file_stem("../x").contains('/'));
+    }
+
+    #[test]
+    fn connect_port_reads_the_authority() {
+        assert_eq!(connect_port("api.localhost:443"), Some(443));
+        assert_eq!(connect_port("api.localhost:80"), Some(80));
+        assert_eq!(connect_port("[::1]:443"), Some(443));
+        assert_eq!(connect_port("api.localhost"), None);
+        assert_eq!(connect_port("::1"), None);
+    }
+
+    #[test]
+    fn a_half_configured_certificate_pair_is_refused() {
+        // Either half alone would be filled in from the generated CA: the
+        // user's key signing with pitchfork's certificate, or a new CA key
+        // written over the user's file.
+        assert!(tls_pair_problem("", "/k.pem").is_some());
+        assert!(tls_pair_problem("/c.pem", "").is_some());
+        assert!(tls_pair_problem("", "").is_none());
+        assert!(tls_pair_problem("/c.pem", "/k.pem").is_none());
+    }
+
+    /// A resolver backed by a freshly generated CA in a temporary directory.
+    #[cfg(feature = "proxy-tls")]
+    fn test_resolver(tld: &str) -> (SniCertResolver, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let cert = dir.path().join("ca.pem");
+        let key = dir.path().join("ca-key.pem");
+        generate_ca(&cert, &key).unwrap();
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        (
+            SniCertResolver::new(&cert, &key, tld.to_string()).unwrap(),
+            dir,
+        )
+    }
+
+    /// SANs on a certificate the resolver minted for `domain`.
+    #[cfg(feature = "proxy-tls")]
+    fn sans_for(resolver: &SniCertResolver, domain: &str) -> Vec<String> {
+        let ck = resolver.get_or_create(domain).expect("a certificate");
+        let (_, cert) = x509_parser::parse_x509_certificate(&ck.cert[0]).unwrap();
+        cert.subject_alternative_name()
+            .unwrap()
+            .map(|ext| {
+                ext.value
+                    .general_names
+                    .iter()
+                    .filter_map(|n| match n {
+                        x509_parser::extensions::GeneralName::DNSName(d) => Some(d.to_string()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn the_ca_refuses_to_sign_for_a_name_outside_the_tld() {
+        use rustls::server::ResolvesServerCert;
+
+        let (resolver, _dir) = test_resolver("localhost");
+        let cache = resolver.host_certs_dir.clone();
+
+        // The CA is installed in the machine's trust store and the proxy
+        // answers on loopback, so minting for an arbitrary SNI would hand out a
+        // browser-trusted certificate for somebody else's name.
+        for foreign in [
+            "login.microsoftonline.com",
+            "example.com",
+            "notlocalhost",
+            "localhost.evil.com",
+        ] {
+            assert!(
+                resolver.get_or_create_checked(foreign).is_none(),
+                "expected {foreign:?} to be refused"
+            );
+        }
+
+        // And nothing was written to the on-disk cache for them.
+        let cached: Vec<String> = std::fs::read_dir(&cache)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(
+            cached.is_empty(),
+            "unexpected cached certificates: {cached:?}"
+        );
+
+        // Names under the TLD are still served, at any depth.
+        for ours in ["localhost", "api.localhost", "core.wt.proj.localhost"] {
+            assert!(
+                resolver.get_or_create_checked(ours).is_some(),
+                "expected {ours:?} to be issued"
+            );
+        }
+        // `resolve` is the trait entry point and applies the same rule.
+        let _ = &resolver as &dyn ResolvesServerCert;
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn the_certificate_cache_is_bounded_and_evicts_the_oldest() {
+        // The set of names under a TLD is unbounded, and each one costs a key
+        // generation and a file, so the cache must not grow with it.
+        let (resolver, _dir) = test_resolver("localhost");
+        let host_certs = resolver.host_certs_dir.clone();
+
+        for i in 0..MAX_HOST_CERTS + 8 {
+            assert!(
+                resolver
+                    .get_or_create_checked(&format!("h{i}.localhost"))
+                    .is_some()
+            );
+        }
+
+        let cached = resolver.cache.lock().unwrap();
+        assert_eq!(cached.by_domain.len(), MAX_HOST_CERTS);
+        assert_eq!(cached.order.len(), MAX_HOST_CERTS);
+        // Oldest first out, newest retained.
+        assert!(cached.get("h0.localhost").is_none());
+        assert!(
+            cached
+                .get(&format!("h{}.localhost", MAX_HOST_CERTS + 7))
+                .is_some()
+        );
+        drop(cached);
+
+        // The files went with them, so the disk cache is bounded too.
+        let on_disk = std::fs::read_dir(&host_certs).unwrap().count();
+        assert!(
+            on_disk <= MAX_HOST_CERTS,
+            "{on_disk} files cached, expected at most {MAX_HOST_CERTS}"
+        );
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn the_disk_cache_is_pruned_at_startup() {
+        // Eviction during a run only knows the names that run has seen, so
+        // files left by earlier processes have to be cleared on the way in or
+        // the directory grows across restarts.
+        let dir = tempfile::tempdir().unwrap();
+        let host_certs = dir.path().join("host-certs");
+        std::fs::create_dir_all(&host_certs).unwrap();
+        for i in 0..MAX_HOST_CERTS + 20 {
+            std::fs::write(host_certs.join(format!("old{i}.pem")), "stale").unwrap();
+        }
+        // A file we do not own is left alone.
+        std::fs::write(host_certs.join("notes.txt"), "keep me").unwrap();
+
+        prune_host_certs(&host_certs);
+
+        let pems = std::fs::read_dir(&host_certs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "pem"))
+            .count();
+        assert_eq!(pems, MAX_HOST_CERTS);
+        assert!(host_certs.join("notes.txt").exists());
+
+        // Under the limit, nothing is touched.
+        let small = dir.path().join("small");
+        std::fs::create_dir_all(&small).unwrap();
+        std::fs::write(small.join("a.pem"), "x").unwrap();
+        prune_host_certs(&small);
+        assert!(small.join("a.pem").exists());
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn a_minted_certificate_never_wildcards_the_whole_tld() {
+        let (resolver, _dir) = test_resolver("localhost");
+
+        // One level down: the parent is the TLD itself, so no wildcard.
+        let sans = sans_for(&resolver, "api.localhost");
+        assert!(sans.contains(&"api.localhost".to_string()));
+        assert!(
+            !sans.iter().any(|s| s.starts_with('*')),
+            "unexpected wildcard in {sans:?}"
+        );
+
+        // Deeper: the sibling wildcard is inside the TLD, which is fine.
+        let sans = sans_for(&resolver, "core.wt.proj.localhost");
+        assert!(sans.contains(&"*.wt.proj.localhost".to_string()));
+
+        // A multi-label TLD is still a TLD; `*.dev.internal` would cover it all.
+        let (resolver, _dir) = test_resolver("dev.internal");
+        let sans = sans_for(&resolver, "api.dev.internal");
+        assert!(
+            !sans.iter().any(|s| s.starts_with('*')),
+            "unexpected wildcard in {sans:?}"
+        );
+    }
 
     /// The placeholder has to say why there is no page: the web UI being off is
     /// a different problem from a checkout no registered project covers, and

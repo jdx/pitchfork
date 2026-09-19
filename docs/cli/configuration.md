@@ -419,16 +419,39 @@ If the daemon does not become ready and bind a port within this timeout, the bro
 - **Default:** `true`
 - **Set with:** `PITCHFORK_PROXY_AUTO_TRUST`
 
-Automatically install the proxy TLS certificate into the system trust store
+Automatically trust the generated proxy CA certificate
 
-When enabled (default), pitchfork automatically installs the proxy's self-signed CA certificate into the system trust store during supervisor startup, so that browsers and tools trust HTTPS proxy URLs without certificate warnings.
+When enabled (default), pitchfork attempts to install its generated CA certificate into the system trust store during HTTPS proxy startup.
 
-On macOS, this triggers a system authorization dialog (Touch ID or password). On Linux, this requires write access to the system CA directory (typically needs `sudo`).
+On macOS, this triggers a system authorization dialog (Touch ID or password). On Linux, use `pitchfork proxy setup` to install the CA with sudo while keeping the supervisor unprivileged.
 
-If auto-trust fails (e.g. due to permissions), it is silently skipped and a warning is logged. You can manually install the certificate with:
-  pitchfork proxy trust
+If auto-trust fails, pitchfork logs a warning and continues starting the proxy. Use `pitchfork proxy doctor` to check trust, or `pitchfork proxy trust` to install the CA manually (with sudo on Linux).
 
 Set to `false` to disable auto-trust entirely.
+
+## `proxy.dns`
+
+- **Type:** `bool`
+- **Default:** `true`
+- **Set with:** `PITCHFORK_PROXY_DNS`
+
+Run a loopback DNS resolver for the proxy TLD
+
+While the proxy is running, answer UDP and TCP DNS queries on `127.0.0.1:<proxy.dns_port>` for names under `proxy.tld`, including nested project and worktree hostnames. Answers follow `proxy.host`, or the LAN IPv4 address in LAN mode. Names outside the TLD receive REFUSED; queries are never forwarded.
+
+Run `pitchfork proxy setup` to configure system resolution separately. Set to `false` when using another resolver or when DNS is not needed.
+
+## `proxy.dns_port`
+
+- **Type:** `int`
+- **Default:** `15353`
+- **Set with:** `PITCHFORK_PROXY_DNS_PORT`
+
+Port the loopback DNS resolver listens on
+
+The resolver binds `127.0.0.1:<dns_port>` on both UDP and TCP.
+
+The default avoids privileged port 53 and the mDNS port, 5353.
 
 ## `proxy.enable`
 
@@ -507,7 +530,7 @@ The port pitchfork's reverse proxy binds to. Must be in the range 1-65535.
 
 Default is 443 (standard HTTPS port) since the proxy defaults to HTTPS. Users can override this to any port (e.g. 7777) to avoid requiring elevated privileges.
 
-Ports below 1024 require the supervisor to be started with elevated privileges (e.g. `sudo pitchfork supervisor start`).
+To use standard ports without running the supervisor as root, choose an unprivileged listener such as 8443 and run `pitchfork proxy setup` to redirect local traffic on macOS or Linux. On Linux, setup can also grant permission to bind ports below 1024 directly.
 
 ## `proxy.sync_hosts`
 
@@ -515,15 +538,11 @@ Ports below 1024 require the supervisor to be started with elevated privileges (
 - **Default:** `true`
 - **Set with:** `PITCHFORK_PROXY_SYNC_HOSTS`
 
-Automatically sync slug hostnames to /etc/hosts
+Automatically sync slug hostnames to /etc/hosts (deprecated)
 
-When enabled (default), pitchfork automatically adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them.
+Deprecated and scheduled for removal after one release. Run `pitchfork proxy setup`, check resolution with `pitchfork proxy doctor`, then set `sync_hosts = false`. The loopback DNS resolver supports nested hostnames without per-host entries.
 
-This is needed because Safari does not auto-resolve `.localhost` subdomains, and custom TLDs (e.g. `.test`) always require DNS entries.
-
-Entries are managed in a marked block in `/etc/hosts` and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.
-
-Set to `false` to disable automatic hosts file management. You will need to configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS).
+When enabled (default), pitchfork adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them. Entries are managed in a marked block and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`, and it only ever covers registered slugs, never wildcard names.
 
 ## `proxy.tld`
 
@@ -538,7 +557,7 @@ The TLD appended to daemon hostnames in proxy URLs.
 With the default `localhost`, daemon URLs look like:
   `api.myproject.localhost:7777`  (daemon `api` of project `myproject`)
 
-For custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you can use dnsmasq or add entries to `/etc/resolver/`.
+Run `pitchfork proxy setup` to configure system resolution, including for custom TLDs such as `test`, or use `--pac` for applications that honor automatic proxy settings. Restart the supervisor after changing the TLD.
 
 ## `proxy.tls_cert`
 
@@ -547,9 +566,11 @@ For custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you c
 
 Path to TLS certificate file (PEM format) for HTTPS proxy
 
-Path to a PEM-encoded TLS certificate file used when `proxy.https = true`.
+Path to a PEM-encoded TLS certificate file used when `proxy.https = true`. It is served as-is for every hostname, and must match `proxy.tls_key`.
 
-If left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
+If left empty and `proxy.https = true`, pitchfork generates a local certificate authority at `$PITCHFORK_STATE_DIR/proxy/ca.pem` and signs a certificate per hostname from it on the first TLS handshake, caching them in `$PITCHFORK_STATE_DIR/proxy/host-certs/`. Trusting the CA once with `pitchfork proxy trust` covers every proxy hostname.
+
+With a custom certificate, pitchfork serves that certificate without signing per-hostname certificates. It must cover every hostname you use, and clients must trust its issuer. Setup skips CA installation; set `proxy.auto_trust = false` to also disable startup CA trust.
 
 ## `proxy.tls_key`
 
@@ -558,9 +579,9 @@ If left empty and `proxy.https = true`, pitchfork will auto-generate a self-sign
 
 Path to TLS private key file (PEM format) for HTTPS proxy
 
-Path to a PEM-encoded private key file used when `proxy.https = true`.
+Path to a PEM-encoded private key file matching `proxy.tls_cert`. The pair is checked at startup, so a mismatch is reported rather than failing every handshake.
 
-If left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
+If left empty and `proxy.https = true`, pitchfork generates a CA key at `$PITCHFORK_STATE_DIR/proxy/ca-key.pem` instead. See `proxy.tls_cert`.
 
 ## `proxy.wildcard`
 

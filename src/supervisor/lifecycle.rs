@@ -3340,7 +3340,7 @@ mod tests {
 /// Adds:
 /// - `HOST` — the address the daemon should bind to (`127.0.0.1`, omitted in LAN mode)
 /// - `PITCHFORK_URL` — the public proxy URL for this daemon (if it has a slug)
-/// - `NODE_EXTRA_CA_CERTS` — path to the pitchfork CA cert (if HTTPS enabled)
+/// - `PITCHFORK_CA_FILE` / `NODE_EXTRA_CA_CERTS` — path to the pitchfork CA cert (if HTTPS enabled)
 /// - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` — `.<tld>` for Vite host allowlisting
 /// - `PITCHFORK_LAN` — set to `"1"` when LAN mode is active
 fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
@@ -3358,7 +3358,11 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
         cmd.env("PITCHFORK_URL", &url);
     }
 
-    // NODE_EXTRA_CA_CERTS: let Node.js backends trust the pitchfork CA
+    // PITCHFORK_CA_FILE / NODE_EXTRA_CA_CERTS: let daemons verify TLS to each
+    // other through the proxy.  `PITCHFORK_CA_FILE` is the runtime-agnostic
+    // name; most TLS libraries take a CA bundle path from configuration, and
+    // several read one straight out of the environment (for example
+    // `SSL_CERT_FILE` for OpenSSL or `REQUESTS_CA_BUNDLE` for Python).
     if s.proxy.enable && s.proxy.https {
         let ca_path = if s.proxy.tls_cert.is_empty() {
             crate::env::PITCHFORK_STATE_DIR.join("proxy").join("ca.pem")
@@ -3366,7 +3370,9 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
             std::path::PathBuf::from(&s.proxy.tls_cert)
         };
         if ca_path.exists() {
-            cmd.env("NODE_EXTRA_CA_CERTS", ca_path.to_string_lossy().to_string());
+            let ca_path = ca_path.to_string_lossy().to_string();
+            cmd.env("PITCHFORK_CA_FILE", &ca_path);
+            cmd.env("NODE_EXTRA_CA_CERTS", &ca_path);
         }
     }
 

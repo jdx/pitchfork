@@ -31,6 +31,8 @@
 - [`pitchfork logs [FLAGS] [ID]…`](/cli/logs.md)
 - [`pitchfork mcp`](/cli/mcp.md)
 - [`pitchfork proxy <SUBCOMMAND>`](/cli/proxy.md)
+- [`pitchfork proxy setup [FLAGS]`](/cli/proxy/setup.md)
+- [`pitchfork proxy doctor`](/cli/proxy/doctor.md)
 - [`pitchfork proxy trust [--cert <CERT>]`](/cli/proxy/trust.md)
 - [`pitchfork proxy untrust [--cert <CERT>]`](/cli/proxy/untrust.md)
 - [`pitchfork proxy status [--json]`](/cli/proxy/status.md)

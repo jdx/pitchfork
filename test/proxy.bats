@@ -637,6 +637,386 @@ EOF
   kill_port "$daemon_port"
 }
 
+
+# ============================================================================
+# Loopback DNS resolver
+# ============================================================================
+
+# Start a supervisor with the proxy and the loopback resolver enabled.
+#
+# The supervisor owns both listeners, so the settings have to be in *its*
+# environment; the one common_setup started predates them.
+_start_proxy_with_dns() {
+  local proxy_port=$1 dns_port=$2
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    PITCHFORK_PROXY_DNS=true \
+    PITCHFORK_PROXY_DNS_PORT="$dns_port" \
+    PITCHFORK_PROXY_SYNC_HOSTS=false \
+    pitchfork supervisor start --force >/dev/null 2>&1
+}
+
+@test "dns resolver answers any name under the tld, so curl --resolve is unnecessary" {
+  local proj="$TEST_TEMP_DIR/dns-resolver"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local daemon_port proxy_port dns_port query
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+  dns_port=$(_free_port)
+  query="$(to_shell_path "$(script_path dns_query.py)")"
+
+  create_pitchfork_toml <<EOF
+[daemons.dns-web]
+run = 'python3 -u -m http.server $daemon_port --bind 127.0.0.1'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/"
+EOF
+
+  run pitchfork proxy add dnsweb --daemon dns-web
+  assert_success
+
+  _start_proxy_with_dns "$proxy_port" "$dns_port"
+
+  run pitchfork start dns-web
+  assert_success
+
+  # A name nothing has registered, several labels deep: the resolver answers on
+  # the shape of the name, not from a table of slugs.
+  local deep="core.some-worktree.some-project.localhost"
+
+  # `dig` is the tool a user would reach for, so prefer it when it is installed.
+  if command -v dig >/dev/null 2>&1; then
+    run dig +short +time=3 +tries=1 "@127.0.0.1" -p "$dns_port" "$deep" A
+    assert_success
+    assert_output "127.0.0.1"
+
+    run dig +time=3 +tries=1 "@127.0.0.1" -p "$dns_port" example.com A
+    assert_success
+    assert_output --partial "status: REFUSED"
+  fi
+
+  run python3 "$query" "$dns_port" "$deep" A
+  assert_success
+  assert_output "NOERROR 127.0.0.1"
+
+  # TCP carries the same answer, which is what a resolver falls back to.
+  run python3 "$query" "$dns_port" "$deep" A --tcp
+  assert_success
+  assert_output "NOERROR 127.0.0.1"
+
+  # AAAA is NODATA while the proxy listens on IPv4 only, which sends the client
+  # to the A record instead of an address nothing is bound to.
+  run python3 "$query" "$dns_port" "$deep" AAAA
+  assert_success
+  assert_output "NOERROR -"
+
+  # Anything outside the TLD is REFUSED, so the stub resolver moves on to its
+  # other servers. An authoritative NXDOMAIN would end the lookup here instead.
+  run python3 "$query" "$dns_port" example.com A
+  assert_success
+  assert_output "REFUSED -"
+
+  # The address the resolver hands out is the one the proxy answers on, so a
+  # client that resolves through it needs no --resolve override.
+  local resolved
+  resolved=$(python3 "$query" "$dns_port" dnsweb.localhost A | cut -d' ' -f2)
+  [ "$resolved" = "127.0.0.1" ]
+  run curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Host: dnsweb.localhost" "http://$resolved:$proxy_port/"
+  assert_success
+  assert_output "200"
+}
+
+@test "proxy serves a PAC file routing the tld through the proxy" {
+  local proxy_port dns_port
+  proxy_port=$(_free_port)
+  dns_port=$(_free_port)
+
+  _start_proxy_with_dns "$proxy_port" "$dns_port"
+
+  run curl -sS "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output --partial "function FindProxyForURL(url, host)"
+  assert_output --partial "dnsDomainIs(host, \".localhost\")"
+  assert_output --partial "PROXY 127.0.0.1:$proxy_port"
+  assert_output --partial 'return "DIRECT";'
+}
+
+@test "proxy doctor reports the resolver and the listener" {
+  local proxy_port dns_port
+  proxy_port=$(_free_port)
+  dns_port=$(_free_port)
+
+  _start_proxy_with_dns "$proxy_port" "$dns_port"
+
+  run env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    PITCHFORK_PROXY_DNS_PORT="$dns_port" \
+    pitchfork proxy doctor
+  # Not `assert_success`: whether `*.localhost` resolves through the system
+  # resolver depends on the host's DNS, which this test does not configure, and
+  # doctor now exits non-zero when any check fails. What it must report is that
+  # the listener and the resolver are both answering.
+  assert_output --partial "[ok  ] proxy listener"
+  assert_output --partial "[ok  ] dns resolver"
+}
+
+@test "proxy doctor exits non-zero when a check fails" {
+  # So `pitchfork proxy doctor || setup-the-proxy` works, and a CI step gating
+  # on this command does not read a broken proxy as a healthy one.
+  local proxy_port dns_port
+  proxy_port=$(_free_port)
+  dns_port=$(_free_port)
+
+  # Nothing is started, so the listener check fails whatever the host's DNS
+  # does. That makes the exit code the same everywhere this runs.
+  run env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    PITCHFORK_PROXY_DNS_PORT="$dns_port" \
+    pitchfork proxy doctor
+  assert_failure
+  assert_output --partial "[fail] proxy listener"
+  assert_output --partial "check(s) failed"
+}
+
+@test "proxy setup prints its plan and changes nothing with --dry-run" {
+  run env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_TLD=pftest \
+    PITCHFORK_PROXY_PORT=8443 \
+    pitchfork proxy setup --dry-run
+  assert_success
+  assert_output --partial "This will do the following:"
+  # Whatever the platform decides, the plan names the TLD it is wiring up and
+  # does not claim to have done anything.
+  assert_output --partial "pftest"
+  refute_output --partial "step(s) applied"
+}
+
+@test "proxy setup --pac plans no privileged steps" {
+  run env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_TLD=pftest \
+    PITCHFORK_PROXY_PORT=8443 \
+    PITCHFORK_PROXY_HTTPS=false \
+    pitchfork proxy setup --pac --dry-run
+  assert_success
+  assert_output --partial "/proxy.pac"
+  refute_output --partial "[sudo]"
+}
+
+@test "PAC clients reach HTTPS proxy URLs through a CONNECT tunnel" {
+  local proj="$TEST_TEMP_DIR/pac-connect"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local daemon_port proxy_port dns_port
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+  dns_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.pac-web]
+run = 'python3 -u -m http.server $daemon_port --bind 127.0.0.1'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/"
+EOF
+
+  run pitchfork proxy add pacweb --daemon pac-web
+  assert_success
+
+  # HTTPS on, which is the configuration the PAC file is documented against:
+  # a browser opening https://pacweb.localhost sends CONNECT to the proxy.
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=true \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    PITCHFORK_PROXY_DNS_PORT="$dns_port" \
+    PITCHFORK_PROXY_SYNC_HOSTS=false \
+    PITCHFORK_PROXY_AUTO_TRUST=false \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run pitchfork start pac-web
+  assert_success
+
+  # The PAC file is fetchable over plain HTTP on the TLS port: the browser
+  # reads it before it can trust the proxy's certificate.
+  run curl -sS "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output --partial "PROXY 127.0.0.1:$proxy_port"
+
+  # Exactly what a PAC-configured browser does: CONNECT, then TLS inside the
+  # tunnel. --proxy-insecure is unrelated to the tunnelled certificate; -k
+  # covers that, since the CA is not trusted in the test environment.
+  run curl -sS -k -o /dev/null -w '%{http_code}' \
+    --proxy "http://127.0.0.1:$proxy_port" \
+    "https://pacweb.localhost/"
+  assert_success
+  assert_output "200"
+
+  # The tunnel is not an open proxy: names outside the TLD are refused.
+  run curl -sS -o /dev/null -w '%{http_code}' \
+    --proxy "http://127.0.0.1:$proxy_port" \
+    "https://example.com/"
+  [[ "$output" == "403" || "$status" -ne 0 ]]
+}
+
+@test "the PAC path is not served for proxied hostnames, and the CA signs only the tld" {
+  local proj="$TEST_TEMP_DIR/pac-host"
+  mkdir -p "$proj"
+  cd "$proj"
+
+  local daemon_port proxy_port dns_port
+  daemon_port=$(_free_port)
+  proxy_port=$(_free_port)
+  dns_port=$(_free_port)
+
+  create_pitchfork_toml <<EOF
+[daemons.pac-host-web]
+run = 'python3 -u -m http.server $daemon_port --bind 127.0.0.1'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/"
+EOF
+
+  run pitchfork proxy add pachost --daemon pac-host-web
+  assert_success
+
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=true \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    PITCHFORK_PROXY_DNS_PORT="$dns_port" \
+    PITCHFORK_PROXY_SYNC_HOSTS=false \
+    PITCHFORK_PROXY_AUTO_TRUST=false \
+    pitchfork supervisor start --force >/dev/null 2>&1
+
+  run pitchfork start pac-host-web
+  assert_success
+
+  # Addressed to the listener itself: the PAC file.
+  run curl -sS "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output --partial "FindProxyForURL"
+
+  # Addressed to a proxied hostname: the daemon owns that path, so this is a
+  # normal request and gets the redirect to HTTPS, not the PAC file.
+  run curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Host: pachost.localhost" "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output "302"
+
+  # The same holds for every method, not just GET. Registering the route for
+  # GET alone would have axum answer a POST with 405 before the fall-through
+  # ran, taking the path away from the daemon for writes.
+  run curl -sS -X POST -o /dev/null -w '%{http_code}' \
+    -H "Host: pachost.localhost" "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output "302"
+
+  # The PAC file itself is read-only, so a write aimed at the listener is
+  # refused by the handler, which says what is allowed.
+  run curl -sS -X POST -o /dev/null -w '%{http_code}' \
+    "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output "405"
+
+  run curl -sSI -X POST "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output --partial "GET, HEAD"
+
+  # The TLD apex is not a routable name, so it serves the PAC file rather than
+  # being treated as a proxied request that nothing can route.
+  run curl -sS -H "Host: localhost" "http://127.0.0.1:$proxy_port/proxy.pac"
+  assert_success
+  assert_output --partial "FindProxyForURL"
+
+  # The local CA must not mint a certificate for a name it does not serve.
+  # `openssl s_client` is the closest thing to what an attacker would do.
+  #
+  # The subject is read back with `openssl x509` rather than matched in
+  # s_client's own output, because the spacing of that line differs between
+  # OpenSSL releases (`CN = x` versus `CN=x`).
+  if command -v openssl >/dev/null 2>&1; then
+    local subject_of="openssl x509 -noout -subject 2>/dev/null"
+
+    # A name under the TLD gets a certificate naming it.
+    run bash -c "echo | openssl s_client -connect 127.0.0.1:$proxy_port \
+      -servername pachost.localhost 2>/dev/null | $subject_of"
+    assert_success
+    assert_output --partial "pachost.localhost"
+
+    # A foreign name gets no certificate at all, so there is no subject to
+    # read. The assertion above proves this pipeline does yield one when a
+    # certificate is issued, so an empty result here is meaningful.
+    run bash -c "echo | openssl s_client -connect 127.0.0.1:$proxy_port \
+      -servername login.microsoftonline.com 2>/dev/null | $subject_of"
+    refute_output --partial "microsoftonline"
+  fi
+}
+
+@test "setup records what it did, and undo reverses it after settings change" {
+  # Exercises the record end to end rather than the plan in isolation: the
+  # file has to be written where undo looks for it, survive a settings change,
+  # and name only what that configuration actually installed.
+  # Windows has no resolver file, pf anchor or iptables rule to install, so
+  # setup plans nothing but notes, reports "Nothing to change." and records
+  # nothing. There is no round trip to exercise there.
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    skip "setup installs nothing on Windows, so there is no record to undo"
+  fi
+
+  local first_port second_port
+  first_port=$(_free_port)
+  second_port=$(_free_port)
+
+  # An unprivileged port on plain HTTP, so setup has nothing privileged to do
+  # beyond the redirect, which fails harmlessly without sudo here.
+  run env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=recordtest \
+    PITCHFORK_PROXY_PORT="$first_port" \
+    pitchfork proxy setup --yes
+  # The redirect needs root, so the run reports failure; the record is written
+  # before any step runs precisely so a partial run is still reversible. That
+  # only holds when setup found real work to do, so check that first: it makes
+  # a platform that plans nothing say so instead of reporting a missing file.
+  refute_output --partial "Nothing to change."
+  assert_file_exist "$PITCHFORK_STATE_DIR/proxy/setup.toml"
+  assert_file_contains "$PITCHFORK_STATE_DIR/proxy/setup.toml" "recordtest"
+
+  # After changing the port, undo knows about both the recorded and current
+  # configurations.
+  run env PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_TLD=recordtest \
+    PITCHFORK_PROXY_PORT="$second_port" \
+    pitchfork proxy setup --undo --dry-run
+  assert_success
+  # Only the Linux undo names the ports, in the iptables rule it drops. The
+  # macOS equivalent removes a pf anchor, whose summary names paths instead,
+  # so assert on whichever this host actually plans.
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    assert_output --partial "pf.anchors/pitchfork"
+  else
+    assert_output --partial "to $first_port"
+    assert_output --partial "to $second_port"
+  fi
+
+  # Undo claims a resolver file only where that configuration installed one,
+  # which on Linux depends on whether systemd-resolved is running here.
+  if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    assert_output --partial "resolved.conf.d"
+  else
+    refute_output --partial "resolved.conf.d"
+  fi
+}
+
 # ============================================================================
 # TLS passthrough tests
 # ============================================================================

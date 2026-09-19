@@ -35,11 +35,20 @@ The normal location is `~/.local/state/pitchfork/`:
 | `state.toml` | Daemon identities, status, retry state, and project sessions |
 | `logs/logs.db` | SQLite daemon log store |
 | `sock/main.sock` | CLI-to-supervisor Unix socket |
-| `proxy/cert.pem` | Generated proxy certificate |
+| `proxy/ca.pem` | Generated proxy CA certificate |
+| `proxy/ca-key.pem` | Private key for the proxy CA |
+| `proxy/host-certs/` | Cached certificates and private keys for individual proxy hostnames |
+| `proxy/setup.toml` | Saved proxy setup configurations used for reconciliation and undo |
 
 `PITCHFORK_STATE_DIR` overrides this location. On Linux, the default also follows
 the system's state-directory resolution (including `XDG_STATE_HOME`). On macOS,
 pitchfork falls back to `~/.local/state/pitchfork`.
+
+The supervisor generates the proxy CA during HTTPS startup. The proxy caches
+per-hostname certificates when using that CA to serve HTTPS.
+`proxy/setup.toml` records system configuration for
+[`proxy setup --undo`](/cli/proxy/setup); it is not the proxy settings file. See
+[local proxy setup](/guides/port-management#hostname-resolution).
 
 ### Logs
 
