@@ -2091,6 +2091,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         // IPv4 / hostname: "host:port" or "host"
         raw_host.split(':').next().unwrap_or(&raw_host).to_string()
     };
+    // A fully qualified name may end in the root dot (`api.localhost.`). The
+    // resolver and the certificate issuer already accept it through
+    // `owns_name`, so routing has to as well, or the name resolves and
+    // handshakes only to be answered "not found".
+    let host = host.trim_end_matches('.').to_string();
 
     // Loop detection: check hop count.
     //
@@ -3138,8 +3143,9 @@ fn bind_error_message(port: u16, err: &std::io::Error) -> String {
     if port < 1024 {
         format!(
             "Failed to bind proxy server to port {port}: {err}\n\
-             Hint: ports below 1024 require elevated privileges. \
-             Try: sudo pitchfork supervisor start"
+             Hint: ports below 1024 require elevated privileges. Run \
+             `pitchfork proxy setup`, which grants the bind capability on Linux, \
+             or set an unprivileged proxy.port and let setup redirect {port} to it."
         )
     } else {
         format!(

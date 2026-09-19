@@ -607,8 +607,9 @@ pub struct SettingsProxy {
     /// Users can override this to any port (e.g. 7777) to avoid requiring
     /// elevated privileges.
     ///
-    /// Ports below 1024 require the supervisor to be started with elevated
-    /// privileges (e.g. `sudo pitchfork supervisor start`).
+    /// Ports below 1024 need a privilege the supervisor does not run with.
+    /// `pitchfork proxy setup` grants the bind capability on Linux; elsewhere,
+    /// set an unprivileged port and let setup redirect the standard port to it.
     #[usage(env = "PITCHFORK_PROXY_PORT", default = 443)]
     pub port: i64,
 

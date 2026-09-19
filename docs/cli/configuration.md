@@ -531,7 +531,7 @@ The port pitchfork's reverse proxy binds to. Must be in the range 1-65535.
 
 Default is 443 (standard HTTPS port) since the proxy defaults to HTTPS. Users can override this to any port (e.g. 7777) to avoid requiring elevated privileges.
 
-Ports below 1024 require the supervisor to be started with elevated privileges (e.g. `sudo pitchfork supervisor start`).
+Ports below 1024 need a privilege the supervisor does not run with. `pitchfork proxy setup` grants the bind capability on Linux; elsewhere, set an unprivileged port and let setup redirect the standard port to it.
 
 ## `proxy.sync_hosts`
 
