@@ -30,6 +30,21 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// Held by an idle stop from its final check until the daemon has stopped,
+/// and briefly by a shell or project session entering a directory.
+///
+/// A shell entering a daemon's directory keeps the daemon running, so the
+/// two must not interleave: the shell is either seen by the final check, or
+/// registered once the daemon has already stopped — the same as entering a
+/// moment later, which the shell hook handles by starting what it manages.
+/// Entering a directory waits only while an idle stop is under way.
+static SHELL_ADMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Hold off idle stops while a shell or project session enters a directory.
+pub(crate) async fn admit_shell() -> tokio::sync::MutexGuard<'static, ()> {
+    SHELL_ADMISSION.lock().await
+}
+
 /// Set while a sweep's stops are under way, so a slow stop does not let the
 /// next tick start a second, overlapping sweep.
 static SWEEPING: AtomicBool = AtomicBool::new(false);
@@ -274,6 +289,9 @@ impl Supervisor {
         for id in ordered {
             let lock = self.stop_lock(&id).await;
             let stopped = {
+                // Admission first, then the daemon's stop lock, as nothing
+                // takes them the other way round.
+                let _admission = SHELL_ADMISSION.lock().await;
                 let _guard = lock.lock().await;
                 match self.idle_stop_blocker(&id, &group).await {
                     Some(reason) => {
