@@ -4,9 +4,9 @@
 - **Usage:** `pitchfork proxy trust [--cert <CERT>]`
 - **Effect:** modifies state
 
-Install the proxy's self-signed TLS certificate into the system trust store
+Install the proxy CA certificate into the system trust store
 
-This command installs pitchfork's auto-generated TLS certificate into your
+This command installs pitchfork's generated CA certificate into your
 system's trust store so that browsers and tools trust HTTPS proxy URLs
 without certificate warnings.
 
@@ -20,7 +20,7 @@ detected automatically based on the running distribution:
   - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat
   - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates
 
-This DOES require sudo on Linux.
+Requires sudo on Linux.
 
 Example:
 
@@ -30,5 +30,5 @@ sudo pitchfork proxy trust    # Linux only
 ```
 
 ## Flags
-- **`--cert <CERT>`** — Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)
+- **`--cert <CERT>`** — Path to the certificate file to trust (defaults to pitchfork's generated CA)
 - **`-h --help`** — Print help

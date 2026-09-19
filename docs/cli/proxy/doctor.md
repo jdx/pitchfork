@@ -4,11 +4,16 @@
 - **Usage:** `pitchfork proxy doctor`
 - **Effect:** read-only
 
-Check everything a proxy URL needs in order to work
+Diagnose proxy connectivity, hostname resolution, and HTTPS trust
 
 Prints one line per check: the proxy listener, the loopback DNS resolver,
 whether a random name under your TLD resolves through the system resolver,
-certificate trust, and whether the standard port reaches the proxy.
+certificate trust, and whether the standard port reaches the proxy. When
+system proxy settings use pitchfork's PAC URL, checks PAC availability
+instead of requiring system DNS resolution.
+
+Exits with a nonzero status if any check fails. Warnings alone do not fail
+the command.
 
 Example:
 

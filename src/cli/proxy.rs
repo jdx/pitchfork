@@ -70,7 +70,7 @@ impl Proxy {
 
 // ─── proxy setup ─────────────────────────────────────────────────────────────
 
-/// Point this machine's DNS, trust store and ports at the proxy
+/// Configure local proxy DNS, HTTPS trust, and standard ports
 ///
 /// Configure hostname resolution, HTTPS certificate trust, and access through
 /// port 443 (or 80 for HTTP). Prints a plan and asks for confirmation before
@@ -105,7 +105,7 @@ struct Setup {
     /// Configure a proxy auto-config (PAC) file instead of the system resolver
     #[usage(long)]
     pac: bool,
-    /// Reverse everything setup did
+    /// Remove recorded setup resources and restore saved proxy settings
     #[usage(long)]
     undo: bool,
     /// Apply without asking for confirmation
@@ -292,11 +292,16 @@ fn confirm(needs_sudo: bool) -> Result<bool> {
 
 // ─── proxy doctor ────────────────────────────────────────────────────────────
 
-/// Check everything a proxy URL needs in order to work
+/// Diagnose proxy connectivity, hostname resolution, and HTTPS trust
 ///
 /// Prints one line per check: the proxy listener, the loopback DNS resolver,
 /// whether a random name under your TLD resolves through the system resolver,
-/// certificate trust, and whether the standard port reaches the proxy.
+/// certificate trust, and whether the standard port reaches the proxy. When
+/// system proxy settings use pitchfork's PAC URL, checks PAC availability
+/// instead of requiring system DNS resolution.
+///
+/// Exits with a nonzero status if any check fails. Warnings alone do not fail
+/// the command.
 ///
 /// Example:
 ///
@@ -334,9 +339,9 @@ impl Doctor {
 
 // ─── proxy trust ─────────────────────────────────────────────────────────────
 
-/// Install the proxy's self-signed TLS certificate into the system trust store
+/// Install the proxy CA certificate into the system trust store
 ///
-/// This command installs pitchfork's auto-generated TLS certificate into your
+/// This command installs pitchfork's generated CA certificate into your
 /// system's trust store so that browsers and tools trust HTTPS proxy URLs
 /// without certificate warnings.
 ///
@@ -350,7 +355,7 @@ impl Doctor {
 ///   - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat
 ///   - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates
 ///
-/// This DOES require sudo on Linux.
+/// Requires sudo on Linux.
 ///
 /// Example:
 ///
@@ -361,7 +366,7 @@ impl Doctor {
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct Trust {
-    /// Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)
+    /// Path to the certificate file to trust (defaults to pitchfork's generated CA)
     #[usage(long)]
     cert: Option<std::path::PathBuf>,
 }
@@ -393,7 +398,7 @@ impl Trust {
 
 // ─── proxy untrust ───────────────────────────────────────────────────────────
 
-/// Remove the proxy's TLS certificate from the system trust store
+/// Remove the proxy CA certificate from the system trust store
 ///
 /// Removes the pitchfork CA certificate that was previously installed by
 /// `pitchfork proxy trust` or auto-trust.
@@ -411,7 +416,7 @@ impl Trust {
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct Untrust {
-    /// Path to the certificate file (defaults to pitchfork's auto-generated cert)
+    /// Path to the certificate file (defaults to pitchfork's generated CA)
     #[usage(long)]
     cert: Option<std::path::PathBuf>,
 }

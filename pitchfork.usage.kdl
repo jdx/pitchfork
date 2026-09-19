@@ -645,9 +645,9 @@ Subcommands:
     status    Show hostnames and registered slugs with their current state
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
-    cmd setup help="Point this machine's DNS, trust store and ports at the proxy" effect=write {
+    cmd setup help="Configure local proxy DNS, HTTPS trust, and standard ports" effect=write {
         long_help #"""
-Point this machine's DNS, trust store and ports at the proxy
+Configure local proxy DNS, HTTPS trust, and standard ports
 
 Configure hostname resolution, HTTPS certificate trust, and access through
 port 443 (or 80 for HTTP). Prints a plan and asks for confirmation before
@@ -678,18 +678,23 @@ pitchfork proxy setup --undo
 ```
 """#
         flag --pac help="Configure a proxy auto-config (PAC) file instead of the system resolver"
-        flag --undo help="Reverse everything setup did"
+        flag --undo help="Remove recorded setup resources and restore saved proxy settings"
         flag "-y --yes" help="Apply without asking for confirmation"
         flag --dry-run help="Print the plan and exit without changing anything"
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    cmd doctor help="Check everything a proxy URL needs in order to work" effect=read {
+    cmd doctor help="Diagnose proxy connectivity, hostname resolution, and HTTPS trust" effect=read {
         long_help #"""
-Check everything a proxy URL needs in order to work
+Diagnose proxy connectivity, hostname resolution, and HTTPS trust
 
 Prints one line per check: the proxy listener, the loopback DNS resolver,
 whether a random name under your TLD resolves through the system resolver,
-certificate trust, and whether the standard port reaches the proxy.
+certificate trust, and whether the standard port reaches the proxy. When
+system proxy settings use pitchfork's PAC URL, checks PAC availability
+instead of requiring system DNS resolution.
+
+Exits with a nonzero status if any check fails. Warnings alone do not fail
+the command.
 
 Example:
 
@@ -699,11 +704,11 @@ pitchfork proxy doctor
 """#
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    cmd trust help="Install the proxy's self-signed TLS certificate into the system trust store" effect=write {
+    cmd trust help="Install the proxy CA certificate into the system trust store" effect=write {
         long_help #"""
-Install the proxy's self-signed TLS certificate into the system trust store
+Install the proxy CA certificate into the system trust store
 
-This command installs pitchfork's auto-generated TLS certificate into your
+This command installs pitchfork's generated CA certificate into your
 system's trust store so that browsers and tools trust HTTPS proxy URLs
 without certificate warnings.
 
@@ -717,7 +722,7 @@ detected automatically based on the running distribution:
   - Arch Linux: /etc/ca-certificates/trust-source/anchors/ + trust extract-compat
   - openSUSE: /etc/pki/trust/anchors/ + update-ca-certificates
 
-This DOES require sudo on Linux.
+Requires sudo on Linux.
 
 Example:
 
@@ -726,14 +731,14 @@ pitchfork proxy trust
 sudo pitchfork proxy trust    # Linux only
 ```
 """#
-        flag --cert help="Path to the certificate file to trust (defaults to pitchfork's auto-generated cert)" {
+        flag --cert help="Path to the certificate file to trust (defaults to pitchfork's generated CA)" {
             arg <CERT>
         }
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    cmd untrust help="Remove the proxy's TLS certificate from the system trust store" effect=write {
+    cmd untrust help="Remove the proxy CA certificate from the system trust store" effect=write {
         long_help #"""
-Remove the proxy's TLS certificate from the system trust store
+Remove the proxy CA certificate from the system trust store
 
 Removes the pitchfork CA certificate that was previously installed by
 `pitchfork proxy trust` or auto-trust.
@@ -749,7 +754,7 @@ pitchfork proxy untrust
 sudo pitchfork proxy untrust    # Linux only
 ```
 """#
-        flag --cert help="Path to the certificate file (defaults to pitchfork's auto-generated cert)" {
+        flag --cert help="Path to the certificate file (defaults to pitchfork's generated CA)" {
             arg <CERT>
         }
         flag "-h --help" help="Print help" action=help builtin=#true
@@ -1403,7 +1408,7 @@ config {
     prop "proxy.auto_start_timeout" type="duration" default="30s" help="Maximum time to wait for an auto-started daemon to become ready" long_help="Maximum time to wait for an auto-started daemon to become ready\n\nWhen a daemon is auto-started via a proxy request, the proxy waits up to this duration for the **entire** auto-start operation to complete — including waiting for the daemon's readiness signal and detecting the bound port.\n\nIf the daemon does not become ready and bind a port within this timeout, the browser receives an error page indicating the startup timed out.\n\n**Examples:** - `\"15s\"` - Shorter timeout for fast-starting services - `\"30s\"` - Default, suitable for most daemons - `\"60s\"` - For daemons with slow initialisation (e.g. large Java apps)" {
         env "PITCHFORK_PROXY_AUTO_START_TIMEOUT"
     }
-    prop "proxy.auto_trust" type="bool" default=#true help="Automatically install the proxy TLS certificate into the system trust store" long_help="Automatically install the proxy TLS certificate into the system trust store\n\nWhen enabled (default), pitchfork automatically installs the proxy's self-signed CA certificate into the system trust store during supervisor startup, so that browsers and tools trust HTTPS proxy URLs without certificate warnings.\n\nOn macOS, this triggers a system authorization dialog (Touch ID or password). On Linux, this requires write access to the system CA directory (typically needs `sudo`).\n\nIf auto-trust fails (e.g. due to permissions), it is silently skipped and a warning is logged. You can manually install the certificate with:\n  pitchfork proxy trust\n\nSet to `false` to disable auto-trust entirely." {
+    prop "proxy.auto_trust" type="bool" default=#true help="Automatically trust the generated proxy CA certificate" long_help="Automatically trust the generated proxy CA certificate\n\nWhen enabled (default), pitchfork attempts to install its generated CA certificate into the system trust store during HTTPS proxy startup.\n\nOn macOS, this triggers a system authorization dialog (Touch ID or password). On Linux, use `pitchfork proxy setup` to install the CA with sudo while keeping the supervisor unprivileged.\n\nIf auto-trust fails, pitchfork logs a warning and continues starting the proxy. Use `pitchfork proxy doctor` to check trust, or `pitchfork proxy trust` to install the CA manually (with sudo on Linux).\n\nSet to `false` to disable auto-trust entirely." {
         env "PITCHFORK_PROXY_AUTO_TRUST"
     }
     prop "proxy.dns" type="bool" default=#true help="Run a loopback DNS resolver for the proxy TLD" long_help="Run a loopback DNS resolver for the proxy TLD\n\nWhile the proxy is running, answer UDP and TCP DNS queries on `127.0.0.1:<proxy.dns_port>` for names under `proxy.tld`, including nested project and worktree hostnames. Answers follow `proxy.host`, or the LAN IPv4 address in LAN mode. Names outside the TLD receive REFUSED; queries are never forwarded.\n\nRun `pitchfork proxy setup` to configure system resolution separately. Set to `false` when using another resolver or when DNS is not needed." {
@@ -1427,16 +1432,16 @@ config {
     prop "proxy.lan_ip" type="string" default="" help="Pin a specific LAN IP address instead of auto-detecting" long_help="Pin a specific LAN IP address instead of auto-detecting\n\nWhen set, skips auto-detection and uses this IP for mDNS publishing. Implies `proxy.lan = true` if a non-empty value is provided." {
         env "PITCHFORK_PROXY_LAN_IP"
     }
-    prop "proxy.port" type="int" default=443 help="Port the reverse proxy server listens on" long_help="Port the reverse proxy server listens on\n\nThe port pitchfork's reverse proxy binds to. Must be in the range 1-65535.\n\nDefault is 443 (standard HTTPS port) since the proxy defaults to HTTPS. Users can override this to any port (e.g. 7777) to avoid requiring elevated privileges.\n\nPorts below 1024 need a privilege the supervisor does not run with. `pitchfork proxy setup` grants the bind capability on Linux; elsewhere, set an unprivileged port and let setup redirect the standard port to it." {
+    prop "proxy.port" type="int" default=443 help="Port the reverse proxy server listens on" long_help="Port the reverse proxy server listens on\n\nThe port pitchfork's reverse proxy binds to. Must be in the range 1-65535.\n\nDefault is 443 (standard HTTPS port) since the proxy defaults to HTTPS. Users can override this to any port (e.g. 7777) to avoid requiring elevated privileges.\n\nTo use standard ports without running the supervisor as root, choose an unprivileged listener such as 8443 and run `pitchfork proxy setup` to redirect local traffic on macOS or Linux. On Linux, setup can also grant permission to bind ports below 1024 directly." {
         env "PITCHFORK_PROXY_PORT"
     }
     prop "proxy.sync_hosts" type="bool" default=#true help="Automatically sync slug hostnames to /etc/hosts (deprecated)" long_help="Automatically sync slug hostnames to /etc/hosts (deprecated)\n\nDeprecated and scheduled for removal after one release. Run `pitchfork proxy setup`, check resolution with `pitchfork proxy doctor`, then set `sync_hosts = false`. The loopback DNS resolver supports nested hostnames without per-host entries.\n\nWhen enabled (default), pitchfork adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them. Entries are managed in a marked block and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`, and it only ever covers registered slugs, never wildcard names." {
         env "PITCHFORK_PROXY_SYNC_HOSTS"
     }
-    prop "proxy.tld" type="string" default="localhost" help="Top-level domain used for proxy URLs" long_help="Top-level domain used for proxy URLs\n\nThe TLD appended to daemon hostnames in proxy URLs.\n\nWith the default `localhost`, daemon URLs look like:\n  `api.myproject.localhost:7777`  (daemon `api` of project `myproject`)\n\nFor custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you can use dnsmasq or add entries to `/etc/resolver/`." {
+    prop "proxy.tld" type="string" default="localhost" help="Top-level domain used for proxy URLs" long_help="Top-level domain used for proxy URLs\n\nThe TLD appended to daemon hostnames in proxy URLs.\n\nWith the default `localhost`, daemon URLs look like:\n  `api.myproject.localhost:7777`  (daemon `api` of project `myproject`)\n\nRun `pitchfork proxy setup` to configure system resolution, including for custom TLDs such as `test`, or use `--pac` for applications that honor automatic proxy settings. Restart the supervisor after changing the TLD." {
         env "PITCHFORK_PROXY_TLD"
     }
-    prop "proxy.tls_cert" type="string" default="" help="Path to TLS certificate file (PEM format) for HTTPS proxy" long_help="Path to TLS certificate file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded TLS certificate file used when `proxy.https = true`. It is served as-is for every host name, and must match `proxy.tls_key`.\n\nIf left empty and `proxy.https = true`, pitchfork generates a local certificate authority at `$PITCHFORK_STATE_DIR/proxy/ca.pem` and signs a certificate per host name from it on the first TLS handshake, caching them in `$PITCHFORK_STATE_DIR/proxy/host-certs/`. Trusting the CA once with `pitchfork proxy trust` covers every proxy host name.\n\nWith a custom certificate, pitchfork does not generate certificates or install a CA. Your certificate must cover every hostname you use, and clients must trust its issuer." {
+    prop "proxy.tls_cert" type="string" default="" help="Path to TLS certificate file (PEM format) for HTTPS proxy" long_help="Path to TLS certificate file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded TLS certificate file used when `proxy.https = true`. It is served as-is for every hostname, and must match `proxy.tls_key`.\n\nIf left empty and `proxy.https = true`, pitchfork generates a local certificate authority at `$PITCHFORK_STATE_DIR/proxy/ca.pem` and signs a certificate per hostname from it on the first TLS handshake, caching them in `$PITCHFORK_STATE_DIR/proxy/host-certs/`. Trusting the CA once with `pitchfork proxy trust` covers every proxy hostname.\n\nWith a custom certificate, pitchfork serves that certificate without signing per-hostname certificates. It must cover every hostname you use, and clients must trust its issuer. Setup skips CA installation; set `proxy.auto_trust = false` to also disable startup CA trust." {
         env "PITCHFORK_PROXY_TLS_CERT"
     }
     prop "proxy.tls_key" type="string" default="" help="Path to TLS private key file (PEM format) for HTTPS proxy" long_help="Path to TLS private key file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded private key file matching `proxy.tls_cert`. The pair is checked at startup, so a mismatch is reported rather than failing every handshake.\n\nIf left empty and `proxy.https = true`, pitchfork generates a CA key at `$PITCHFORK_STATE_DIR/proxy/ca-key.pem` instead. See `proxy.tls_cert`." {

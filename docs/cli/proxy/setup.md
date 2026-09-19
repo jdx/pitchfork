@@ -4,7 +4,7 @@
 - **Usage:** `pitchfork proxy setup [FLAGS]`
 - **Effect:** modifies state
 
-Point this machine's DNS, trust store and ports at the proxy
+Configure local proxy DNS, HTTPS trust, and standard ports
 
 Configure hostname resolution, HTTPS certificate trust, and access through
 port 443 (or 80 for HTTP). Prints a plan and asks for confirmation before
@@ -36,7 +36,7 @@ pitchfork proxy setup --undo
 
 ## Flags
 - **`--pac`** — Configure a proxy auto-config (PAC) file instead of the system resolver
-- **`--undo`** — Reverse everything setup did
+- **`--undo`** — Remove recorded setup resources and restore saved proxy settings
 - **`-y --yes`** — Apply without asking for confirmation
 - **`--dry-run`** — Print the plan and exit without changing anything
 - **`-h --help`** — Print help
