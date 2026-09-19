@@ -533,7 +533,7 @@
           ]
         },
         "proxy_idle_timeout": {
-          "description": "Stop this daemon after this long without proxy activity, when the proxy\nstarted it (e.g. `\"15m\"`). Overrides `settings.proxy.idle_timeout`;\n`false` or `\"0\"` means it is never stopped for inactivity, including\nwhen the proxy starts it as another daemon's dependency.\n\nDaemons started any other way (`pitchfork start`, the TUI, the web UI,\n`boot_start`, the shell hook) are never stopped for inactivity.",
+          "description": "Idle timeout when the proxy auto-starts this daemon, for example `\"15m\"`.\nAccepts a duration string or `false`; `\"0\"` also disables idle shutdown.\n\nWhen omitted, a daemon started through its URL uses\n`settings.proxy.idle_timeout`; a dependency inherits the requested\ndaemon's timeout. An explicit `false` exempts this daemon in either case.\n\nThe timeout is recorded at startup. Explicitly started daemons are\nexempt; live dependents, active proxy connections, and tracked shell\nsessions prevent idle shutdown.",
           "anyOf": [
             {
               "$ref": "#/$defs/ProxyIdleTimeout"

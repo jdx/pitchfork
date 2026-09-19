@@ -572,26 +572,25 @@ pub struct SettingsProxy {
 
     /// Stop proxy-started daemons after this long without proxy activity
     ///
-    /// Empty (default) or `0` turns idle shutdown off, which keeps the
-    /// long-standing behavior: a daemon the proxy starts keeps running until
-    /// it is stopped.
+    /// Disabled by default: an empty string or `"0"` disables the default timeout.
+    /// Set a duration such as `"15m"` or `"1h"` to enable idle shutdown for daemons
+    /// started through their proxy URL. A daemon's `proxy_idle_timeout` overrides
+    /// this setting; dependencies without an override inherit the requested
+    /// daemon's timeout.
     ///
-    /// When set, a daemon that the proxy auto-started — and the dependencies
-    /// the proxy started along with it — is stopped once the proxy has carried
-    /// no request, WebSocket, streaming response or TLS passthrough connection
-    /// for it for this long. Dependencies stop after the daemons that need
-    /// them, and only once nothing running still depends on them.
+    /// HTTP requests count until their response ends. Streaming responses,
+    /// WebSockets, and TLS passthrough connections keep a daemon active while
+    /// open. DNS lookups, idle keep-alive connections, and traffic sent directly
+    /// to the daemon's port do not count.
     ///
-    /// Daemons are never stopped for inactivity while a tracked shell session
-    /// is inside their directory, or if they were started any other way
-    /// (`pitchfork start`, the TUI, the web UI, the shell hook, `boot_start`);
-    /// starting a proxy-started daemon explicitly keeps it running from then
-    /// on. A daemon's own `proxy_idle_timeout` overrides this value.
+    /// Only proxy-started daemons are eligible. Explicitly starting a daemon
+    /// exempts it and its dependencies from idle shutdown. Live dependents and
+    /// tracked shell sessions also prevent shutdown.
     ///
-    /// Idleness is checked every `general.interval`, so a daemon stops between
-    /// this long and this long plus one interval after its last activity.
-    ///
-    /// **Examples:** `"15m"`, `"1h"`
+    /// Eligibility is checked every `general.interval` (10 seconds by default).
+    /// Dependencies stop after their dependents; shutdown may take longer than
+    /// the idle timeout. The timeout is recorded at startup, and activity
+    /// tracking resets after a supervisor restart.
     #[usage(env = "PITCHFORK_PROXY_IDLE_TIMEOUT", default = "", ty = "duration")]
     pub idle_timeout: String,
 

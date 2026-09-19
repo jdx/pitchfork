@@ -2112,13 +2112,16 @@ pub struct PitchforkTomlDaemon {
     /// [`Self::effective_proxy_tls_port`] rather than either field.
     #[schemars(range(min = 1))]
     pub proxy_port: Option<u16>,
-    /// Stop this daemon after this long without proxy activity, when the proxy
-    /// started it (e.g. `"15m"`). Overrides `settings.proxy.idle_timeout`;
-    /// `false` or `"0"` means it is never stopped for inactivity, including
-    /// when the proxy starts it as another daemon's dependency.
+    /// Idle timeout when the proxy auto-starts this daemon, for example `"15m"`.
+    /// Accepts a duration string or `false`; `"0"` also disables idle shutdown.
     ///
-    /// Daemons started any other way (`pitchfork start`, the TUI, the web UI,
-    /// `boot_start`, the shell hook) are never stopped for inactivity.
+    /// When omitted, a daemon started through its URL uses
+    /// `settings.proxy.idle_timeout`; a dependency inherits the requested
+    /// daemon's timeout. An explicit `false` exempts this daemon in either case.
+    ///
+    /// The timeout is recorded at startup. Explicitly started daemons are
+    /// exempt; live dependents, active proxy connections, and tracked shell
+    /// sessions prevent idle shutdown.
     pub proxy_idle_timeout: Option<ProxyIdleTimeout>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,

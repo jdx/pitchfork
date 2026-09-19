@@ -675,9 +675,14 @@ Every hostname for the daemon uses the same selection. See
 
 ### `proxy_idle_timeout`
 
-How long a daemon the proxy started may go without proxy traffic before it is
-stopped. Overrides [`proxy.idle_timeout`](/guides/port-management#idle-shutdown)
-for this daemon. `false` or `"0"` means it is never stopped for inactivity.
+Idle timeout for this daemon when the proxy auto-starts it. Accepts a duration
+string such as `"15m"`, or `false` to disable idle shutdown. `"0"` also disables
+it; `true` is not accepted.
+
+For a daemon started through its URL, an omitted value uses
+[`proxy.idle_timeout`](/cli/configuration#proxy-idle-timeout). A dependency
+without its own value inherits the requested daemon's timeout. An explicit
+`false` exempts the daemon even when it is started as a dependency.
 
 ```toml
 [daemons.web]
@@ -691,11 +696,11 @@ port = 5174
 proxy_idle_timeout = false
 ```
 
-Only daemons started by opening their proxy URL, and dependencies started
-along with them, are affected. A dependency without its own value uses the
-value of the daemon that started it. See
-[idle shutdown](/guides/port-management#idle-shutdown) for what counts as
-activity and what keeps a daemon running.
+The timeout is recorded when the proxy starts the daemon. It does not make
+an already-running or explicitly started daemon eligible for idle shutdown.
+Live dependents, active proxy connections, and tracked shell sessions prevent
+shutdown. See [idle shutdown](/guides/port-management#idle-shutdown) for the
+complete lifecycle and activity rules.
 
 ### `expected_port` (deprecated)
 
