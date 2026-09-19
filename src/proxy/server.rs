@@ -913,42 +913,73 @@ async fn serve_http(
              The supervisor must be started with sudo to bind to this port."
         );
     }
-    let shutdown_signal = cancel.clone().cancelled_owned();
-    let server = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal)
-    .into_future();
-    tokio::pin!(server);
-
-    // Axum's graceful shutdown waits for every open connection with no limit,
-    // and a long-lived `ws://` stream may never close on its own. One deadline,
-    // started when shutdown begins, covers that wait and the tunnel drain
-    // below, as the HTTPS path does; past it the remaining connections are
-    // dropped rather than holding the supervisor's shutdown up.
-    let deadline = tokio::select! {
-        r = &mut server => {
-            r.map_err(|e| miette::miette!("Proxy server error: {e}"))?;
-            tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET
-        }
-        _ = cancel.cancelled() => {
-            let deadline = tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET;
-            match tokio::time::timeout_at(deadline, &mut server).await {
-                Ok(r) => r.map_err(|e| miette::miette!("Proxy server error: {e}"))?,
-                Err(_) => log::debug!(
-                    "Proxy connections still open after {SHUTDOWN_DRAIN_BUDGET:?}; dropping them"
-                ),
+    // Served by hand rather than through `axum::serve`, for the same reason as
+    // the HTTPS path: axum spawns each connection as a free task, so once its
+    // shutdown wait is cut short the connections keep running — a `ws://`
+    // stream or a long response splicing on while the supervisor stops the
+    // daemons behind it. Here they live in a `JoinSet`, which aborts whatever
+    // is left when the drain budget runs out.
+    let mut conn_tasks: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    loop {
+        while conn_tasks.try_join_next().is_some() {}
+        tokio::select! {
+            accept_result = listener.accept() => {
+                let (stream, peer_addr) = match accept_result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        log::warn!("Accept error (will retry): {e}");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                // Handlers read the peer address to decide how much of this
+                // machine's configuration a response may describe.
+                let app = app
+                    .clone()
+                    .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
+                let cancel = cancel.clone();
+                conn_tasks.spawn(async move {
+                    let io = hyper_util::rt::TokioIo::new(stream);
+                    let svc = hyper_util::service::TowerToHyperService::new(app);
+                    let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+                    let conn = builder.serve_connection_with_upgrades(io, svc);
+                    tokio::pin!(conn);
+                    let result = tokio::select! {
+                        r = conn.as_mut() => r,
+                        // Let an idle keep-alive connection close now and a
+                        // request in flight finish, rather than every open
+                        // connection running out the whole drain budget.
+                        _ = cancel.cancelled() => {
+                            conn.as_mut().graceful_shutdown();
+                            conn.await
+                        }
+                    };
+                    if let Err(e) = result {
+                        log::debug!("Connection error: {e}");
+                    }
+                });
             }
-            deadline
+            _ = cancel.cancelled() => break,
         }
-    };
+    }
 
-    // Axum's graceful shutdown returns once its own per-connection futures are
-    // done, and a CONNECT request's future completes the moment the connection
-    // is upgraded. The tunnel it spawned outlives it, so without this the
-    // supervisor would go on to stop daemons while tunnels were still splicing
-    // bytes.
+    // One deadline for both drains, as the HTTPS path has: in-flight
+    // connections first, then the CONNECT tunnels.
+    let deadline = tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET;
+    if tokio::time::timeout_at(deadline, async {
+        while conn_tasks.join_next().await.is_some() {}
+    })
+    .await
+    .is_err()
+    {
+        log::debug!("Proxy connections still open after {SHUTDOWN_DRAIN_BUDGET:?}; aborting them");
+    }
+    // Aborts whatever did not finish in time.
+    drop(conn_tasks);
+
+    // A CONNECT request's connection completes the moment it is upgraded; the
+    // tunnel it spawned outlives it, so without this the supervisor would go
+    // on to stop daemons while tunnels were still splicing bytes.
     proxy_state.tunnels.close();
     let _ = tokio::time::timeout_at(deadline, proxy_state.tunnels.wait()).await;
     Ok(())
@@ -3083,7 +3114,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 // top of proxy_handler (hops >= MAX_PROXY_HOPS check) before the request
                 // is forwarded.  A 101 response here means the backend accepted the
                 // upgrade, so the hop count was already within limits.
-                tokio::spawn(async move {
+                // Tracked with the CONNECT tunnels and raced against the
+                // cancellation token, so shutdown drains it instead of leaving
+                // it splicing to a daemon that is about to be stopped.
+                let cancel = state.cancel.clone();
+                state.tunnels.spawn(async move {
                     if let (Ok(client_upgraded), Ok(backend_upgraded)) =
                         (client_upgrade.await, backend_upgrade.await)
                     {
@@ -3096,8 +3131,10 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                         // flowing.  The OS TCP keepalive is sufficient to reap truly dead
                         // connections; a proper idle timeout would require a custom
                         // AsyncRead/AsyncWrite wrapper that resets the timer on each I/O op.
-                        let _ =
-                            tokio::io::copy_bidirectional(&mut client_io, &mut backend_io).await;
+                        tokio::select! {
+                            _ = tokio::io::copy_bidirectional(&mut client_io, &mut backend_io) => {}
+                            _ = cancel.cancelled() => {}
+                        }
                     }
                 });
                 return Response::from_parts(parts, Body::empty());
