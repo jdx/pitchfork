@@ -329,6 +329,117 @@ auto_start_timeout = "60s"
 To require manual startup instead, set `auto_start = false` in
 `[settings.proxy]`. Requests to stopped daemons then return a `502` error.
 
+## Idle Shutdown
+
+Idle shutdown stops daemons that the proxy auto-started after they are no
+longer in use. It is disabled by default. Enable it with
+[`proxy.idle_timeout`](/cli/configuration#proxy-idle-timeout), or set
+[`proxy_idle_timeout`](/reference/configuration#proxy-idle-timeout) on an
+individual daemon.
+
+### Configure the Idle Timeout
+
+This example sets a 15-minute default and a five-minute timeout for `web`:
+
+```toml
+[settings.proxy]
+idle_timeout = "15m"
+
+[daemons.db]
+run = "postgres -D ./data"
+ready_port = 5432
+
+[daemons.web]
+run = "npm run dev"
+port = 5173
+depends = ["db"]
+proxy_idle_timeout = "5m"
+```
+
+It assumes an initialized PostgreSQL data directory and an app listening on
+port 5173. Opening `web.<project>.localhost`, with the configured proxy scheme
+and port, starts `db` and `web`. After five minutes without activity, `web`
+becomes eligible for shutdown. Pitchfork stops it before `db`, and stops `db`
+only if no other daemon or tracked shell session still needs it. The next
+visit starts them again.
+
+| Configuration | Effect |
+|---------------|--------|
+| `settings.proxy.idle_timeout = "15m"` | Sets the default for daemons started through their proxy URL. The environment equivalent is `PITCHFORK_PROXY_IDLE_TIMEOUT=15m`. |
+| `proxy_idle_timeout = "5m"` on a daemon | Overrides the default, or enables idle shutdown for that daemon when the default is off. |
+| `proxy_idle_timeout = false` on a daemon | Exempts it from idle shutdown, even when the proxy starts it as a dependency. `"0"` has the same effect. |
+| `settings.proxy.idle_timeout = ""` | Disables the default; this is the initial value. `"0"` also disables it. Per-daemon settings still apply. |
+
+A dependency without its own `proxy_idle_timeout` inherits the timeout of the
+requested daemon. In this example, `db` inherits five minutes from `web`, not
+the 15-minute default. A dependency that is already running keeps its existing
+idle-shutdown eligibility and timeout.
+
+### What Counts as Activity
+
+The idle timer starts after startup finishes or the last active request or
+connection ends. These keep a daemon active:
+
+- **HTTP requests**, until the response body has been sent or the request is
+  abandoned. Long downloads and server-sent event streams count for their
+  full lifetime.
+- **WebSockets and other upgraded connections**, while open, even without
+  data flowing. A browser tab with an HMR connection keeps its dev server up.
+- **TLS passthrough connections**, while open. The proxy cannot inspect the
+  requests inside them.
+
+DNS lookups and idle HTTP keep-alive connections do not count. Neither does
+traffic sent directly to the daemon's port. For clients that bypass the proxy,
+start the daemon explicitly or set `proxy_idle_timeout = false`.
+
+### Which Daemons Can Stop
+
+Only daemons started by proxy access, including dependencies started for that
+request, are eligible. Daemons started through the CLI, TUI, web UI, shell hook,
+or `boot_start` are exempt from idle shutdown.
+
+To keep an already proxy-started app and its dependencies running, explicitly
+start it:
+
+```sh
+pitchfork start web
+```
+
+This removes their idle-shutdown eligibility even if they are already running.
+Other lifecycle controls, such as manual stops and shell-hook autostop, still
+apply.
+
+An eligible daemon stays up while:
+
+- A dependent is running, starting, stopping for a restart, or waiting to retry
+  after an error. Shared dependencies stop only after their last dependent.
+- A shell tracked by the [shell hook](/guides/shell-hook), or a
+  `pitchfork project enter` session, is inside its directory or a subdirectory.
+- Proxy activity or startup is in progress. Startup protects the full
+  dependency graph, including when it continues after a request times out.
+
+Workers and databases without their own proxy traffic can be stopped as
+proxy-started dependencies once their idle timeout has elapsed and no
+remaining dependent or tracked session needs them. Dependencies stop after
+the daemons that use them.
+
+### Timing and Restarts
+
+Pitchfork checks idleness every
+[`general.interval`](/cli/configuration#general-interval), which defaults to
+10 seconds. An eligible daemon is selected on a check after its timeout has
+elapsed; completing shutdown can take longer, for example while earlier
+dependents stop.
+
+A request arriving during idle shutdown waits for the stop to finish, then
+starts the daemon again. This wait is bounded by `proxy.auto_start_timeout`.
+
+The timeout is recorded when the proxy starts a daemon. Configuration changes
+apply on its next proxy start. Retries and file-watch restarts preserve its
+eligibility and recorded timeout. A supervisor restart also preserves those
+values, but resets activity tracking so each eligible daemon gets a fresh idle
+period.
+
 ## Viewing Proxy URLs
 
 With the proxy enabled, `pitchfork start`, `pitchfork list`, `pitchfork status`,

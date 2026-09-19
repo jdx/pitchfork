@@ -6310,6 +6310,38 @@
         "default_list": [],
         "extensions": []
       },
+      "proxy.idle_timeout": {
+        "default": "",
+        "default_note": null,
+        "data_type": "null",
+        "value_type": {
+          "kind": "base",
+          "of": "duration"
+        },
+        "env": "PITCHFORK_PROXY_IDLE_TIMEOUT",
+        "envs": [
+          "PITCHFORK_PROXY_IDLE_TIMEOUT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Stop proxy-started daemons after this long without proxy activity",
+        "long_help": "Stop proxy-started daemons after this long without proxy activity\n\nDisabled by default: an empty string or `\"0\"` disables the default timeout. Set a duration such as `\"15m\"` or `\"1h\"` to enable idle shutdown for daemons started through their proxy URL. A daemon's `proxy_idle_timeout` overrides this setting; dependencies without an override inherit the requested daemon's timeout.\n\nHTTP requests count until their response ends. Streaming responses, WebSockets, and TLS passthrough connections keep a daemon active while open. DNS lookups, idle keep-alive connections, and traffic sent directly to the daemon's port do not count.\n\nOnly proxy-started daemons are eligible. Explicitly starting a daemon exempts it and its dependencies from idle shutdown. Live dependents and tracked shell sessions also prevent shutdown.\n\nEligibility is checked every `general.interval` (10 seconds by default). Dependencies stop after their dependents; shutdown may take longer than the idle timeout. The timeout is recorded at startup, and activity tracking resets after a supervisor restart.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "proxy.lan": {
         "default": false,
         "default_note": null,

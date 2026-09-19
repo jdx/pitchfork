@@ -1,0 +1,560 @@
+//! Idle shutdown of daemons the proxy started.
+//!
+//! A daemon is eligible only while its record carries a
+//! `proxy_idle_timeout_ms`, which only a proxy auto-start sets. Anything
+//! started another way — and a proxy-started daemon that has since been
+//! started explicitly, which [`Supervisor::claim_daemons`] records — is never
+//! stopped here.
+//!
+//! The interval watcher calls [`Supervisor::check_idle_daemons`]. It stops an
+//! eligible daemon once all of these hold:
+//!
+//! - the proxy has carried nothing for it (see [`crate::proxy::activity`]) for
+//!   its grace period;
+//! - nothing running or starting depends on it, other than daemons being
+//!   stopped in the same pass;
+//! - no tracked shell or project session is inside its directory.
+//!
+//! Daemons are stopped dependents first, so a dependency goes only after the
+//! last daemon that needs it, and never while anything else still does.
+
+use super::autostop::is_within;
+use super::{SUPERVISOR, Supervisor};
+use crate::daemon::Daemon;
+use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
+use crate::ipc::IpcResponse;
+use crate::proxy::activity::ACTIVITY;
+use log::LevelFilter::Info;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+/// Held by an idle stop while it makes its final check and marks the daemon
+/// stopping, and briefly by a shell or project session entering a directory.
+///
+/// A shell entering a daemon's directory keeps the daemon running, so the
+/// two must not interleave: the shell is either seen by the final check, or
+/// registered once the daemon is already marked stopping — the same as
+/// entering a moment later, which the shell hook handles by starting what it
+/// manages, after the stop. The lock is released before the stop itself, so
+/// entering a directory never waits for a daemon to exit.
+static SHELL_ADMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Hold off idle stops while a shell or project session enters a directory.
+pub(crate) async fn admit_shell() -> tokio::sync::MutexGuard<'static, ()> {
+    SHELL_ADMISSION.lock().await
+}
+
+/// Set while a sweep's stops are under way, so a slow stop does not let the
+/// next tick start a second, overlapping sweep.
+static SWEEPING: AtomicBool = AtomicBool::new(false);
+
+/// Holds [`SWEEPING`] for one sweep and clears it when dropped, so a sweep
+/// that ends early — or panics — does not turn idle shutdown off for good.
+struct Sweep;
+
+impl Sweep {
+    fn begin() -> Option<Self> {
+        (!SWEEPING.swap(true, Ordering::SeqCst)).then_some(Sweep)
+    }
+}
+
+impl Drop for Sweep {
+    fn drop(&mut self) {
+        SWEEPING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// A daemon's idle grace period, if it may be stopped for inactivity.
+fn grace(daemon: &Daemon) -> Option<Duration> {
+    daemon.proxy_idle_timeout_ms.map(Duration::from_millis)
+}
+
+/// Whether `daemon` still needs what it depends on: it is up, on its way up,
+/// or on its way back. A restart (file watch, `--force`) stops first, and an
+/// errored daemon with retries left is about to start again, so both keep
+/// their dependencies as a running daemon does.
+fn is_live(daemon: &Daemon) -> bool {
+    let status = &daemon.status;
+    status.is_running()
+        || status.is_waiting()
+        || status.is_stopping()
+        || (status.is_errored() && daemon.retry_count < daemon.retry.count())
+}
+
+/// Whether a tracked shell or project session is inside `daemon`'s directory.
+fn shell_inside(daemon: &Daemon, active_dirs: &[PathBuf]) -> bool {
+    daemon
+        .dir
+        .as_deref()
+        .is_some_and(|dir| active_dirs.iter().any(|d| is_within(dir, d)))
+}
+
+/// Live daemons that depend on `id`, other than those in `excluding`.
+fn live_dependents<'a>(
+    id: &'a DaemonId,
+    daemons: &'a BTreeMap<DaemonId, Daemon>,
+    excluding: &'a HashSet<DaemonId>,
+) -> impl Iterator<Item = &'a DaemonId> + 'a {
+    daemons
+        .values()
+        .filter(move |d| is_live(d) && d.depends.contains(id) && !excluding.contains(&d.id))
+        .map(|d| &d.id)
+}
+
+/// Which daemons to stop for inactivity, and in what order.
+///
+/// Returns levels: every daemon in a level is stopped before any in the next,
+/// and nothing in a later level depends on anything in an earlier one — so
+/// dependents come first. A daemon is included only when it is eligible, idle
+/// by `is_idle`, has no shell inside its directory, and every live daemon
+/// depending on it is itself included.
+pub(crate) fn plan_idle_stops(
+    daemons: &BTreeMap<DaemonId, Daemon>,
+    active_dirs: &[PathBuf],
+    is_idle: impl Fn(&DaemonId, Duration) -> bool,
+) -> Vec<Vec<DaemonId>> {
+    let mut chosen: HashSet<DaemonId> = daemons
+        .values()
+        .filter(|d| d.status.is_running() && !shell_inside(d, active_dirs))
+        .filter(|d| grace(d).is_some_and(|g| is_idle(&d.id, g)))
+        .map(|d| d.id.clone())
+        .collect();
+
+    // Drop anything something outside the set still needs. Dropping one can
+    // leave its own dependencies needed in turn, so repeat until nothing
+    // changes.
+    loop {
+        let needed: Vec<DaemonId> = chosen
+            .iter()
+            .filter(|id| live_dependents(id, daemons, &chosen).next().is_some())
+            .cloned()
+            .collect();
+        if needed.is_empty() {
+            break;
+        }
+        for id in needed {
+            chosen.remove(&id);
+        }
+    }
+
+    // Peel off, level by level, the daemons nothing left in the set depends on.
+    let mut levels = Vec::new();
+    while !chosen.is_empty() {
+        let mut level: Vec<DaemonId> = chosen
+            .iter()
+            .filter(|id| {
+                !chosen
+                    .iter()
+                    .any(|other| daemons.get(other).is_some_and(|d| d.depends.contains(id)))
+            })
+            .cloned()
+            .collect();
+        if level.is_empty() {
+            // What is left is a dependency cycle and what it depends on.
+            // Nothing in a cycle can go first, and stopping its members
+            // together cannot be undone if one of them then fails to stop,
+            // which would leave the rest running without it. `depends` cycles
+            // are refused at start, so one only appears through a later
+            // config edit; leave it running.
+            break;
+        }
+        level.sort();
+        for id in &level {
+            chosen.remove(id);
+        }
+        levels.push(level);
+    }
+    levels
+}
+
+impl Supervisor {
+    /// Record that `ids` were started explicitly, so none of them is stopped
+    /// for inactivity from now on.
+    ///
+    /// Sent by every start that is not the proxy's, for the daemons it names
+    /// and everything they depend on, before anything is started: the result
+    /// is the same as if the explicit start had come first. Waits out an idle
+    /// stop already under way for any of them, so the caller then sees the
+    /// daemon stopped and starts it, rather than skipping it as running while
+    /// it goes away.
+    pub(crate) async fn claim_daemons(&self, ids: &[DaemonId]) {
+        let claimed: Vec<DaemonId> = {
+            let mut state_file = self.state_file.lock().await;
+            ids.iter()
+                .filter(|id| state_file.clear_proxy_idle_timeout(id))
+                .cloned()
+                .collect()
+        };
+        for id in &claimed {
+            info!("{id} was started explicitly; it will no longer be stopped when idle");
+        }
+        // An idle stop revalidates ownership under the daemon's stop lock, so
+        // one that has not taken the lock yet will now call itself off; one
+        // that holds it is waited for here.
+        for id in ids {
+            if ACTIVITY.is_idle_stopping(id) {
+                drop(self.stop_lock(id).await.lock().await);
+            }
+        }
+    }
+
+    /// Stop proxy-started daemons that have been idle for their grace period.
+    ///
+    /// Cheap when nothing is eligible, which is the default. The stops run in
+    /// a detached task so a slow one does not hold up the interval watcher.
+    pub(crate) async fn check_idle_daemons(&self) {
+        let daemons = {
+            let state_file = self.state_file.lock().await;
+            if !state_file
+                .daemons
+                .values()
+                .any(|d| d.proxy_idle_timeout_ms.is_some() && d.status.is_running())
+            {
+                return;
+            }
+            state_file.daemons.clone()
+        };
+        let Some(sweep) = Sweep::begin() else {
+            return;
+        };
+        let active_dirs = self.get_active_directories().await;
+        let plan = plan_idle_stops(&daemons, &active_dirs, |id, grace| {
+            let activity = ACTIVITY.snapshot(id);
+            activity.in_flight == 0 && !activity.idle_stopping && activity.idle_for >= grace
+        });
+        if plan.is_empty() {
+            return;
+        }
+        debug!("idle shutdown plan: {plan:?}");
+        let graces: HashMap<DaemonId, Duration> = daemons
+            .values()
+            .filter_map(|d| grace(d).map(|g| (d.id.clone(), g)))
+            .collect();
+        tokio::spawn(async move {
+            let _sweep = sweep;
+            for level in plan {
+                SUPERVISOR.idle_stop_level(level, &graces).await;
+            }
+        });
+    }
+
+    /// Stop one level of the plan for inactivity, as far as it still
+    /// qualifies.
+    ///
+    /// Every member is claimed first. A claim keeps new proxy work from
+    /// starting while the level is handled: a request arriving meanwhile
+    /// waits and starts the daemon again once it has stopped.
+    ///
+    /// The planner leaves dependency cycles out, so members of a level do not
+    /// depend on each other; each is still checked with the other claimed
+    /// members set aside, and one that no longer qualifies leaves that set
+    /// and has its claim released at once, so requests for it do not wait on
+    /// the rest of the level and nothing goes while a member that stays still
+    /// needs it.
+    /// The last check for each member runs under its stop lock, since a
+    /// request, an explicit start, a shell or a new dependent may have
+    /// arrived since the plan was made.
+    async fn idle_stop_level(&self, level: Vec<DaemonId>, graces: &HashMap<DaemonId, Duration>) {
+        let mut group: HashSet<DaemonId> = HashSet::new();
+        for id in level {
+            match graces.get(&id) {
+                Some(&grace) if ACTIVITY.claim_idle_stop(&id, grace) => {
+                    group.insert(id);
+                }
+                _ => debug!("idle stop of {id} called off: it was active again"),
+            }
+        }
+
+        loop {
+            let mut blocked = Vec::new();
+            for id in &group {
+                if let Some(reason) = self.idle_stop_blocker(id, &group, false).await {
+                    debug!("idle stop of {id} called off: {reason}");
+                    blocked.push(id.clone());
+                }
+            }
+            if blocked.is_empty() {
+                break;
+            }
+            for id in blocked {
+                // Staying up, so requests for it must not wait on this level.
+                group.remove(&id);
+                ACTIVITY.release_idle_stop(&id);
+            }
+        }
+
+        let mut ordered: Vec<DaemonId> = group.iter().cloned().collect();
+        ordered.sort();
+        for id in ordered {
+            let lock = self.stop_lock(&id).await;
+            let stopped = {
+                let _guard = lock.lock().await;
+                // The decision and marking the daemon stopping are one step as
+                // far as a shell entering its directory is concerned; the stop
+                // itself, which can take the whole stop timeout, runs after.
+                let blocker = {
+                    let _admission = SHELL_ADMISSION.lock().await;
+                    self.idle_stop_blocker(&id, &group, true).await
+                };
+                match blocker {
+                    Some(reason) => {
+                        debug!("idle stop of {id} called off: {reason}");
+                        false
+                    }
+                    None => {
+                        let grace = graces.get(&id).copied().unwrap_or_default();
+                        info!("stopping {id}: no proxy activity for {grace:?}");
+                        match self.stop_locked(&id).await {
+                            Ok(IpcResponse::Ok | IpcResponse::DaemonWasNotRunning) => true,
+                            // No process to stop, so nothing recorded an
+                            // outcome over the stopping mark.
+                            Ok(IpcResponse::DaemonNotRunning) => {
+                                self.settle_stopping(&id, DaemonStatus::Stopped).await;
+                                true
+                            }
+                            Ok(rsp) => {
+                                error!("failed to stop idle daemon {id}: {rsp:?}");
+                                self.settle_stopping(&id, DaemonStatus::Running).await;
+                                false
+                            }
+                            Err(e) => {
+                                error!("failed to stop idle daemon {id}: {e}");
+                                self.settle_stopping(&id, DaemonStatus::Running).await;
+                                false
+                            }
+                        }
+                    }
+                }
+            };
+            // Handled either way: requests for it no longer wait on this level.
+            ACTIVITY.release_idle_stop(&id);
+            if stopped {
+                self.add_notification(Info, format!("stopped idle {id}"))
+                    .await;
+            } else {
+                // Still running, so the members checked after it must keep
+                // what it needs.
+                group.remove(&id);
+            }
+        }
+    }
+
+    /// Replace the stopping mark an idle stop left on `id` with `status`, if
+    /// nothing has recorded an outcome over it.
+    async fn settle_stopping(&self, id: &DaemonId, status: DaemonStatus) {
+        let mut state_file = self.state_file.lock().await;
+        if state_file
+            .daemons
+            .get(id)
+            .is_some_and(|d| d.status.is_stopping())
+        {
+            state_file.set_status(id, status);
+        }
+    }
+
+    /// Why `id` must not be stopped for inactivity right now, if anything.
+    ///
+    /// Dependents in `stopping_with` are being stopped along with it and do
+    /// not count. With `commit`, a daemon that may be stopped is marked
+    /// stopping under the same lock, so anything that looks at it afterwards —
+    /// a shell hook deciding what to start — sees it on its way down rather
+    /// than running.
+    async fn idle_stop_blocker(
+        &self,
+        id: &DaemonId,
+        stopping_with: &HashSet<DaemonId>,
+        commit: bool,
+    ) -> Option<&'static str> {
+        // Shells and sessions are read under the same lock as the rest, so a
+        // shell entering the directory cannot slip in between the two.
+        let mut state_file = self.state_file.lock().await;
+        let active_dirs = state_file.active_directories();
+        let Some(daemon) = state_file.daemons.get(id) else {
+            return Some("it is no longer known");
+        };
+        if !daemon.status.is_running() {
+            return Some("it is no longer running");
+        }
+        if daemon.proxy_idle_timeout_ms.is_none() {
+            return Some("it was started explicitly");
+        }
+        if shell_inside(daemon, &active_dirs) {
+            return Some("a shell is inside its directory");
+        }
+        if live_dependents(id, &state_file.daemons, stopping_with)
+            .next()
+            .is_some()
+        {
+            return Some("a running daemon depends on it");
+        }
+        if commit {
+            state_file.set_status(id, DaemonStatus::Stopping);
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon_status::DaemonStatus;
+
+    fn id(name: &str) -> DaemonId {
+        DaemonId::new("proj", name)
+    }
+
+    struct Fixture(BTreeMap<DaemonId, Daemon>);
+
+    impl Fixture {
+        fn new() -> Self {
+            Self(BTreeMap::new())
+        }
+
+        fn add(mut self, name: &str, idle_ms: Option<u64>, depends: &[&str]) -> Self {
+            self.0.insert(
+                id(name),
+                Daemon {
+                    id: id(name),
+                    status: DaemonStatus::Running,
+                    dir: Some(PathBuf::from("/work/proj")),
+                    depends: depends.iter().map(|d| id(d)).collect(),
+                    proxy_idle_timeout_ms: idle_ms,
+                    ..Default::default()
+                },
+            );
+            self
+        }
+
+        fn status(mut self, name: &str, status: DaemonStatus) -> Self {
+            self.0.get_mut(&id(name)).unwrap().status = status;
+            self
+        }
+
+        fn plan(&self, active_dirs: &[&str], idle: &[&str]) -> Vec<Vec<String>> {
+            let dirs: Vec<PathBuf> = active_dirs.iter().map(PathBuf::from).collect();
+            let idle: HashSet<DaemonId> = idle.iter().map(|n| id(n)).collect();
+            plan_idle_stops(&self.0, &dirs, |d, _| idle.contains(d))
+                .into_iter()
+                .map(|l| l.into_iter().map(|d| d.name().to_string()).collect())
+                .collect()
+        }
+    }
+
+    const G: Option<u64> = Some(60_000);
+
+    #[test]
+    fn only_proxy_started_daemons_are_eligible() {
+        let f = Fixture::new().add("web", G, &[]).add("manual", None, &[]);
+        assert_eq!(f.plan(&[], &["web", "manual"]), vec![vec!["web"]]);
+    }
+
+    #[test]
+    fn active_daemons_are_kept() {
+        let f = Fixture::new().add("web", G, &[]);
+        assert!(f.plan(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn dependencies_stop_after_their_dependents() {
+        let f = Fixture::new()
+            .add("db", G, &[])
+            .add("cache", G, &[])
+            .add("api", G, &["db", "cache"])
+            .add("web", G, &["api"]);
+        assert_eq!(
+            f.plan(&[], &["db", "cache", "api", "web"]),
+            vec![vec!["web"], vec!["api"], vec!["cache", "db"]]
+        );
+    }
+
+    #[test]
+    fn a_dependency_stays_while_a_busy_dependent_needs_it() {
+        let f = Fixture::new().add("db", G, &[]).add("api", G, &["db"]);
+        // db has no traffic of its own, but api is still busy.
+        assert!(f.plan(&[], &["db"]).is_empty());
+    }
+
+    #[test]
+    fn a_shared_dependency_stays_for_an_explicitly_started_consumer() {
+        let f =
+            Fixture::new()
+                .add("db", G, &[])
+                .add("api", G, &["db"])
+                .add("worker", None, &["db"]);
+        assert_eq!(f.plan(&[], &["db", "api"]), vec![vec!["api"]]);
+    }
+
+    #[test]
+    fn a_starting_dependent_keeps_its_dependency() {
+        let f = Fixture::new()
+            .add("db", G, &[])
+            .add("worker", None, &["db"])
+            .status("worker", DaemonStatus::Waiting);
+        assert!(f.plan(&[], &["db"]).is_empty());
+    }
+
+    #[test]
+    fn a_dependent_on_its_way_back_keeps_its_dependency() {
+        // Stopping for a restart.
+        let f = Fixture::new()
+            .add("db", G, &[])
+            .add("api", None, &["db"])
+            .status("api", DaemonStatus::Stopping);
+        assert!(f.plan(&[], &["db"]).is_empty());
+
+        // Crashed, with a retry still to come.
+        let mut f = Fixture::new()
+            .add("db", G, &[])
+            .add("api", None, &["db"])
+            .status("api", DaemonStatus::Errored(1));
+        f.0.get_mut(&id("api")).unwrap().retry = crate::config_types::Retry(3);
+        assert!(f.plan(&[], &["db"]).is_empty());
+
+        // Out of retries: it is not coming back.
+        f.0.get_mut(&id("api")).unwrap().retry_count = 3;
+        assert_eq!(f.plan(&[], &["db"]), vec![vec!["db"]]);
+    }
+
+    #[test]
+    fn a_stopped_dependent_does_not_keep_its_dependency() {
+        let f = Fixture::new()
+            .add("db", G, &[])
+            .add("worker", None, &["db"])
+            .status("worker", DaemonStatus::Stopped);
+        assert_eq!(f.plan(&[], &["db"]), vec![vec!["db"]]);
+    }
+
+    #[test]
+    fn a_proxied_daemon_depending_on_a_busy_one_keeps_it() {
+        // `admin` depends on `api`; `api` is idle, but `admin` is serving
+        // traffic, so `api` must stay even though it saw none itself.
+        let f = Fixture::new().add("api", G, &[]).add("admin", G, &["api"]);
+        assert!(f.plan(&[], &["api"]).is_empty());
+    }
+
+    #[test]
+    fn a_shell_inside_the_directory_keeps_the_stack() {
+        let f = Fixture::new().add("db", G, &[]).add("api", G, &["db"]);
+        assert!(f.plan(&["/work/proj/src"], &["db", "api"]).is_empty());
+        // A shell elsewhere does not.
+        assert_eq!(
+            f.plan(&["/work/other"], &["db", "api"]),
+            vec![vec!["api"], vec!["db"]]
+        );
+    }
+
+    #[test]
+    fn a_dependency_cycle_is_left_running() {
+        // `web` depends on the cycle and goes; the cycle and `db`, which it
+        // needs, stay.
+        let f = Fixture::new()
+            .add("db", G, &[])
+            .add("a", G, &["b", "db"])
+            .add("b", G, &["a"])
+            .add("web", G, &["a"]);
+        assert_eq!(f.plan(&[], &["db", "a", "b", "web"]), vec![vec!["web"]]);
+    }
+}

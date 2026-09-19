@@ -2657,3 +2657,131 @@ impl JsonSchema for ProxyConfig {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// ProxyIdleTimeout (false or duration string)
+// ---------------------------------------------------------------------------
+
+/// Per-daemon override of `proxy.idle_timeout`.
+///
+/// Accepts two TOML forms:
+/// ```toml
+/// proxy_idle_timeout = "15m"   # stop 15 minutes after the last proxy request
+/// proxy_idle_timeout = false   # never stop this daemon for inactivity
+/// ```
+/// A zero duration is the same as `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyIdleTimeout {
+    /// Never stop this daemon for inactivity.
+    Disabled,
+    /// Stop after this long without proxy activity.
+    After(std::time::Duration),
+}
+
+impl ProxyIdleTimeout {
+    /// The grace period, or `None` when idle shutdown is off.
+    pub fn duration(self) -> Option<std::time::Duration> {
+        match self {
+            ProxyIdleTimeout::Disabled => None,
+            ProxyIdleTimeout::After(d) => Some(d),
+        }
+    }
+
+    fn parse(s: &str) -> Result<Self, String> {
+        let d = humantime::parse_duration(s.trim())
+            .map_err(|e| format!("invalid proxy_idle_timeout {s:?}: {e}"))?;
+        Ok(if d.is_zero() {
+            ProxyIdleTimeout::Disabled
+        } else {
+            ProxyIdleTimeout::After(d)
+        })
+    }
+}
+
+impl Serialize for ProxyIdleTimeout {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ProxyIdleTimeout::Disabled => s.serialize_bool(false),
+            ProxyIdleTimeout::After(d) => {
+                s.serialize_str(&humantime::format_duration(*d).to_string())
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ProxyIdleTimeout {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Duration(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Bool(false) => Ok(ProxyIdleTimeout::Disabled),
+            Raw::Bool(true) => Err(serde::de::Error::custom(
+                "proxy_idle_timeout = true is not a duration; give one such as \"15m\", \
+                 or false to turn idle shutdown off",
+            )),
+            Raw::Duration(s) => ProxyIdleTimeout::parse(&s).map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+impl JsonSchema for ProxyIdleTimeout {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ProxyIdleTimeout")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "Stop a proxy-started daemon after this long without proxy activity (e.g. \"15m\"); false never stops it",
+            "oneOf": [
+                { "type": "boolean", "enum": [false] },
+                { "type": "string" }
+            ]
+        })
+    }
+}
+
+#[cfg(test)]
+mod proxy_idle_timeout_tests {
+    use super::ProxyIdleTimeout;
+    use std::time::Duration;
+
+    #[derive(serde::Deserialize, serde::Serialize)]
+    struct Wrap {
+        t: ProxyIdleTimeout,
+    }
+
+    fn parse(toml_value: &str) -> Result<ProxyIdleTimeout, toml::de::Error> {
+        toml::from_str::<Wrap>(&format!("t = {toml_value}")).map(|w| w.t)
+    }
+
+    #[test]
+    fn accepts_a_duration_or_false() {
+        assert_eq!(
+            parse("\"15m\"").unwrap(),
+            ProxyIdleTimeout::After(Duration::from_secs(900))
+        );
+        assert_eq!(parse("false").unwrap(), ProxyIdleTimeout::Disabled);
+        assert_eq!(parse("\"0s\"").unwrap(), ProxyIdleTimeout::Disabled);
+    }
+
+    #[test]
+    fn rejects_true_and_garbage() {
+        assert!(parse("true").is_err());
+        assert!(parse("\"soon\"").is_err());
+    }
+
+    #[test]
+    fn round_trips() {
+        for t in [
+            ProxyIdleTimeout::Disabled,
+            ProxyIdleTimeout::After(Duration::from_secs(90)),
+        ] {
+            let s = toml::to_string(&Wrap { t }).unwrap();
+            assert_eq!(parse(s.trim_start_matches("t = ").trim()).unwrap(), t);
+        }
+    }
+}

@@ -103,6 +103,14 @@ pub enum IpcRequest {
         daemons: Vec<DaemonId>,
         prune: bool,
     },
+    /// These daemons are being started explicitly: none of them is to be
+    /// stopped for inactivity from now on, even if the proxy started it.
+    /// Sent before the start itself, and answered once any idle stop already
+    /// under way for one of them has finished. Appended to preserve the wire
+    /// indexes of existing variants.
+    ClaimDaemons {
+        ids: Vec<DaemonId>,
+    },
     /// Invalid request (failed to deserialize)
     #[serde(skip)]
     Invalid {
@@ -325,5 +333,48 @@ mod tests {
         bytes.push(b'\n');
         let decoded: IpcResponse = deserialize(&bytes).unwrap();
         assert!(matches!(decoded, IpcResponse::Cleaned { count: 3 }));
+    }
+
+    fn round_trip<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
+        let mut bytes = serialize(value).unwrap();
+        bytes.push(b'\n');
+        deserialize(&bytes).unwrap()
+    }
+
+    #[test]
+    fn claim_daemons_ipc_round_trips() {
+        let ids = vec![DaemonId::new("proj", "api"), DaemonId::new("proj", "db")];
+        match round_trip(&IpcRequest::ClaimDaemons { ids: ids.clone() }) {
+            IpcRequest::ClaimDaemons { ids: decoded } => assert_eq!(decoded, ids),
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    /// The idle-shutdown ownership rides at the end of both positionally
+    /// encoded structs, after fields that are skipped when empty.
+    #[test]
+    fn proxy_idle_timeout_survives_the_ipc_encoding() {
+        let daemon = Daemon {
+            id: DaemonId::new("proj", "api"),
+            proxy_idle_timeout_ms: Some(900_000),
+            ..Default::default()
+        };
+        match round_trip(&IpcResponse::ActiveDaemons(vec![daemon])) {
+            IpcResponse::ActiveDaemons(daemons) => {
+                assert_eq!(daemons[0].proxy_idle_timeout_ms, Some(900_000));
+                assert!(!daemons[0].oneshot);
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+
+        let opts = RunOptions {
+            id: DaemonId::new("proj", "api"),
+            proxy_idle_timeout_ms: Some(900_000),
+            ..Default::default()
+        };
+        match round_trip(&IpcRequest::Run(opts)) {
+            IpcRequest::Run(opts) => assert_eq!(opts.proxy_idle_timeout_ms, Some(900_000)),
+            other => panic!("unexpected request: {other:?}"),
+        }
     }
 }

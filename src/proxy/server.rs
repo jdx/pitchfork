@@ -108,6 +108,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::ProxyTlsMode;
+use crate::proxy::activity::{ACTIVITY, ActivityGuard, GuardedBody};
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
 
@@ -716,7 +717,10 @@ static AUTO_START_IN_PROGRESS: once_cell::sync::Lazy<
 enum ResolveResult {
     /// Daemon is running and ready — forward to this port.
     /// Covers both already-running daemons and freshly auto-started ones.
-    Ready(u16),
+    ///
+    /// The guard records the forwarded work as the daemon's activity, and has
+    /// to be held for as long as that work lasts.
+    Ready(u16, Option<ActivityGuard>),
     /// Daemon is currently starting (auto-start in progress or just triggered).
     Starting { slug: String },
     /// No matching slug or daemon found.
@@ -1463,8 +1467,11 @@ async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniP
 /// is logged.
 #[cfg(feature = "proxy-tls")]
 async fn serve_passthrough(mut stream: TcpStream, host: &str, tld: &str) {
-    let port = match resolve_passthrough_port(host, tld).await {
-        Ok(port) => port,
+    // Held until the splice ends: an open passthrough connection is activity
+    // for as long as it is open, since the proxy cannot see the requests
+    // inside it.
+    let (port, _activity) = match resolve_passthrough_port(host, tld).await {
+        Ok(ready) => ready,
         Err(msg) => {
             log::warn!("TLS passthrough for '{host}' failed: {msg}");
             return;
@@ -1522,7 +1529,10 @@ async fn connect_backend(addr: SocketAddr) -> std::io::Result<TcpStream> {
 /// one of its own — is bounded by a single `proxy.auto_start_timeout` budget,
 /// which is what the documentation promises.
 #[cfg(feature = "proxy-tls")]
-async fn resolve_passthrough_port(host: &str, tld: &str) -> std::result::Result<u16, String> {
+async fn resolve_passthrough_port(
+    host: &str,
+    tld: &str,
+) -> std::result::Result<(u16, Option<ActivityGuard>), String> {
     let budget = settings().proxy_auto_start_timeout();
     match tokio::time::timeout(budget, resolve_passthrough_port_inner(host, tld)).await {
         Ok(result) => result,
@@ -1535,13 +1545,17 @@ async fn resolve_passthrough_port(host: &str, tld: &str) -> std::result::Result<
 /// Inner loop of [`resolve_passthrough_port`], wrapped by the caller so that
 /// waiting and starting share one deadline.
 #[cfg(feature = "proxy-tls")]
-async fn resolve_passthrough_port_inner(host: &str, tld: &str) -> std::result::Result<u16, String> {
+async fn resolve_passthrough_port_inner(
+    host: &str,
+    tld: &str,
+) -> std::result::Result<(u16, Option<ActivityGuard>), String> {
     loop {
         match resolve_target(host, tld).await {
-            ResolveResult::Ready(port) => return Ok(port),
-            // Another connection is already auto-starting this daemon; wait
-            // for it rather than starting a second copy. The caller's timeout
-            // ends this wait.
+            ResolveResult::Ready(port, activity) => return Ok((port, activity)),
+            // Another connection is already auto-starting this daemon, or it
+            // is being stopped for inactivity; wait for that to finish rather
+            // than starting a second copy. The caller's timeout ends this
+            // wait.
             ResolveResult::Starting { slug: _ } => {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
@@ -2974,8 +2988,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         None
     };
 
-    let target_port = if let Some(port) = target_port {
-        port
+    let (target_port, activity) = if let Some(port) = target_port {
+        (port, None)
     } else {
         // A passthrough hostname must never be forwarded as plain HTTP: the
         // daemon expects a TLS handshake on that port, so the request would
@@ -2987,7 +3001,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
             );
         }
         match resolve_target(&host, &state.tld).await {
-            ResolveResult::Ready(port) => port,
+            ResolveResult::Ready(port, activity) => (port, activity),
             ResolveResult::Starting { slug } => {
                 return starting_html_response(&slug, &raw_host);
             }
@@ -3192,6 +3206,9 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 // it splicing to a daemon that is about to be stopped.
                 let cancel = state.cancel.clone();
                 state.tunnels.spawn(async move {
+                    // An open WebSocket is activity until either side closes
+                    // it, however quiet it is.
+                    let _activity = activity;
                     let splice = async move {
                         if let (Ok(client_upgraded), Ok(backend_upgraded)) =
                             (client_upgrade.await, backend_upgrade.await)
@@ -3222,7 +3239,10 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
             // Backend refused the upgrade (returned a non-101 response) — forward it as-is.
             // This can happen when the backend rejects a WebSocket handshake with e.g. 400.
-            Response::from_parts(parts, Body::new(body))
+            //
+            // The body carries the activity guard, so a streamed response
+            // (server-sent events, a long download) counts until it ends.
+            Response::from_parts(parts, Body::new(GuardedBody::new(body, activity)))
         }
         Err(e) => {
             let msg = format!(
@@ -3280,7 +3300,7 @@ fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
 ///    trigger an automatic start and wait for it to become ready.
 ///
 /// # Returns
-/// - `ResolveResult::Ready(port)`       — daemon running (or just auto-started), forward to this port
+/// - `ResolveResult::Ready(port, _)`    — daemon running (or just auto-started), forward to this port
 /// - `ResolveResult::Starting { slug }` — daemon start in progress (show waiting page)
 /// - `ResolveResult::NotFound`          — no daemon matched
 /// - `ResolveResult::Error(msg)`        — routing refused with a descriptive reason
@@ -3289,6 +3309,9 @@ fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
+    // One budget for everything this request may wait on: an idle stop under
+    // way and then the start after it.
+    let deadline = auto_start_deadline();
     let ctx = match resolve_route_context(host, tld).await {
         Ok(ctx) => ctx,
         Err(result) => return result,
@@ -3320,15 +3343,104 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
                 ctx.worktree_dir.as_deref(),
                 ctx.expected_namespace.as_deref(),
                 &ctx.route,
+                deadline,
             )
             .await
         }
         // With more than one namespace running a daemon of this name and no
         // namespace to narrow by, the first match is used — as before.
-        [(_, d), ..] => match select_daemon_port(&ctx.route, d) {
-            Some(port) => ResolveResult::Ready(port),
+        [(id, d), ..] => match select_daemon_port(&ctx.route, d) {
+            Some(port) => match begin_running(id, deadline).await {
+                Running::Yes(activity) => ResolveResult::Ready(port, Some(activity)),
+                Running::Stopping => ResolveResult::Starting {
+                    slug: ctx.cached.slug.clone(),
+                },
+                Running::No => {
+                    try_auto_start(
+                        &ctx.cached.slug,
+                        &ctx.cached,
+                        ctx.worktree_dir.as_deref(),
+                        ctx.expected_namespace.as_deref(),
+                        &ctx.route,
+                        deadline,
+                    )
+                    .await
+                }
+            },
             None => ResolveResult::NotFound,
         },
+    }
+}
+
+/// Whether a daemon found running is still running once its request has
+/// been recorded as activity.
+enum Running {
+    /// Still running; forward while holding this.
+    Yes(ActivityGuard),
+    /// Still being stopped for inactivity when the request's time ran out.
+    Stopping,
+    /// Stopped since the state was read, including by an idle stop the
+    /// request waited out: start it again.
+    No,
+}
+
+/// When a request that may auto-start a daemon has to give up:
+/// `proxy.auto_start_timeout` from now.
+fn auto_start_deadline() -> tokio::time::Instant {
+    tokio::time::Instant::now() + settings().proxy_auto_start_timeout()
+}
+
+/// Wait until `deadline` for any stop for inactivity of `ids` to finish.
+/// Returns whether none is under way any more.
+///
+/// A request that arrives while its daemon is being stopped waits here and
+/// then starts it again, rather than reaching a daemon that is going away or
+/// being turned away while it goes.
+async fn wait_out_idle_stops(ids: &[DaemonId], deadline: tokio::time::Instant) -> bool {
+    while ids.iter().any(|id| ACTIVITY.is_idle_stopping(id)) {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    true
+}
+
+/// Record a request for a daemon that the state showed running, then check
+/// that it still is.
+///
+/// Recording comes first: once it has, a stop for inactivity can no longer be
+/// claimed, so a daemon that is still running at the check stays running for
+/// as long as the request holds the guard.
+///
+/// A stop for inactivity under way is waited out until `deadline`. It may have
+/// been called off rather than carried out, so the daemon is then looked at
+/// again instead of assumed stopped.
+async fn begin_running(id: &DaemonId, deadline: tokio::time::Instant) -> Running {
+    let activity = match ACTIVITY.begin(id) {
+        Some(activity) => activity,
+        None => {
+            if !wait_out_idle_stops(std::slice::from_ref(id), deadline).await {
+                return Running::Stopping;
+            }
+            match ACTIVITY.begin(id) {
+                Some(activity) => activity,
+                // Claimed again straight away.
+                None => return Running::Stopping,
+            }
+        }
+    };
+    let running = {
+        let state_file = SUPERVISOR.state_file.lock().await;
+        state_file
+            .daemons
+            .get(id)
+            .is_some_and(|d| d.status.is_running())
+    };
+    if running {
+        Running::Yes(activity)
+    } else {
+        Running::No
     }
 }
 
@@ -3627,6 +3739,7 @@ async fn try_auto_start(
     worktree_dir: Option<&std::path::Path>,
     expected_namespace: Option<&str>,
     route: &ProxyTlsRoute,
+    deadline: tokio::time::Instant,
 ) -> ResolveResult {
     let s = settings();
     if !s.proxy.auto_start {
@@ -3657,8 +3770,9 @@ async fn try_auto_start(
         daemon_id: daemon_id.clone(),
     });
 
+    // The request's deadline, which may already be partly spent waiting out
+    // an idle stop, so the whole request stays within one timeout.
     let timeout = s.proxy_auto_start_timeout();
-    let deadline = tokio::time::Instant::now() + timeout;
     let timed_out = || {
         log::warn!("Auto-start: total timeout ({timeout:?}) exceeded for daemon {daemon_id}");
         ResolveResult::Error(format!(
@@ -3691,7 +3805,8 @@ async fn try_auto_start(
         Err(_elapsed) => return timed_out(),
     }
 
-    let result = tokio::time::timeout_at(deadline, wait_for_active_port(&daemon_id, route)).await;
+    let result =
+        tokio::time::timeout_at(deadline, wait_for_active_port(slug, &daemon_id, route)).await;
     drop(guard);
     result.unwrap_or_else(|_elapsed| timed_out())
 }
@@ -3765,6 +3880,29 @@ async fn start_with_dependencies(
                 )));
             }
         };
+    // Record the start as activity for every daemon in the graph, for as long
+    // as the start runs — past the request's own wait, if it gives up. A
+    // dependency that is already running is skipped by the start, so it must
+    // not be stopped for inactivity meanwhile; one whose stop is already under
+    // way is waited out first, and then started again. Taken before waiting
+    // on the startup locks, so a dependency cannot go while this start queues
+    // behind another.
+    let _activity = match ACTIVITY.begin_all(&graph) {
+        Some(activity) => activity,
+        None => {
+            wait_out_idle_stops(&graph, auto_start_deadline()).await;
+            match ACTIVITY.begin_all(&graph) {
+                Some(activity) => activity,
+                None => {
+                    return Err(ResolveResult::Error(format!(
+                        "A dependency of '{daemon_id}' is still being stopped for inactivity.\n\
+                         Reload to start it again."
+                    )));
+                }
+            }
+        }
+    };
+    let proxy_idle = proxy_idle_timeouts(daemon_id, &graph, &pt).await;
     let _locks = lock_startup_graph(graph).await;
 
     // The same entry point as `pitchfork start`, over this supervisor's own
@@ -3780,7 +3918,8 @@ async fn start_with_dependencies(
     };
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
-        ..crate::ipc::batch::StartOptions::default()
+        proxy_idle: Some(proxy_idle),
+        ..Default::default()
     };
     let result = match ipc
         .start_daemons_with_config(std::slice::from_ref(daemon_id), opts, pt)
@@ -3817,7 +3956,11 @@ async fn start_with_dependencies(
 }
 
 /// Poll the state file until a started daemon reports a port to forward to.
-async fn wait_for_active_port(daemon_id: &DaemonId, route: &ProxyTlsRoute) -> ResolveResult {
+async fn wait_for_active_port(
+    slug: &str,
+    daemon_id: &DaemonId,
+    route: &ProxyTlsRoute,
+) -> ResolveResult {
     let poll_interval = std::time::Duration::from_millis(250);
 
     loop {
@@ -3833,8 +3976,22 @@ async fn wait_for_active_port(daemon_id: &DaemonId, route: &ProxyTlsRoute) -> Re
                 // port on the request that started the daemon, not only on
                 // later ones.
                 if let Some(port) = select_daemon_port(route, d) {
-                    log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
-                    return ResolveResult::Ready(port);
+                    // Recorded as the request's activity. Its start held the
+                    // daemon's activity until it finished, so a stop for
+                    // inactivity can only have been claimed since if the grace
+                    // period is shorter than this poll. Then it is on its way
+                    // down, and the request is answered as for a daemon still
+                    // starting: the page reloads, and a passthrough connection
+                    // resolves again, and either starts it once more.
+                    return match ACTIVITY.begin(daemon_id) {
+                        Some(activity) => {
+                            log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
+                            ResolveResult::Ready(port, Some(activity))
+                        }
+                        None => ResolveResult::Starting {
+                            slug: slug.to_string(),
+                        },
+                    };
                 }
             } else {
                 log::warn!(
@@ -3856,6 +4013,52 @@ async fn wait_for_active_port(daemon_id: &DaemonId, route: &ProxyTlsRoute) -> Re
 
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+/// Which daemons of a proxy auto-start may later be stopped for inactivity,
+/// with their grace periods in milliseconds.
+///
+/// The daemon behind the hostname uses its own `proxy_idle_timeout`, or else
+/// `proxy.idle_timeout` as its project resolves it. A dependency uses its own
+/// `proxy_idle_timeout` when it sets one, and otherwise inherits the daemon's:
+/// it was started only because that daemon needed it. Daemons with idle
+/// shutdown off are left out, and are started as explicit.
+///
+/// Only daemons this start actually launches are affected; one that is
+/// already running keeps whatever ownership it had.
+async fn proxy_idle_timeouts(
+    daemon_id: &DaemonId,
+    closure: &[DaemonId],
+    pt: &crate::pitchfork_toml::PitchforkToml,
+) -> std::collections::HashMap<DaemonId, u64> {
+    let own = |id: &DaemonId| pt.daemons.get(id).and_then(|d| d.proxy_idle_timeout);
+    let target = match own(daemon_id) {
+        Some(configured) => configured.duration(),
+        None => {
+            // Project settings are read from files, so off the request thread.
+            let project_dir = crate::ipc::batch::resolve_config_base_dir(
+                pt.daemons.get(daemon_id).and_then(|d| d.path.as_deref()),
+            );
+            tokio::task::spawn_blocking(move || {
+                crate::settings::Settings::load_from_dir(&project_dir).proxy_idle_timeout()
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+    };
+    let millis = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+    closure
+        .iter()
+        .filter_map(|id| {
+            let grace = if id == daemon_id {
+                target
+            } else {
+                own(id).map_or(target, |configured| configured.duration())
+            };
+            grace.map(|g| (id.clone(), millis(g)))
+        })
+        .collect()
 }
 
 /// Resolve a hostname against the automatic hostname registry.
@@ -3948,6 +4151,8 @@ async fn resolve_registry_daemon(
     per_checkout: bool,
     route: &ProxyTlsRoute,
 ) -> ResolveResult {
+    // One budget for waiting out an idle stop and the start after it.
+    let deadline = auto_start_deadline();
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
         state_file.daemons.clone()
@@ -3981,10 +4186,19 @@ async fn resolve_registry_daemon(
                     .unwrap_or_else(|| "an unknown directory".to_string()),
             ));
         }
-        return match select_daemon_port(route, d) {
-            Some(port) => ResolveResult::Ready(port),
-            None => ResolveResult::NotFound,
+        let Some(port) = select_daemon_port(route, d) else {
+            return ResolveResult::NotFound;
         };
+        match begin_running(&d.id, deadline).await {
+            Running::Yes(activity) => return ResolveResult::Ready(port, Some(activity)),
+            Running::Stopping => {
+                return ResolveResult::Starting {
+                    slug: host.to_string(),
+                };
+            }
+            // Stopped since the state was read: start it again below.
+            Running::No => {}
+        }
     }
 
     let cached = CachedSlugEntry {
@@ -3997,12 +4211,12 @@ async fn resolve_registry_daemon(
         tls: *route,
         worktree_tls: std::collections::HashMap::new(),
     };
-    let result = try_auto_start(host, &cached, None, Some(namespace), route).await;
+    let result = try_auto_start(host, &cached, None, Some(namespace), route, deadline).await;
 
     // The start can land on a record another checkout already owns, because the
     // supervisor refuses to run a second daemon under the same ID. Serving that
     // port would hand this hostname the other checkout's content.
-    if per_checkout && let ResolveResult::Ready(_) = result {
+    if per_checkout && let ResolveResult::Ready(..) = result {
         let started = {
             let state_file = SUPERVISOR.state_file.lock().await;
             state_file
@@ -4499,6 +4713,57 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An idle stop can be called off rather than carried out. A request
+    /// that waited it out then finds the daemon still running and forwards to
+    /// it, instead of starting it all over again.
+    #[tokio::test]
+    async fn a_request_forwards_after_an_idle_stop_is_called_off() {
+        let id = DaemonId::new("calledoff", "api");
+        SUPERVISOR.state_file.lock().await.daemons.insert(
+            id.clone(),
+            crate::daemon::Daemon {
+                id: id.clone(),
+                status: crate::daemon_status::DaemonStatus::Running,
+                ..Default::default()
+            },
+        );
+        assert!(ACTIVITY.claim_idle_stop(&id, std::time::Duration::ZERO));
+        let releaser = {
+            let id = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                ACTIVITY.release_idle_stop(&id);
+            })
+        };
+        assert!(matches!(
+            begin_running(&id, auto_start_deadline()).await,
+            Running::Yes(_)
+        ));
+        releaser.await.unwrap();
+        SUPERVISOR.state_file.lock().await.daemons.remove(&id);
+    }
+
+    /// A request for a daemon mid idle-stop waits the stop out, so it can
+    /// start the daemon again, instead of being answered "Starting…".
+    #[tokio::test]
+    async fn a_request_waits_out_an_idle_stop() {
+        let id = DaemonId::new("waitproj", "api");
+        assert!(ACTIVITY.claim_idle_stop(&id, std::time::Duration::ZERO));
+        let releaser = {
+            let id = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                ACTIVITY.release_idle_stop(&id);
+            })
+        };
+        assert!(matches!(
+            begin_running(&id, auto_start_deadline()).await,
+            Running::No
+        ));
+        releaser.await.unwrap();
+        assert!(ACTIVITY.begin(&id).is_some());
+    }
 
     /// Axum answers a path match with no method match itself, so a route
     /// registered for `GET` alone takes that path away from `fallback` for

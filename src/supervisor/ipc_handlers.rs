@@ -114,7 +114,12 @@ impl Supervisor {
             }
             IpcRequest::UpdateShellDir { shell_pid, dir } => {
                 let prev = self.get_shell_dir(shell_pid).await;
-                self.set_shell_dir(shell_pid, dir.clone()).await?;
+                {
+                    // Seen by any idle stop still deciding, or registered
+                    // after it has finished.
+                    let _admission = super::idle::admit_shell().await;
+                    self.set_shell_dir(shell_pid, dir.clone()).await?;
+                }
                 // Cancel any pending autostops for daemons in the new directory
                 self.cancel_pending_autostops_for_dir(&dir).await;
                 if let Some(prev) = prev {
@@ -164,7 +169,10 @@ impl Supervisor {
             }
             IpcRequest::ProjectEnter { pid, dir } => {
                 debug!("handling project enter pid {pid} dir {}", dir.display());
-                let prev = self.enter_project_session(pid, dir.clone()).await?;
+                let prev = {
+                    let _admission = super::idle::admit_shell().await;
+                    self.enter_project_session(pid, dir.clone()).await?
+                };
                 self.cancel_pending_autostops_for_dir(&dir).await;
                 // When re-entering (prev.is_some()), the new session keeps the
                 // directory active, so leave_dir would be a no-op. Skip it to
@@ -196,6 +204,10 @@ impl Supervisor {
             IpcRequest::GetWebUrl => IpcResponse::WebUrl {
                 url: crate::web::url(),
             },
+            IpcRequest::ClaimDaemons { ids } => {
+                self.claim_daemons(&ids).await;
+                IpcResponse::Ok
+            }
         };
         // Ensure state is flushed to disk before returning the response
         // so that CLI commands reading StateFile::get() see fresh data.

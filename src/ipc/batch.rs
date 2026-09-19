@@ -109,6 +109,14 @@ pub struct StartOptions {
     pub retry: Option<crate::config_types::Retry>,
     /// Suppress output (ready check hints, startup logs)
     pub quiet: bool,
+    /// Set only by the proxy's auto-start: the daemons of this start that may
+    /// be stopped for inactivity, each with its grace period in milliseconds.
+    /// A daemon not in the map is started as explicit.
+    ///
+    /// Every other start leaves this `None`, which makes it explicit: it
+    /// claims the daemons it names and their dependencies from idle shutdown
+    /// before starting anything.
+    pub proxy_idle: Option<HashMap<DaemonId, u64>>,
 }
 
 /// Build RunOptions from a daemon configuration and start options.
@@ -129,6 +137,10 @@ pub async fn build_run_options(
     let mut run_opts = daemon_config.to_run_options(id, cmd);
     run_opts.wait_ready = true;
     run_opts.on_directory_enter = overrides.is_some_and(|o| o.on_directory_enter);
+    run_opts.proxy_idle_timeout_ms = overrides
+        .and_then(|o| o.proxy_idle.as_ref())
+        .and_then(|idle| idle.get(id))
+        .copied();
 
     if let Some(opts) = overrides {
         run_opts.shell_pid = opts.shell_pid;
@@ -601,6 +613,21 @@ impl IpcClient {
         let (config_ids, adhoc_ids): (Vec<DaemonId>, Vec<DaemonId>) = requested_ids
             .into_iter()
             .partition(|id| pt.daemons.contains_key(id));
+
+        // An explicit start takes these daemons, and what they depend on, away
+        // from idle shutdown — the same outcome as if it had started them
+        // before the proxy did. Done before the running snapshot below, since
+        // the supervisor answers only once an idle stop already under way has
+        // finished, and the daemon must then be seen as stopped and started.
+        if opts.proxy_idle.is_none() {
+            let mut claimed = adhoc_ids.clone();
+            match resolve_dependencies(&config_ids, &pt.daemons) {
+                Ok(order) => claimed.extend(order.levels.into_iter().flatten()),
+                // Reported by the start below; claim what was named.
+                Err(_) => claimed.extend(config_ids.iter().cloned()),
+            }
+            self.claim_daemons(&claimed).await?;
+        }
 
         // Get currently running daemons once and reuse the snapshot for both
         // restart checks and template context.
@@ -1146,6 +1173,11 @@ impl IpcClient {
         overrides: Option<&StartOptions>,
     ) -> Result<RunResult> {
         let pt = PitchforkToml::all_merged_all_namespaces()?;
+        // Claimed with everything it depends on, as `start_daemons` does, so
+        // starting it here keeps the same daemons out of idle shutdown.
+        let claimed: Vec<DaemonId> = resolve_dependencies(std::slice::from_ref(id), &pt.daemons)
+            .map(|order| order.levels.into_iter().flatten().collect())
+            .unwrap_or_else(|_| vec![id.clone()]);
 
         let mut daemon_config = pt
             .daemons
@@ -1169,6 +1201,9 @@ impl IpcClient {
             .await
             .map_err(|e| miette::miette!("{e}"))?;
 
+        if overrides.is_none_or(|o| o.proxy_idle.is_none()) {
+            self.claim_daemons(&claimed).await?;
+        }
         self.run(run_opts).await
     }
 
@@ -1318,6 +1353,11 @@ impl IpcClient {
             );
         }
 
+        // Only the run's own ID: an ad-hoc command starts nothing it depends
+        // on and declares no `depends`, so a configured daemon of the same
+        // name does not make that daemon's dependencies explicit.
+        self.claim_daemons(std::slice::from_ref(&run_opts.id))
+            .await?;
         self.run(run_opts).await
     }
 }

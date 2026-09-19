@@ -570,6 +570,30 @@ pub struct SettingsProxy {
     #[usage(env = "PITCHFORK_PROXY_HTTPS", default = true)]
     pub https: bool,
 
+    /// Stop proxy-started daemons after this long without proxy activity
+    ///
+    /// Disabled by default: an empty string or `"0"` disables the default timeout.
+    /// Set a duration such as `"15m"` or `"1h"` to enable idle shutdown for daemons
+    /// started through their proxy URL. A daemon's `proxy_idle_timeout` overrides
+    /// this setting; dependencies without an override inherit the requested
+    /// daemon's timeout.
+    ///
+    /// HTTP requests count until their response ends. Streaming responses,
+    /// WebSockets, and TLS passthrough connections keep a daemon active while
+    /// open. DNS lookups, idle keep-alive connections, and traffic sent directly
+    /// to the daemon's port do not count.
+    ///
+    /// Only proxy-started daemons are eligible. Explicitly starting a daemon
+    /// exempts it and its dependencies from idle shutdown. Live dependents and
+    /// tracked shell sessions also prevent shutdown.
+    ///
+    /// Eligibility is checked every `general.interval` (10 seconds by default).
+    /// Dependencies stop after their dependents; shutdown may take longer than
+    /// the idle timeout. The timeout is recorded at startup, and activity
+    /// tracking resets after a supervisor restart.
+    #[usage(env = "PITCHFORK_PROXY_IDLE_TIMEOUT", default = "", ty = "duration")]
+    pub idle_timeout: String,
+
     /// Enable LAN mode for the reverse proxy
     ///
     /// When enabled, the proxy switches to the `.local` TLD and publishes slug
@@ -1250,6 +1274,13 @@ impl Settings {
         }
     }
 
+    /// `proxy.idle_timeout` as a grace period, or `None` when idle shutdown
+    /// is off (empty, zero, or invalid — invalid values were already warned
+    /// about at load time).
+    pub fn proxy_idle_timeout(&self) -> Option<std::time::Duration> {
+        Self::parse_duration(self.proxy.idle_timeout.trim()).filter(|d| !d.is_zero())
+    }
+
     /// Resolve `general.ready_delay` as whole seconds.
     ///
     /// The ready-check pipeline (RunOptions/IPC/supervisor) models the delay
@@ -1834,6 +1865,8 @@ settings_partial! {
         host: String,
         /// Enable HTTPS for the reverse proxy
         https: bool,
+        /// Stop proxy-started daemons after this long without proxy activity
+        idle_timeout: String,
         /// Enable LAN mode for the reverse proxy
         lan: bool,
         /// Pin a specific LAN IP address instead of auto-detecting
@@ -2133,9 +2166,9 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        // 75 before either change, plus `supervisor.oneshot_timeout` from main
-        // and `proxy.dns` / `proxy.dns_port` from this branch.
-        assert_eq!(keys.len(), 78, "{keys:?}");
+        // 75 before either change, plus `supervisor.oneshot_timeout` from main,
+        // `proxy.dns` / `proxy.dns_port`, and `proxy.idle_timeout`.
+        assert_eq!(keys.len(), 79, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"supervisor.oneshot_timeout"));
         assert!(keys.contains(&"logs.archive_hook.command"));
@@ -2143,6 +2176,7 @@ mod tests {
         assert!(keys.contains(&"supervisor.watch_interval"));
         assert!(keys.contains(&"proxy.dns"));
         assert!(keys.contains(&"proxy.dns_port"));
+        assert!(keys.contains(&"proxy.idle_timeout"));
 
         let registry = Settings::SETTINGS_REGISTRY;
         let interval = registry.get(registry.lookup("general.interval").unwrap().id);

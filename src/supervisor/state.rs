@@ -27,7 +27,7 @@ use crate::pitchfork_toml::WatchMode;
 use crate::procs::PROCS;
 use crate::state_file::DiskRecord;
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn should_clean_daemon(
@@ -119,6 +119,10 @@ pub(crate) struct UpsertDaemonOpts {
     pub pty: Option<bool>,
     /// True for config-only cron daemons auto-registered into state.
     pub config_registered: bool,
+    /// Idle-shutdown ownership. `None` inherits the existing record's, so a
+    /// status-only upsert (stop, exit finalization) keeps it; a start sets it
+    /// from its `RunOptions`, which is what makes an explicit start explicit.
+    pub proxy_idle_timeout_ms: Option<Option<u64>>,
 }
 
 /// Builder for UpsertDaemonOpts - ensures daemon ID is always provided.
@@ -190,6 +194,7 @@ impl UpsertDaemonOpts {
             o.pty = opts.pty;
             o.archive_hook = opts.archive_hook.clone();
             o.log_format = opts.log_format.clone();
+            o.proxy_idle_timeout_ms = Some(opts.proxy_idle_timeout_ms);
         })
     }
 }
@@ -411,6 +416,9 @@ impl Supervisor {
                 .or(existing.and_then(|d| d.log_format.clone())),
             pty: opts.pty.or(existing.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
+            proxy_idle_timeout_ms: opts
+                .proxy_idle_timeout_ms
+                .unwrap_or_else(|| existing.and_then(|d| d.proxy_idle_timeout_ms)),
         };
         state_file.insert_daemon(&opts.id, daemon.clone());
         Ok(daemon)
@@ -573,12 +581,7 @@ impl Supervisor {
     /// sessions. These are the directories that should keep auto-stop daemons
     /// alive.
     pub(crate) async fn get_active_directories(&self) -> Vec<PathBuf> {
-        let state = self.state_file.lock().await;
-        let mut dirs: HashSet<PathBuf> = state.shell_dirs.values().cloned().collect();
-        for (_, dir, _) in state.iter_project_sessions() {
-            dirs.insert(dir.clone());
-        }
-        dirs.into_iter().collect()
+        self.state_file.lock().await.active_directories()
     }
 
     /// Collect all project sessions as `(pid, dir, liveness_title)`. Every

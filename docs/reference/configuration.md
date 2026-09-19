@@ -14,7 +14,7 @@ logging and dashboard ports, see [settings](/reference/settings).
 | Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
 | Order startup | [`depends`](#depends), [`oneshot`](#oneshot), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
 | Recover and monitor | [`retry`](#retry), [`health_cmd`](#health-cmd), [`health_http`](#health-http), [`health_port`](#health-port), [`memory_limit`](#memory-limit), [`cpu_limit`](#cpu-limit) |
-| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal) |
+| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal), [`proxy_idle_timeout`](#proxy-idle-timeout) |
 | Configure ports and logs | [`port`](#port), [`logs`](#logs) |
 | Share project configuration | [Environment defaults](#shared-environment), [groups](#daemon-groups), [namespace registry](#namespace-registry), [proxy slugs](#global-config-slug-registry) |
 
@@ -672,6 +672,35 @@ Without an explicit selection, passthrough uses the first declared port.
 Termination uses the detected active port, falling back to the first port.
 Every hostname for the daemon uses the same selection. See
 [choosing a port](/guides/port-management#choosing-a-port-on-a-multi-port-daemon).
+
+### `proxy_idle_timeout`
+
+Idle timeout for this daemon when the proxy auto-starts it. Accepts a duration
+string such as `"15m"`, or `false` to disable idle shutdown. `"0"` also disables
+it; `true` is not accepted.
+
+For a daemon started through its URL, an omitted value uses
+[`proxy.idle_timeout`](/cli/configuration#proxy-idle-timeout). A dependency
+without its own value inherits the requested daemon's timeout. An explicit
+`false` exempts the daemon even when it is started as a dependency.
+
+```toml
+[daemons.web]
+run = "npm run dev"
+port = 5173
+proxy_idle_timeout = "15m"
+
+[daemons.admin]
+run = "npm run admin"
+port = 5174
+proxy_idle_timeout = false
+```
+
+The timeout is recorded when the proxy starts the daemon. It does not make
+an already-running or explicitly started daemon eligible for idle shutdown.
+Live dependents, active proxy connections, and tracked shell sessions prevent
+shutdown. See [idle shutdown](/guides/port-management#idle-shutdown) for the
+complete lifecycle and activity rules.
 
 ### `expected_port` (deprecated)
 

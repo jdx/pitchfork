@@ -163,6 +163,14 @@ pub struct Daemon {
     /// after it for a peer that does not have it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub oneshot: bool,
+    /// Set when the proxy started this run and it may be stopped for
+    /// inactivity: how long, in milliseconds, it may go without proxy
+    /// activity. `None` for a daemon started any other way, or claimed since
+    /// by an explicit start.
+    ///
+    /// Appended last for the positional IPC encoding, like `oneshot`.
+    #[serde(default)]
+    pub proxy_idle_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -262,6 +270,14 @@ pub struct RunOptions {
     /// second directory entry lands in.
     #[serde(default)]
     pub on_directory_enter: bool,
+    /// The proxy is starting this daemon, and it may be stopped after this
+    /// many milliseconds without proxy activity. `None` for every other start,
+    /// which is what makes such a start explicit. Carried over by restarts
+    /// (retry, file watch), which continue the same ownership.
+    ///
+    /// Appended last for the positional IPC encoding.
+    #[serde(default)]
+    pub proxy_idle_timeout_ms: Option<u64>,
 }
 
 impl Daemon {
@@ -300,6 +316,8 @@ impl Daemon {
             // falls back.
             oneshot_wait: None,
             on_directory_enter: false,
+            // A restart continues whatever ownership the run it replaces had.
+            proxy_idle_timeout_ms: self.proxy_idle_timeout_ms,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,

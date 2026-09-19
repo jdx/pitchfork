@@ -532,6 +532,17 @@
             }
           ]
         },
+        "proxy_idle_timeout": {
+          "description": "Idle timeout when the proxy auto-starts this daemon, for example `\"15m\"`.\nAccepts a duration string or `false`; `\"0\"` also disables idle shutdown.\n\nWhen omitted, a daemon started through its URL uses\n`settings.proxy.idle_timeout`; a dependency inherits the requested\ndaemon's timeout. An explicit `false` exempts this daemon in either case.\n\nThe timeout is recorded at startup. Explicitly started daemons are\nexempt; live dependents, active proxy connections, and tracked shell\nsessions prevent idle shutdown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyIdleTimeout"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proxy_port": {
           "description": "Shorter spelling of `proxy_tls_port`. Set one or the other, not both.\n\nKept separate rather than folded so that a config keeps the spelling\nits author chose when pitchfork rewrites it. Read\n[`Self::effective_proxy_tls_port`] rather than either field.",
           "type": [
@@ -816,6 +827,20 @@
       "oneOf": [
         {
           "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ProxyIdleTimeout": {
+      "description": "Stop a proxy-started daemon after this long without proxy activity (e.g. \"15m\"); false never stops it",
+      "oneOf": [
+        {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
         },
         {
           "type": "string"
@@ -1309,6 +1334,13 @@
           "description": "Enable HTTPS for the reverse proxy",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "idle_timeout": {
+          "description": "Stop proxy-started daemons after this long without proxy activity",
+          "type": [
+            "string",
             "null"
           ]
         },
