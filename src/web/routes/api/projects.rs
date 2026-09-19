@@ -1547,10 +1547,18 @@ mod tests {
         let (groups, error) = groups_for_dir(&project);
         assert!(groups.is_empty());
         assert!(error.is_some());
+        let before = std::fs::metadata(&config).unwrap().modified().unwrap();
 
-        // Same size, so only the absence of a cached failure lets this
-        // succeed on the next read.
+        // Same size and same modification time, as restoring a file's
+        // permissions would be, so only the absence of a cached failure lets
+        // this succeed on the next read.
         std::fs::write(&config, "[groups.web]\ndaemons = [\"api\"]").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&config)
+            .unwrap()
+            .set_modified(before)
+            .unwrap();
         let (groups, error) = groups_for_dir(&project);
         assert!(error.is_none(), "{error:?}");
         assert!(groups.contains_key("web"));
