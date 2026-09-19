@@ -212,6 +212,8 @@ Linux still needs sudo to trust the CA for HTTPS if it is not already trusted;
 macOS may request authorization for keychain or network settings changes.
 Applications that ignore PAC settings still need DNS and a reachable proxy port.
 
+In LAN mode, `--pac` is ignored: its TLD is `.local`, which mDNS already resolves, and a PAC file would route every `.local` URL through pitchfork.
+
 ### Undoing Setup {#undoing-it}
 
 ```sh

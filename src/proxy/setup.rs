@@ -173,6 +173,17 @@ impl SetupContext {
         self.redirect_target().contains(':')
     }
 
+    /// Whether this setup routes through a PAC file.
+    ///
+    /// `--pac` does not apply in LAN mode. Its TLD is `local`, so a PAC file
+    /// would send every `*.local` request the browser makes — printers, other
+    /// machines — through pitchfork, which answers only for its own names. mDNS
+    /// already resolves what LAN mode publishes, so LAN mode is planned as it
+    /// is without `--pac`.
+    fn uses_pac(&self) -> bool {
+        self.pac && !self.lan
+    }
+
     /// URL of the PAC script served by the proxy.
     fn pac_url(&self) -> String {
         super::pac::url(&self.contact_host, self.proxy_port)
@@ -494,7 +505,7 @@ pub fn validate_tld(tld: &str) -> Result<()> {
 /// Build the plan for `pitchfork proxy setup`.
 pub fn plan(ctx: &SetupContext) -> Plan {
     let mut plan = Plan::default();
-    if ctx.pac {
+    if ctx.uses_pac() {
         plan_pac(ctx, &mut plan);
     } else {
         plan_resolver(ctx, &mut plan);
@@ -821,7 +832,7 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
         )));
         return;
     }
-    if ctx.pac {
+    if ctx.uses_pac() {
         // The PAC file sends the browser straight at the proxy port, so the
         // standard port never enters the picture.
         plan.steps.push(Step::note(format!(
@@ -1297,7 +1308,7 @@ pub fn plan_undo(ctx: &SetupContext) -> Plan {
     // `pac` is part of that test because `plan` runs `plan_pac` *instead of*
     // `plan_resolver`: a PAC setup points the system at a proxy URL and never
     // touches the resolver, so it has no resolver file to take back.
-    let wrote_resolver = ctx.dns_enabled && !ctx.lan && !ctx.pac;
+    let wrote_resolver = ctx.dns_enabled && !ctx.lan && !ctx.uses_pac();
     let wrote_dropin =
         wrote_resolver && ctx.systemd_resolved && !ctx.tld.eq_ignore_ascii_case("localhost");
 
@@ -1357,7 +1368,7 @@ pub fn plan_undo(ctx: &SetupContext) -> Plan {
     // a step for something never installed would be listed and, worse, treated
     // as a resource the new run has to reverse.
     let granted_capability = ctx.proxy_port < 1024;
-    let installed_redirect = !granted_capability && ctx.needs_port_redirect() && !ctx.pac;
+    let installed_redirect = !granted_capability && ctx.needs_port_redirect() && !ctx.uses_pac();
     match ctx.platform {
         Platform::MacOs if installed_redirect => {
             plan.steps.push(Step {
@@ -4535,6 +4546,32 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
             pf_anchor_rules(443, 8443, "127.0.0.1")
                 .contains("lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443")
         );
+    }
+
+    #[test]
+    fn pac_leaves_the_local_namespace_alone_in_lan_mode() {
+        // LAN mode's TLD is `local`; a PAC file for it would capture every
+        // `*.local` URL in the browser, not only pitchfork's.
+        for platform in [Platform::MacOs, Platform::Linux, Platform::Other] {
+            let mut c = ctx(platform);
+            c.network_services = vec!["Wi-Fi".into()];
+            c.gnome = true;
+            c.pac = true;
+            c.lan = true;
+            c.tld = "local".into();
+            let p = plan(&c);
+            assert!(
+                !p.steps
+                    .iter()
+                    .any(|s| matches!(s.resource, Some(Resource::AutoProxy { .. }))),
+                "{platform:?} configured an automatic proxy in LAN mode: {:?}",
+                p.describe()
+            );
+            assert!(
+                !p.manual.iter().any(|m| m.contains("proxy.pac")),
+                "{platform:?} asked for a manual PAC URL in LAN mode"
+            );
+        }
     }
 
     #[test]
