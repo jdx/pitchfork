@@ -17,6 +17,9 @@ teardown() {
 # Wait for it to exit so it cannot flush its own state over the fixture.
 stop_supervisor_for_state_rewrite() {
   pitchfork supervisor stop 2>/dev/null || true
+  # `stop` finds the supervisor through state.toml. Also stop any supervisor
+  # for this state dir that it missed, e.g. because its record was not flushed.
+  _stop_leaked_supervisors
   [[ -n "${_SETUP_SUPERVISOR_PID:-}" ]] || return 0
   local _
   for _ in $(seq 1 100); do

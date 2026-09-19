@@ -105,15 +105,15 @@ _common_setup() {
   fi
 }
 
-# Print an identity token for $1 if it is a `pitchfork supervisor run` process,
-# or nothing. The token includes the process start time, so it differs once the
+# Print an identity token for $1 if it is a `pitchfork supervisor run` process
+# (with or without flags such as --boot), or nothing. The token includes the process start time, so it differs once the
 # PID is reused. Linux reads the start time in clock ticks from /proc; other
 # Unix systems use `ps -o lstart=`, which has one-second resolution. Returns
 # nothing on Windows, where `ps` does not see the Windows PIDs pitchfork records.
 _supervisor_identity() {
   local pid="$1" args start
   args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 0
-  [[ "$args" =~ ^[^\ ]*pitchfork\ supervisor\ run$ ]] || return 0
+  [[ "$args" =~ ^[^\ ]*pitchfork\ supervisor\ run(\ |$) ]] || return 0
   if [[ -r "/proc/$pid/stat" ]]; then
     start="$(sed -E 's/^.*\) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')"
   else
@@ -122,6 +122,19 @@ _supervisor_identity() {
   if [[ -n "$start" ]]; then
     echo "$pid:$start"
   fi
+}
+
+# Whether process $1 runs with this test's PITCHFORK_STATE_DIR. Linux reads
+# /proc/<pid>/environ; elsewhere (macOS, BSD) the BSD-style `ps eww` appends the
+# environment to the command line.
+_process_uses_state_dir() {
+  local pid="$1" out
+  if [[ -r "/proc/$pid/environ" ]]; then
+    grep -qzxF "PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" "/proc/$pid/environ" 2>/dev/null
+    return
+  fi
+  out="$(ps eww -p "$pid" -o command= 2>/dev/null)" || return 1
+  [[ " $out " == *" PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR "* ]]
 }
 
 # The supervisor PID recorded in the state file, or nothing.
@@ -133,9 +146,9 @@ _recorded_supervisor_pid() {
 }
 
 # Stop any supervisor from this test that `pitchfork supervisor stop` missed.
-# Candidates are the supervisor started in setup and, on Linux, any supervisor
-# whose environment points at this test's state directory (for example one a
-# CLI command auto-started). Each candidate is bound to its identity (PID plus
+# Candidates are the supervisor started in setup and any supervisor whose
+# environment points at this test's state directory (for example one a CLI
+# command auto-started). Each candidate is bound to its identity (PID plus
 # start time) when it is found, and is only signalled while that identity still
 # matches, so a PID reused by another test's supervisor is never touched.
 # Unix only: Windows PIDs are handled by taskkill, and the Windows supervisor is
@@ -150,14 +163,14 @@ _stop_leaked_supervisors() {
     [[ "$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")" == "$_SETUP_SUPERVISOR_IDENTITY" ]]; then
     ids+=("$_SETUP_SUPERVISOR_IDENTITY")
   fi
-  for pid in $(pgrep -f '^[^ ]*pitchfork supervisor run$' 2>/dev/null); do
-    grep -qzxF "PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" "/proc/$pid/environ" 2>/dev/null || continue
+  for pid in $(pgrep -f '^[^ ]*pitchfork supervisor run( |$)' 2>/dev/null); do
+    _process_uses_state_dir "$pid" || continue
     id="$(_supervisor_identity "$pid")"
     [[ -n "$id" && " ${ids[*]} " != *" $id "* ]] && ids+=("$id")
   done
   ((${#ids[@]})) || return 0
 
-  echo "# teardown: stopping leaked supervisor(s): ${ids[*]%%:*}" >&3
+  echo "# stopping leftover supervisor(s): ${ids[*]%%:*}" >&3
   # SIGTERM first so the supervisor stops its own daemons, then SIGKILL. A
   # non-zero status only means every candidate already exited.
   _signal_supervisors TERM "${ids[@]}" || return 0
