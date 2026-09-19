@@ -38,6 +38,9 @@ pub struct StartResult {
     pub started: Vec<(DaemonId, DateTime<Local>, Vec<u16>)>,
     /// Whether any daemon failed to start
     pub any_failed: bool,
+    /// Daemons that failed to start, with the reason, in the order they failed.
+    /// A dependency failure stops the run, so its dependents never appear here.
+    pub failed: Vec<(DaemonId, String)>,
     /// Deferred job status updates — caller must apply these
     /// after all tasks complete, before calling progress::stop()
     pub pending_job_updates: Vec<PendingJobUpdate>,
@@ -217,8 +220,8 @@ fn should_inject_default_ready_delay(opts: &RunOptions) -> bool {
 /// renders all template-enabled fields, and uses the currently-running daemons'
 /// resolved ports (read from the state file) as template context.
 ///
-/// Used by single-daemon start paths (`start_daemon`, proxy auto-start) that
-/// don't go through the batch dependency-resolution path.
+/// Used by the single-daemon start path (`start_daemon`), which doesn't go
+/// through the batch dependency-resolution path.
 pub(crate) fn render_daemon_config(
     id: &DaemonId,
     daemon_config: &mut PitchforkTomlDaemon,
@@ -331,6 +334,13 @@ fn merge_ready_output_override(
 }
 
 /// Determine the effective ready check type from merged RunOptions.
+/// Why a run that returned an exit code did not start.
+fn failure_reason(rr: &RunResult, code: i32) -> String {
+    rr.error_message
+        .clone()
+        .unwrap_or_else(|| format!("exited with code {code}"))
+}
+
 fn ready_check_type(opts: &RunOptions) -> ReadyCheckType {
     if opts.oneshot {
         ReadyCheckType::Completion
@@ -539,6 +549,21 @@ impl IpcClient {
         opts: StartOptions,
     ) -> Result<StartResult> {
         let pt = PitchforkToml::all_merged_all_namespaces()?;
+        self.start_daemons_with_config(ids, opts, pt).await
+    }
+
+    /// [`Self::start_daemons`] against a configuration the caller loaded.
+    ///
+    /// The proxy runs inside the supervisor, whose working directory is not the
+    /// project a request names, so it loads the configuration from that
+    /// project's directory instead. `pt` must hold every daemon in the
+    /// requested daemons' dependency graph.
+    pub async fn start_daemons_with_config(
+        self: &Arc<Self>,
+        ids: &[DaemonId],
+        opts: StartOptions,
+        pt: PitchforkToml,
+    ) -> Result<StartResult> {
         let disabled_daemons = self.get_disabled_daemons().await?;
 
         // Get all active daemons for ad-hoc restart support
@@ -567,6 +592,7 @@ impl IpcClient {
             return Ok(StartResult {
                 started: vec![],
                 any_failed: false,
+                failed: vec![],
                 pending_job_updates: vec![],
             });
         }
@@ -607,6 +633,7 @@ impl IpcClient {
 
         // Start daemons level by level
         let mut any_failed = false;
+        let mut failed: Vec<(DaemonId, String)> = Vec::new();
         let mut successful_daemons: Vec<(DaemonId, DateTime<Local>, Vec<u16>)> = Vec::new();
         // Accumulated resolved ports from completed levels, available for template rendering
         let mut resolved_ports_map: std::collections::HashMap<DaemonId, Vec<u16>> =
@@ -719,6 +746,7 @@ impl IpcClient {
                         Err(e) => {
                             error!("Template render error for daemon {id}: {e}");
                             any_failed = true;
+                            failed.push((id, format!("template render error: {e}")));
                             continue;
                         }
                     };
@@ -748,13 +776,15 @@ impl IpcClient {
                                     ));
                                 }
                                 Ok(rr) => {
-                                    if rr.exit_code.is_some() {
+                                    if let Some(code) = rr.exit_code {
                                         any_failed = true;
                                         error!("Daemon {} failed to start", id);
+                                        failed.push((id.clone(), failure_reason(rr, code)));
                                     }
                                 }
-                                Err(_) => {
+                                Err(e) => {
                                     any_failed = true;
+                                    failed.push((id.clone(), e.to_string()));
                                 }
                             }
                             pending_job_updates.push(PendingJobUpdate {
@@ -844,12 +874,14 @@ impl IpcClient {
                                 ));
                             }
                             Ok(rr) => {
-                                if rr.exit_code.is_some() {
+                                if let Some(code) = rr.exit_code {
                                     any_failed = true;
+                                    failed.push((id.clone(), failure_reason(rr, code)));
                                 }
                             }
-                            Err(_) => {
+                            Err(e) => {
                                 any_failed = true;
+                                failed.push((id.clone(), e.to_string()));
                             }
                         }
                         pending_job_updates.push(PendingJobUpdate {
@@ -869,6 +901,7 @@ impl IpcClient {
         Ok(StartResult {
             started: successful_daemons,
             any_failed,
+            failed,
             pending_job_updates,
         })
     }
