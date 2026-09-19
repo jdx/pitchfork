@@ -22,6 +22,7 @@ use super::autostop::is_within;
 use super::{SUPERVISOR, Supervisor};
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
+use crate::daemon_status::DaemonStatus;
 use crate::ipc::IpcResponse;
 use crate::proxy::activity::ACTIVITY;
 use log::LevelFilter::Info;
@@ -30,14 +31,15 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// Held by an idle stop from its final check until the daemon has stopped,
-/// and briefly by a shell or project session entering a directory.
+/// Held by an idle stop while it makes its final check and marks the daemon
+/// stopping, and briefly by a shell or project session entering a directory.
 ///
 /// A shell entering a daemon's directory keeps the daemon running, so the
 /// two must not interleave: the shell is either seen by the final check, or
-/// registered once the daemon has already stopped — the same as entering a
-/// moment later, which the shell hook handles by starting what it manages.
-/// Entering a directory waits only while an idle stop is under way.
+/// registered once the daemon is already marked stopping — the same as
+/// entering a moment later, which the shell hook handles by starting what it
+/// manages, after the stop. The lock is released before the stop itself, so
+/// entering a directory never waits for a daemon to exit.
 static SHELL_ADMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Hold off idle stops while a shell or project session enters a directory.
@@ -269,7 +271,7 @@ impl Supervisor {
         loop {
             let mut blocked = Vec::new();
             for id in &group {
-                if let Some(reason) = self.idle_stop_blocker(id, &group).await {
+                if let Some(reason) = self.idle_stop_blocker(id, &group, false).await {
                     debug!("idle stop of {id} called off: {reason}");
                     blocked.push(id.clone());
                 }
@@ -289,11 +291,15 @@ impl Supervisor {
         for id in ordered {
             let lock = self.stop_lock(&id).await;
             let stopped = {
-                // Admission first, then the daemon's stop lock, as nothing
-                // takes them the other way round.
-                let _admission = SHELL_ADMISSION.lock().await;
                 let _guard = lock.lock().await;
-                match self.idle_stop_blocker(&id, &group).await {
+                // The decision and marking the daemon stopping are one step as
+                // far as a shell entering its directory is concerned; the stop
+                // itself, which can take the whole stop timeout, runs after.
+                let blocker = {
+                    let _admission = SHELL_ADMISSION.lock().await;
+                    self.idle_stop_blocker(&id, &group, true).await
+                };
+                match blocker {
                     Some(reason) => {
                         debug!("idle stop of {id} called off: {reason}");
                         false
@@ -302,17 +308,21 @@ impl Supervisor {
                         let grace = graces.get(&id).copied().unwrap_or_default();
                         info!("stopping {id}: no proxy activity for {grace:?}");
                         match self.stop_locked(&id).await {
-                            Ok(
-                                IpcResponse::Ok
-                                | IpcResponse::DaemonWasNotRunning
-                                | IpcResponse::DaemonNotRunning,
-                            ) => true,
+                            Ok(IpcResponse::Ok | IpcResponse::DaemonWasNotRunning) => true,
+                            // No process to stop, so nothing recorded an
+                            // outcome over the stopping mark.
+                            Ok(IpcResponse::DaemonNotRunning) => {
+                                self.settle_stopping(&id, DaemonStatus::Stopped).await;
+                                true
+                            }
                             Ok(rsp) => {
                                 error!("failed to stop idle daemon {id}: {rsp:?}");
+                                self.settle_stopping(&id, DaemonStatus::Running).await;
                                 false
                             }
                             Err(e) => {
                                 error!("failed to stop idle daemon {id}: {e}");
+                                self.settle_stopping(&id, DaemonStatus::Running).await;
                                 false
                             }
                         }
@@ -332,18 +342,35 @@ impl Supervisor {
         }
     }
 
+    /// Replace the stopping mark an idle stop left on `id` with `status`, if
+    /// nothing has recorded an outcome over it.
+    async fn settle_stopping(&self, id: &DaemonId, status: DaemonStatus) {
+        let mut state_file = self.state_file.lock().await;
+        if state_file
+            .daemons
+            .get(id)
+            .is_some_and(|d| d.status.is_stopping())
+        {
+            state_file.set_status(id, status);
+        }
+    }
+
     /// Why `id` must not be stopped for inactivity right now, if anything.
     ///
     /// Dependents in `stopping_with` are being stopped along with it and do
-    /// not count.
+    /// not count. With `commit`, a daemon that may be stopped is marked
+    /// stopping under the same lock, so anything that looks at it afterwards —
+    /// a shell hook deciding what to start — sees it on its way down rather
+    /// than running.
     async fn idle_stop_blocker(
         &self,
         id: &DaemonId,
         stopping_with: &HashSet<DaemonId>,
+        commit: bool,
     ) -> Option<&'static str> {
         // Shells and sessions are read under the same lock as the rest, so a
         // shell entering the directory cannot slip in between the two.
-        let state_file = self.state_file.lock().await;
+        let mut state_file = self.state_file.lock().await;
         let active_dirs = state_file.active_directories();
         let Some(daemon) = state_file.daemons.get(id) else {
             return Some("it is no longer known");
@@ -362,6 +389,9 @@ impl Supervisor {
             .is_some()
         {
             return Some("a running daemon depends on it");
+        }
+        if commit {
+            state_file.set_status(id, DaemonStatus::Stopping);
         }
         None
     }

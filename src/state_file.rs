@@ -254,6 +254,21 @@ impl StateFile {
         self.mark_dirty();
     }
 
+    /// Set a daemon's status, marking the state dirty. Returns whether the
+    /// daemon exists.
+    pub fn set_status(
+        &mut self,
+        id: &DaemonId,
+        status: crate::daemon_status::DaemonStatus,
+    ) -> bool {
+        let Some(daemon) = self.daemons.get_mut(id) else {
+            return false;
+        };
+        daemon.status = status;
+        self.mark_dirty();
+        true
+    }
+
     /// Clear a daemon's idle-shutdown ownership, marking the state dirty if it
     /// had any. Returns true if it did.
     pub fn clear_proxy_idle_timeout(&mut self, id: &DaemonId) -> bool {
