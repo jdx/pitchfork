@@ -14,8 +14,17 @@ teardown() {
 # file. Overwriting it while that supervisor runs would drop its own record, so
 # the next command would auto-start a second supervisor and teardown would only
 # stop that one, leaving the first running with bats' output pipe open.
+# Wait for it to exit so it cannot flush its own state over the fixture.
 stop_supervisor_for_state_rewrite() {
   pitchfork supervisor stop 2>/dev/null || true
+  [[ -n "${_SETUP_SUPERVISOR_PID:-}" ]] || return 0
+  local _
+  for _ in $(seq 1 100); do
+    pid_alive "$_SETUP_SUPERVISOR_PID" || return 0
+    sleep 0.1
+  done
+  echo "supervisor $_SETUP_SUPERVISOR_PID still running after stop" >&2
+  return 1
 }
 
 assert_state_keys_qualified() {
