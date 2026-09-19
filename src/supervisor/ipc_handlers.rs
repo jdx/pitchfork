@@ -196,6 +196,10 @@ impl Supervisor {
             IpcRequest::GetWebUrl => IpcResponse::WebUrl {
                 url: crate::web::url(),
             },
+            IpcRequest::ClaimDaemons { ids } => {
+                self.claim_daemons(&ids).await;
+                IpcResponse::Ok
+            }
         };
         // Ensure state is flushed to disk before returning the response
         // so that CLI commands reading StateFile::get() see fresh data.

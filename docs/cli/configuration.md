@@ -495,6 +495,23 @@ You must also configure `proxy.tls_cert` and `proxy.tls_key`, or pitchfork will 
 
 Set to `false` to use plain HTTP (e.g. for simple local development).
 
+## `proxy.idle_timeout`
+
+- **Type:** `duration`
+- **Set with:** `PITCHFORK_PROXY_IDLE_TIMEOUT`
+
+Stop proxy-started daemons after this long without proxy activity
+
+Empty (default) or `0` turns idle shutdown off, which keeps the long-standing behavior: a daemon the proxy starts keeps running until it is stopped.
+
+When set, a daemon that the proxy auto-started — and the dependencies the proxy started along with it — is stopped once the proxy has carried no request, WebSocket, streaming response or TLS passthrough connection for it for this long. Dependencies stop after the daemons that need them, and only once nothing running still depends on them.
+
+Daemons are never stopped for inactivity while a tracked shell session is inside their directory, or if they were started any other way (`pitchfork start`, the TUI, the web UI, the shell hook, `boot_start`); starting a proxy-started daemon explicitly keeps it running from then on. A daemon's own `proxy_idle_timeout` overrides this value.
+
+Idleness is checked every `general.interval`, so a daemon stops between this long and this long plus one interval after its last activity.
+
+**Examples:** `"15m"`, `"1h"`
+
 ## `proxy.lan`
 
 - **Type:** `bool`

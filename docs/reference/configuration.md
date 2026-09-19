@@ -14,7 +14,7 @@ logging and dashboard ports, see [settings](/reference/settings).
 | Run a command | [`run`](#run-required), [`dir`](#dir), [`env`](#env), [`mise`](#mise), [`user`](#user), [`pty`](#pty) |
 | Order startup | [`depends`](#depends), [`oneshot`](#oneshot), [`ready_delay`](#ready-delay), [`ready_output`](#ready-output), [`ready_http`](#ready-http), [`ready_port`](#ready-port), [`ready_cmd`](#ready-cmd) |
 | Recover and monitor | [`retry`](#retry), [`health_cmd`](#health-cmd), [`health_http`](#health-http), [`health_port`](#health-port), [`memory_limit`](#memory-limit), [`cpu_limit`](#cpu-limit) |
-| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal) |
+| Automate the lifecycle | [`auto`](#auto), [`watch`](#watch), [`watch_mode`](#watch-mode), [`boot_start`](#boot-start), [`cron`](#cron), [`hooks`](#hooks), [`stop_signal`](#stop-signal), [`proxy_idle_timeout`](#proxy-idle-timeout) |
 | Configure ports and logs | [`port`](#port), [`logs`](#logs) |
 | Share project configuration | [Environment defaults](#shared-environment), [groups](#daemon-groups), [namespace registry](#namespace-registry), [proxy slugs](#global-config-slug-registry) |
 
@@ -672,6 +672,30 @@ Without an explicit selection, passthrough uses the first declared port.
 Termination uses the detected active port, falling back to the first port.
 Every hostname for the daemon uses the same selection. See
 [choosing a port](/guides/port-management#choosing-a-port-on-a-multi-port-daemon).
+
+### `proxy_idle_timeout`
+
+How long a daemon the proxy started may go without proxy traffic before it is
+stopped. Overrides [`proxy.idle_timeout`](/guides/port-management#idle-shutdown)
+for this daemon. `false` or `"0"` means it is never stopped for inactivity.
+
+```toml
+[daemons.web]
+run = "npm run dev"
+port = 5173
+proxy_idle_timeout = "15m"
+
+[daemons.admin]
+run = "npm run admin"
+port = 5174
+proxy_idle_timeout = false
+```
+
+Only daemons started by opening their proxy URL, and dependencies started
+along with them, are affected. A dependency without its own value uses the
+value of the daemon that started it. See
+[idle shutdown](/guides/port-management#idle-shutdown) for what counts as
+activity and what keeps a daemon running.
 
 ### `expected_port` (deprecated)
 

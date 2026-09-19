@@ -2352,7 +2352,7 @@ impl Supervisor {
     }
 
     /// Stop implementation. Caller must hold the daemon's stop lock.
-    async fn stop_locked(&self, id: &DaemonId) -> Result<IpcResponse> {
+    pub(super) async fn stop_locked(&self, id: &DaemonId) -> Result<IpcResponse> {
         let pitchfork_id = DaemonId::pitchfork();
         if *id == pitchfork_id {
             return Ok(IpcResponse::Error(

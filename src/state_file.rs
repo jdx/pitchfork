@@ -254,6 +254,19 @@ impl StateFile {
         self.mark_dirty();
     }
 
+    /// Clear a daemon's idle-shutdown ownership, marking the state dirty if it
+    /// had any. Returns true if it did.
+    pub fn clear_proxy_idle_timeout(&mut self, id: &DaemonId) -> bool {
+        let cleared = self
+            .daemons
+            .get_mut(id)
+            .is_some_and(|d| d.proxy_idle_timeout_ms.take().is_some());
+        if cleared {
+            self.mark_dirty();
+        }
+        cleared
+    }
+
     /// Remove a daemon entry and mark the state dirty if the daemon existed.
     pub fn remove_daemon(&mut self, id: &DaemonId) {
         if self.daemons.remove(id).is_some() {

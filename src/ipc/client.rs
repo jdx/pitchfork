@@ -584,6 +584,31 @@ impl IpcClient {
         }
     }
 
+    /// Tell the supervisor that `ids` are being started explicitly, so it
+    /// stops treating any of them as the proxy's to stop when idle.
+    ///
+    /// A failure is an error: the start would otherwise go ahead, find a
+    /// proxy-started daemon running and skip it, and leave it to be stopped
+    /// when idle despite having been started explicitly. The one refusal
+    /// tolerated is a supervisor too old to know the request, which has no
+    /// idle shutdown to opt out of.
+    pub async fn claim_daemons(&self, ids: &[DaemonId]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        match self
+            .request(IpcRequest::ClaimDaemons { ids: ids.to_vec() })
+            .await?
+        {
+            IpcResponse::Ok => Ok(()),
+            IpcResponse::Error(e) if is_unknown_request(&e) => {
+                debug!("supervisor predates idle shutdown; nothing to claim: {e}");
+                Ok(())
+            }
+            rsp => Err(Self::unexpected_response("Ok", &rsp).into()),
+        }
+    }
+
     pub async fn get_disabled_daemons(&self) -> Result<Vec<DaemonId>> {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {
@@ -751,4 +776,10 @@ impl IpcClient {
             .into()),
         }
     }
+}
+
+/// Whether a supervisor answered a request with "I cannot decode this", which
+/// is how one older than the request's variant responds to it.
+fn is_unknown_request(error: &str) -> bool {
+    error.starts_with("Invalid request:")
 }

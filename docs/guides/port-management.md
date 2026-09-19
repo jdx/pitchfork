@@ -329,6 +329,86 @@ auto_start_timeout = "60s"
 To require manual startup instead, set `auto_start = false` in
 `[settings.proxy]`. Requests to stopped daemons then return a `502` error.
 
+## Idle Shutdown
+
+Daemons that the proxy started can be stopped again once they are no longer
+used. This is off by default: a daemon the proxy starts keeps running until you
+stop it. Turn it on for every proxy-started daemon with a grace period:
+
+```toml
+[settings.proxy]
+idle_timeout = "15m"
+```
+
+(see [`proxy.idle_timeout`](/cli/configuration#proxy-idle-timeout)), or for one daemon with [`proxy_idle_timeout`](/reference/configuration#proxy-idle-timeout),
+which also overrides the setting (`false` opts a daemon out):
+
+```toml
+[daemons.web]
+run = "npm run dev"
+port = 5173
+proxy_idle_timeout = "15m"
+```
+
+With this configuration, opening `web.<project>.localhost` starts `web` and its
+`depends`. After 15 minutes in which the proxy has carried nothing for it,
+`web` is stopped, then each dependency that nothing running needs any more.
+The next visit starts them again.
+
+### What Counts as Activity
+
+Activity is traffic the proxy carries, not name lookups:
+
+- **HTTP requests**, from when they arrive until the response body has been
+  sent in full. A streamed response such as server-sent events keeps the daemon
+  active for as long as it streams.
+- **WebSockets and other upgraded connections**, for as long as they are open,
+  even when no data flows. A browser tab holding an HMR socket keeps its dev
+  server running.
+- **TLS passthrough connections**, for as long as they are open, since the
+  proxy cannot see the requests inside them.
+
+Idle keep-alive connections do not count. The grace period starts when the last
+of these ends.
+
+### What Keeps a Daemon Running
+
+A proxy-started daemon is never stopped while any of these holds:
+
+- Something running or starting depends on it. A shared dependency such as a
+  database stays up until its last dependent stops, whoever started that
+  dependent, and dependencies are stopped only after the daemons that need
+  them.
+- A shell tracked by the [shell hook](/guides/shell-hook) or a
+  `pitchfork project enter` session is inside its directory. The shell may be
+  using the daemon directly, which the proxy cannot see.
+- It was started explicitly. `pitchfork start`, `restart` and `run`, the TUI,
+  the web UI, the shell hook and `boot_start` never produce an idle-stoppable
+  daemon. Starting a daemon the proxy already started, directly or as a
+  dependency of something you start, makes it yours: it stays running until
+  you stop it.
+
+Background workers and databases without a proxy hostname have no traffic of
+their own. They are stopped only as proxy-started dependencies, after the last
+daemon that needs them.
+
+### Timing and Limitations
+
+- Idleness is checked every [`general.interval`](/cli/configuration#general-interval) (10 s by
+  default), so a daemon stops between the grace period and the grace period
+  plus one interval after its last activity.
+- A request that arrives while a daemon is being stopped for inactivity waits
+  for the stop to finish and then starts the daemon again, within
+  `proxy.auto_start_timeout`.
+- Only traffic through the proxy counts. Clients that connect to the daemon's
+  port directly are invisible to it. To keep such a daemon running, start it
+  explicitly, or send a periodic request through its proxy URL as a heartbeat:
+  any request resets the grace period.
+- The grace period is recorded when the proxy starts the daemon. Changing it
+  takes effect the next time the proxy starts the daemon.
+- After a supervisor restart, each proxy-started daemon gets a full grace
+  period before it can be stopped, since earlier activity is not persisted.
+
 ## Viewing Proxy URLs
 
 With the proxy enabled, `pitchfork start`, `pitchfork list`, `pitchfork status`,

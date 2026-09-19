@@ -185,6 +185,10 @@ impl Supervisor {
                 }
                 // Spawn/prune per-daemon health-check tasks.
                 SUPERVISOR.manage_health_tasks(&mut health_tasks).await;
+                // Stop proxy-started daemons that have gone idle. Here rather
+                // than in `refresh`, which the shell hook also runs on every
+                // `cd`.
+                SUPERVISOR.check_idle_daemons().await;
                 // Apply log retention policy if configured.
                 if last_retention_check.elapsed() >= Duration::from_secs(3600) {
                     match SUPERVISOR.apply_log_retention().await {

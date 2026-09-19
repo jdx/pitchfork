@@ -24,7 +24,7 @@ use tokio::time;
 /// parents, and symlink resolution (e.g. macOS `/tmp` -> `/private/tmp`).
 /// `canonicalize` is only invoked when the cheap string comparison already
 /// fails, so the common case stays allocation-free.
-fn is_within(base: &Path, path: &Path) -> bool {
+pub(super) fn is_within(base: &Path, path: &Path) -> bool {
     if path.starts_with(base) {
         return true;
     }

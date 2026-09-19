@@ -17,8 +17,8 @@ use std::time::SystemTime;
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, OnOutputHook,
     PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlHooks, PortBump, PortConfig, ProxyConfig,
-    ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, StopSignal,
-    WatchMode,
+    ProxyIdleTimeout, ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig,
+    StopSignal, WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -221,6 +221,9 @@ struct PitchforkTomlDaemonRaw {
     /// config that used it keeps one spelling rather than gaining both.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy_port: Option<u16>,
+    /// Stop after this long without proxy activity when the proxy started it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_idle_timeout: Option<ProxyIdleTimeout>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -1455,6 +1458,7 @@ impl PitchforkToml {
                 proxy_tls: raw_daemon.proxy_tls,
                 proxy_tls_port: raw_daemon.proxy_tls_port,
                 proxy_port: raw_daemon.proxy_port,
+                proxy_idle_timeout: raw_daemon.proxy_idle_timeout,
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
@@ -1633,6 +1637,7 @@ impl PitchforkToml {
                     proxy_tls: daemon.proxy_tls,
                     proxy_tls_port: daemon.proxy_tls_port,
                     proxy_port: daemon.proxy_port,
+                    proxy_idle_timeout: daemon.proxy_idle_timeout,
                     // Deprecated fields: written for backward compatibility with older pitchfork versions
                     expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
                     auto_bump_port: port.filter(|p| p.auto_bump()).map(|_| true),
@@ -2107,6 +2112,14 @@ pub struct PitchforkTomlDaemon {
     /// [`Self::effective_proxy_tls_port`] rather than either field.
     #[schemars(range(min = 1))]
     pub proxy_port: Option<u16>,
+    /// Stop this daemon after this long without proxy activity, when the proxy
+    /// started it (e.g. `"15m"`). Overrides `settings.proxy.idle_timeout`;
+    /// `false` or `"0"` means it is never stopped for inactivity, including
+    /// when the proxy starts it as another daemon's dependency.
+    ///
+    /// Daemons started any other way (`pitchfork start`, the TUI, the web UI,
+    /// `boot_start`, the shell hook) are never stopped for inactivity.
+    pub proxy_idle_timeout: Option<ProxyIdleTimeout>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
     /// List of daemon IDs that must be started before this one
@@ -2284,6 +2297,8 @@ impl PitchforkTomlDaemon {
             log_format: self.logs.as_ref().and_then(|l| l.log_format.clone()),
             on_output_hook: self.hooks.as_ref().and_then(|h| h.on_output.clone()),
             pty: self.pty,
+            // Explicit unless the proxy's start marks it otherwise.
+            proxy_idle_timeout_ms: None,
         }
     }
 }

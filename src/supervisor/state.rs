@@ -119,6 +119,10 @@ pub(crate) struct UpsertDaemonOpts {
     pub pty: Option<bool>,
     /// True for config-only cron daemons auto-registered into state.
     pub config_registered: bool,
+    /// Idle-shutdown ownership. `None` inherits the existing record's, so a
+    /// status-only upsert (stop, exit finalization) keeps it; a start sets it
+    /// from its `RunOptions`, which is what makes an explicit start explicit.
+    pub proxy_idle_timeout_ms: Option<Option<u64>>,
 }
 
 /// Builder for UpsertDaemonOpts - ensures daemon ID is always provided.
@@ -190,6 +194,7 @@ impl UpsertDaemonOpts {
             o.pty = opts.pty;
             o.archive_hook = opts.archive_hook.clone();
             o.log_format = opts.log_format.clone();
+            o.proxy_idle_timeout_ms = Some(opts.proxy_idle_timeout_ms);
         })
     }
 }
@@ -411,6 +416,9 @@ impl Supervisor {
                 .or(existing.and_then(|d| d.log_format.clone())),
             pty: opts.pty.or(existing.and_then(|d| d.pty)),
             config_registered: opts.config_registered,
+            proxy_idle_timeout_ms: opts
+                .proxy_idle_timeout_ms
+                .unwrap_or_else(|| existing.and_then(|d| d.proxy_idle_timeout_ms)),
         };
         state_file.insert_daemon(&opts.id, daemon.clone());
         Ok(daemon)
