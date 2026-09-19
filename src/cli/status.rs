@@ -35,6 +35,20 @@ pub struct Status {
     json: bool,
 }
 
+/// The hostname to show for a daemon: its legacy slug, or the automatic
+/// hostname derived from where its config lives.
+fn daemon_host(
+    id: &crate::daemon_id::DaemonId,
+    global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
+) -> Option<String> {
+    let config = PitchforkToml::all_merged_all_namespaces().ok();
+    crate::proxy::hostname::host_for_daemon(
+        id,
+        config.as_ref().and_then(|pt| pt.daemons.get(id)),
+        global_slugs,
+    )
+}
+
 impl Status {
     pub async fn run(&self) -> Result<()> {
         let qualified_id = PitchforkToml::resolve_id(&self.id)?;
@@ -62,9 +76,7 @@ impl Status {
             let proxy_url = if s.proxy.enable
                 && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty())
             {
-                let slug =
-                    PitchforkToml::find_slug_for_daemon_in_registry(&qualified_id, &global_slugs);
-                build_proxy_url(slug.as_deref(), &s)
+                build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s)
             } else {
                 None
             };
@@ -81,7 +93,8 @@ impl Status {
                 oneshot: daemon.oneshot,
                 active_port: daemon.active_port,
                 port: daemon.resolved_port.clone(),
-                proxy_url,
+                proxy_url: proxy_url.clone(),
+                url: proxy_url,
             };
             return print_json(&entry);
         }
@@ -108,10 +121,11 @@ impl Status {
         }
         let s = settings();
         if s.proxy.enable && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty()) {
-            let slug =
-                PitchforkToml::find_slug_for_daemon_in_registry(&qualified_id, &global_slugs);
-            if let Some(url) = build_proxy_url(slug.as_deref(), &s) {
-                println!("Proxy: {url}");
+            match build_proxy_url(daemon_host(&qualified_id, &global_slugs).as_deref(), &s) {
+                Some(url) => println!("Proxy: {url}"),
+                // A daemon with a port but no hostname either opted out or lost
+                // a label to a clash, which `proxy status` spells out.
+                None => println!("Proxy: not routed (see `pitchfork proxy status`)"),
             }
         }
         Ok(())

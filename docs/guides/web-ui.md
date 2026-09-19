@@ -246,6 +246,16 @@ logs. Daemons in the worktree that no group names are listed under
 "ungrouped". See [daemon groups](/reference/configuration#daemon-groups) for
 the config format.
 
+### Hostnames
+
+When the proxy is enabled, `<project>.<tld>` and `<worktree>.<project>.<tld>`
+redirect to these pages, so `shop.test` opens the project page and
+`feature-a.shop.test` opens that worktree's stack. The pages themselves stay at
+`/projects/...` on the web UI's own address, which is where links and bookmarks
+should point. When the web UI is not running, those hostnames explain how to
+enable it instead. See [port management](/guides/port-management#reserved-addresses-and-conflicts)
+for how the names are derived.
+
 ### Starting is always a click
 
 A request to a daemon's proxy hostname starts that daemon if it is not already

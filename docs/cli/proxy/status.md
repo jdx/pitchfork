@@ -4,10 +4,11 @@
 - **Usage:** `pitchfork proxy status [--json]`
 - **Effect:** read-only
 
-Show all registered slugs and their current state
+Show hostnames and registered slugs with their current state
 
-Displays the proxy configuration and lists all slugs from the global config
-with their project directory, daemon name, and current status (running/stopped, port).
+Displays the proxy configuration, the automatic hostnames grouped by project
+and worktree, and any slugs from the global config with their project
+directory, daemon name, and current status (running/stopped, port).
 
 ## Flags
 - **`--json`** — Output in JSON format

@@ -99,6 +99,13 @@ Daemons started in a worktree run with the worktree directory as their working d
 
 This automatic discovery (and worktree-aware proxy slug routing) is controlled by the `general.worktree` setting, which is enabled by default. Set it to `false` to disable all worktree/workspace discovery; only the main project directory is then used.
 
+With the proxy enabled, project daemons with a `port` also get a hostname:
+`<daemon>.<project>.<tld>` in the primary checkout and
+`<daemon>.<worktree>.<project>.<tld>` in a linked worktree. The project label comes
+from the primary checkout's explicit namespace or directory name; the worktree
+label comes from its directory name or `worktree_label`. See
+[port management](/guides/port-management#hostnames).
+
 Automatic worktree isolation applies when namespaces are derived from project directories — so worktree directories need distinct names (the default when you create worktrees per branch). If a config sets an explicit top-level `namespace`, it overrides the directory-derived namespace, so give each worktree a distinct explicit namespace to keep same-named daemons from colliding.
 
 ## Display Behavior

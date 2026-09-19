@@ -108,6 +108,21 @@ Notes:
 - If multiple files declare `namespace`, every value must match
 - Global config files must use `global`
 
+### Top-level `worktree_label` (optional)
+
+Sets this checkout's label in proxy hostnames when it is a linked git worktree,
+replacing the worktree directory's name.
+
+```toml
+worktree_label = "fix-login"
+```
+
+With the proxy enabled, the daemon `api` uses
+`api.fix-login.<project>.<tld>`. Set this in `pitchfork.local.toml` or an external
+config registered for the checkout so other worktrees do not inherit the same
+label. It has no effect in the primary checkout. See
+[hostnames](/guides/port-management#hostnames).
+
 ## Shared environment
 
 Top-level `[env]` values supply defaults for all daemons. A daemon's own `env`
@@ -544,6 +559,28 @@ port = { expect = [3000], bump = 10 }
 - The first resolved port is injected as `$PORT` and `$PORT0`; additional ports use `$PORT1`, `$PORT2`, and so on. Your command must use these values, directly or through arguments
 - When `bump` is enabled and the port is occupied, all ports are incremented by the same offset to maintain relative spacing
 - Resolved ports are available via `pitchfork status` and in the start output
+
+### `proxy`
+
+Controls the daemon label in an automatic proxy hostname. With the proxy
+enabled, project daemons with a `port` get a hostname by default. Use this field
+to rename the label or disable the automatic hostname.
+
+```toml
+[daemons.admin]
+run = "node admin.js"
+port = 3001
+proxy = false        # disable the automatic hostname
+
+[daemons.web-frontend]
+run = "npm run dev"
+port = 5173
+proxy = "web"        # https://web.<project>.<tld>
+```
+
+Accepts `true` (the default), `false`, or a string label. Automatic hostnames
+require a `port`. Existing slug mappings are independent of this setting. See
+[hostnames](/guides/port-management#hostnames).
 
 ### `expected_port` (deprecated)
 

@@ -284,7 +284,8 @@ Show one worktree's stack: the groups declared by the config loaded for that
 worktree, each with its member daemons in full daemon-entry form. The `default`
 group comes first. `missing` lists qualified ids a group declares that no known
 daemon matches, and `ungrouped` lists the worktree's daemons that no group
-names. The worktree segment accepts either the URL name or the branch name. When two
+names. The worktree segment accepts the URL name, the branch name, or the directory
+name, which is the label the proxy builds `<worktree>.<project>.<tld>` from. When two
 branches sanitize to the same URL name, the later one gets a numeric suffix
 (`feature-api`, `feature-api-2`) rather than being dropped.
 

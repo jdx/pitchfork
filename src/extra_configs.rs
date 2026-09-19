@@ -169,6 +169,19 @@ pub fn paths_for(cwd: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// Configuration files registered for this exact project directory.
+///
+/// Unlike [`paths_for`], this does not include files registered for an
+/// ancestor: they belong to that project, not to this one.
+pub fn configs_for_dir(dir: &Path) -> Vec<PathBuf> {
+    let dir = normalize(dir);
+    entries()
+        .into_iter()
+        .filter(|e| e.dir == dir)
+        .flat_map(|e| e.config)
+        .collect()
+}
+
 pub fn project_dir(path: &Path) -> Option<PathBuf> {
     let path = normalize(path);
     entries()

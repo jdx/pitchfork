@@ -68,7 +68,9 @@ The current daemon's own metadata is always available:
 | <code v-pre>{{ name }}</code> | Daemon short name | `"api"` |
 | <code v-pre>{{ namespace }}</code> | Daemon namespace | `"myproj"` |
 | <code v-pre>{{ id }}</code> | Qualified ID | `"myproj/api"` |
-| <code v-pre>{{ slug }}</code> | Proxy slug alias (or null) | `"myapi"` |
+| <code v-pre>{{ slug }}</code> | Legacy proxy slug alias (or null) | `"myapi"` |
+| <code v-pre>{{ host }}</code> | Proxy hostname without the TLD (or null) | `"api.myproj"` |
+| <code v-pre>{{ url }}</code> | Full proxy URL (or null) | `"https://api.myproj.localhost"` |
 | <code v-pre>{{ dir }}</code> | Resolved working directory | `"/home/user/myproj"` |
 
 ### Daemon References
@@ -83,7 +85,9 @@ Reference same-namespace daemons by their short name:
 | <code v-pre>{{ daemons.redis.id }}</code> | Qualified ID | `"myproj/redis"` |
 | <code v-pre>{{ daemons.redis.name }}</code> | Short name | `"redis"` |
 | <code v-pre>{{ daemons.redis.namespace }}</code> | Namespace | `"myproj"` |
-| <code v-pre>{{ daemons.redis.slug }}</code> | Slug alias | `"myredis"` |
+| <code v-pre>{{ daemons.redis.slug }}</code> | Legacy slug alias | `"myredis"` |
+| <code v-pre>{{ daemons.redis.host }}</code> | Proxy hostname without the TLD | `"redis.myproj"` |
+| <code v-pre>{{ daemons.redis.url }}</code> | Full proxy URL | `"https://redis.myproj.localhost"` |
 | <code v-pre>{{ daemons.redis.dir }}</code> | Working directory | `"/home/user/myproj"` |
 
 ::: tip
@@ -136,13 +140,35 @@ Global proxy settings are available:
 
 ### Proxy URL
 
-<code v-pre>{{ proxy_url }}</code> provides the full proxy URL for the current daemon when it has a registered slug:
+<code v-pre>{{ url }}</code> provides the current daemon's full proxy URL.
+Use <code v-pre>{{ daemons.api.url }}</code> to reference the URL of an `api`
+dependency. The URL uses a registered slug when available, otherwise the
+[automatic hostname](port-management.md#hostnames).
+
+For a registered project named `myproj`, with HTTPS enabled on port 443:
 
 ```toml
 [daemons.api]
-run = "echo {{ proxy_url }}"
-# Renders to: "echo https://myapi.localhost"
+run = "node server.js"
+port = 3000
+env.PUBLIC_URL = "{{ url }}"
+# PUBLIC_URL: https://api.myproj.localhost
+
+[daemons.worker]
+depends = ["api"]
+run = "./worker --api {{ daemons.api.url }}"
+# Renders to: ./worker --api https://api.myproj.localhost
 ```
+
+The URL is null when the proxy is disabled or no routable hostname is available.
+Automatic hostnames require a `port` and are disabled by `proxy = false`;
+existing slug mappings still apply. Label conflicts can also prevent an
+automatic hostname from being assigned.
+
+The daemon receives the same URL as `PITCHFORK_URL` in its environment.
+<code v-pre>{{ host }}</code> contains the hostname without the TLD, such as
+`api.myproj`. <code v-pre>{{ proxy_url }}</code> remains an alias for
+<code v-pre>{{ url }}</code>.
 
 ## Resolution Order
 

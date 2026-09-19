@@ -236,6 +236,56 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
     new_entries
 }
 
+// ─── Hostname registry cache ────────────────────────────────────────────────
+//
+// The automatic `<daemon>.<worktree>.<project>` hostnames are resolved against
+// a registry built from every project pitchfork knows about.  Building it reads
+// configuration files and enumerates git worktrees, so the result is cached
+// with the same short TTL as the slug table.
+
+struct RegistryCache {
+    registry: Arc<crate::proxy::hostname::HostRegistry>,
+    expires_at: std::time::Instant,
+}
+
+static HOST_REGISTRY: once_cell::sync::Lazy<tokio::sync::Mutex<RegistryCache>> =
+    once_cell::sync::Lazy::new(|| {
+        tokio::sync::Mutex::new(RegistryCache {
+            registry: Arc::new(crate::proxy::hostname::HostRegistry::default()),
+            expires_at: std::time::Instant::now(), // expired -> built on first access
+        })
+    });
+
+/// Return a snapshot of the cached hostname registry, rebuilding if expired.
+pub async fn get_cached_host_registry() -> Arc<crate::proxy::hostname::HostRegistry> {
+    {
+        let cache = HOST_REGISTRY.lock().await;
+        if std::time::Instant::now() < cache.expires_at {
+            return Arc::clone(&cache.registry);
+        }
+    } // lock released before disk I/O
+
+    let registry = Arc::new(
+        tokio::task::spawn_blocking(crate::proxy::hostname::HostRegistry::build)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to refresh hostname registry: {e}");
+                crate::proxy::hostname::HostRegistry::default()
+            }),
+    );
+    for err in &registry.errors {
+        crate::proxy::hostname::warn_once(err);
+    }
+
+    {
+        let mut cache = HOST_REGISTRY.lock().await;
+        cache.registry = Arc::clone(&registry);
+        cache.expires_at = std::time::Instant::now() + SLUG_CACHE_TTL;
+    }
+
+    registry
+}
+
 /// Try to match a subdomain against a slug table, with optional wildcard fallback.
 ///
 /// When `wildcard` is true and no exact match is found, progressively strips
@@ -346,6 +396,15 @@ enum ResolveResult {
     Starting { slug: String },
     /// No matching slug or daemon found.
     NotFound,
+    /// The hostname is reserved for a project or stack page, which a later
+    /// change will serve.  It must never fall through to a daemon.
+    Page {
+        project: String,
+        worktree: Option<String>,
+        daemons: Vec<String>,
+    },
+    /// The hostname named a project or daemon that does not exist.
+    Unknown { heading: String, known: Vec<String> },
     /// Routing refused with a descriptive reason.
     Error(String),
 }
@@ -563,7 +622,7 @@ async fn serve_https_with_http_fallback(
 
         tokio::select! {
             accept_result = listener.accept() => {
-                let (stream, _peer_addr) = match accept_result {
+                let (stream, peer_addr) = match accept_result {
                     Ok(conn) => conn,
                     Err(e) => {
                         log::warn!("Accept error (will retry): {e}");
@@ -573,7 +632,13 @@ async fn serve_https_with_http_fallback(
                 };
 
                 let acceptor = acceptor.clone();
-                let app = app.clone();
+                // This loop serves the router itself rather than going through
+                // `into_make_service_with_connect_info`, so the peer address is
+                // attached here. Handlers use it to decide how much of this
+                // machine's configuration a response may describe.
+                let app = app
+                    .clone()
+                    .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
                 let redirect_app = redirect_app.clone();
 
                 conn_tasks.spawn(async move {
@@ -1268,9 +1333,11 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         );
     }
 
+    let local_client = is_local_client(&req);
+
     // Intercept "pitchfork.<tld>" — route to the built-in web UI
     let target_port = if let Some(subdomain) = strip_tld(&host, &state.tld) {
-        if subdomain == "pitchfork" {
+        if subdomain.eq_ignore_ascii_case("pitchfork") {
             crate::web::port()
         } else {
             None
@@ -1287,19 +1354,62 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
             ResolveResult::Starting { slug } => {
                 return starting_html_response(&slug, &raw_host);
             }
+            ResolveResult::Page {
+                project,
+                worktree,
+                daemons,
+            } => {
+                // A reserved name answers 200 while an unknown one answers 404,
+                // which tells anything on the network which projects exist. Off
+                // this machine the two look the same.
+                if !local_client {
+                    return unknown_host_response(&host, "Not found", &[]);
+                }
+                // The project and stack pages live in the web UI, which is
+                // their canonical location, so this hostname redirects there.
+                if let Some(base) = crate::web::url() {
+                    return page_redirect_response(&base, &project, worktree.as_deref());
+                }
+                return page_placeholder_response(
+                    &project,
+                    worktree.as_deref(),
+                    &daemons,
+                    &state.tld,
+                    &host_port_suffix(&raw_host),
+                );
+            }
+            ResolveResult::Unknown { heading, known } => {
+                // The heading says which project was recognised, which is one
+                // more thing than a remote client needs to learn.
+                return unknown_host_response(
+                    &host,
+                    if local_client { &heading } else { "Not found" },
+                    if local_client { &known } else { &[] },
+                );
+            }
             ResolveResult::NotFound => {
                 return error_response(
                     StatusCode::BAD_GATEWAY,
                     &format!(
                         "No daemon found for host '{host}'.\n\
-                         Make sure the daemon has a slug, is running, and has a port configured.\n\
-                         Expected format: <slug>.{tld}",
+                         A daemon is reachable once it configures a `port` and its project is \
+                         known to pitchfork; run `pitchfork proxy status` to see the hostnames \
+                         it serves.\n\
+                         Expected format: <daemon>.<project>.{tld}",
                         tld = state.tld
                     ),
                 );
             }
             ResolveResult::Error(msg) => {
-                return error_response(StatusCode::BAD_GATEWAY, &msg);
+                if local_client {
+                    return error_response(StatusCode::BAD_GATEWAY, &msg);
+                }
+                // The message names directories on this machine.
+                log::warn!("Refused '{host}' for a non-local client: {msg}");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("'{host}' is not available."),
+                );
             }
         }
     };
@@ -1488,8 +1598,24 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
         return ResolveResult::NotFound;
     };
 
-    let Some(cached) = cached_slug_lookup(&subdomain).await else {
-        return ResolveResult::NotFound;
+    let cached = cached_slug_lookup(&subdomain).await.filter(|cached| {
+        // A slug too long for the configured TLD is not advertised as a URL, so
+        // it does not take precedence over the daemon's automatic hostname
+        // here either.
+        if crate::proxy::hostname::hostname_fits(&cached.slug) {
+            return true;
+        }
+        crate::proxy::hostname::warn_once(&format!(
+            "Slug '{}' plus the configured proxy.tld is over the DNS length limit, \
+             so it is not routed.",
+            cached.slug
+        ));
+        false
+    });
+    let Some(cached) = cached else {
+        // No legacy slug matched; fall through to the automatic
+        // `<daemon>.<worktree>.<project>` hostnames.
+        return resolve_registry_target(&subdomain).await;
     };
 
     // ─── Worktree prefix extraction ──────────────────────────────────────
@@ -1694,11 +1820,28 @@ async fn try_auto_start_inner(
         }
     };
 
-    // Render Tera templates and merge top-level env (per-daemon wins).
-    if let Err(e) = crate::ipc::batch::render_daemon_config(daemon_id, &mut daemon_config, &pt) {
-        log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
-        return ResolveResult::Error(format!("Failed to render templates: {e}"));
-    }
+    // Render Tera templates and merge top-level env (per-daemon wins). Building
+    // the template context reads configuration and derives hostnames, so it
+    // runs on a blocking worker rather than on the thread serving the request.
+    let rendered = {
+        let id = daemon_id.clone();
+        let mut config = daemon_config.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::ipc::batch::render_daemon_config(&id, &mut config, &pt).map(|()| config)
+        })
+        .await
+    };
+    daemon_config = match rendered {
+        Ok(Ok(config)) => config,
+        Ok(Err(e)) => {
+            log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
+            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+        }
+        Err(e) => {
+            log::warn!("Auto-start: template rendering task failed for {daemon_id}: {e}");
+            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+        }
+    };
 
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
@@ -1764,16 +1907,429 @@ async fn try_auto_start_inner(
     }
 }
 
+/// Resolve a hostname against the automatic hostname registry.
+///
+/// Runs only after the legacy `[slugs]` registry found no match, so a slug
+/// keeps precedence over an automatic hostname that spells the same thing.
+async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
+    let registry = get_cached_host_registry().await;
+    if !crate::proxy::hostname::hostname_fits(subdomain) {
+        // Nothing advertises a name this long, so nothing answers to one.
+        return ResolveResult::Unknown {
+            heading: "Host name too long".to_string(),
+            known: registry.project_labels(),
+        };
+    }
+    match registry.resolve(subdomain, settings().proxy.wildcard) {
+        crate::proxy::hostname::HostTarget::Daemon {
+            ref dir,
+            ref namespace,
+            ref daemon,
+            ..
+        } => {
+            // When several checkouts share this daemon's namespace — in this
+            // project or in another one, since namespaces come from directory
+            // names — the ID no longer says which checkout is running, so the
+            // request has to be matched to the directory it named.
+            let per_checkout = registry.shares_daemon_id(namespace, daemon);
+            resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout).await
+        }
+        crate::proxy::hostname::HostTarget::ProjectPage { project } => {
+            let daemons = registry
+                .projects
+                .get(&project)
+                .map(|p| p.primary.labels())
+                .unwrap_or_default();
+            ResolveResult::Page {
+                project,
+                worktree: None,
+                daemons,
+            }
+        }
+        crate::proxy::hostname::HostTarget::WorktreePage { project, worktree } => {
+            let daemons = registry
+                .projects
+                .get(&project)
+                .and_then(|p| p.worktrees.get(&worktree))
+                .map(|c| c.labels())
+                .unwrap_or_default();
+            ResolveResult::Page {
+                project,
+                worktree: Some(worktree),
+                daemons,
+            }
+        }
+        crate::proxy::hostname::HostTarget::UnknownProject { known } => ResolveResult::Unknown {
+            heading: "Unknown project".to_string(),
+            known,
+        },
+        crate::proxy::hostname::HostTarget::UnknownDaemon {
+            project,
+            worktree,
+            known,
+        } => ResolveResult::Unknown {
+            heading: match worktree {
+                Some(wt) => format!("Unknown daemon in '{wt}' of project '{project}'"),
+                None => format!("Unknown daemon in project '{project}'"),
+            },
+            known,
+        },
+    }
+}
+
+/// Find the running daemon behind an automatic hostname, auto-starting it when
+/// it is not running.
+///
+/// Several checkouts of one project can share a namespace when the project
+/// declares one explicitly, so a daemon running in the matching directory is
+/// preferred over one that merely shares the name.
+async fn resolve_registry_daemon(
+    host: &str,
+    dir: &std::path::Path,
+    namespace: &str,
+    daemon: &str,
+    per_checkout: bool,
+) -> ResolveResult {
+    let daemons = {
+        let state_file = SUPERVISOR.state_file.lock().await;
+        state_file.daemons.clone()
+    };
+
+    let mut matches: Vec<crate::daemon::Daemon> = daemons
+        .iter()
+        .filter(|(id, d)| {
+            id.name() == daemon && id.namespace() == namespace && d.status.is_running()
+        })
+        .map(|(_, d)| d.clone())
+        .collect();
+    // Attributing a daemon to a checkout walks the filesystem, so it happens off
+    // the request's worker thread.
+    matches = sort_by_checkout(matches, dir).await;
+
+    if let Some(d) = matches.first() {
+        // A running daemon from another checkout would serve that checkout's
+        // content under this one's hostname, so say what is wrong instead.
+        if per_checkout && !runs_in_checkout(d.clone(), dir).await {
+            return ResolveResult::Error(format!(
+                "'{host}' belongs to the checkout at {}, but daemon '{namespace}/{daemon}' is \
+                 running from {}.\n\
+                 These checkouts share the namespace '{namespace}', so pitchfork cannot run \
+                 both copies at once.\n\
+                 Give each checkout its own top-level `namespace`, or stop the other one first.",
+                dir.display(),
+                d.dir
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "an unknown directory".to_string()),
+            ));
+        }
+        return match d.active_port.or_else(|| d.resolved_port.first().copied()) {
+            Some(port) => ResolveResult::Ready(port),
+            None => ResolveResult::NotFound,
+        };
+    }
+
+    let cached = CachedSlugEntry {
+        slug: host.to_string(),
+        namespace: Some(namespace.to_string()),
+        daemon_name: daemon.to_string(),
+        dir: dir.to_path_buf(),
+        worktrees: vec![],
+        rejected_worktree_prefixes: std::collections::HashSet::new(),
+    };
+    let result = try_auto_start(host, &cached, None, Some(namespace)).await;
+
+    // The start can land on a record another checkout already owns, because the
+    // supervisor refuses to run a second daemon under the same ID. Serving that
+    // port would hand this hostname the other checkout's content.
+    if per_checkout && let ResolveResult::Ready(_) = result {
+        let started = {
+            let state_file = SUPERVISOR.state_file.lock().await;
+            state_file
+                .daemons
+                .iter()
+                .find(|(id, _)| id.name() == daemon && id.namespace() == namespace)
+                .map(|(_, d)| d.clone())
+        };
+        if let Some(d) = started
+            && !runs_in_checkout(d.clone(), dir).await
+        {
+            return ResolveResult::Error(format!(
+                "'{host}' belongs to the checkout at {}, but daemon '{namespace}/{daemon}' is \
+                 running from {}.\n\
+                 These checkouts share the namespace '{namespace}', so pitchfork cannot run \
+                 both copies at once.\n\
+                 Give each checkout its own top-level `namespace`, or stop the other one first.",
+                dir.display(),
+                d.dir
+                    .as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "an unknown directory".to_string()),
+            ));
+        }
+    }
+
+    result
+}
+
+/// Whether the request came from this machine.
+///
+/// Names of other people's projects, daemon labels and absolute paths are
+/// details of the developer's machine. They help whoever is sitting at it and
+/// tell a device on the LAN things it has no business knowing, so pages spell
+/// them out for loopback clients only.
+fn is_local_client(req: &Request) -> bool {
+    // A request whose peer is unknown is treated as remote: withholding detail
+    // from a local client is a small loss, and the reverse is a leak.
+    req.extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .is_some_and(|ci| ci.0.ip().is_loopback())
+}
+
+/// Whether a daemon is running from this checkout.
+///
+/// The daemon's directory is resolved to the checkout that contains it rather
+/// than compared as a path prefix, so a worktree nested inside its primary
+/// checkout is attributed to the worktree, and a symlinked or non-canonical
+/// directory still matches. A daemon whose explicit `dir` lies outside every
+/// checkout belongs to none of them, which keeps it reachable as long as its
+/// hostname is unambiguous.
+fn daemon_runs_in(daemon: &crate::daemon::Daemon, checkout: &std::path::Path) -> bool {
+    daemon
+        .dir
+        .as_deref()
+        .is_some_and(|d| crate::proxy::hostname::checkout_root_of(d) == checkout)
+}
+
+/// [`daemon_runs_in`] off the async worker, since it walks the filesystem.
+async fn runs_in_checkout(daemon: crate::daemon::Daemon, checkout: &std::path::Path) -> bool {
+    let checkout = checkout.to_path_buf();
+    tokio::task::spawn_blocking(move || daemon_runs_in(&daemon, &checkout))
+        .await
+        .unwrap_or(false)
+}
+
+/// Order the candidates so that daemons running in this checkout come first.
+///
+/// Only the attribution runs off-thread, and the candidates stay here, so a
+/// failure in that task costs the ordering rather than the candidates
+/// themselves.
+async fn sort_by_checkout(
+    daemons: Vec<crate::daemon::Daemon>,
+    checkout: &std::path::Path,
+) -> Vec<crate::daemon::Daemon> {
+    if daemons.len() < 2 {
+        return daemons;
+    }
+    let dirs: Vec<Option<std::path::PathBuf>> = daemons.iter().map(|d| d.dir.clone()).collect();
+    let checkout = checkout.to_path_buf();
+    let here = tokio::task::spawn_blocking(move || {
+        dirs.iter()
+            .map(|dir| {
+                dir.as_deref()
+                    .is_some_and(|d| crate::proxy::hostname::checkout_root_of(d) == checkout)
+            })
+            .collect::<Vec<bool>>()
+    })
+    .await;
+
+    match here {
+        Ok(here) => {
+            let mut ordered: Vec<(bool, crate::daemon::Daemon)> =
+                here.into_iter().zip(daemons).collect();
+            ordered.sort_by_key(|(here, _)| !here);
+            ordered.into_iter().map(|(_, d)| d).collect()
+        }
+        Err(e) => {
+            log::warn!("Checkout attribution task failed: {e}");
+            daemons
+        }
+    }
+}
+
+/// Escape the five characters that change the meaning of HTML text.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+/// Wrap body markup in the shared pitchfork page chrome.
+fn html_page(status: StatusCode, title: &str, body: String) -> Response {
+    let html = format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} — pitchfork</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0f1117;
+            color: #e1e4e8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }}
+        .container {{ max-width: 640px; padding: 2rem; }}
+        h1 {{ font-size: 1.5rem; font-weight: 600; margin-bottom: 0.75rem; }}
+        p {{ color: #8b949e; font-size: 0.9rem; margin-bottom: 0.75rem; }}
+        ul {{ list-style: none; margin: 0.5rem 0 1rem; }}
+        li {{ margin: 0.25rem 0; }}
+        code, a {{
+            color: #58a6ff;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            text-decoration: none;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">{body}</div>
+</body>
+</html>"##
+    );
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/html; charset=utf-8")
+        .body(Body::from(html))
+        .unwrap_or_else(|_| (status, title.to_string()).into_response())
+}
+
+/// The `:port` part of a Host header, or an empty string when it carries none.
+///
+/// Links on pitchfork's own pages keep the port the request arrived on, so they
+/// still work when the proxy listens somewhere other than 80 or 443.
+fn host_port_suffix(raw_host: &str) -> String {
+    let port = if raw_host.starts_with('[') {
+        raw_host.split_once("]:").map(|(_, port)| port)
+    } else {
+        raw_host.rsplit_once(':').map(|(_, port)| port)
+    };
+    port.filter(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty())
+        .map(|p| format!(":{p}"))
+        .unwrap_or_default()
+}
+
+/// Redirect a reserved project or stack hostname to its page in the web UI.
+///
+/// The page lives at `/projects/<project>[/<worktree>]`, which is its canonical
+/// location. Both labels come from hostname labels, so they are already limited
+/// to characters that need no escaping in a path.
+fn page_redirect_response(base: &str, project: &str, worktree: Option<&str>) -> Response {
+    let target = match worktree {
+        Some(worktree) => format!("{base}/projects/{project}/{worktree}"),
+        None => format!("{base}/projects/{project}"),
+    };
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(axum::http::header::LOCATION, &target)
+        .header(axum::http::header::CACHE_CONTROL, "no-store")
+        .body(axum::body::Body::from(format!(
+            "The {} page has moved to {target}\n",
+            if worktree.is_some() {
+                "stack"
+            } else {
+                "project"
+            }
+        )))
+        .unwrap_or_else(|_| {
+            html_page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "pitchfork",
+                String::new(),
+            )
+        })
+}
+
+/// Serve the placeholder for a reserved project or stack hostname.
+///
+/// `<project>.<tld>` and `<worktree>.<project>.<tld>` belong to the project and
+/// stack pages, which the web UI serves. This stands in when the web UI is not
+/// running, so the hostname never resolves to whichever daemon shares its
+/// name.
+fn page_placeholder_response(
+    project: &str,
+    worktree: Option<&str>,
+    daemons: &[String],
+    tld: &str,
+    port_suffix: &str,
+) -> Response {
+    let heading = match worktree {
+        Some(wt) => format!("{} · {}", escape_html(project), escape_html(wt)),
+        None => escape_html(project),
+    };
+    let suffix = match worktree {
+        Some(wt) => format!(
+            "{}.{}.{}",
+            escape_html(wt),
+            escape_html(project),
+            escape_html(tld)
+        ),
+        None => format!("{}.{}", escape_html(project), escape_html(tld)),
+    };
+    let list = if daemons.is_empty() {
+        "<p>No daemon in this checkout has a port configured.</p>".to_string()
+    } else {
+        let items: String = daemons
+            .iter()
+            .map(|d| {
+                let d = escape_html(d);
+                format!("<li><a href=\"//{d}.{suffix}{port_suffix}\">{d}.{suffix}</a></li>")
+            })
+            .collect();
+        format!("<p>Daemons here:</p><ul>{items}</ul>")
+    };
+    let body = format!(
+        "<h1>{heading}</h1>\
+         <p>This address is reserved for the {page} page, which the web UI serves. \
+         Enable it with <code>[settings.web] auto_start = true</code> to open this \
+         address.</p>\
+         {list}",
+        page = if worktree.is_some() {
+            "stack"
+        } else {
+            "project"
+        },
+    );
+    html_page(StatusCode::OK, "pitchfork", body)
+}
+
+/// Serve the 404 page for a hostname whose project or daemon does not exist.
+fn unknown_host_response(host: &str, heading: &str, known: &[String]) -> Response {
+    let list = if known.is_empty() {
+        "<p>Nothing is registered under this name yet.</p>".to_string()
+    } else {
+        let items: String = known
+            .iter()
+            .map(|k| format!("<li><code>{}</code></li>", escape_html(k)))
+            .collect();
+        format!("<p>Known names:</p><ul>{items}</ul>")
+    };
+    let body = format!(
+        "<h1>{heading}</h1><p>No route for <code>{host}</code>.</p>{list}",
+        heading = escape_html(heading),
+        host = escape_html(host),
+    );
+    html_page(StatusCode::NOT_FOUND, "Not found", body)
+}
+
 /// Strip the TLD suffix from a hostname, returning the subdomain part.
+///
+/// Host names are case-insensitive (RFC 4343) and a browser passes on whatever
+/// the user typed, so `API.MyProject.LOCALHOST` has to lose its TLD like any
+/// other spelling.
 ///
 /// Examples:
 /// - `api.myproject.localhost` with tld `localhost` → `api.myproject`
-/// - `api.localhost` with tld `localhost` → `api`
+/// - `api.LOCALHOST` with tld `localhost` → `api`
 /// - `localhost` with tld `localhost` → `None` (no subdomain)
 fn strip_tld(host: &str, tld: &str) -> Option<String> {
-    host.strip_suffix(&format!(".{tld}"))
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    strip_dot_suffix_ignore_case(host, tld)
 }
 
 /// Build a human-friendly error message for port binding failures.
@@ -1960,11 +2516,42 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 mod tests {
     use super::*;
 
+    /// A reserved project or stack hostname sends the browser to the page in
+    /// the web UI, which is where those pages live.
+    #[test]
+    fn test_page_redirect_targets_the_web_ui() {
+        let response = page_redirect_response("http://127.0.0.1:3120", "shop", Some("feature-a"));
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .unwrap(),
+            "http://127.0.0.1:3120/projects/shop/feature-a"
+        );
+
+        let project = page_redirect_response("http://127.0.0.1:3120/ps", "shop", None);
+        assert_eq!(
+            project.headers().get(axum::http::header::LOCATION).unwrap(),
+            // The base carries the web UI's path prefix when one is set.
+            "http://127.0.0.1:3120/ps/projects/shop"
+        );
+    }
+
     #[test]
     fn test_strip_tld() {
         assert_eq!(
             strip_tld("api.myproject.localhost", "localhost"),
             Some("api.myproject".to_string())
+        );
+        // Host names are case-insensitive, and browsers pass on what was typed.
+        assert_eq!(
+            strip_tld("API.MyProject.LOCALHOST", "localhost"),
+            Some("API.MyProject".to_string())
+        );
+        assert_eq!(
+            strip_tld("api.localhost", "LOCALHOST"),
+            Some("api".to_string())
         );
         assert_eq!(
             strip_tld("api.localhost", "localhost"),
@@ -2274,5 +2861,84 @@ mod tests {
         join_cookie_fields(&mut headers);
 
         assert!(headers.get(COOKIE).is_none());
+    }
+
+    #[test]
+    fn test_host_port_suffix() {
+        assert_eq!(host_port_suffix("api.myproj.localhost:8088"), ":8088");
+        assert_eq!(host_port_suffix("api.myproj.localhost"), "");
+        assert_eq!(host_port_suffix("[::1]:8088"), ":8088");
+        assert_eq!(host_port_suffix("[::1]"), "");
+        // A non-numeric tail is not a port and must not reach a link.
+        assert_eq!(host_port_suffix("host:notaport"), "");
+    }
+
+    /// A daemon belongs to the checkout that contains its working directory,
+    /// which is the worktree rather than the primary when one is nested inside
+    /// the other, and no checkout at all when its `dir` points elsewhere.
+    #[test]
+    fn test_daemon_runs_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("my-repo");
+        std::fs::create_dir_all(repo.join(".git/worktrees/feature")).unwrap();
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        // A worktree checked out *inside* the primary's directory tree.
+        let nested = repo.join(".worktrees/feature");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                repo.join(".git/worktrees/feature").display()
+            ),
+        )
+        .unwrap();
+
+        let root = |p: &std::path::Path| crate::proxy::hostname::checkout_root_of(p);
+        let repo_root = root(&repo);
+        let nested_root = root(&nested);
+
+        let mut daemon = crate::daemon::Daemon {
+            dir: Some(repo.join("sub")),
+            ..Default::default()
+        };
+        assert!(daemon_runs_in(&daemon, &repo_root));
+        assert!(!daemon_runs_in(&daemon, &nested_root));
+
+        // Lexically the nested worktree sits under the primary; by checkout it
+        // does not, so the primary's hostname must not claim it.
+        daemon.dir = Some(nested.clone());
+        assert!(daemon_runs_in(&daemon, &nested_root));
+        assert!(!daemon_runs_in(&daemon, &repo_root));
+
+        // An explicit dir outside every checkout belongs to none of them.
+        daemon.dir = Some(temp.path().join("elsewhere"));
+        assert!(!daemon_runs_in(&daemon, &repo_root));
+
+        daemon.dir = None;
+        assert!(!daemon_runs_in(&daemon, &repo_root));
+    }
+
+    /// Only a request known to come from this machine gets the detailed pages;
+    /// an unknown peer counts as remote.
+    #[test]
+    fn test_is_local_client() {
+        let build = |info: Option<SocketAddr>| {
+            let mut req = Request::new(Body::empty());
+            if let Some(addr) = info {
+                req.extensions_mut()
+                    .insert(axum::extract::ConnectInfo(addr));
+            }
+            req
+        };
+
+        assert!(is_local_client(&build(Some(
+            "127.0.0.1:5000".parse().unwrap()
+        ))));
+        assert!(is_local_client(&build(Some("[::1]:5000".parse().unwrap()))));
+        assert!(!is_local_client(&build(Some(
+            "192.168.1.42:5000".parse().unwrap()
+        ))));
+        assert!(!is_local_client(&build(None)));
     }
 }

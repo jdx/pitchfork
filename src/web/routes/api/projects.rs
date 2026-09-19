@@ -18,7 +18,7 @@ use std::path::{Path as StdPath, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::daemons::{ApiDaemonEntry, build_api_daemons, config_daemon_entry};
+use super::daemons::{ApiDaemonEntry, build_api_daemons, config_daemon_entry, config_proxy_hosts};
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::proxy::worktree::{WorktreeEntry, discover_worktrees};
@@ -429,22 +429,33 @@ pub fn find_project<'a>(projects: &'a [ProjectView], name: &str) -> Option<&'a P
     projects.iter().find(|p| p.name.eq_ignore_ascii_case(name))
 }
 
-/// Look a worktree up by its URL name, falling back to its branch name.
+/// Look a worktree up by its URL name, then its branch, then its directory.
 ///
 /// URL names win, so a branch whose sanitized name collided and was suffixed
 /// (`feature-api-2`) is still reachable at its own URL rather than resolving to
-/// whichever worktree claimed the base name.
+/// whichever worktree claimed the base name. The directory name is accepted
+/// because that is the label the proxy builds `<worktree>.<project>.<tld>`
+/// from, and those hostnames redirect here.
 pub fn find_worktree<'a>(project: &'a ProjectView, name: &str) -> Option<&'a WorktreeView> {
-    project
+    let by_name = project
         .worktrees
         .iter()
-        .find(|w| w.name.eq_ignore_ascii_case(name))
-        .or_else(|| {
-            project
-                .worktrees
-                .iter()
-                .find(|w| w.branch.eq_ignore_ascii_case(name))
+        .find(|w| w.name.eq_ignore_ascii_case(name));
+    let by_branch = || {
+        project
+            .worktrees
+            .iter()
+            .find(|w| w.branch.eq_ignore_ascii_case(name))
+    };
+    let by_directory = || {
+        project.worktrees.iter().find(|w| {
+            w.path
+                .file_name()
+                .and_then(|dir| dir.to_str())
+                .is_some_and(|dir| dir.eq_ignore_ascii_case(name))
         })
+    };
+    by_name.or_else(by_branch).or_else(by_directory)
 }
 
 // ─── discovery (I/O) ─────────────────────────────────────────────────────────
@@ -900,27 +911,17 @@ fn config_entries_blocking(
         .map(|config| config.daemons.keys().map(|id| id.qualified()).collect())
         .unwrap_or_default();
 
-    let slugs = PitchforkToml::read_global_slugs();
-    let settings = crate::settings::settings();
-    let mut entries = Vec::new();
+    // Collect the daemons first, so their proxy hostnames are resolved in one
+    // pass rather than per daemon.
+    let mut selected: Vec<(DaemonId, crate::pitchfork_toml::PitchforkTomlDaemon)> = Vec::new();
     let mut seen = HashSet::new();
 
     for dir in dirs {
         match PitchforkToml::all_merged_from(dir) {
             Ok(config) => {
                 for (id, daemon_config) in &config.daemons {
-                    let qualified = id.qualified();
-                    if seen.insert(qualified.clone()) {
-                        entries.push((
-                            qualified,
-                            config_daemon_entry(
-                                id,
-                                daemon_config,
-                                &slugs,
-                                &settings,
-                                disabled.contains(id),
-                            ),
-                        ));
+                    if seen.insert(id.qualified()) {
+                        selected.push((id.clone(), daemon_config.clone()));
                     }
                 }
             }
@@ -933,25 +934,27 @@ fn config_entries_blocking(
     // a real, startable daemon, not a missing one.
     if let Some(config) = &merged {
         for id in wanted {
-            let qualified = id.qualified();
-            if seen.contains(&qualified) {
+            if seen.contains(&id.qualified()) {
                 continue;
             }
             if let Some(daemon_config) = config.daemons.get(id) {
-                seen.insert(qualified.clone());
-                entries.push((
-                    qualified,
-                    config_daemon_entry(
-                        id,
-                        daemon_config,
-                        &slugs,
-                        &settings,
-                        disabled.contains(id),
-                    ),
-                ));
+                seen.insert(id.qualified());
+                selected.push((id.clone(), daemon_config.clone()));
             }
         }
     }
+
+    let hosts = config_proxy_hosts(&selected);
+    let settings = crate::settings::settings();
+    let entries = selected
+        .iter()
+        .map(|(id, daemon_config)| {
+            (
+                id.qualified(),
+                config_daemon_entry(id, daemon_config, &hosts, &settings, disabled.contains(id)),
+            )
+        })
+        .collect();
 
     (entries, resolvable)
 }
@@ -1170,6 +1173,12 @@ mod tests {
         assert!(find_worktree(project, "FEATURE-A").is_some());
         // The unsanitized branch name resolves too.
         assert!(find_worktree(project, "feature/a").is_some());
+        // So does the directory name, which is the label the proxy's
+        // `<worktree>.<project>.<tld>` hostnames redirect with.
+        assert_eq!(
+            find_worktree(project, "shop-feature-a").map(|w| w.name.as_str()),
+            Some("feature-a")
+        );
         assert!(find_worktree(project, "missing").is_none());
     }
 
