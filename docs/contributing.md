@@ -80,14 +80,6 @@ Keep tutorials runnable, label prerequisites, and distinguish complete config
 examples from fields to add to an existing table. Link to the canonical guide
 instead of repeating long explanations across pages.
 
-## If the mbx build cache fails
-
-Compilation-heavy tasks use [mbx](https://mr-boxington.jdx.dev) through the
-repository's Cargo wrapper. If the cache command fails, build the UI first,
-then run the equivalent Cargo command without the wrapper. See
-[CONTRIBUTING.md](https://github.com/jdx/pitchfork/blob/main/CONTRIBUTING.md#mbx-build-cache)
-for the fallback commands and the information needed to report a mismatch.
-
 ## Pull requests
 
 Use a Conventional Commit title that starts with a lowercase description:
