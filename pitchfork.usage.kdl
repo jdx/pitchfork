@@ -618,12 +618,16 @@ cmd proxy help="Manage the pitchfork reverse proxy" effect=read subcommand_requi
     long_help #"""
 Manage the pitchfork reverse proxy
 
-The reverse proxy routes requests from stable slug-based URLs like
-`https://myapp.localhost` to the daemon's actual listening port (e.g.
-localhost:3000).
+The reverse proxy routes requests from stable URLs to the daemon's actual
+listening port. Every daemon with a `port` gets a hostname automatically,
+built from the daemon, worktree and project names plus the configured TLD:
 
-Slugs are defined in the global config (~/.config/pitchfork/config.toml)
-under [slugs]. Each slug maps to a project directory and daemon name.
+    https://api.myproject.localhost
+    https://api.fix-login.myproject.localhost
+
+Slugs are the older mechanism and still work. They are defined in the global
+config (~/.config/pitchfork/config.toml) under [slugs], each mapping to a
+project directory and daemon name, and are resolved before hostnames.
 
 Enable the proxy in your pitchfork.toml or settings:
 
@@ -634,9 +638,9 @@ Subcommands:
 
     trust     Install the proxy's TLS certificate into the system trust store
     untrust   Remove the proxy's TLS certificate from the system trust store
-    add       Add a slug mapping to the global config
-    remove    Remove a slug mapping from the global config
-    status    Show all registered slugs and their current state
+    add       Add a slug mapping to the global config (legacy)
+    remove    Remove a slug mapping from the global config (legacy)
+    status    Show hostnames and registered slugs with their current state
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd trust help="Install the proxy's self-signed TLS certificate into the system trust store" effect=write {
@@ -694,22 +698,25 @@ sudo pitchfork proxy untrust    # Linux only
         }
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    cmd status help="Show all registered slugs and their current state" effect=read {
+    cmd status help="Show hostnames and registered slugs with their current state" effect=read {
         long_help #"""
-Show all registered slugs and their current state
+Show hostnames and registered slugs with their current state
 
-Displays the proxy configuration and lists all slugs from the global config
-with their project directory, daemon name, and current status (running/stopped, port).
+Displays the proxy configuration, the automatic hostnames grouped by project
+and worktree, and any slugs from the global config with their project
+directory, daemon name, and current status (running/stopped, port).
 """#
         flag --json help="Output in JSON format"
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    cmd add help="Add a slug mapping to the global config" effect=write {
+    cmd add help="Add a slug mapping to the global config (legacy)" effect=write {
         long_help #"""
-Add a slug mapping to the global config
+Add a slug mapping to the global config (legacy)
 
 Registers a slug in ~/.config/pitchfork/config.toml that maps to a project
-directory and daemon name. The proxy uses this to route requests.
+directory and daemon name. The proxy resolves slugs before the automatic
+per-daemon hostnames, such as api.myproject.localhost, which need no
+registration.
 
 If --dir is not specified, uses the current directory.
 If --daemon is not specified, defaults to the slug name.
@@ -1290,7 +1297,7 @@ config {
     prop "general.ready_delay" type="duration" default="3s" help="Default readiness delay in seconds when a daemon has no ready check configured" long_help="Default readiness delay in seconds when a daemon has no ready check configured\n\nWhen a daemon has no other readiness check (output, HTTP, port, command), pitchfork waits this long before considering it ready. Daemons can override this with their own `ready_delay` setting." {
         env "PITCHFORK_READY_DELAY"
     }
-    prop "general.worktree" type="bool" default=#true help="Enable git worktree / jj workspace auto-discovery" long_help="Enable git worktree / jj workspace auto-discovery\n\nWhen enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy slug routing and supervisor config discovery. Each worktree gets its own namespace.\n\nSet to `false` to disable all worktree/workspace discovery. The deprecated `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration." {
+    prop "general.worktree" type="bool" default=#true help="Enable git worktree / jj workspace auto-discovery" long_help="Enable git worktree / jj workspace auto-discovery\n\nWhen enabled (default), pitchfork discovers git worktrees and jj workspaces for proxy hostname routing and supervisor config discovery. Each worktree gets its own namespace, and its daemons answer at `<daemon>.<worktree>.<project>.<tld>`.\n\nSet to `false` to disable all worktree/workspace discovery. The deprecated `PITCHFORK_PROXY_WORKTREE` environment variable remains an alias during migration." {
         env "PITCHFORK_WORKTREE"
         deprecated_env "PITCHFORK_PROXY_WORKTREE"
         alias "proxy.worktree"
@@ -1343,7 +1350,7 @@ config {
     prop "proxy.auto_trust" type="bool" default=#true help="Automatically install the proxy TLS certificate into the system trust store" long_help="Automatically install the proxy TLS certificate into the system trust store\n\nWhen enabled (default), pitchfork automatically installs the proxy's self-signed CA certificate into the system trust store during supervisor startup, so that browsers and tools trust HTTPS proxy URLs without certificate warnings.\n\nOn macOS, this triggers a system authorization dialog (Touch ID or password). On Linux, this requires write access to the system CA directory (typically needs `sudo`).\n\nIf auto-trust fails (e.g. due to permissions), it is silently skipped and a warning is logged. You can manually install the certificate with:\n  pitchfork proxy trust\n\nSet to `false` to disable auto-trust entirely." {
         env "PITCHFORK_PROXY_AUTO_TRUST"
     }
-    prop "proxy.enable" type="bool" default=#false help="Enable the reverse proxy server for daemons" long_help="Enable the reverse proxy server for daemons\n\nWhen enabled, pitchfork starts a reverse proxy that routes requests from `<slug>.<tld>:<port>` to the daemon's actual listening port.\n\nOnly daemons with an explicit `slug` are routable through the proxy. No slug = not proxied.\n\nExample: `myapp.localhost:7777` -> `localhost:3000` (daemon with slug = \"myapp\")" {
+    prop "proxy.enable" type="bool" default=#false help="Enable the reverse proxy server for daemons" long_help="Enable the reverse proxy server for daemons\n\nWhen enabled, pitchfork starts a reverse proxy that routes a stable hostname to the daemon's actual listening port.\n\nEvery daemon with a `port` gets a hostname built from its name, its worktree when it lives in one, and its project, unless it opts out with `proxy = false`. A daemon without a port is not routed.\n\nExample: `api.myproject.localhost:7777` -> `localhost:3000`" {
         env "PITCHFORK_PROXY_ENABLE"
     }
     prop "proxy.host" type="string" default="127.0.0.1" help="Bind address for the reverse proxy server" long_help="Bind address for the reverse proxy server\n\nIP address the reverse proxy listens on.\n\n**Security Warning:** The default `127.0.0.1` only allows local connections. Setting this to `0.0.0.0` will expose the proxy on every network interface, including externally routable ones -- anyone on the same LAN can then reach your local daemons.\n\n**Examples:** - `\"127.0.0.1\"` - Local only (default, recommended) - `\"0.0.0.0\"` - All interfaces (use with caution) - `\"::1\"` - IPv6 loopback" {
@@ -1364,7 +1371,7 @@ config {
     prop "proxy.sync_hosts" type="bool" default=#true help="Automatically sync slug hostnames to /etc/hosts" long_help="Automatically sync slug hostnames to /etc/hosts\n\nWhen enabled (default), pitchfork automatically adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them.\n\nThis is needed because Safari does not auto-resolve `.localhost` subdomains, and custom TLDs (e.g. `.test`) always require DNS entries.\n\nEntries are managed in a marked block in `/etc/hosts` and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.\n\nSet to `false` to disable automatic hosts file management. You will need to configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS)." {
         env "PITCHFORK_PROXY_SYNC_HOSTS"
     }
-    prop "proxy.tld" type="string" default="localhost" help="Top-level domain used for proxy URLs" long_help="Top-level domain used for proxy URLs\n\nThe TLD appended to daemon hostnames in proxy URLs.\n\nWith the default `localhost`, daemon URLs look like:\n  `myapp.localhost:7777`  (for a daemon with slug = \"myapp\")\n\nFor custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you can use dnsmasq or add entries to `/etc/resolver/`." {
+    prop "proxy.tld" type="string" default="localhost" help="Top-level domain used for proxy URLs" long_help="Top-level domain used for proxy URLs\n\nThe TLD appended to daemon hostnames in proxy URLs.\n\nWith the default `localhost`, daemon URLs look like:\n  `api.myproject.localhost:7777`  (daemon `api` of project `myproject`)\n\nFor custom TLDs (e.g. `test`), you need wildcard DNS resolution. On macOS, you can use dnsmasq or add entries to `/etc/resolver/`." {
         env "PITCHFORK_PROXY_TLD"
     }
     prop "proxy.tls_cert" type="string" default="" help="Path to TLS certificate file (PEM format) for HTTPS proxy" long_help="Path to TLS certificate file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded TLS certificate file used when `proxy.https = true`.\n\nIf left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`." {
@@ -1373,7 +1380,7 @@ config {
     prop "proxy.tls_key" type="string" default="" help="Path to TLS private key file (PEM format) for HTTPS proxy" long_help="Path to TLS private key file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded private key file used when `proxy.https = true`.\n\nIf left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`." {
         env "PITCHFORK_PROXY_TLS_KEY"
     }
-    prop "proxy.wildcard" type="bool" default=#true help="Enable wildcard subdomain matching for proxy routes" long_help="Enable wildcard subdomain matching for proxy routes\n\nWhen enabled (default), requests for subdomains of a registered slug will fall back to the parent slug's daemon.\n\nFor example, with slug \"myapp\": - `myapp.localhost` → exact match (always works) - `tenant.myapp.localhost` → wildcard fallback to \"myapp\"\n\nThis is useful for multi-tenant apps where each tenant gets a unique subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but all share the same backend server.\n\nSet to `false` to require exact hostname matches only." {
+    prop "proxy.wildcard" type="bool" default=#true help="Enable wildcard subdomain matching for proxy routes" long_help="Enable wildcard subdomain matching for proxy routes\n\nWhen enabled (default), extra labels to the left of a daemon's hostname route to that same daemon.\n\nFor example, with a daemon reachable at `api.myproject.localhost`:\n\n- `api.myproject.localhost` → exact match (always works)\n\n- `tenant.api.myproject.localhost` → wildcard fallback to the same daemon\n\nThe same holds for a legacy slug, where `tenant.myapp.localhost` falls back to the slug `myapp`.\n\nThis is useful for multi-tenant apps where each tenant gets a unique subdomain (e.g. `acme.myapp.localhost`, `globex.myapp.localhost`) but all share the same backend server.\n\nSet to `false` to require exact hostname matches only." {
         env "PITCHFORK_PROXY_WILDCARD"
     }
     prop "supervisor.auto_start" type="bool" default=#true help="Automatically start the supervisor when a client command needs it" long_help="Automatically start the supervisor when a client command needs it\n\nWhen enabled (default), commands such as `pitchfork start`, `pitchfork list`, the TUI, and shell activation start a background supervisor automatically when one is not already running.\n\nDisable this when the supervisor is managed by systemd, launchd, or another service manager:\n\n```toml\n[settings.supervisor]\nauto_start = false\n```\n\nWith auto-start disabled, client commands wait for the configured IPC connection attempts and then fail with an actionable error instead of spawning an unmanaged supervisor. Explicit `pitchfork supervisor start` and `pitchfork supervisor run` commands are unaffected." {

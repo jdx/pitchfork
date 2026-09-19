@@ -667,35 +667,64 @@ impl IpcClient {
                     continue;
                 }
 
+                // Render this level's templates on a blocking worker: building a
+                // context reads configuration and derives hostnames, which walks
+                // each project's checkouts.
+                let rendered = {
+                    let ids: Vec<DaemonId> = to_start.clone();
+                    let pt = pt.clone();
+                    let ports = resolved_ports_map.clone();
+                    tokio::task::spawn_blocking(move || {
+                        ids.into_iter()
+                            .filter_map(|id| {
+                                let daemon_config = pt.daemons.get(&id)?;
+                                let mut rendered_config = daemon_config.clone();
+                                let mut template_ctx = crate::template::TemplateContext::new(
+                                    &id,
+                                    daemon_config,
+                                    &ports,
+                                    &pt.daemons,
+                                );
+                                let result = crate::template::render_daemon_templates(
+                                    &mut rendered_config,
+                                    &mut template_ctx,
+                                    pt.env.as_ref(),
+                                )
+                                .map(|()| rendered_config);
+                                Some((id, result))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await
+                };
+                let rendered = match rendered {
+                    Ok(rendered) => rendered,
+                    Err(e) => {
+                        // Nothing in this level was rendered, so nothing in it
+                        // starts. Later levels depend on this one, so the run
+                        // stops here rather than starting dependents whose
+                        // prerequisites never ran.
+                        error!("Template rendering task failed: {e}");
+                        error!("Dependency failed, aborting remaining starts");
+                        any_failed = true;
+                        break;
+                    }
+                };
+
                 // Start all daemons in this level concurrently
                 let mut tasks = Vec::new();
-                for id in to_start {
-                    if let Some(daemon_config) = pt.daemons.get(&id) {
-                        // Render Tera templates with context from previously started daemons
-                        let mut rendered_config = daemon_config.clone();
-                        let mut template_ctx = crate::template::TemplateContext::new(
-                            &id,
-                            daemon_config,
-                            &resolved_ports_map,
-                            &pt.daemons,
-                        );
-                        match crate::template::render_daemon_templates(
-                            &mut rendered_config,
-                            &mut template_ctx,
-                            pt.env.as_ref(),
-                        ) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                error!("Template render error for daemon {id}: {e}");
-                                any_failed = true;
-                                continue;
-                            }
+                for (id, result) in rendered {
+                    let rendered_config = match result {
+                        Ok(config) => config,
+                        Err(e) => {
+                            error!("Template render error for daemon {id}: {e}");
+                            any_failed = true;
+                            continue;
                         }
-
-                        let is_explicit = explicitly_requested.contains(&id);
-                        let task = Self::spawn_start_task(id, &rendered_config, is_explicit, &opts);
-                        tasks.push(task);
-                    }
+                    };
+                    let is_explicit = explicitly_requested.contains(&id);
+                    let task = Self::spawn_start_task(id, &rendered_config, is_explicit, &opts);
+                    tasks.push(task);
                 }
 
                 // Wait for all daemons in this level to complete before moving to next level
@@ -1089,7 +1118,16 @@ impl IpcClient {
             .ok_or_else(|| miette::miette!("Daemon config not found for {id}"))?;
 
         // Render Tera templates and merge top-level env (per-daemon wins).
-        render_daemon_config(id, &mut daemon_config, &pt)?;
+        // Building the context reads configuration and derives hostnames, so it
+        // runs on a blocking worker rather than on the caller's runtime.
+        daemon_config = {
+            let id = id.clone();
+            tokio::task::spawn_blocking(move || {
+                render_daemon_config(&id, &mut daemon_config, &pt).map(|()| daemon_config)
+            })
+            .await
+            .map_err(|e| miette::miette!("template rendering task failed: {e}"))??
+        };
 
         let run_opts = build_run_options(id, &daemon_config, overrides)
             .await

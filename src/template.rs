@@ -28,6 +28,8 @@ pub struct DaemonTemplateState {
     pub name: String,
     pub namespace: String,
     pub slug: Option<String>,
+    /// Hostname the proxy routes to this daemon, without the TLD.
+    pub host: Option<String>,
     pub dir: PathBuf,
 }
 
@@ -66,6 +68,15 @@ impl TemplateContext {
         daemon_configs: &IndexMap<DaemonId, PitchforkTomlDaemon>,
     ) -> Self {
         let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        // Deriving a hostname reads configuration and walks the project's
+        // checkouts. With the proxy off there is no URL to render either way,
+        // so `{{ host }}` and `{{ url }}` are null and the work is skipped.
+        let proxy_enabled = settings().proxy.enable;
+        let host_of = |id: &DaemonId, config: &PitchforkTomlDaemon| {
+            proxy_enabled
+                .then(|| crate::proxy::hostname::host_for_daemon(id, Some(config), &global_slugs))
+                .flatten()
+        };
         let effective_user = daemon_config.effective_user();
         let dir = crate::ipc::batch::resolve_daemon_dir(
             daemon_config.dir.as_deref(),
@@ -82,6 +93,7 @@ impl TemplateContext {
                 id,
                 &global_slugs,
             ),
+            host: host_of(id, daemon_config),
             dir,
         };
 
@@ -103,6 +115,7 @@ impl TemplateContext {
                         dep_id,
                         &global_slugs,
                     ),
+                    host: host_of(dep_id, config),
                     dir: dep_dir,
                 };
 
@@ -140,6 +153,7 @@ impl TemplateContext {
         ctx.insert("namespace", &self.self_state.namespace);
         ctx.insert("id", &self.self_state.id);
         ctx.insert("slug", &self.self_state.slug);
+        ctx.insert("host", &self.self_state.host);
         ctx.insert("dir", &self.self_state.dir.to_string_lossy().to_string());
 
         // Daemons
@@ -168,8 +182,10 @@ impl TemplateContext {
 
         // Always expose proxy_url so templates can distinguish an unroutable daemon
         // via a strict null value instead of an undefined-variable error.
-        let proxy_url = build_proxy_url(self.self_state.slug.as_deref(), &s);
+        let proxy_url = crate::proxy::build_proxy_url(self.self_state.host.as_deref(), &s);
         ctx.insert("proxy_url", &proxy_url);
+        // `url` is the current spelling; `proxy_url` stays for existing configs.
+        ctx.insert("url", &proxy_url);
 
         // Rendered env for this daemon (set via set_env after env rendering)
         if let Some(ref env) = self.env {
@@ -192,6 +208,8 @@ fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
         "name": state.name,
         "namespace": state.namespace,
         "slug": state.slug,
+        "host": state.host,
+        "url": crate::proxy::build_proxy_url(state.host.as_deref(), &settings()),
         "dir": state.dir.to_string_lossy(),
     })
 }
@@ -200,21 +218,6 @@ fn daemon_state_to_json(state: &DaemonTemplateState) -> serde_json::Value {
 /// E.g. `myproj/redis` -> `myproj.redis`
 fn qualified_key(id: &DaemonId) -> String {
     format!("{}.{}", id.namespace(), id.name())
-}
-
-/// Build a proxy URL from slug and settings.
-fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
-    let slug = slug?;
-    let scheme = if s.proxy.https { "https" } else { "http" };
-    let tld = &s.proxy.tld;
-    let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
-    let effective_port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
-    let host = format!("{slug}.{tld}");
-    Some(if effective_port == standard_port {
-        format!("{scheme}://{host}")
-    } else {
-        format!("{scheme}://{host}:{effective_port}")
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -646,6 +649,32 @@ mod tests {
         assert_eq!(
             render_template("{{ proxy_url | default(value=\"none\") }}", &ctx).unwrap(),
             "none"
+        );
+    }
+
+    /// The daemon being rendered and a daemon it references resolve their
+    /// hostnames the same way, so `{{ host }}` is never populated while
+    /// `{{ daemons.*.host }}` is null — whether or not the proxy is enabled.
+    #[test]
+    fn test_self_and_referenced_hosts_agree() {
+        let id = DaemonId::try_new("myproj", "api").unwrap();
+        let config = PitchforkTomlDaemon {
+            run: "server".to_string(),
+            port: Some(crate::config_types::PortConfig {
+                expect: vec![3000],
+                ..Default::default()
+            }),
+            ..PitchforkTomlDaemon::default()
+        };
+        let mut configs = IndexMap::new();
+        configs.insert(id.clone(), config.clone());
+        let mut resolved = HashMap::new();
+        resolved.insert(id.clone(), vec![3000]);
+
+        let ctx = TemplateContext::new(&id, &config, &resolved, &configs);
+        assert_eq!(
+            ctx.self_state.host,
+            ctx.daemon_states.get("api").unwrap().host
         );
     }
 

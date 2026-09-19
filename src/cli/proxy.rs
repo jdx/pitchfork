@@ -1,5 +1,8 @@
 use crate::Result;
-use crate::cli::json_output::{JsonLanInfo, JsonProxyStatus, JsonSlugEntry, print_json};
+use crate::cli::json_output::{
+    JsonLanInfo, JsonProxyHost, JsonProxyProject, JsonProxyStatus, JsonProxyWorktree,
+    JsonSlugEntry, print_json,
+};
 
 /// Manage the pitchfork reverse proxy
 #[derive(Debug, usage_rs::Args)]
@@ -8,12 +11,16 @@ use crate::cli::json_output::{JsonLanInfo, JsonProxyStatus, JsonSlugEntry, print
     long_about = "\
 Manage the pitchfork reverse proxy
 
-The reverse proxy routes requests from stable slug-based URLs like
-`https://myapp.localhost` to the daemon's actual listening port (e.g.
-localhost:3000).
+The reverse proxy routes requests from stable URLs to the daemon's actual
+listening port. Every daemon with a `port` gets a hostname automatically,
+built from the daemon, worktree and project names plus the configured TLD:
 
-Slugs are defined in the global config (~/.config/pitchfork/config.toml)
-under [slugs]. Each slug maps to a project directory and daemon name.
+    https://api.myproject.localhost
+    https://api.fix-login.myproject.localhost
+
+Slugs are the older mechanism and still work. They are defined in the global
+config (~/.config/pitchfork/config.toml) under [slugs], each mapping to a
+project directory and daemon name, and are resolved before hostnames.
 
 Enable the proxy in your pitchfork.toml or settings:
 
@@ -24,9 +31,9 @@ Subcommands:
 
     trust     Install the proxy's TLS certificate into the system trust store
     untrust   Remove the proxy's TLS certificate from the system trust store
-    add       Add a slug mapping to the global config
-    remove    Remove a slug mapping from the global config
-    status    Show all registered slugs and their current state"
+    add       Add a slug mapping to the global config (legacy)
+    remove    Remove a slug mapping from the global config (legacy)
+    status    Show hostnames and registered slugs with their current state"
 )]
 pub struct Proxy {
     #[usage(subcommand)]
@@ -154,10 +161,11 @@ impl Untrust {
 
 // ─── proxy status ─────────────────────────────────────────────────────────────
 
-/// Show all registered slugs and their current state
+/// Show hostnames and registered slugs with their current state
 ///
-/// Displays the proxy configuration and lists all slugs from the global config
-/// with their project directory, daemon name, and current status (running/stopped, port).
+/// Displays the proxy configuration, the automatic hostnames grouped by project
+/// and worktree, and any slugs from the global config with their project
+/// directory, daemon name, and current status (running/stopped, port).
 #[derive(Debug, usage_rs::Args)]
 #[usage(verbatim_doc_comment)]
 struct ProxyStatus {
@@ -183,6 +191,8 @@ impl ProxyStatus {
                     tls_cert: None,
                     trusted: None,
                     slugs: vec![],
+                    projects: vec![],
+                    conflicts: vec![],
                 });
             }
             println!("Proxy: disabled");
@@ -204,6 +214,8 @@ impl ProxyStatus {
                     tls_cert: None,
                     trusted: None,
                     slugs: vec![],
+                    projects: vec![],
+                    conflicts: vec![],
                 });
             }
             println!("Proxy: enabled");
@@ -337,6 +349,9 @@ impl ProxyStatus {
             })
             .collect();
 
+        let (projects, conflicts) =
+            collect_projects(scheme, tld, effective_port, standard_port, &state_file);
+
         if self.json {
             return print_json(&JsonProxyStatus {
                 enabled: true,
@@ -347,6 +362,8 @@ impl ProxyStatus {
                 tls_cert,
                 trusted,
                 slugs: slug_entries,
+                projects,
+                conflicts,
             });
         }
 
@@ -401,16 +418,162 @@ impl ProxyStatus {
             }
         }
 
+        if !conflicts.is_empty() {
+            println!();
+            println!("Conflicts:");
+            println!();
+            for conflict in &conflicts {
+                println!("  {conflict}");
+            }
+        }
+
+        println!();
+        if projects.is_empty() {
+            println!("No project hostnames.");
+            println!();
+            println!("Give a daemon a `port` in pitchfork.toml and it gets a hostname.");
+        } else {
+            println!("Hostnames:");
+            println!();
+            for project in &projects {
+                println!("  {} — {}", project.project, project.url);
+                println!("    Dir: {}", project.dir);
+                print_hosts(&project.daemons, "    ");
+                for wt in &project.worktrees {
+                    println!("    {} — {}", wt.worktree, wt.url);
+                    println!("      Dir: {}", wt.dir);
+                    print_hosts(&wt.daemons, "      ");
+                }
+                println!();
+            }
+        }
+
         Ok(())
     }
 }
 
+/// Print one checkout's daemon hostnames under a heading.
+fn print_hosts(hosts: &[JsonProxyHost], indent: &str) {
+    if hosts.is_empty() {
+        println!("{indent}(no daemon with a port)");
+        return;
+    }
+    for host in hosts {
+        let port = host
+            .port
+            .map(|p| format!(" (port {p})"))
+            .unwrap_or_default();
+        println!(
+            "{indent}{} — {} [{}{port}]",
+            host.daemon, host.url, host.status
+        );
+    }
+}
+
+/// Build the hostname listing from the proxy's own hostname registry, so the
+/// output matches exactly what the proxy will route.
+fn collect_projects(
+    scheme: &str,
+    tld: &str,
+    effective_port: u16,
+    standard_port: u16,
+    state_file: &Option<crate::state_file::StateFile>,
+) -> (Vec<JsonProxyProject>, Vec<String>) {
+    let url = |host: &str| {
+        if effective_port == standard_port {
+            format!("{scheme}://{host}.{tld}")
+        } else {
+            format!("{scheme}://{host}.{tld}:{effective_port}")
+        }
+    };
+    let hosts = |registry: &crate::proxy::hostname::HostRegistry,
+                 checkout: &crate::proxy::hostname::CheckoutHosts,
+                 suffix: &str| {
+        checkout
+            .labels()
+            .into_iter()
+            .filter(|label| {
+                // The listing shows only what the proxy will route.
+                crate::proxy::hostname::hostname_fits(&format!("{label}.{suffix}"))
+            })
+            .map(|label| {
+                let name = checkout.daemons.get(&label).cloned().unwrap_or_default();
+                let daemon = state_file.as_ref().and_then(|sf| {
+                    sf.daemons
+                        .iter()
+                        .find(|(id, _)| id.name() == name && id.namespace() == checkout.namespace)
+                        .map(|(_, d)| d)
+                });
+                // Checkouts that share a namespace share one state record, so a
+                // record from another checkout says nothing about this one.
+                let other_checkout = daemon.is_some_and(|d| {
+                    registry.shares_daemon_id(&checkout.namespace, &name)
+                        && !d.dir.as_deref().is_some_and(|dir| {
+                            crate::proxy::hostname::checkout_root_of(dir) == checkout.dir
+                        })
+                });
+                let (status, port) = match daemon {
+                    _ if other_checkout => ("other checkout".to_string(), None),
+                    Some(d) if d.status.is_running() => (
+                        "running".to_string(),
+                        d.active_port.or_else(|| d.resolved_port.first().copied()),
+                    ),
+                    Some(d) => (d.status.to_string(), None),
+                    None => ("available".to_string(), None),
+                };
+                let host = format!("{label}.{suffix}");
+                JsonProxyHost {
+                    daemon: name,
+                    url: url(&host),
+                    host,
+                    status,
+                    port,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let registry = crate::proxy::hostname::HostRegistry::build();
+    let conflicts = registry.errors.clone();
+    let projects = registry
+        .project_labels()
+        .into_iter()
+        .filter_map(|label| {
+            let project = registry.projects.get(&label)?;
+            let worktrees = project
+                .worktree_labels()
+                .into_iter()
+                .filter_map(|wt_label| {
+                    let checkout = project.worktrees.get(&wt_label)?;
+                    let suffix = format!("{wt_label}.{label}");
+                    Some(JsonProxyWorktree {
+                        url: url(&suffix),
+                        daemons: hosts(&registry, checkout, &suffix),
+                        worktree: wt_label,
+                        dir: checkout.dir.display().to_string(),
+                    })
+                })
+                .collect();
+            Some(JsonProxyProject {
+                url: url(&label),
+                daemons: hosts(&registry, &project.primary, &label),
+                dir: project.primary.dir.display().to_string(),
+                project: label,
+                worktrees,
+            })
+        })
+        .collect();
+    (projects, conflicts)
+}
+
 // ─── proxy add ───────────────────────────────────────────────────────────────
 
-/// Add a slug mapping to the global config
+/// Add a slug mapping to the global config (legacy)
 ///
 /// Registers a slug in ~/.config/pitchfork/config.toml that maps to a project
-/// directory and daemon name. The proxy uses this to route requests.
+/// directory and daemon name. The proxy resolves slugs before the automatic
+/// per-daemon hostnames, such as api.myproject.localhost, which need no
+/// registration.
 ///
 /// If --dir is not specified, uses the current directory.
 /// If --daemon is not specified, defaults to the slug name.

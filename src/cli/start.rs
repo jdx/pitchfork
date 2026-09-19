@@ -202,12 +202,20 @@ impl Start {
                 .enable
                 .then(PitchforkToml::read_global_slugs)
                 .unwrap_or_default();
+            let host_config = settings()
+                .proxy
+                .enable
+                .then(PitchforkToml::all_merged_all_namespaces)
+                .and_then(|r| r.ok());
             for (id, _start_time, resolved_ports) in &result.started {
                 let s = settings();
                 if s.proxy.enable && !resolved_ports.is_empty() {
-                    let slug_name =
-                        PitchforkToml::find_slug_for_daemon_in_registry(id, &global_slugs);
-                    if let Some(proxy_url) = build_proxy_url(slug_name.as_deref(), &s) {
+                    let host = crate::proxy::hostname::host_for_daemon(
+                        id,
+                        host_config.as_ref().and_then(|pt| pt.daemons.get(id)),
+                        &global_slugs,
+                    );
+                    if let Some(proxy_url) = build_proxy_url(host.as_deref(), &s) {
                         let display_name = id.styled_qualified();
                         println!(
                             "  {} {} {}",

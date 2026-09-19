@@ -56,6 +56,14 @@
       "additionalProperties": {
         "$ref": "#/$defs/SlugEntryRaw"
       }
+    },
+    "worktree_label": {
+      "description": "Hostname label for this checkout when it is a linked git worktree.\n\nOverrides the worktree directory's name in proxy hostnames.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     }
   },
   "$defs": {
@@ -513,6 +521,17 @@
             }
           ]
         },
+        "proxy": {
+          "description": "Proxy routing: `false` opts out of the automatic hostname, a string\noverrides the daemon label used in it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pty": {
           "description": "Allocate a pseudo-terminal for the daemon process.",
           "type": [
@@ -758,6 +777,17 @@
               }
             }
           }
+        }
+      ]
+    },
+    "ProxyConfig": {
+      "description": "Proxy routing: false = no hostname, true = default hostname, string = daemon label override",
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
         }
       ]
     },

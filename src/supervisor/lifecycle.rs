@@ -1095,7 +1095,7 @@ impl Supervisor {
         );
 
         // Inject proxy-related environment variables
-        inject_proxy_env(&mut cmd, &opts.slug);
+        inject_proxy_env(&mut cmd, &daemon_proxy_host(&opts).await);
 
         #[cfg(unix)]
         {
@@ -3343,18 +3343,18 @@ mod tests {
 /// - `NODE_EXTRA_CA_CERTS` — path to the pitchfork CA cert (if HTTPS enabled)
 /// - `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` — `.<tld>` for Vite host allowlisting
 /// - `PITCHFORK_LAN` — set to `"1"` when LAN mode is active
-fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
+fn inject_proxy_env(cmd: &mut tokio::process::Command, host: &Option<String>) {
     let s = crate::settings::settings();
     let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
 
-    if should_force_loopback_host(slug) && !lan_enabled {
-        // Only force loopback binding for daemons that are actually routed via a slug.
+    if s.proxy.enable && host.is_some() && !lan_enabled {
+        // Only force loopback binding for daemons the proxy actually routes to.
         // In LAN mode, daemons need to bind to 0.0.0.0 to be reachable from the network.
         cmd.env("HOST", "127.0.0.1");
     }
 
-    // PITCHFORK_URL: the daemon's public proxy URL (only if it has a slug and proxy is enabled)
-    if let Some(url) = build_pitchfork_url(slug, &s) {
+    // PITCHFORK_URL: the daemon's public proxy URL (only if it is routed and proxy is enabled)
+    if let Some(url) = build_pitchfork_url(host, &s) {
         cmd.env("PITCHFORK_URL", &url);
     }
 
@@ -3382,38 +3382,51 @@ fn inject_proxy_env(cmd: &mut tokio::process::Command, slug: &Option<String>) {
     }
 }
 
-fn should_force_loopback_host(slug: &Option<String>) -> bool {
-    let Some(slug) = slug.as_deref() else {
-        return false;
-    };
-
-    let s = crate::settings::settings();
-    if !s.proxy.enable {
-        return false;
+/// The hostname the proxy routes to this daemon, without the TLD.
+///
+/// A daemon registered under a legacy `[slugs]` entry keeps that spelling,
+/// because the proxy resolves slugs first. Otherwise the hostname is derived
+/// from where the daemon's configuration lives.
+async fn daemon_proxy_host(opts: &RunOptions) -> Option<String> {
+    // Nothing consumes a hostname while the proxy is off, and deriving one
+    // reads configuration and walks the project, so daemon starts skip it.
+    if !crate::settings::settings().proxy.enable {
+        return None;
     }
-
-    let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    slugs.contains_key(slug)
+    // A slug carried on the run options skips the lookup below, so it needs the
+    // same length check that lookup applies; otherwise the daemon is told a URL
+    // the proxy refuses to route.
+    if let Some(slug) = opts.slug.as_deref()
+        && crate::proxy::hostname::hostname_fits(slug)
+    {
+        return opts.slug.clone();
+    }
+    // The daemon's own `dir` can point outside its project, so look the config
+    // up from where it was defined.
+    let config_dir = opts
+        .watch_base_dir
+        .clone()
+        .unwrap_or_else(|| opts.dir.0.clone());
+    let id = opts.id.clone();
+    // Reading the config, the slug registry and the project's checkouts is all
+    // file I/O, so it happens together on a blocking worker rather than on the
+    // supervisor's executor. The lookup is the one the CLI and the proxy use,
+    // so the daemon is told the address they advertise for it — a registered
+    // slug when it has one, otherwise its automatic hostname.
+    tokio::task::spawn_blocking(move || {
+        let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(&config_dir).ok()?;
+        let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+        crate::proxy::hostname::host_for_daemon(&id, pt.daemons.get(&id), &slugs)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Compute the public proxy URL for a daemon.
 ///
-/// Returns `None` if the daemon has no slug or the proxy is not enabled.
-fn build_pitchfork_url(slug: &Option<String>, s: &crate::settings::Settings) -> Option<String> {
-    let slug = slug.as_ref()?;
-    if !s.proxy.enable {
-        return None;
-    }
-    let scheme = if s.proxy.https { "https" } else { "http" };
-    let port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
-    let port_suffix = if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) {
-        String::new()
-    } else {
-        format!(":{port}")
-    };
-    let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
-    let tld = if lan_enabled { "local" } else { &s.proxy.tld };
-    Some(format!("{scheme}://{slug}.{tld}{port_suffix}",))
+/// Returns `None` if the daemon has no hostname or the proxy is not enabled.
+fn build_pitchfork_url(host: &Option<String>, s: &crate::settings::Settings) -> Option<String> {
+    crate::proxy::build_proxy_url(host.as_deref(), s)
 }
 
 #[cfg(test)]
