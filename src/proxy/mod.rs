@@ -19,6 +19,7 @@ pub mod mdns;
 pub mod pac;
 pub mod server;
 pub mod setup;
+pub mod sni;
 pub mod trust;
 pub mod worktree;
 

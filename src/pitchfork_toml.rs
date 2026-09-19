@@ -17,7 +17,8 @@ use std::time::SystemTime;
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, OnOutputHook,
     PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlHooks, PortBump, PortConfig, ProxyConfig,
-    ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, StopSignal, WatchMode,
+    ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, StopSignal,
+    WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -210,6 +211,16 @@ struct PitchforkTomlDaemonRaw {
     /// Deprecated: use `port.bump` instead
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port_bump_attempts: Option<u32>,
+    /// TLS handling for this daemon's proxy hostname: `terminate` or `passthrough`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_tls: Option<ProxyTlsMode>,
+    /// Which of the daemon's ports the proxy hostname maps to.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_tls_port: Option<u16>,
+    /// Shorter spelling of `proxy_tls_port`. Never written back out, so a
+    /// config that used it keeps one spelling rather than gaining both.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy_port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub boot_start: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -1344,6 +1355,65 @@ impl PitchforkToml {
                 None
             };
 
+            // `proxy_port` is the shorter spelling of the same setting.
+            if let (Some(explicit), Some(short)) =
+                (raw_daemon.proxy_tls_port, raw_daemon.proxy_port)
+                && explicit != short
+            {
+                warn!(
+                    "daemon {short_name}: proxy_tls_port ({explicit}) and proxy_port ({short}) \
+                     disagree; using proxy_tls_port"
+                );
+            }
+            let proxy_tls_port = raw_daemon.proxy_tls_port.or(raw_daemon.proxy_port);
+
+            // Port 0 asks the operating system to choose, so it names no port
+            // a hostname can be sent to.
+            for (key, value) in [
+                ("proxy_tls_port", raw_daemon.proxy_tls_port),
+                ("proxy_port", raw_daemon.proxy_port),
+            ] {
+                if value == Some(0) {
+                    return Err(ConfigParseError::ProxyPortZero {
+                        daemon: short_name.clone(),
+                        key,
+                        path: path.to_path_buf(),
+                    }
+                    .into());
+                }
+            }
+
+            // The hostname maps to one of the daemon's own ports, so a port it
+            // never declares cannot be routed to.
+            if let Some(port_want) = proxy_tls_port {
+                let declared = port.as_ref().map(|p| p.expect.clone()).unwrap_or_default();
+                if !declared.contains(&port_want) {
+                    return Err(ConfigParseError::ProxyPortNotDeclared {
+                        daemon: short_name.clone(),
+                        port: port_want,
+                        declared,
+                        path: path.to_path_buf(),
+                    }
+                    .into());
+                }
+            }
+
+            // TLS passthrough splices the raw stream to 127.0.0.1:<port>, so a
+            // daemon without a known port has nothing to splice to.
+            if raw_daemon
+                .proxy_tls
+                .is_some_and(ProxyTlsMode::is_passthrough)
+                && port
+                    .as_ref()
+                    .is_none_or(|p| p.expect.iter().all(|&port| port == 0))
+            {
+                return Err(ConfigParseError::PassthroughWithoutPort {
+                    daemon: short_name.clone(),
+                    path: path.to_path_buf(),
+                }
+                .into());
+            }
+
             let daemon = PitchforkTomlDaemon {
                 run: raw_daemon.run,
                 auto: raw_daemon.auto,
@@ -1360,6 +1430,9 @@ impl PitchforkToml {
                 health_port: raw_daemon.health_port,
                 port,
                 proxy: raw_daemon.proxy,
+                proxy_tls: raw_daemon.proxy_tls,
+                proxy_tls_port: raw_daemon.proxy_tls_port,
+                proxy_port: raw_daemon.proxy_port,
                 boot_start: raw_daemon.boot_start,
                 depends,
                 watch: raw_daemon.watch,
@@ -1535,6 +1608,9 @@ impl PitchforkToml {
                     health_port: daemon.health_port.clone(),
                     port: port.cloned(),
                     proxy: daemon.proxy.clone(),
+                    proxy_tls: daemon.proxy_tls,
+                    proxy_tls_port: daemon.proxy_tls_port,
+                    proxy_port: daemon.proxy_port,
                     // Deprecated fields: written for backward compatibility with older pitchfork versions
                     expected_port: port.map(|p| p.expect.clone()).unwrap_or_default(),
                     auto_bump_port: port.filter(|p| p.auto_bump()).map(|_| true),
@@ -1987,6 +2063,28 @@ pub struct PitchforkTomlDaemon {
     /// overrides the daemon label used in it.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub proxy: Option<ProxyConfig>,
+    /// TLS handling for this daemon's proxy hostname.
+    ///
+    /// - `terminate` (default): the proxy terminates TLS with its own
+    ///   certificate and forwards plain HTTP to the daemon.
+    /// - `passthrough`: the proxy reads the SNI hostname from the TLS
+    ///   ClientHello and splices the raw TCP stream to the daemon, which
+    ///   presents its own certificate and can require client certificates.
+    ///   Requires `port`.
+    pub proxy_tls: Option<ProxyTlsMode>,
+    /// Which of the daemon's ports the proxy hostname maps to.
+    ///
+    /// Must name one of the ports in `port`. Defaults to the daemon's first
+    /// port. `proxy_port` is the shorter spelling of the same setting.
+    #[schemars(range(min = 1))]
+    pub proxy_tls_port: Option<u16>,
+    /// Shorter spelling of `proxy_tls_port`. Set one or the other, not both.
+    ///
+    /// Kept separate rather than folded so that a config keeps the spelling
+    /// its author chose when pitchfork rewrites it. Read
+    /// [`Self::effective_proxy_tls_port`] rather than either field.
+    #[schemars(range(min = 1))]
+    pub proxy_port: Option<u16>,
     /// Whether to start this daemon automatically on system boot
     pub boot_start: Option<bool>,
     /// List of daemon IDs that must be started before this one
@@ -2040,6 +2138,15 @@ pub struct PitchforkTomlDaemon {
 }
 
 impl PitchforkTomlDaemon {
+    /// Which of the daemon's ports its proxy hostname maps to, from either
+    /// spelling of the setting.
+    ///
+    /// `proxy_tls_port` wins when both are set; parsing has already warned
+    /// about that combination.
+    pub fn effective_proxy_tls_port(&self) -> Option<u16> {
+        self.proxy_tls_port.or(self.proxy_port)
+    }
+
     /// Whether this daemon is a oneshot task (`oneshot = true`).
     pub fn is_oneshot(&self) -> bool {
         self.oneshot.unwrap_or(false)

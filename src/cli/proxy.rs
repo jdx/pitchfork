@@ -772,7 +772,11 @@ fn collect_projects(
                 crate::proxy::hostname::hostname_fits(&format!("{label}.{suffix}"))
             })
             .map(|label| {
-                let name = checkout.daemons.get(&label).cloned().unwrap_or_default();
+                let name = checkout
+                    .daemons
+                    .get(&label)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_default();
                 let daemon = state_file.as_ref().and_then(|sf| {
                     sf.daemons
                         .iter()

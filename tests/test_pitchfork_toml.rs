@@ -2921,6 +2921,275 @@ run = "echo"
     Ok(())
 }
 
+/// `proxy_tls = "passthrough"` parses and carries the daemon's port selection.
+#[test]
+fn test_read_proxy_tls_passthrough() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = [8443, 9443]
+proxy_tls = "passthrough"
+proxy_tls_port = 9443
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "api").unwrap();
+    assert_eq!(
+        daemon.proxy_tls,
+        Some(pitchfork_toml::ProxyTlsMode::Passthrough)
+    );
+    assert_eq!(daemon.proxy_tls_port, Some(9443));
+
+    Ok(())
+}
+
+/// Omitting `proxy_tls` leaves the daemon on the default terminating path.
+#[test]
+fn test_read_proxy_tls_defaults_to_none() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = 8443
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "api").unwrap();
+    assert_eq!(daemon.proxy_tls, None);
+    assert!(
+        !daemon.proxy_tls.unwrap_or_default().is_passthrough(),
+        "the default mode must be terminate"
+    );
+
+    Ok(())
+}
+
+/// A `proxy_tls_port` the daemon does not declare is rejected rather than
+/// routed to a port nothing bound.
+#[test]
+fn test_proxy_tls_port_must_name_a_declared_port() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = [8443, 9443]
+proxy_tls_port = 7443
+"#,
+    )
+    .unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+        .expect_err("a port outside `port` should not parse");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("7443"), "{msg}");
+
+    // Including when the daemon declares no ports at all.
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+proxy_tls_port = 7443
+"#,
+    )
+    .unwrap();
+    assert!(pitchfork_toml::PitchforkToml::read(&toml_path).is_err());
+}
+
+/// Port 0 asks the operating system to choose a port, so it names nothing a
+/// hostname can be routed to.
+#[test]
+fn test_proxy_port_zero_is_rejected() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    for key in ["proxy_tls_port", "proxy_port"] {
+        fs::write(
+            &toml_path,
+            format!(
+                r#"
+[daemons.api]
+run = "serve"
+port = [0, 8443]
+{key} = 0
+"#
+            ),
+        )
+        .unwrap();
+
+        let err = format!(
+            "{:?}",
+            pitchfork_toml::PitchforkToml::read(&toml_path).expect_err("port 0 should not parse")
+        );
+        assert!(err.contains(key), "{err}");
+    }
+
+    // Passthrough needs a port that can be connected to, so a daemon whose
+    // only declared port is 0 is rejected as well.
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = 0
+proxy_tls = "passthrough"
+"#,
+    )
+    .unwrap();
+    assert!(pitchfork_toml::PitchforkToml::read(&toml_path).is_err());
+}
+
+/// `proxy_port` is accepted as the shorter spelling of `proxy_tls_port`.
+#[test]
+fn test_read_proxy_port_alias() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = [8443, 9443]
+proxy_port = 9443
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "api").unwrap();
+    assert_eq!(daemon.effective_proxy_tls_port(), Some(9443));
+
+    // A rewrite keeps the spelling the config used rather than swapping it
+    // for the longer one.
+    pt.write()?;
+    let raw = fs::read_to_string(&toml_path).unwrap();
+    assert!(raw.contains("proxy_port = 9443"), "{raw}");
+    assert!(!raw.contains("proxy_tls_port"), "{raw}");
+
+    Ok(())
+}
+
+/// Passthrough splices to a port, so a daemon that declares none is rejected
+/// at parse time rather than failing per connection.
+#[test]
+fn test_proxy_tls_passthrough_without_port_is_rejected() {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+proxy_tls = "passthrough"
+"#,
+    )
+    .unwrap();
+
+    let err = pitchfork_toml::PitchforkToml::read(&toml_path)
+        .expect_err("passthrough without a port should not parse");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("api"), "{msg}");
+    assert!(msg.contains("passthrough"), "{msg}");
+
+    // `port = { bump = ... }` declares bumping but no port to splice to.
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+proxy_tls = "passthrough"
+port = { bump = 10 }
+"#,
+    )
+    .unwrap();
+    assert!(
+        pitchfork_toml::PitchforkToml::read(&toml_path).is_err(),
+        "an empty port list should be rejected too"
+    );
+}
+
+/// Terminate mode needs no port: the proxy forwards HTTP to whichever port the
+/// daemon turns out to be listening on.
+#[test]
+fn test_proxy_tls_terminate_without_port_is_allowed() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+proxy_tls = "terminate"
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&pt, "api").unwrap();
+    assert_eq!(
+        daemon.proxy_tls,
+        Some(pitchfork_toml::ProxyTlsMode::Terminate)
+    );
+
+    Ok(())
+}
+
+/// A rewrite of the config keeps both proxy TLS fields.
+#[test]
+fn test_write_preserves_proxy_tls() -> Result<()> {
+    let temp_dir = TempDir::new().unwrap();
+    let toml_path = temp_dir.path().join("pitchfork.toml");
+
+    fs::write(
+        &toml_path,
+        r#"
+[daemons.api]
+run = "serve"
+port = [8443, 9443]
+proxy_tls = "passthrough"
+proxy_tls_port = 9443
+"#,
+    )
+    .unwrap();
+
+    let pt = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    pt.write()?;
+
+    let raw = fs::read_to_string(&toml_path).unwrap();
+    assert!(raw.contains("proxy_tls = \"passthrough\""), "{raw}");
+    assert!(raw.contains("proxy_tls_port = 9443"), "{raw}");
+
+    let reread = pitchfork_toml::PitchforkToml::read(&toml_path)?;
+    let daemon = get_daemon_by_name(&reread, "api").unwrap();
+    assert_eq!(
+        daemon.proxy_tls,
+        Some(pitchfork_toml::ProxyTlsMode::Passthrough)
+    );
+    assert_eq!(daemon.proxy_tls_port, Some(9443));
+
+    Ok(())
+}
+
 /// A oneshot daemon parses and round-trips through a write.
 #[test]
 fn test_daemon_oneshot() -> Result<()> {

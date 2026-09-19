@@ -308,7 +308,7 @@ pub fn auto_host_for_daemon(id: &DaemonId, config: &PitchforkTomlDaemon) -> Opti
         None => (&project.primary, None),
     };
     // The checkout routes this label to this daemon, or to nothing at all.
-    if hosts.daemons.get(&daemon).map(String::as_str) != Some(id.name()) {
+    if hosts.daemons.get(&daemon).map(|d| d.name.as_str()) != Some(id.name()) {
         return None;
     }
 
@@ -358,8 +358,26 @@ pub struct CheckoutHosts {
     pub dir: PathBuf,
     /// Namespace the checkout's daemons belong to.
     pub namespace: String,
-    /// Daemon label → daemon name.
-    pub daemons: HashMap<String, String>,
+    /// Daemon label → the daemon it names.
+    pub daemons: HashMap<String, DaemonHost>,
+}
+
+/// A daemon reachable under a checkout's hostname, and how its TLS is served.
+///
+/// The TLS settings are captured here, while the checkout's config is being
+/// read anyway, rather than re-read per connection. That keeps the routing
+/// decision and the hostname that carries it from ever coming from different
+/// reads of the config: a `proxy_tls = "passthrough"` daemon cannot be listed
+/// with its mode missing and be terminated with the proxy's certificate
+/// because its config happened to be unreadable at that moment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonHost {
+    /// The daemon's name within its namespace.
+    pub name: String,
+    /// `proxy_tls` as the checkout's config had it, `None` when unset.
+    pub proxy_tls: Option<crate::config_types::ProxyTlsMode>,
+    /// `proxy_tls_port`, or its shorter `proxy_port` spelling.
+    pub proxy_tls_port: Option<u16>,
 }
 
 impl CheckoutHosts {
@@ -372,7 +390,7 @@ impl CheckoutHosts {
     fn load(dir: &Path) -> Option<(Self, Vec<String>)> {
         let namespace = PitchforkToml::namespace_for_dir(dir).ok()?;
         let pt = PitchforkToml::all_merged_from(dir).ok()?;
-        let mut daemons: HashMap<String, String> = HashMap::new();
+        let mut daemons: HashMap<String, DaemonHost> = HashMap::new();
         let mut errors = Vec::new();
         let mut colliding: Vec<String> = Vec::new();
         for (id, config) in &pt.daemons {
@@ -388,12 +406,20 @@ impl CheckoutHosts {
                         "daemon hostname label '{label}' in {} is claimed by both '{other}' and \
                          '{name}'. Rename one of them, or set `proxy = \"<label>\"` on one.",
                         dir.display(),
+                        other = other.name,
                         name = id.name(),
                     ));
                     colliding.push(label);
                 }
                 None => {
-                    daemons.insert(label, id.name().to_string());
+                    daemons.insert(
+                        label,
+                        DaemonHost {
+                            name: id.name().to_string(),
+                            proxy_tls: config.proxy_tls,
+                            proxy_tls_port: config.effective_proxy_tls_port(),
+                        },
+                    );
                 }
             }
         }
@@ -459,6 +485,11 @@ pub enum HostTarget {
         dir: PathBuf,
         namespace: String,
         daemon: String,
+        /// `proxy_tls` as the checkout's config had it when the registry was
+        /// built, so routing and the hostname come from one read.
+        proxy_tls: Option<crate::config_types::ProxyTlsMode>,
+        /// `proxy_tls_port`, from the same read.
+        proxy_tls_port: Option<u16>,
     },
     /// `<project>.<tld>` — reserved for the project page.
     ProjectPage { project: String },
@@ -795,7 +826,7 @@ impl HostRegistry {
         self.projects
             .values()
             .flat_map(ProjectHosts::checkouts)
-            .filter(|c| c.namespace == namespace && c.daemons.values().any(|n| n == daemon))
+            .filter(|c| c.namespace == namespace && c.daemons.values().any(|d| d.name == daemon))
             .count()
             > 1
     }
@@ -859,12 +890,14 @@ impl HostRegistry {
         }
 
         match checkout.daemons.get(daemon_label) {
-            Some(name) => HostTarget::Daemon {
+            Some(daemon) => HostTarget::Daemon {
                 project: project.label.clone(),
                 worktree,
                 dir: checkout.dir.clone(),
                 namespace: checkout.namespace.clone(),
-                daemon: name.clone(),
+                daemon: daemon.name.clone(),
+                proxy_tls: daemon.proxy_tls,
+                proxy_tls_port: daemon.proxy_tls_port,
             },
             None => HostTarget::UnknownDaemon {
                 project: project.label.clone(),
@@ -891,7 +924,16 @@ mod tests {
             namespace: namespace.to_string(),
             daemons: daemons
                 .iter()
-                .map(|(l, n)| (l.to_string(), n.to_string()))
+                .map(|(l, n)| {
+                    (
+                        l.to_string(),
+                        DaemonHost {
+                            name: n.to_string(),
+                            proxy_tls: None,
+                            proxy_tls_port: None,
+                        },
+                    )
+                })
                 .collect(),
         }
     }
@@ -1117,6 +1159,38 @@ mod tests {
         }
     }
 
+    /// The registry captures each daemon's TLS settings while it reads the
+    /// checkout's config, so routing never has to read it again and cannot
+    /// disagree with the hostname it built.
+    #[test]
+    fn test_checkout_hosts_capture_proxy_tls() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("tlsproj");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("pitchfork.toml"),
+            "[daemons.secure]\nrun = \"serve\"\nport = [8443, 9443]\n\
+             proxy_tls = \"passthrough\"\nproxy_tls_port = 9443\n\
+             [daemons.plain]\nrun = \"serve\"\nport = 8080\n",
+        )
+        .unwrap();
+
+        let (hosts, errors) = CheckoutHosts::load(&project).expect("checkout loads");
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let secure = hosts.daemons.get("secure").expect("secure is routable");
+        assert_eq!(secure.name, "secure");
+        assert_eq!(
+            secure.proxy_tls,
+            Some(crate::config_types::ProxyTlsMode::Passthrough)
+        );
+        assert_eq!(secure.proxy_tls_port, Some(9443));
+
+        let plain = hosts.daemons.get("plain").expect("plain is routable");
+        assert_eq!(plain.proxy_tls, None);
+        assert_eq!(plain.proxy_tls_port, None);
+    }
+
     #[test]
     fn test_resolve_primary_checkout_daemon() {
         let target = registry().resolve("api.myproj", true);
@@ -1128,6 +1202,8 @@ mod tests {
                 dir: PathBuf::from("/repos/myproj"),
                 namespace: "myproj".into(),
                 daemon: "api".into(),
+                proxy_tls: None,
+                proxy_tls_port: None,
             }
         );
     }
@@ -1143,6 +1219,8 @@ mod tests {
                 dir: PathBuf::from("/repos/fix-1"),
                 namespace: "fix-1".into(),
                 daemon: "web".into(),
+                proxy_tls: None,
+                proxy_tls_port: None,
             }
         );
     }

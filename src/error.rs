@@ -214,6 +214,58 @@ pub enum ConfigParseError {
     },
 
     #[error(
+        "daemon '{daemon}' in {} sets proxy_tls = \"passthrough\" but has no port",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::passthrough_without_port),
+        url("https://pitchfork.jdx.dev/guides/port-management#tls-passthrough"),
+        help(
+            "TLS passthrough splices the raw stream to a port on 127.0.0.1, so the daemon's port must be known up front; add `port = <number>` to the daemon, or remove proxy_tls"
+        )
+    )]
+    PassthroughWithoutPort { daemon: String, path: PathBuf },
+
+    #[error(
+        "daemon '{daemon}' in {} sets proxy_tls_port = {port}, which is not one of its ports {declared:?}",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::proxy_port_not_declared),
+        url(
+            "https://pitchfork.jdx.dev/guides/port-management#choosing-a-port-on-a-multi-port-daemon"
+        ),
+        help(
+            "the proxy hostname maps to one of the daemon's own ports, so name a port from `port`, or add this one to it"
+        )
+    )]
+    ProxyPortNotDeclared {
+        daemon: String,
+        port: u16,
+        declared: Vec<u16>,
+        path: PathBuf,
+    },
+
+    #[error(
+        "daemon '{daemon}' in {} sets {key} = 0, which is not a port a hostname can be routed to",
+        path.display()
+    )]
+    #[diagnostic(
+        code(pitchfork::config::proxy_port_zero),
+        url(
+            "https://pitchfork.jdx.dev/guides/port-management#choosing-a-port-on-a-multi-port-daemon"
+        ),
+        help(
+            "port 0 asks the operating system to pick a port, so there is no fixed port for the proxy to send a hostname to; name the port the daemon actually listens on"
+        )
+    )]
+    ProxyPortZero {
+        daemon: String,
+        key: &'static str,
+        path: PathBuf,
+    },
+
+    #[error(
         "invalid dependency '{dependency}' in daemon '{daemon}' ({}): {reason}",
         path.display()
     )]

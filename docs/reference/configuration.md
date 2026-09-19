@@ -582,6 +582,59 @@ Accepts `true` (the default), `false`, or a string label. Automatic hostnames
 require a `port`. Existing slug mappings are independent of this setting. See
 [hostnames](/guides/port-management#hostnames).
 
+### `proxy_tls`
+
+How the reverse proxy handles TLS for this daemon. Defaults to `"terminate"`.
+
+| Value | Behavior |
+|-------|----------|
+| `"terminate"` | The proxy presents its own certificate and forwards plain HTTP to the daemon. |
+| `"passthrough"` | The proxy routes by the TLS SNI hostname and forwards the encrypted stream. The daemon handles TLS, including its certificate, mTLS, and ALPN negotiation. |
+
+```toml
+[daemons.api]
+run = "./serve --port 8443 --tls-cert server.pem --tls-key server-key.pem"
+port = 8443
+proxy_tls = "passthrough"
+```
+
+Passthrough requires a nonzero `port`, `settings.proxy.https = true`, and the
+`proxy-tls` build feature (enabled by default). The daemon must serve TLS on
+the selected port with a certificate the client trusts for the hostname.
+
+When auto-start is enabled, the proxy holds the connection while the daemon
+starts, up to `settings.proxy.auto_start_timeout` (default: `"30s"`). Clients
+see a delayed handshake rather than a startup page.
+
+The proxy cannot add HTTP headers or inspect requests in passthrough mode.
+The daemon sees all clients as `127.0.0.1`, including LAN clients; do not use
+loopback as proof of a trusted client. See the
+[TLS passthrough guide](/guides/port-management#tls-passthrough) for setup,
+certificate requirements, and connection errors.
+
+### `proxy_tls_port`
+
+The declared daemon port that receives proxy traffic. `proxy_port` is an
+alternative spelling; use one spelling per daemon. Applies to both TLS modes.
+
+```toml
+[daemons.api]
+run = "./serve --http 8080 --grpc 9443"
+port = [8080, 9443]
+proxy_tls = "passthrough"
+proxy_tls_port = 9443
+```
+
+The value must be nonzero and appear in `port`; invalid selections are
+rejected when the configuration is read. Selection follows the port's position
+in the list after auto-bump, so selecting 9443 above still reaches the second
+port if it moves to 9444.
+
+Without an explicit selection, passthrough uses the first declared port.
+Termination uses the detected active port, falling back to the first port.
+Every hostname for the daemon uses the same selection. See
+[choosing a port](/guides/port-management#choosing-a-port-on-a-multi-port-daemon).
+
 ### `expected_port` (deprecated)
 
 Use `port` instead. TCP ports the daemon is expected to bind to.
