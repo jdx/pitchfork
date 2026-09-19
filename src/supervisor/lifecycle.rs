@@ -69,6 +69,8 @@ enum RunIdentity {
         uid: nix::unistd::Uid,
         gid: nix::unistd::Gid,
         username: Option<CString>,
+        /// Home directory from the user's passwd entry.
+        home: Option<std::path::PathBuf>,
     },
 }
 
@@ -1086,6 +1088,9 @@ impl Supervisor {
         #[cfg(not(unix))]
         cmd.stdin(std::process::Stdio::null());
 
+        // Before the runtime env, so a daemon's own `env` entries win.
+        #[cfg(unix)]
+        apply_identity_env(&mut cmd, &run_identity);
         apply_runtime_env(
             &mut cmd,
             id,
@@ -2595,6 +2600,9 @@ fn resolve_run_identity(
     if current_uid.is_root()
         && let Some(identity) = resolve_sudo_identity(sudo_uid, sudo_gid)
     {
+        if identity.matches(current_uid, current_gid) {
+            return Ok(RunIdentity::Inherit);
+        }
         return Ok(identity);
     }
 
@@ -2627,27 +2635,27 @@ fn run_identity_from_user_record(user: nix::unistd::User) -> Result<RunIdentity>
         uid: user.uid,
         gid: user.gid,
         username: Some(username),
+        home: Some(user.dir),
     })
-}
-
-#[cfg(unix)]
-fn run_identity_from_raw_ids(uid: u32, gid: u32, username: Option<CString>) -> RunIdentity {
-    RunIdentity::Switch {
-        uid: nix::unistd::Uid::from_raw(uid),
-        gid: nix::unistd::Gid::from_raw(gid),
-        username,
-    }
 }
 
 #[cfg(unix)]
 fn resolve_sudo_identity(sudo_uid: Option<&str>, sudo_gid: Option<&str>) -> Option<RunIdentity> {
     let uid = sudo_uid?.parse::<u32>().ok()?;
     let gid = sudo_gid?.parse::<u32>().ok()?;
-    let username = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
+    let user = nix::unistd::User::from_uid(nix::unistd::Uid::from_raw(uid))
         .ok()
-        .flatten()
-        .and_then(|u| CString::new(u.name).ok());
-    Some(run_identity_from_raw_ids(uid, gid, username))
+        .flatten();
+    let (username, home) = match user {
+        Some(user) => (CString::new(user.name).ok(), Some(user.dir)),
+        None => (None, None),
+    };
+    Some(RunIdentity::Switch {
+        uid: nix::unistd::Uid::from_raw(uid),
+        gid: nix::unistd::Gid::from_raw(gid),
+        username,
+        home,
+    })
 }
 
 #[cfg(unix)]
@@ -2676,9 +2684,33 @@ fn ensure_can_use_identity(
     ))
 }
 
+/// Point HOME, USER and LOGNAME at the user a daemon switches to.
+///
+/// The supervisor's environment describes the supervisor's own user (usually
+/// root), so without this a daemon run as another user would read and write
+/// root's home. A value the passwd entry cannot supply is removed rather than
+/// left describing root.
+#[cfg(unix)]
+fn apply_identity_env(command: &mut tokio::process::Command, identity: &RunIdentity) {
+    let RunIdentity::Switch { username, home, .. } = identity else {
+        return;
+    };
+    match home.as_ref().filter(|home| !home.as_os_str().is_empty()) {
+        Some(home) => command.env("HOME", home),
+        None => command.env_remove("HOME"),
+    };
+    match username.as_ref().and_then(|name| name.to_str().ok()) {
+        Some(name) => command.env("USER", name).env("LOGNAME", name),
+        None => command.env_remove("USER").env_remove("LOGNAME"),
+    };
+}
+
 #[cfg(unix)]
 fn apply_run_identity(identity: &RunIdentity) -> std::io::Result<()> {
-    let RunIdentity::Switch { uid, gid, username } = identity else {
+    let RunIdentity::Switch {
+        uid, gid, username, ..
+    } = identity
+    else {
         return Ok(());
     };
     if let Some(username) = username {
@@ -3335,6 +3367,113 @@ mod tests {
     fn test_resolve_run_identity_same_user_is_noop() {
         let identity = resolve_run_identity(Some("root"), 0, 0, Some("501"), Some("20")).unwrap();
         assert_eq!(identity, RunIdentity::Inherit);
+    }
+
+    #[test]
+    fn test_resolve_configured_user_records_home() {
+        let identity = resolve_configured_user("root").unwrap();
+        let RunIdentity::Switch { home, .. } = identity else {
+            panic!("expected identity switch");
+        };
+        let expected = nix::unistd::User::from_name("root").unwrap().unwrap().dir;
+        assert_eq!(home, Some(expected));
+    }
+
+    fn switch_to(name: Option<&str>, home: Option<&str>) -> RunIdentity {
+        RunIdentity::Switch {
+            uid: nix::unistd::Uid::from_raw(501),
+            gid: nix::unistd::Gid::from_raw(20),
+            username: name.map(|n| CString::new(n).unwrap()),
+            home: home.map(std::path::PathBuf::from),
+        }
+    }
+
+    /// The env a command will run with, as set on the command itself:
+    /// `Some(None)` is an explicit removal, `None` means inherited.
+    fn command_env(
+        command: &tokio::process::Command,
+        key: &str,
+    ) -> Option<Option<std::ffi::OsString>> {
+        command
+            .as_std()
+            .get_envs()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.map(ToOwned::to_owned))
+    }
+
+    /// Mirrors the order run_once applies them in.
+    fn daemon_command(
+        identity: &RunIdentity,
+        daemon_env: Option<&IndexMap<String, String>>,
+    ) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new("true");
+        apply_identity_env(&mut command, identity);
+        apply_runtime_env(
+            &mut command,
+            &DaemonId::new("identity-env-test", "api"),
+            0,
+            daemon_env,
+            &[],
+        );
+        command
+    }
+
+    #[test]
+    fn test_identity_env_describes_the_switched_user() {
+        let command = daemon_command(&switch_to(Some("alice"), Some("/home/alice")), None);
+        assert_eq!(
+            command_env(&command, "HOME"),
+            Some(Some("/home/alice".into()))
+        );
+        assert_eq!(command_env(&command, "USER"), Some(Some("alice".into())));
+        assert_eq!(command_env(&command, "LOGNAME"), Some(Some("alice".into())));
+    }
+
+    #[test]
+    fn test_identity_env_leaves_inherited_env_alone() {
+        let command = daemon_command(&RunIdentity::Inherit, None);
+        assert_eq!(command_env(&command, "HOME"), None);
+        assert_eq!(command_env(&command, "USER"), None);
+        assert_eq!(command_env(&command, "LOGNAME"), None);
+    }
+
+    #[test]
+    fn test_root_sudo_to_root_preserves_environment() {
+        let identity = resolve_run_identity(None, 0, 0, Some("0"), Some("0")).unwrap();
+        assert_eq!(identity, RunIdentity::Inherit);
+        let command = daemon_command(&identity, None);
+        for key in ["HOME", "USER", "LOGNAME"] {
+            assert_eq!(command_env(&command, key), None);
+        }
+    }
+
+    #[test]
+    fn test_daemon_env_overrides_identity_env() {
+        let mut env = IndexMap::new();
+        env.insert("HOME".to_string(), "/srv/app".to_string());
+        env.insert("USER".to_string(), "app".to_string());
+        let command = daemon_command(&switch_to(Some("alice"), Some("/home/alice")), Some(&env));
+        assert_eq!(command_env(&command, "HOME"), Some(Some("/srv/app".into())));
+        assert_eq!(command_env(&command, "USER"), Some(Some("app".into())));
+        assert_eq!(command_env(&command, "LOGNAME"), Some(Some("alice".into())));
+    }
+
+    #[test]
+    fn test_identity_env_drops_values_without_a_passwd_entry() {
+        // A sudo uid with no passwd entry: the supervisor's values would still
+        // describe root, so they are removed instead.
+        let command = daemon_command(&switch_to(None, None), None);
+        assert_eq!(command_env(&command, "HOME"), Some(None));
+        assert_eq!(command_env(&command, "USER"), Some(None));
+        assert_eq!(command_env(&command, "LOGNAME"), Some(None));
+    }
+
+    #[test]
+    fn test_daemon_env_restores_values_without_a_passwd_entry() {
+        let mut env = IndexMap::new();
+        env.insert("HOME".to_string(), "/srv/app".to_string());
+        let command = daemon_command(&switch_to(None, None), Some(&env));
+        assert_eq!(command_env(&command, "HOME"), Some(Some("/srv/app".into())));
     }
 }
 
