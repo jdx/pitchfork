@@ -652,29 +652,36 @@ enum SystemName {
     NonePublished,
     /// The registry could not be read, so there is no name and no verdict.
     Unreadable,
+    /// Every registered slug collides with another by case. mDNS still
+    /// publishes them, but the proxy routes none, so resolving one would pass
+    /// a setup whose URLs all fail.
+    AllAmbiguous(Vec<String>),
 }
 
-/// A hostname LAN mode actually advertises, or `None` when none is registered.
+/// Which published hostname to look up, from the global slug registry.
 ///
 /// mDNS publishes `<slug>.<tld>` for each registered slug and nothing else, so
 /// this is the only name whose resolution says anything about whether the LAN
-/// path works. An unambiguous slug is preferred because the proxy also routes
-/// it; an ambiguous one is used only when nothing else is registered, since
-/// mDNS still advertises it.
+/// path works. Only an unambiguous slug is a fair probe: the proxy routes it.
+/// A registry whose slugs all collide by case is its own answer — mDNS still
+/// publishes those names, so it is not "nothing yet", but none of them route.
 ///
 /// Reads the global config, which takes a file lock and can therefore wait on
 /// another process, so callers run it under a deadline like every other probe
 /// here rather than on the async task.
-fn published_slug_name(tld: &str) -> Option<String> {
+fn published_slug_name(tld: &str) -> SystemName {
     let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
-    // An unambiguous slug first, since that is one the proxy also routes. But
-    // mDNS publishes every key, colliding ones included, so a registry holding
-    // only ambiguous slugs still publishes names and is not "nothing yet".
-    slugs
+    if let Some(slug) = slugs
         .keys()
         .find(|slug| !crate::pitchfork_toml::PitchforkToml::slug_is_ambiguous(slug, &slugs))
-        .or_else(|| slugs.keys().next())
-        .map(|slug| format!("{}.{tld}", slug.to_ascii_lowercase()))
+    {
+        return SystemName::Published(format!("{}.{tld}", slug.to_ascii_lowercase()));
+    }
+    if slugs.is_empty() {
+        SystemName::NonePublished
+    } else {
+        SystemName::AllAmbiguous(slugs.keys().cloned().collect())
+    }
 }
 
 pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
@@ -830,12 +837,9 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
         // Not flattened: the outer `None` is the deadline elapsing, which is
         // not the same as the registry being empty, and reporting one as the
         // other would claim nothing is published when the truth is unknown.
-        match bounded_blocking(move || published_slug_name(&for_tld)).await {
-            Some(found) => found
-                .map(SystemName::Published)
-                .unwrap_or(SystemName::NonePublished),
-            None => SystemName::Unreadable,
-        }
+        bounded_blocking(move || published_slug_name(&for_tld))
+            .await
+            .unwrap_or(SystemName::Unreadable)
     } else {
         SystemName::Published(name.clone())
     };
@@ -863,6 +867,16 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
                 "proxy.dns is false and no slug is published, so *.{tld} names resolve \
                  only where the system or browser does so itself — enable proxy.dns and \
                  run `pitchfork proxy setup`, or register a slug with proxy.sync_hosts on"
+            ),
+        )),
+        SystemName::AllAmbiguous(slugs) => checks.push(Check::new(
+            "system resolution",
+            Status::Warn,
+            format!(
+                "every registered slug collides with another that differs only by case \
+                 ({}), so the proxy routes none of them — remove one of each pair with \
+                 `pitchfork proxy remove <slug>`",
+                slugs.join(", ")
             ),
         )),
         SystemName::Unreadable => checks.push(Check::new(
