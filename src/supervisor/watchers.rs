@@ -716,6 +716,10 @@ impl Supervisor {
                         opts.wait_ready = false;
                         opts.cron_schedule = Some(schedule_str.clone());
                         opts.cron_retrigger = Some(retrigger);
+                        // A scheduled run is the configuration asking for the
+                        // daemon, not the proxy: it is never stopped for
+                        // inactivity, whatever started the previous run.
+                        opts.proxy_idle_timeout_ms = None;
                         if let Err(e) = self.run(opts).await {
                             error!("failed to run cron daemon {id}: {e}");
                         }

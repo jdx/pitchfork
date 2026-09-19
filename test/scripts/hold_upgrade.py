@@ -13,7 +13,8 @@ import time
 
 proxy_port, host, path, secs = int(sys.argv[1]), sys.argv[2], sys.argv[3], float(sys.argv[4])
 
-sock = socket.create_connection(("127.0.0.1", proxy_port))
+# Bounded, so a proxy that never answers fails the test instead of hanging it.
+sock = socket.create_connection(("127.0.0.1", proxy_port), timeout=20)
 sock.sendall(
     (
         f"GET {path} HTTP/1.1\r\n"

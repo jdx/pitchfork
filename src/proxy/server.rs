@@ -3309,6 +3309,9 @@ fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
 /// The state file lock is held only for the duration of the snapshot copy,
 /// then released immediately to avoid serialising all proxy requests.
 async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
+    // One budget for everything this request may wait on: an idle stop under
+    // way and then the start after it.
+    let deadline = auto_start_deadline();
     let ctx = match resolve_route_context(host, tld).await {
         Ok(ctx) => ctx,
         Err(result) => return result,
@@ -3340,13 +3343,14 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
                 ctx.worktree_dir.as_deref(),
                 ctx.expected_namespace.as_deref(),
                 &ctx.route,
+                deadline,
             )
             .await
         }
         // With more than one namespace running a daemon of this name and no
         // namespace to narrow by, the first match is used — as before.
         [(id, d), ..] => match select_daemon_port(&ctx.route, d) {
-            Some(port) => match begin_running(id).await {
+            Some(port) => match begin_running(id, deadline).await {
                 Running::Yes(activity) => ResolveResult::Ready(port, Some(activity)),
                 Running::Stopping => ResolveResult::Starting {
                     slug: ctx.cached.slug.clone(),
@@ -3358,6 +3362,7 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
                         ctx.worktree_dir.as_deref(),
                         ctx.expected_namespace.as_deref(),
                         &ctx.route,
+                        deadline,
                     )
                     .await
                 }
@@ -3372,22 +3377,26 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
 enum Running {
     /// Still running; forward while holding this.
     Yes(ActivityGuard),
-    /// Still being stopped for inactivity after waiting as long as an
-    /// auto-start may take.
+    /// Still being stopped for inactivity when the request's time ran out.
     Stopping,
     /// Stopped since the state was read, including by an idle stop the
     /// request waited out: start it again.
     No,
 }
 
-/// Wait for any stop for inactivity of `ids` to finish, for at most
-/// `proxy.auto_start_timeout`. Returns whether none is under way any more.
+/// When a request that may auto-start a daemon has to give up:
+/// `proxy.auto_start_timeout` from now.
+fn auto_start_deadline() -> tokio::time::Instant {
+    tokio::time::Instant::now() + settings().proxy_auto_start_timeout()
+}
+
+/// Wait until `deadline` for any stop for inactivity of `ids` to finish.
+/// Returns whether none is under way any more.
 ///
 /// A request that arrives while its daemon is being stopped waits here and
 /// then starts it again, rather than reaching a daemon that is going away or
 /// being turned away while it goes.
-async fn wait_out_idle_stops(ids: &[DaemonId]) -> bool {
-    let deadline = tokio::time::Instant::now() + settings().proxy_auto_start_timeout();
+async fn wait_out_idle_stops(ids: &[DaemonId], deadline: tokio::time::Instant) -> bool {
     while ids.iter().any(|id| ACTIVITY.is_idle_stopping(id)) {
         if tokio::time::Instant::now() >= deadline {
             return false;
@@ -3403,13 +3412,23 @@ async fn wait_out_idle_stops(ids: &[DaemonId]) -> bool {
 /// Recording comes first: once it has, a stop for inactivity can no longer be
 /// claimed, so a daemon that is still running at the check stays running for
 /// as long as the request holds the guard.
-async fn begin_running(id: &DaemonId) -> Running {
-    let Some(activity) = ACTIVITY.begin(id) else {
-        return if wait_out_idle_stops(std::slice::from_ref(id)).await {
-            Running::No
-        } else {
-            Running::Stopping
-        };
+///
+/// A stop for inactivity under way is waited out until `deadline`. It may have
+/// been called off rather than carried out, so the daemon is then looked at
+/// again instead of assumed stopped.
+async fn begin_running(id: &DaemonId, deadline: tokio::time::Instant) -> Running {
+    let activity = match ACTIVITY.begin(id) {
+        Some(activity) => activity,
+        None => {
+            if !wait_out_idle_stops(std::slice::from_ref(id), deadline).await {
+                return Running::Stopping;
+            }
+            match ACTIVITY.begin(id) {
+                Some(activity) => activity,
+                // Claimed again straight away.
+                None => return Running::Stopping,
+            }
+        }
     };
     let running = {
         let state_file = SUPERVISOR.state_file.lock().await;
@@ -3720,6 +3739,7 @@ async fn try_auto_start(
     worktree_dir: Option<&std::path::Path>,
     expected_namespace: Option<&str>,
     route: &ProxyTlsRoute,
+    deadline: tokio::time::Instant,
 ) -> ResolveResult {
     let s = settings();
     if !s.proxy.auto_start {
@@ -3750,8 +3770,9 @@ async fn try_auto_start(
         daemon_id: daemon_id.clone(),
     });
 
+    // The request's deadline, which may already be partly spent waiting out
+    // an idle stop, so the whole request stays within one timeout.
     let timeout = s.proxy_auto_start_timeout();
-    let deadline = tokio::time::Instant::now() + timeout;
     let timed_out = || {
         log::warn!("Auto-start: total timeout ({timeout:?}) exceeded for daemon {daemon_id}");
         ResolveResult::Error(format!(
@@ -3784,7 +3805,8 @@ async fn try_auto_start(
         Err(_elapsed) => return timed_out(),
     }
 
-    let result = tokio::time::timeout_at(deadline, wait_for_active_port(&daemon_id, route)).await;
+    let result =
+        tokio::time::timeout_at(deadline, wait_for_active_port(slug, &daemon_id, route)).await;
     drop(guard);
     result.unwrap_or_else(|_elapsed| timed_out())
 }
@@ -3868,7 +3890,7 @@ async fn start_with_dependencies(
     let _activity = match ACTIVITY.begin_all(&graph) {
         Some(activity) => activity,
         None => {
-            wait_out_idle_stops(&graph).await;
+            wait_out_idle_stops(&graph, auto_start_deadline()).await;
             match ACTIVITY.begin_all(&graph) {
                 Some(activity) => activity,
                 None => {
@@ -3934,7 +3956,11 @@ async fn start_with_dependencies(
 }
 
 /// Poll the state file until a started daemon reports a port to forward to.
-async fn wait_for_active_port(daemon_id: &DaemonId, route: &ProxyTlsRoute) -> ResolveResult {
+async fn wait_for_active_port(
+    slug: &str,
+    daemon_id: &DaemonId,
+    route: &ProxyTlsRoute,
+) -> ResolveResult {
     let poll_interval = std::time::Duration::from_millis(250);
 
     loop {
@@ -3953,12 +3979,19 @@ async fn wait_for_active_port(daemon_id: &DaemonId, route: &ProxyTlsRoute) -> Re
                     // Recorded as the request's activity. Its start held the
                     // daemon's activity until it finished, so a stop for
                     // inactivity can only have been claimed since if the grace
-                    // period is shorter than this poll; then the next poll
-                    // finds it stopping.
-                    if let Some(activity) = ACTIVITY.begin(daemon_id) {
-                        log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
-                        return ResolveResult::Ready(port, Some(activity));
-                    }
+                    // period is shorter than this poll. Then it is on its way
+                    // down, and the request is answered as for a daemon still
+                    // starting: the page reloads, and a passthrough connection
+                    // resolves again, and either starts it once more.
+                    return match ACTIVITY.begin(daemon_id) {
+                        Some(activity) => {
+                            log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
+                            ResolveResult::Ready(port, Some(activity))
+                        }
+                        None => ResolveResult::Starting {
+                            slug: slug.to_string(),
+                        },
+                    };
                 }
             } else {
                 log::warn!(
@@ -4118,6 +4151,8 @@ async fn resolve_registry_daemon(
     per_checkout: bool,
     route: &ProxyTlsRoute,
 ) -> ResolveResult {
+    // One budget for waiting out an idle stop and the start after it.
+    let deadline = auto_start_deadline();
     let daemons = {
         let state_file = SUPERVISOR.state_file.lock().await;
         state_file.daemons.clone()
@@ -4154,7 +4189,7 @@ async fn resolve_registry_daemon(
         let Some(port) = select_daemon_port(route, d) else {
             return ResolveResult::NotFound;
         };
-        match begin_running(&d.id).await {
+        match begin_running(&d.id, deadline).await {
             Running::Yes(activity) => return ResolveResult::Ready(port, Some(activity)),
             Running::Stopping => {
                 return ResolveResult::Starting {
@@ -4176,7 +4211,7 @@ async fn resolve_registry_daemon(
         tls: *route,
         worktree_tls: std::collections::HashMap::new(),
     };
-    let result = try_auto_start(host, &cached, None, Some(namespace), route).await;
+    let result = try_auto_start(host, &cached, None, Some(namespace), route, deadline).await;
 
     // The start can land on a record another checkout already owns, because the
     // supervisor refuses to run a second daemon under the same ID. Serving that
@@ -4679,6 +4714,36 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 mod tests {
     use super::*;
 
+    /// An idle stop can be called off rather than carried out. A request
+    /// that waited it out then finds the daemon still running and forwards to
+    /// it, instead of starting it all over again.
+    #[tokio::test]
+    async fn a_request_forwards_after_an_idle_stop_is_called_off() {
+        let id = DaemonId::new("calledoff", "api");
+        SUPERVISOR.state_file.lock().await.daemons.insert(
+            id.clone(),
+            crate::daemon::Daemon {
+                id: id.clone(),
+                status: crate::daemon_status::DaemonStatus::Running,
+                ..Default::default()
+            },
+        );
+        assert!(ACTIVITY.claim_idle_stop(&id, std::time::Duration::ZERO));
+        let releaser = {
+            let id = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                ACTIVITY.release_idle_stop(&id);
+            })
+        };
+        assert!(matches!(
+            begin_running(&id, auto_start_deadline()).await,
+            Running::Yes(_)
+        ));
+        releaser.await.unwrap();
+        SUPERVISOR.state_file.lock().await.daemons.remove(&id);
+    }
+
     /// A request for a daemon mid idle-stop waits the stop out, so it can
     /// start the daemon again, instead of being answered "Starting…".
     #[tokio::test]
@@ -4692,7 +4757,10 @@ mod tests {
                 ACTIVITY.release_idle_stop(&id);
             })
         };
-        assert!(matches!(begin_running(&id).await, Running::No));
+        assert!(matches!(
+            begin_running(&id, auto_start_deadline()).await,
+            Running::No
+        ));
         releaser.await.unwrap();
         assert!(ACTIVITY.begin(&id).is_some());
     }

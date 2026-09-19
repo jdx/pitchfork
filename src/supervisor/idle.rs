@@ -22,6 +22,7 @@ use super::autostop::is_within;
 use super::{SUPERVISOR, Supervisor};
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
+use crate::ipc::IpcResponse;
 use crate::proxy::activity::ACTIVITY;
 use log::LevelFilter::Info;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -213,56 +214,109 @@ impl Supervisor {
         tokio::spawn(async move {
             let _sweep = sweep;
             for level in plan {
-                for id in level {
-                    if let Some(&grace) = graces.get(&id) {
-                        SUPERVISOR.idle_stop(&id, grace).await;
-                    }
-                }
+                SUPERVISOR.idle_stop_level(level, &graces).await;
             }
         });
     }
 
-    /// Stop one daemon for inactivity, if it still qualifies.
+    /// Stop one level of the plan for inactivity, as far as it still
+    /// qualifies.
     ///
-    /// The claim on its activity keeps new proxy work from starting while the
-    /// stop runs: a request arriving meanwhile waits and starts the daemon
-    /// again once it has stopped. Everything the plan checked is checked again
-    /// under the daemon's stop lock, since a request, an explicit start, a
-    /// shell or a new dependent may have arrived since.
-    async fn idle_stop(&self, id: &DaemonId, grace: Duration) {
-        if !ACTIVITY.claim_idle_stop(id, grace) {
-            debug!("idle stop of {id} called off: it was active again");
-            return;
-        }
-        let lock = self.stop_lock(id).await;
-        let stopped = {
-            let _guard = lock.lock().await;
-            match self.idle_stop_blocker(id).await {
-                Some(reason) => {
-                    debug!("idle stop of {id} called off: {reason}");
-                    false
+    /// Every member is claimed first. A claim keeps new proxy work from
+    /// starting while the level is handled: a request arriving meanwhile
+    /// waits and starts the daemon again once it has stopped.
+    ///
+    /// Members of a dependency cycle share a level and depend on each other,
+    /// so each is checked with the other claimed members set aside. A member
+    /// that no longer qualifies leaves that set and the rest are checked
+    /// again, so nothing goes while a member that stays still needs it.
+    /// The last check for each member runs under its stop lock, since a
+    /// request, an explicit start, a shell or a new dependent may have
+    /// arrived since the plan was made.
+    async fn idle_stop_level(&self, level: Vec<DaemonId>, graces: &HashMap<DaemonId, Duration>) {
+        let mut group: HashSet<DaemonId> = HashSet::new();
+        for id in level {
+            match graces.get(&id) {
+                Some(&grace) if ACTIVITY.claim_idle_stop(&id, grace) => {
+                    group.insert(id);
                 }
-                None => {
-                    info!("stopping {id}: no proxy activity for {grace:?}");
-                    match self.stop_locked(id).await {
-                        Ok(_) => true,
-                        Err(e) => {
-                            error!("failed to stop idle daemon {id}: {e}");
-                            false
+                _ => debug!("idle stop of {id} called off: it was active again"),
+            }
+        }
+        let claimed: Vec<DaemonId> = group.iter().cloned().collect();
+
+        loop {
+            let mut blocked = Vec::new();
+            for id in &group {
+                if let Some(reason) = self.idle_stop_blocker(id, &group).await {
+                    debug!("idle stop of {id} called off: {reason}");
+                    blocked.push(id.clone());
+                }
+            }
+            if blocked.is_empty() {
+                break;
+            }
+            for id in blocked {
+                group.remove(&id);
+            }
+        }
+
+        let mut ordered: Vec<DaemonId> = group.iter().cloned().collect();
+        ordered.sort();
+        for id in ordered {
+            let lock = self.stop_lock(&id).await;
+            let stopped = {
+                let _guard = lock.lock().await;
+                match self.idle_stop_blocker(&id, &group).await {
+                    Some(reason) => {
+                        debug!("idle stop of {id} called off: {reason}");
+                        false
+                    }
+                    None => {
+                        let grace = graces.get(&id).copied().unwrap_or_default();
+                        info!("stopping {id}: no proxy activity for {grace:?}");
+                        match self.stop_locked(&id).await {
+                            Ok(
+                                IpcResponse::Ok
+                                | IpcResponse::DaemonWasNotRunning
+                                | IpcResponse::DaemonNotRunning,
+                            ) => true,
+                            Ok(rsp) => {
+                                error!("failed to stop idle daemon {id}: {rsp:?}");
+                                false
+                            }
+                            Err(e) => {
+                                error!("failed to stop idle daemon {id}: {e}");
+                                false
+                            }
                         }
                     }
                 }
+            };
+            if stopped {
+                self.add_notification(Info, format!("stopped idle {id}"))
+                    .await;
+            } else {
+                // Still running, so the members checked after it must keep
+                // what it needs.
+                group.remove(&id);
             }
-        };
-        ACTIVITY.release_idle_stop(id);
-        if stopped {
-            self.add_notification(Info, format!("stopped idle {id}"))
-                .await;
+        }
+
+        for id in &claimed {
+            ACTIVITY.release_idle_stop(id);
         }
     }
 
     /// Why `id` must not be stopped for inactivity right now, if anything.
-    async fn idle_stop_blocker(&self, id: &DaemonId) -> Option<&'static str> {
+    ///
+    /// Dependents in `stopping_with` are being stopped along with it and do
+    /// not count.
+    async fn idle_stop_blocker(
+        &self,
+        id: &DaemonId,
+        stopping_with: &HashSet<DaemonId>,
+    ) -> Option<&'static str> {
         let active_dirs = self.get_active_directories().await;
         let state_file = self.state_file.lock().await;
         let Some(daemon) = state_file.daemons.get(id) else {
@@ -277,7 +331,7 @@ impl Supervisor {
         if shell_inside(daemon, &active_dirs) {
             return Some("a shell is inside its directory");
         }
-        if live_dependents(id, &state_file.daemons, &HashSet::new())
+        if live_dependents(id, &state_file.daemons, stopping_with)
             .next()
             .is_some()
         {
