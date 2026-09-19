@@ -91,7 +91,7 @@ Returns a single `ApiDaemonEntry` object (same shape as `/api/daemons` items).
 
 ## POST /api/daemons/{id}/start
 
-Start a daemon.
+Start a daemon. If it is already running, the response includes `noop: true`.
 
 ```bash
 curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/start
@@ -105,7 +105,9 @@ curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/start
 
 ## POST /api/daemons/{id}/stop
 
-Stop a running daemon.
+Stop a running daemon. If it is already stopped, the response includes
+`noop: true`. Clients can treat `noop: true` as a successful no-op even when
+`ok` is false.
 
 ```bash
 curl -X POST http://127.0.0.1:3120/api/daemons/myproject%2Fapi/stop
@@ -192,20 +194,23 @@ curl http://127.0.0.1:3120/api/proxies
 
 ## GET /api/projects
 
-List every registered project with its worktree count and daemon totals.
+List registered projects with worktree counts and daemon totals. All three
+`/api/projects` endpoints are read-only: fetching or polling them never starts
+a daemon.
 
-A namespace registered on a linked worktree whose main checkout is also
-registered is folded into that checkout: it appears as one of its worktrees, not
-as a project, so `/api/projects/<that-namespace>` returns 404.
+If a linked worktree and its main checkout are both registered, the worktree
+appears under the main checkout's project. It has no separate project endpoint;
+`/api/projects/<linked-worktree-namespace>` returns HTTP 404. If only the linked
+worktree is registered, it remains a separate project.
 
-`last_activity` is derived from process uptime, so it is the start time of the
-most recently started daemon currently up. A project with nothing running reports
-`null` even if its daemons ran earlier; the supervisor keeps no start timestamp
-for a stopped daemon.
+Project and worktree responses use these fields:
 
-`dir_exists` is `false` when the registered directory is gone, which happens
-when a checkout is deleted and its `[namespaces]` entry is left behind. Such a
-project is still listed, with `can_start: false` on its worktrees.
+| Field | Meaning |
+| --- | --- |
+| `daemons` | Counts by status. `available` means configured but not yet tracked by the supervisor; `transitioning` includes waiting and stopping. |
+| `last_activity` | RFC 3339 start time of the most recently started daemon still running, or `null` when none are running. |
+| `dir_exists` | Whether the registered directory still exists. Deleted checkouts remain listed until their registration is removed. |
+| `url`, `api_url` | Paths to the web page and API resource. |
 
 ```bash
 curl http://127.0.0.1:3120/api/projects
@@ -219,8 +224,8 @@ curl http://127.0.0.1:3120/api/projects
     "name": "shop",
     "dir": "/home/user/shop",
     "dir_exists": true,
-    "worktree_count": 2,
-    "daemons": { "total": 5, "running": 2, "stopped": 2, "completed": 0, "transitioning": 0, "failed": 0, "available": 1 },
+    "worktree_count": 1,
+    "daemons": { "total": 1, "running": 1, "stopped": 0, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
     "last_activity": "2026-05-31T10:00:00+02:00",
     "url": "/projects/shop",
     "api_url": "/api/projects/shop"
@@ -230,33 +235,29 @@ curl http://127.0.0.1:3120/api/projects
 
 ## GET /api/projects/{project}
 
-Show one project: every worktree the supervisor knows about, including ones
-that have never started a daemon, plus the primary checkout's stack under
-`stack`. Returns HTTP 404 for an unknown project. Project names match
-case-insensitively.
+Return the project's worktrees, including those whose daemons have never
+started. The optional `stack` field contains the primary checkout's stack.
+Project names match case-insensitively; unknown names return HTTP 404.
 
-`disk_usage_bytes` is omitted from a worktree whenever pitchfork does not track
-a data directory for its daemons, which is the case today.
-`can_start` is `false` when the control endpoints cannot resolve a config for
-some of the worktree's daemons, which happens for a worktree outside both the
-supervisor's own project and the namespace registry. Those daemons are still
-listed, and the stack response names them in `unresolvable_daemons`. Starting
-or restarting one fails with "Daemon config not found" until the worktree is
-registered, including for a daemon that is currently running: restart stops it
-before the lookup.
+Each worktree includes its namespace, group count, daemon counts, and page and
+API paths. `can_start` is false when the directory is missing or the supervisor
+cannot resolve configuration for a daemon shown in its stack. See the stack
+endpoint below for details. `namespace` can be `null`, with `namespace_error`
+explaining why it could not be derived. `disk_usage_bytes` is currently omitted
+because pitchfork does not track daemon data directories.
 
 ```bash
 curl http://127.0.0.1:3120/api/projects/shop
 ```
 
-**Response:**
+**Response excerpt** (the primary checkout's `stack` is omitted here):
 
 ```json
 {
   "name": "shop",
   "dir": "/home/user/shop",
   "dir_exists": true,
-  "daemons": { "total": 5, "running": 2, "stopped": 2, "completed": 0, "transitioning": 0, "failed": 0, "available": 1 },
+  "daemons": { "total": 1, "running": 1, "stopped": 0, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
   "last_activity": "2026-05-31T10:00:00+02:00",
   "worktrees": [
     {
@@ -267,33 +268,50 @@ curl http://127.0.0.1:3120/api/projects/shop
       "is_primary": true,
       "can_start": true,
       "dir_exists": true,
-      "group_count": 2,
-      "daemons": { "total": 3, "running": 2, "stopped": 1, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
+      "group_count": 1,
+      "daemons": { "total": 1, "running": 1, "stopped": 0, "completed": 0, "transitioning": 0, "failed": 0, "available": 0 },
       "last_activity": "2026-05-31T10:00:00+02:00",
       "url": "/projects/shop/main",
       "api_url": "/api/projects/shop/main"
     }
-  ],
-  "stack": { "project": "shop", "worktree": "main", "groups": [] }
+  ]
 }
 ```
 
 ## GET /api/projects/{project}/{worktree}
 
-Show one worktree's stack: the groups declared by the config loaded for that
-worktree, each with its member daemons in full daemon-entry form. The `default`
-group comes first. `missing` lists qualified ids a group declares that no known
-daemon matches, and `ungrouped` lists the worktree's daemons that no group
-names. The worktree segment accepts the URL name, the branch name, or the directory
-name, which is the label the proxy builds `<worktree>.<project>.<tld>` from. When two
-branches sanitize to the same URL name, the later one gets a numeric suffix
-(`feature-api`, `feature-api-2`) rather than being dropped.
+Return the groups from the worktree's project configuration, their member
+daemons, and ungrouped daemons. User and system config groups are excluded.
+The `default` group comes first, followed by other groups in configuration order.
+
+Project and worktree names match case-insensitively. The worktree segment
+accepts its URL name, branch name, or directory name, in that order. URL names
+use numeric suffixes to distinguish collisions, such as `feature-api` and
+`feature-api-2`. Prefer the returned `api_url` when constructing requests.
+Unknown projects or worktrees return HTTP 404.
+
+| Field | Meaning |
+| --- | --- |
+| `groups[].daemons` | Full daemon objects, including members from other registered namespaces even if they have never started. |
+| `groups[].missing` | Qualified IDs declared by the group that match no known daemon. |
+| `groups[].total` | Number of declared members, including missing ones. |
+| `ungrouped` | Daemons in this worktree's namespace that no group includes. |
+| `daemons` | Counts for this worktree's namespace; members from other namespaces are excluded. |
+| `can_start` | False if the directory is missing or `unresolvable_daemons` is nonempty. This is not a guarantee that every declared group member exists; also check `missing`. |
+| `unresolvable_daemons` | IDs of listed daemons whose configuration the supervisor cannot resolve, including group members from other namespaces. |
+| `config_error` | Present when the worktree's configuration could not be read. |
+
+Register an unresolvable daemon's directory before starting or restarting it.
+The supervisor loads configuration from its own project and the namespace
+registry. Restart stops the daemon before looking up its configuration, so an
+unresolvable daemon can be stopped without being brought back up. Stop does
+not require configuration.
 
 ```bash
 curl http://127.0.0.1:3120/api/projects/shop/main
 ```
 
-**Response:**
+**Response** (daemon objects abbreviated):
 
 ```json
 {
@@ -313,14 +331,14 @@ curl http://127.0.0.1:3120/api/projects/shop/main
       "daemons": [{ "id": { "qualified": "shop/api" }, "status": { "type": "running" } }],
       "missing": [],
       "running": 1,
-      "total": 2
+      "total": 1
     }
   ],
   "ungrouped": [],
   "daemons": {
-    "total": 3,
+    "total": 1,
     "running": 1,
-    "stopped": 2,
+    "stopped": 0,
     "completed": 0,
     "transitioning": 0,
     "failed": 0,
@@ -333,9 +351,9 @@ curl http://127.0.0.1:3120/api/projects/shop/main
 Each entry of `daemons` inside a group is a full daemon object, the same shape
 `GET /api/daemons` returns; it is abbreviated above.
 
-These three endpoints are read-only and never start a daemon. To act on a
-group, POST to the daemon control endpoints above with each of the group's
-qualified ids.
+To control a group, POST to the daemon control endpoints with each member's
+qualified ID, URL-encoded as a single path segment. There is no group mutation
+endpoint.
 
 ## GET /api/processes/{id}/tree
 

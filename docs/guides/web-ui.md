@@ -166,9 +166,7 @@ Never expose the API to a public network without authentication. The bundled web
 ## API reference
 
 See the [HTTP API reference](/reference/http-api) for daemon control, log streaming,
-namespace management, project and stack data, and response examples. The
-`/api/projects` endpoints return the same data the project and stack pages
-show, so mise and other tools can consume it.
+namespace management, project and stack data, and response examples.
 
 ## Features
 
@@ -189,41 +187,22 @@ Control daemons directly from the browser:
 
 ### Projects and stacks
 
-The **Projects** tab lists every project registered in the namespace registry.
-A project is one registered namespace; its worktrees are the git worktrees or
-jj workspaces found under the project directory.
+Use the **Projects** tab to browse a project's worktrees and control groups of
+daemons together. Each project corresponds to a registered namespace. To add
+one, run `pitchfork proxy add` from its directory or add it under
+`[namespaces]` in your [user config](/reference/configuration#namespace-registry).
 
-A namespace registered on a linked worktree is shown under its main checkout's
-project rather than as a project of its own, so open the checkout to reach it.
+Open a project to see its Git worktrees or jj workspaces, daemon counts, and
+links to each worktree's **stack**. The primary checkout's stack also appears
+on the project page. Worktrees are listed even before any of their daemons
+have started. If both a linked worktree and its main checkout are registered,
+the worktree appears under the main checkout's project.
 
-Opening a project shows each worktree with its namespace, running and stopped
-daemon counts, last activity, and a link to that worktree's stack. Last activity
-comes from process uptime, so it is when the most recently started daemon came
-up, and a worktree with nothing running shows none even if its daemons ran
-earlier. A project whose registered directory has been deleted
-is listed and marked "missing" rather than silently looking healthy. Worktrees
-that pitchfork knows about but has never started are listed too, with their
-daemons marked available. The primary checkout's stack is shown on the same
-page under "Stack · primary checkout". Per-worktree disk usage is only shown
-when pitchfork tracks a data directory for the daemons, which it does not do
-today, so the column stays hidden rather than reporting a guess.
+#### Define a stack
 
-The supervisor resolves daemon configs from its own project directory and from
-the namespace registry. A worktree in neither is still listed with its daemons,
-but marked "not startable" and the start and restart actions for exactly those
-daemons are disabled, because they would fail with "Daemon config not found";
-a restart would stop a running one and then fail to bring it back. Stopping
-needs no config, so it stays available. To register the worktree, add it under
-`[namespaces]` in the user config or run `pitchfork proxy add` from it, then
-reload the page. A group can also name a daemon from another namespace; when
-that one is unresolvable, the page says so separately, because registering this
-worktree would not fix it.
-
-A stack page shows the groups that worktree's own configuration declares, in
-the order they appear, except that a group named `default` comes first and is
-presented as the stack's primary action. The user and system configs are not
-included: their groups apply to every directory, so listing them here would
-repeat the same stack under every worktree.
+A stack contains the [daemon groups](/reference/configuration#daemon-groups)
+from the worktree's project configuration. Groups from user and system configs
+are excluded. Add a `default` group to give the stack its primary controls:
 
 ```toml
 # shop/pitchfork.toml
@@ -237,34 +216,42 @@ run = "npm run worker"
 daemons = ["api", "worker"]
 ```
 
-With that config, the stack page for the `shop` project's main worktree offers
-**Start stack**, **Stop stack**, and **Restart stack**, which act on
-`shop/api` and `shop/worker` through the ordinary daemon control endpoints.
-Stopping walks the group in reverse order. Each group also has its own
-start, stop, and restart buttons, and every member row links to that daemon's
-logs. Daemons in the worktree that no group names are listed under
-"ungrouped". See [daemon groups](/reference/configuration#daemon-groups) for
-the config format.
+For this configuration, **Start stack**, **Stop stack**, and **Restart stack**
+control both `shop/api` and `shop/worker`. Stop runs in reverse declaration
+order. Other groups have their own controls and appear after `default` in
+configuration order. Each daemon keeps its individual controls and logs link;
+daemons outside any group appear under **ungrouped**.
 
-### Hostnames
+Opening a project or stack page, or polling its API, never starts a daemon.
+Use the start or restart controls to run daemons from these pages. Requests to
+a daemon's proxy hostname still start that daemon on demand.
 
-When the proxy is enabled, `<project>.<tld>` and `<worktree>.<project>.<tld>`
-redirect to these pages, so `shop.test` opens the project page and
-`feature-a.shop.test` opens that worktree's stack. The redirect follows the
-checkout the hostname resolved to, so it lands on the right page even when the
-hostname label differs from the name the page uses, which happens when a label
-is sanitized or set with `worktree_label`. The pages themselves stay at
-`/projects/...` on the web UI's own address, which is where links and bookmarks
-should point. When the web UI is not running, those hostnames explain how to
-enable it instead. See [port management](/guides/port-management#reserved-addresses-and-conflicts)
-for how the names are derived.
+#### Unavailable daemons
 
-### Starting is always a click
+Start and restart are disabled for daemons whose configuration the supervisor
+cannot resolve, and for groups containing those daemons. Register the affected
+worktree, then reload the page. If a group includes a daemon from another
+namespace, register or restore that namespace's directory instead. Stop remains
+available.
 
-A request to a daemon's proxy hostname starts that daemon if it is not already
-running. Project and stack pages behave the opposite way: loading one, or
-polling the JSON endpoints behind it, never starts anything. A daemon in a
-stack starts only when someone clicks Start, Restart, or Start stack.
+Deleted checkout directories are marked **missing**. Restore the directory or
+remove its stale `[namespaces]` entry from your user config. Daemons belonging
+to a missing directory cannot be started or restarted.
+
+**Last activity** shows the start time of the most recently started daemon
+that is still running. It is empty when no daemons are running.
+
+#### Open a stack by hostname
+
+With the proxy enabled, `<project>.<tld>` opens the project page and
+`<worktree>.<project>.<tld>` opens that worktree's stack. For example, with
+`proxy.tld = "test"`, use `shop.test` or `feature-a.shop.test`.
+
+These addresses redirect to `/projects/<project>` or
+`/projects/<project>/<worktree>` on the web UI. Bookmark the destination URL.
+If the web UI is not running, the hostname shows instructions for enabling it.
+See [reserved proxy addresses](/guides/port-management#reserved-addresses-and-conflicts)
+for details.
 
 ### Live Logs
 
