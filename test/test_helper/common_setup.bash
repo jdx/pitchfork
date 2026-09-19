@@ -81,7 +81,69 @@ _common_setup() {
   # to /dev/null (a file, not a pipe), there's no pipe to inherit, and
   # subsequent pitchfork commands connect to the already-running supervisor
   # without spawning a new background process.
-  pitchfork supervisor start --force >/dev/null 2>&1 || true
+  #
+  # Also close bats' extra descriptors (fd 3 is its TAP output pipe). On Unix
+  # the supervisor inherits every descriptor not marked close-on-exec, so if it
+  # ever outlived the test it would keep that pipe open and bats would wait on
+  # it forever after the last test passed.
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&- || true
+
+  # Remember which supervisor this test started, so teardown can still stop it
+  # if the test rewrites the state file and loses the record `supervisor stop`
+  # relies on.
+  _SETUP_SUPERVISOR_PID="$(_recorded_supervisor_pid)"
+}
+
+# The supervisor PID recorded in the state file, or nothing.
+_recorded_supervisor_pid() {
+  grep -A 10 '^\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" 2>/dev/null |
+    grep -E '^pid = [0-9]+$' |
+    head -1 |
+    sed -E 's/.*= //'
+}
+
+# Stop any supervisor from this test that `pitchfork supervisor stop` missed.
+# Candidates are the supervisor started in setup and, on Linux, any supervisor
+# whose environment points at this test's state directory (for example one a
+# CLI command auto-started). A PID is only signalled while it still runs
+# pitchfork. Unix only: Windows PIDs are handled by taskkill, and the Windows
+# supervisor is spawned without inheriting handles, so it cannot hold bats'
+# pipes open.
+_stop_leaked_supervisors() {
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    return 0
+  fi
+  local -a pids=()
+  [[ -n "${_SETUP_SUPERVISOR_PID:-}" ]] && pids+=("$_SETUP_SUPERVISOR_PID")
+  local pid
+  for pid in $(pgrep -f '^[^ ]*pitchfork supervisor run$' 2>/dev/null); do
+    if grep -qzxF "PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" "/proc/$pid/environ" 2>/dev/null; then
+      pids+=("$pid")
+    fi
+  done
+
+  local -a leaked=()
+  for pid in "${pids[@]}"; do
+    [[ " ${leaked[*]} " == *" $pid "* ]] && continue
+    if ps -p "$pid" -o args= 2>/dev/null | grep -qE '^[^ ]*pitchfork supervisor run$'; then
+      leaked+=("$pid")
+    fi
+  done
+  ((${#leaked[@]})) || return 0
+
+  echo "# teardown: stopping leaked supervisor(s): ${leaked[*]}" >&3
+  # SIGTERM first so the supervisor stops its own daemons, then SIGKILL.
+  kill "${leaked[@]}" 2>/dev/null || true
+  local _ alive
+  for _ in $(seq 1 50); do
+    alive=0
+    for pid in "${leaked[@]}"; do
+      pid_alive "$pid" && alive=1
+    done
+    ((alive)) || return 0
+    sleep 0.1
+  done
+  kill -9 "${leaked[@]}" 2>/dev/null || true
 }
 
 # Skip a test on Windows (Git Bash / MSYS2).
@@ -206,6 +268,7 @@ _common_teardown() {
   # Use timeout to prevent hang if supervisor stop is stuck (e.g. daemon
   # cleanup on Windows where POSIX signals are unavailable).
   timeout 10 pitchfork supervisor stop 2>/dev/null || true
+  _stop_leaked_supervisors
 
   # Preserve temp dirs on failure for post-mortem debugging
   if [[ -n "$BATS_TEST_COMPLETED" && "$BATS_TEST_COMPLETED" == "1" ]]; then

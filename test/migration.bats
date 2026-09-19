@@ -10,6 +10,14 @@ teardown() {
   _common_teardown
 }
 
+# Stop the supervisor that _common_setup started before replacing the state
+# file. Overwriting it while that supervisor runs would drop its own record, so
+# the next command would auto-start a second supervisor and teardown would only
+# stop that one, leaving the first running with bats' output pipe open.
+stop_supervisor_for_state_rewrite() {
+  pitchfork supervisor stop 2>/dev/null || true
+}
+
 assert_state_keys_qualified() {
   local state_file="$PITCHFORK_STATE_DIR/state.toml"
   local key
@@ -23,6 +31,7 @@ assert_state_keys_qualified() {
 
 @test "state file is migrated from old bare-name format" {
   local state_file="$PITCHFORK_STATE_DIR/state.toml"
+  stop_supervisor_for_state_rewrite
   cat > "$state_file" <<'EOF'
 [daemons.myservice]
 id = "myservice"
@@ -62,6 +71,7 @@ EOF
 
 @test "state file migration preserves disabled daemons" {
   local state_file="$PITCHFORK_STATE_DIR/state.toml"
+  stop_supervisor_for_state_rewrite
   cat > "$state_file" <<'EOF'
 disabled = ["api"]
 
@@ -153,6 +163,7 @@ EOF
 
 @test "new-format state file is not migrated" {
   local state_file="$PITCHFORK_STATE_DIR/state.toml"
+  stop_supervisor_for_state_rewrite
   cat > "$state_file" <<'EOF'
 disabled = []
 
