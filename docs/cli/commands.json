@@ -6290,6 +6290,38 @@
         "default_list": [],
         "extensions": []
       },
+      "proxy.idle_timeout": {
+        "default": "",
+        "default_note": null,
+        "data_type": "null",
+        "value_type": {
+          "kind": "base",
+          "of": "duration"
+        },
+        "env": "PITCHFORK_PROXY_IDLE_TIMEOUT",
+        "envs": [
+          "PITCHFORK_PROXY_IDLE_TIMEOUT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Stop proxy-started daemons after this long without proxy activity",
+        "long_help": "Stop proxy-started daemons after this long without proxy activity\n\nEmpty (default) or `0` turns idle shutdown off, which keeps the long-standing behavior: a daemon the proxy starts keeps running until it is stopped.\n\nWhen set, a daemon that the proxy auto-started — and the dependencies the proxy started along with it — is stopped once the proxy has carried no request, WebSocket, streaming response or TLS passthrough connection for it for this long. Dependencies stop after the daemons that need them, and only once nothing running still depends on them.\n\nDaemons are never stopped for inactivity while a tracked shell session is inside their directory, or if they were started any other way (`pitchfork start`, the TUI, the web UI, the shell hook, `boot_start`); starting a proxy-started daemon explicitly keeps it running from then on. A daemon's own `proxy_idle_timeout` overrides this value.\n\nIdleness is checked every `general.interval`, so a daemon stops between this long and this long plus one interval after its last activity.\n\n**Examples:** `\"15m\"`, `\"1h\"`",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "proxy.lan": {
         "default": false,
         "default_note": null,

@@ -14,6 +14,7 @@ mod adopt;
 mod autostop;
 mod health;
 mod hooks;
+mod idle;
 mod ipc_handlers;
 mod lifecycle;
 mod log_sink;

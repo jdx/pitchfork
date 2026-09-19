@@ -10,6 +10,7 @@
 //! myapp.localhost:7777          →  localhost:8080  (via slug)
 //! ```
 
+pub mod activity;
 pub mod dns;
 pub mod doctor;
 pub mod hostname;

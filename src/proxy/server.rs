@@ -108,6 +108,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::daemon_id::DaemonId;
 use crate::pitchfork_toml::ProxyTlsMode;
+use crate::proxy::activity::{ACTIVITY, ActivityGuard, GuardedBody};
 use crate::settings::settings;
 use crate::supervisor::SUPERVISOR;
 
@@ -716,7 +717,10 @@ static AUTO_START_IN_PROGRESS: once_cell::sync::Lazy<
 enum ResolveResult {
     /// Daemon is running and ready — forward to this port.
     /// Covers both already-running daemons and freshly auto-started ones.
-    Ready(u16),
+    ///
+    /// The guard records the forwarded work as the daemon's activity, and has
+    /// to be held for as long as that work lasts.
+    Ready(u16, Option<ActivityGuard>),
     /// Daemon is currently starting (auto-start in progress or just triggered).
     Starting { slug: String },
     /// No matching slug or daemon found.
@@ -1463,8 +1467,11 @@ async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniP
 /// is logged.
 #[cfg(feature = "proxy-tls")]
 async fn serve_passthrough(mut stream: TcpStream, host: &str, tld: &str) {
-    let port = match resolve_passthrough_port(host, tld).await {
-        Ok(port) => port,
+    // Held until the splice ends: an open passthrough connection is activity
+    // for as long as it is open, since the proxy cannot see the requests
+    // inside it.
+    let (port, _activity) = match resolve_passthrough_port(host, tld).await {
+        Ok(ready) => ready,
         Err(msg) => {
             log::warn!("TLS passthrough for '{host}' failed: {msg}");
             return;
@@ -1522,7 +1529,10 @@ async fn connect_backend(addr: SocketAddr) -> std::io::Result<TcpStream> {
 /// one of its own — is bounded by a single `proxy.auto_start_timeout` budget,
 /// which is what the documentation promises.
 #[cfg(feature = "proxy-tls")]
-async fn resolve_passthrough_port(host: &str, tld: &str) -> std::result::Result<u16, String> {
+async fn resolve_passthrough_port(
+    host: &str,
+    tld: &str,
+) -> std::result::Result<(u16, Option<ActivityGuard>), String> {
     let budget = settings().proxy_auto_start_timeout();
     match tokio::time::timeout(budget, resolve_passthrough_port_inner(host, tld)).await {
         Ok(result) => result,
@@ -1535,13 +1545,17 @@ async fn resolve_passthrough_port(host: &str, tld: &str) -> std::result::Result<
 /// Inner loop of [`resolve_passthrough_port`], wrapped by the caller so that
 /// waiting and starting share one deadline.
 #[cfg(feature = "proxy-tls")]
-async fn resolve_passthrough_port_inner(host: &str, tld: &str) -> std::result::Result<u16, String> {
+async fn resolve_passthrough_port_inner(
+    host: &str,
+    tld: &str,
+) -> std::result::Result<(u16, Option<ActivityGuard>), String> {
     loop {
         match resolve_target(host, tld).await {
-            ResolveResult::Ready(port) => return Ok(port),
-            // Another connection is already auto-starting this daemon; wait
-            // for it rather than starting a second copy. The caller's timeout
-            // ends this wait.
+            ResolveResult::Ready(port, activity) => return Ok((port, activity)),
+            // Another connection is already auto-starting this daemon, or it
+            // is being stopped for inactivity; wait for that to finish rather
+            // than starting a second copy. The caller's timeout ends this
+            // wait.
             ResolveResult::Starting { slug: _ } => {
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
@@ -2974,8 +2988,8 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
         None
     };
 
-    let target_port = if let Some(port) = target_port {
-        port
+    let (target_port, activity) = if let Some(port) = target_port {
+        (port, None)
     } else {
         // A passthrough hostname must never be forwarded as plain HTTP: the
         // daemon expects a TLS handshake on that port, so the request would
@@ -2987,7 +3001,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
             );
         }
         match resolve_target(&host, &state.tld).await {
-            ResolveResult::Ready(port) => port,
+            ResolveResult::Ready(port, activity) => (port, activity),
             ResolveResult::Starting { slug } => {
                 return starting_html_response(&slug, &raw_host);
             }
@@ -3192,6 +3206,9 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 // it splicing to a daemon that is about to be stopped.
                 let cancel = state.cancel.clone();
                 state.tunnels.spawn(async move {
+                    // An open WebSocket is activity until either side closes
+                    // it, however quiet it is.
+                    let _activity = activity;
                     let splice = async move {
                         if let (Ok(client_upgraded), Ok(backend_upgraded)) =
                             (client_upgrade.await, backend_upgrade.await)
@@ -3222,7 +3239,10 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
 
             // Backend refused the upgrade (returned a non-101 response) — forward it as-is.
             // This can happen when the backend rejects a WebSocket handshake with e.g. 400.
-            Response::from_parts(parts, Body::new(body))
+            //
+            // The body carries the activity guard, so a streamed response
+            // (server-sent events, a long download) counts until it ends.
+            Response::from_parts(parts, Body::new(GuardedBody::new(body, activity)))
         }
         Err(e) => {
             let msg = format!(
@@ -3280,7 +3300,7 @@ fn passthrough_unroutable_message(host: &str, is_tls: bool) -> String {
 ///    trigger an automatic start and wait for it to become ready.
 ///
 /// # Returns
-/// - `ResolveResult::Ready(port)`       — daemon running (or just auto-started), forward to this port
+/// - `ResolveResult::Ready(port, _)`    — daemon running (or just auto-started), forward to this port
 /// - `ResolveResult::Starting { slug }` — daemon start in progress (show waiting page)
 /// - `ResolveResult::NotFound`          — no daemon matched
 /// - `ResolveResult::Error(msg)`        — routing refused with a descriptive reason
@@ -3325,10 +3345,62 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
         }
         // With more than one namespace running a daemon of this name and no
         // namespace to narrow by, the first match is used — as before.
-        [(_, d), ..] => match select_daemon_port(&ctx.route, d) {
-            Some(port) => ResolveResult::Ready(port),
+        [(id, d), ..] => match select_daemon_port(&ctx.route, d) {
+            Some(port) => match begin_running(id).await {
+                Running::Yes(activity) => ResolveResult::Ready(port, Some(activity)),
+                Running::Stopping => ResolveResult::Starting {
+                    slug: ctx.cached.slug.clone(),
+                },
+                Running::No => {
+                    try_auto_start(
+                        &ctx.cached.slug,
+                        &ctx.cached,
+                        ctx.worktree_dir.as_deref(),
+                        ctx.expected_namespace.as_deref(),
+                        &ctx.route,
+                    )
+                    .await
+                }
+            },
             None => ResolveResult::NotFound,
         },
+    }
+}
+
+/// Whether a daemon found running is still running once its request has
+/// been recorded as activity.
+enum Running {
+    /// Still running; forward while holding this.
+    Yes(ActivityGuard),
+    /// Being stopped for inactivity. The request waits for the stop to finish
+    /// and then starts the daemon again, rather than reaching a daemon that is
+    /// going away.
+    Stopping,
+    /// Stopped since the state was read.
+    No,
+}
+
+/// Record a request for a daemon that the state showed running, then check
+/// that it still is.
+///
+/// Recording comes first: once it has, a stop for inactivity can no longer be
+/// claimed, so a daemon that is still running at the check stays running for
+/// as long as the request holds the guard.
+async fn begin_running(id: &DaemonId) -> Running {
+    let Some(activity) = ACTIVITY.begin(id) else {
+        return Running::Stopping;
+    };
+    let running = {
+        let state_file = SUPERVISOR.state_file.lock().await;
+        state_file
+            .daemons
+            .get(id)
+            .is_some_and(|d| d.status.is_running())
+    };
+    if running {
+        Running::Yes(activity)
+    } else {
+        Running::No
     }
 }
 
@@ -3660,14 +3732,32 @@ async fn try_auto_start_inner(
         return ResolveResult::NotFound;
     }
 
+    // Record the start as activity for the daemon and everything it depends
+    // on before anything is started. A dependency that is already running is
+    // skipped by the start below, so it must not be stopped for inactivity in
+    // the meantime; and one whose stop has already been claimed has to finish
+    // stopping first, so the request waits and starts it again afterwards.
+    // An unresolvable graph is reported by the start itself.
+    let closure: Vec<DaemonId> =
+        crate::deps::resolve_dependencies(std::slice::from_ref(daemon_id), &pt.daemons)
+            .map(|order| order.levels.into_iter().flatten().collect())
+            .unwrap_or_else(|_| vec![daemon_id.clone()]);
+    let Some(mut activity) = ACTIVITY.begin_all(&closure) else {
+        return ResolveResult::Starting {
+            slug: slug.to_string(),
+        };
+    };
+
     // Reuse CLI startup so dependencies, oneshots, readiness, and port
     // templates have identical behavior for a cold browser request.
     let client = match crate::ipc::client::IpcClient::connect(false).await {
         Ok(client) => Arc::new(client),
         Err(e) => return ResolveResult::Error(format!("Failed to connect to supervisor: {e}")),
     };
+    let proxy_idle = proxy_idle_timeouts(daemon_id, &closure, &pt).await;
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
+        proxy_idle: Some(proxy_idle),
         ..Default::default()
     };
     log::info!("Auto-start: starting daemon {daemon_id} and dependencies for slug '{slug}'");
@@ -3702,7 +3792,13 @@ async fn try_auto_start_inner(
                 // later ones.
                 if let Some(port) = select_daemon_port(route, d) {
                     log::info!("Auto-start: daemon {daemon_id} is ready on port {port}");
-                    return ResolveResult::Ready(port);
+                    // The request keeps the daemon's own guard; those for its
+                    // dependencies end here, which starts their idle clocks.
+                    let own = activity
+                        .iter()
+                        .position(|g| g.id() == daemon_id)
+                        .map(|i| activity.swap_remove(i));
+                    return ResolveResult::Ready(port, own);
                 }
             } else {
                 log::warn!(
@@ -3724,6 +3820,52 @@ async fn try_auto_start_inner(
 
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+/// Which daemons of a proxy auto-start may later be stopped for inactivity,
+/// with their grace periods in milliseconds.
+///
+/// The daemon behind the hostname uses its own `proxy_idle_timeout`, or else
+/// `proxy.idle_timeout` as its project resolves it. A dependency uses its own
+/// `proxy_idle_timeout` when it sets one, and otherwise inherits the daemon's:
+/// it was started only because that daemon needed it. Daemons with idle
+/// shutdown off are left out, and are started as explicit.
+///
+/// Only daemons this start actually launches are affected; one that is
+/// already running keeps whatever ownership it had.
+async fn proxy_idle_timeouts(
+    daemon_id: &DaemonId,
+    closure: &[DaemonId],
+    pt: &crate::pitchfork_toml::PitchforkToml,
+) -> std::collections::HashMap<DaemonId, u64> {
+    let own = |id: &DaemonId| pt.daemons.get(id).and_then(|d| d.proxy_idle_timeout);
+    let target = match own(daemon_id) {
+        Some(configured) => configured.duration(),
+        None => {
+            // Project settings are read from files, so off the request thread.
+            let project_dir = crate::ipc::batch::resolve_config_base_dir(
+                pt.daemons.get(daemon_id).and_then(|d| d.path.as_deref()),
+            );
+            tokio::task::spawn_blocking(move || {
+                crate::settings::Settings::load_from_dir(&project_dir).proxy_idle_timeout()
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+    };
+    let millis = |d: std::time::Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+    closure
+        .iter()
+        .filter_map(|id| {
+            let grace = if id == daemon_id {
+                target
+            } else {
+                own(id).map_or(target, |configured| configured.duration())
+            };
+            grace.map(|g| (id.clone(), millis(g)))
+        })
+        .collect()
 }
 
 /// Resolve a hostname against the automatic hostname registry.
@@ -3849,10 +3991,19 @@ async fn resolve_registry_daemon(
                     .unwrap_or_else(|| "an unknown directory".to_string()),
             ));
         }
-        return match select_daemon_port(route, d) {
-            Some(port) => ResolveResult::Ready(port),
-            None => ResolveResult::NotFound,
+        let Some(port) = select_daemon_port(route, d) else {
+            return ResolveResult::NotFound;
         };
+        match begin_running(&d.id).await {
+            Running::Yes(activity) => return ResolveResult::Ready(port, Some(activity)),
+            Running::Stopping => {
+                return ResolveResult::Starting {
+                    slug: host.to_string(),
+                };
+            }
+            // Stopped since the state was read: start it again below.
+            Running::No => {}
+        }
     }
 
     let cached = CachedSlugEntry {
@@ -3870,7 +4021,7 @@ async fn resolve_registry_daemon(
     // The start can land on a record another checkout already owns, because the
     // supervisor refuses to run a second daemon under the same ID. Serving that
     // port would hand this hostname the other checkout's content.
-    if per_checkout && let ResolveResult::Ready(_) = result {
+    if per_checkout && let ResolveResult::Ready(..) = result {
         let started = {
             let state_file = SUPERVISOR.state_file.lock().await;
             state_file

@@ -584,6 +584,25 @@ impl IpcClient {
         }
     }
 
+    /// Tell the supervisor that `ids` are being started explicitly, so it
+    /// stops treating any of them as the proxy's to stop when idle.
+    ///
+    /// Best effort: a supervisor too old to know the request has no idle
+    /// shutdown to opt out of, so its refusal is not an error.
+    pub async fn claim_daemons(&self, ids: &[DaemonId]) {
+        if ids.is_empty() {
+            return;
+        }
+        match self
+            .request(IpcRequest::ClaimDaemons { ids: ids.to_vec() })
+            .await
+        {
+            Ok(IpcResponse::Ok) => {}
+            Ok(rsp) => debug!("supervisor did not accept ClaimDaemons: {rsp:?}"),
+            Err(e) => debug!("failed to send ClaimDaemons: {e}"),
+        }
+    }
+
     pub async fn get_disabled_daemons(&self) -> Result<Vec<DaemonId>> {
         let rsp = self.request(IpcRequest::GetDisabledDaemons).await?;
         match rsp {

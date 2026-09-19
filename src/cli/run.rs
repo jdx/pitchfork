@@ -111,6 +111,7 @@ impl Run {
             },
             retry: Some(crate::config_types::Retry(self.retry)),
             quiet: self.quiet,
+            proxy_idle: None,
         };
 
         // Resolve ID, allowing unconfigured short IDs as ad-hoc global daemons.
