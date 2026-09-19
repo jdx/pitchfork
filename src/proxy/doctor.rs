@@ -658,17 +658,22 @@ enum SystemName {
 ///
 /// mDNS publishes `<slug>.<tld>` for each registered slug and nothing else, so
 /// this is the only name whose resolution says anything about whether the LAN
-/// path works. An ambiguous slug is skipped because the proxy refuses to route
-/// it, so it is not advertised either.
+/// path works. An unambiguous slug is preferred because the proxy also routes
+/// it; an ambiguous one is used only when nothing else is registered, since
+/// mDNS still advertises it.
 ///
 /// Reads the global config, which takes a file lock and can therefore wait on
 /// another process, so callers run it under a deadline like every other probe
 /// here rather than on the async task.
 fn published_slug_name(tld: &str) -> Option<String> {
     let slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
+    // An unambiguous slug first, since that is one the proxy also routes. But
+    // mDNS publishes every key, colliding ones included, so a registry holding
+    // only ambiguous slugs still publishes names and is not "nothing yet".
     slugs
         .keys()
         .find(|slug| !crate::pitchfork_toml::PitchforkToml::slug_is_ambiguous(slug, &slugs))
+        .or_else(|| slugs.keys().next())
         .map(|slug| format!("{}.{tld}", slug.to_ascii_lowercase()))
 }
 
@@ -1397,6 +1402,10 @@ mod tests {
         assert!(err.contains("rcode 5"), "unexpected error: {err}");
 
         cancel.cancel();
-        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the resolver did not stop within 5s of cancellation")
+            .expect("the resolver task panicked")
+            .expect("the resolver returned an error");
     }
 }

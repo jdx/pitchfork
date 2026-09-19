@@ -1322,8 +1322,14 @@ impl Supervisor {
             publisher.lock().await.shutdown();
         }
 
-        if let Some(dns_task) = self.dns_task.lock().await.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), dns_task).await;
+        if let Some(mut dns_task) = self.dns_task.lock().await.take()
+            && tokio::time::timeout(Duration::from_secs(5), &mut dns_task)
+                .await
+                .is_err()
+        {
+            // Cancelled but still running: aborted, as the LAN monitor is,
+            // so its sockets are not left bound to the resolver port.
+            dns_task.abort();
         }
 
         if let Some(proxy_task) = self.proxy_task.lock().await.take() {

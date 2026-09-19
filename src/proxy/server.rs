@@ -1189,7 +1189,28 @@ async fn serve_https_with_http_fallback(
                         );
                         match peek_sni_host(&stream, sni_budget).await {
                             SniProbe::Host(host) => {
-                                if resolve_tls_mode(&host, &tld).await.is_passthrough() {
+                                // Also under the handshake deadline: on a cache
+                                // miss this rebuilds the slug and host
+                                // registries, which can be slow, and the
+                                // connection still holds a negotiation slot.
+                                let Ok(mode) = tokio::time::timeout_at(
+                                    handshake_deadline,
+                                    resolve_tls_mode(&host, &tld),
+                                )
+                                .await
+                                else {
+                                    if let Some(suppressed) =
+                                        ABANDONED_HANDSHAKE.allow(REFUSAL_LOG_INTERVAL)
+                                    {
+                                        log::debug!(
+                                            "Routing lookup for '{host}' did not finish within the \
+                                             handshake timeout ({suppressed} similar since the \
+                                             last message)"
+                                        );
+                                    }
+                                    return;
+                                };
+                                if mode.is_passthrough() {
                                     // The splice is the session, however long
                                     // it lasts; it must not keep a slot meant
                                     // for connections still negotiating.
@@ -1221,8 +1242,13 @@ async fn serve_https_with_http_fallback(
                                 );
                                 // Make sure the resolver's synchronous snapshots
                                 // have been populated before it has to decide.
-                                let _ = get_cached_slugs().await;
-                                let _ = get_cached_host_registry().await;
+                                // Bounded like the rest of negotiation; if it
+                                // runs out, the accept below does too.
+                                let _ = tokio::time::timeout_at(handshake_deadline, async {
+                                    let _ = get_cached_slugs().await;
+                                    let _ = get_cached_host_registry().await;
+                                })
+                                .await;
                             }
                         }
 

@@ -976,6 +976,10 @@ mod tests {
         drop(stream);
 
         cancel.cancel();
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("the resolver did not stop within 5s of cancellation")
+            .expect("the resolver task panicked")
+            .expect("the resolver returned an error");
     }
 }
