@@ -244,7 +244,7 @@ pub(crate) fn render_daemon_config(
 
     let mut ctx =
         crate::template::TemplateContext::new(id, daemon_config, &resolved_daemons, &pt.daemons);
-    crate::template::render_daemon_templates(daemon_config, &mut ctx, pt.env.as_ref())
+    crate::template::render_daemon_templates(daemon_config, &mut ctx, pt.env_for(id))
         .map_err(|e| miette::miette!("Template render error for daemon {id}: {e}"))
 }
 
@@ -712,10 +712,13 @@ impl IpcClient {
                                     &ports,
                                     &pt.daemons,
                                 );
+                                // A dependency from another registered project
+                                // keeps that project's `[env]` defaults; the
+                                // requesting checkout's must not leak into it.
                                 let result = crate::template::render_daemon_templates(
                                     &mut rendered_config,
                                     &mut template_ctx,
-                                    pt.env.as_ref(),
+                                    pt.env_for(&id),
                                 )
                                 .map(|()| rendered_config);
                                 Some((id, result))

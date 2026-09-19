@@ -125,7 +125,7 @@ label. It has no effect in the primary checkout. See
 
 ## Shared environment
 
-Top-level `[env]` values supply defaults for all daemons. A daemon's own `env`
+Top-level `[env]` values supply defaults for daemons in the project. A daemon's own `env`
 overrides matching keys. Values support [templates](/guides/configuration-templates).
 
 ```toml
@@ -137,6 +137,16 @@ LOG_LEVEL = "info"
 run = "node server.js"
 env = { LOG_LEVEL = "debug" }
 ```
+
+Dependencies from other registered projects use their own project's top-level
+`[env]` for both templates and process environment. For example, a dependency
+named `shared/db` uses the `shared` project's defaults even when started by an
+app in `web`. Values defined only in `web`'s `[env]` are not passed to `shared/db`.
+This applies to CLI startup and proxy auto-start.
+
+Daemons in the requesting checkout's configuration chain use its merged
+`[env]`. A nested configuration can therefore override defaults for a daemon
+defined in a parent directory.
 
 ## Settings
 

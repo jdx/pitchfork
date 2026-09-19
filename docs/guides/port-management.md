@@ -298,7 +298,11 @@ Dependencies at the same level start in parallel. Running services are reused;
 an in-flight `oneshot` is awaited, and a completed `oneshot` runs again.
 Dependencies in other registered projects use a qualified ID such as
 `depends = ["shared/db"]`. The proxy loads configuration from the checkout
-identified by the hostname.
+identified by the hostname. Dependencies from other registered projects use
+their own project's top-level `[env]` defaults for templates and process
+environment. Daemons in the requested checkout use its merged `[env]`,
+including nested configuration overrides. See
+[shared environment](/reference/configuration#shared-environment).
 
 Concurrent proxy requests that share dependencies coordinate startup so a
 shared service starts once and is ready before either dependent starts.

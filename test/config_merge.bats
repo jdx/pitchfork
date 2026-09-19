@@ -89,6 +89,29 @@ EOF
   assert_output --partial "parent_daemon"
 }
 
+@test "a nested config's [env] overrides the parent's for a parent daemon" {
+  create_pitchfork_toml <<'EOF'
+[env]
+GREETING = "from-parent"
+
+[daemons.greeter]
+run = "sh -c 'echo greeting=$GREETING; sleep 30'"
+ready_delay = 1
+EOF
+  mkdir -p subdir
+  cd subdir
+  cat >pitchfork.toml <<'EOF'
+[env]
+GREETING = "from-subdir"
+EOF
+
+  # Started from the subdirectory, whose config chain overrides the default.
+  run pitchfork start greeter
+  assert_success
+  wait_for_logs greeter "greeting=from-subdir" 10
+  run pitchfork stop greeter
+}
+
 @test "namespace collision between two directories with same name" {
   # Two discovered config files whose parent directories share the same basename
   # but live at different paths in the cwd hierarchy.

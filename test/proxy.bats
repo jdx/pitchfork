@@ -1351,6 +1351,52 @@ EOF
   kill_port "$app_port"
 }
 
+@test "a dependency in another registered project keeps its own [env]" {
+  mkdir -p "$TEST_TEMP_DIR/shared" "$TEST_TEMP_DIR/web"
+  _register_projects shared web
+
+  local http_script app_port proxy_port seen
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  app_port=$(_free_port)
+  proxy_port=$(_free_port)
+  seen="$(to_shell_path "$TEST_TEMP_DIR/db-env")"
+
+  # db records the environment it was given, both as rendered into its
+  # command and as seen by the process.
+  cat >"$TEST_TEMP_DIR/shared/pitchfork.toml" <<EOF
+[env]
+OWNER = "shared"
+
+[daemons.db]
+run = 'echo "template={{ env.OWNER }} process=\$OWNER app_only=\${APP_ONLY:-unset}" > "$seen"; echo "db ready"; sleep 60'
+ready_output = "db ready"
+EOF
+  cat >"$TEST_TEMP_DIR/web/pitchfork.toml" <<EOF
+[env]
+OWNER = "web"
+APP_ONLY = "private-to-web"
+
+[daemons.app]
+run = "python3 -u $http_script 0 $app_port"
+port = $app_port
+ready_http = "http://127.0.0.1:$app_port/health"
+depends = ["shared/db"]
+EOF
+
+  _start_autostart_proxy "$proxy_port"
+
+  run curl -s -w '\n%{http_code}' --max-time 60 \
+    -H "Host: app.web.localhost" "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_line --index 1 "200"
+
+  run cat "$TEST_TEMP_DIR/db-env"
+  assert_output "template=shared process=shared app_only=unset"
+
+  pitchfork stop --all || true
+  kill_port "$app_port"
+}
+
 @test "auto-start reports a failed dependency and leaves the app stopped" {
   local proj="$TEST_TEMP_DIR/failproj"
   mkdir -p "$proj"
