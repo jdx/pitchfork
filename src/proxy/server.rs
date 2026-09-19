@@ -1601,7 +1601,8 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
             return true;
         }
         crate::proxy::hostname::warn_once(&format!(
-            "Slug '{}' plus the configured proxy.tld is over the DNS length limit, so it is              not routed.",
+            "Slug '{}' plus the configured proxy.tld is over the DNS length limit, \
+             so it is not routed.",
             cached.slug
         ));
         false
