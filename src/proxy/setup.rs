@@ -2403,8 +2403,11 @@ fn check_grant(path: &Path, caps: Option<&[String]>) -> Result<()> {
 
 /// Why the CA pair cannot be used, or `None` when it is ready to trust.
 fn ca_pair_problem(cert: &Path, key: &Path) -> Option<String> {
-    if !cert.exists() || !key.exists() {
-        return Some("not generated yet".to_string());
+    match (cert.exists(), key.exists()) {
+        (false, false) => return Some("not generated yet".to_string()),
+        (true, false) => return Some(format!("{} is missing", key.display())),
+        (false, true) => return Some(format!("{} is missing", cert.display())),
+        (true, true) => {}
     }
     #[cfg(feature = "proxy-tls")]
     {
@@ -2429,7 +2432,9 @@ fn generate_ca(cert: &Path, key: &Path) -> Result<()> {
         crate::proxy::server::ensure_ca(cert, key, || match ca_pair_problem(cert, key) {
             None => true,
             Some(problem) => {
-                if cert.exists() && key.exists() {
+                // Either file on its own is a pair being replaced, not a
+                // first generation.
+                if cert.exists() || key.exists() {
                     println!("  the existing CA cannot be used ({problem}); generating a new one");
                     // A supervisor started before the files went bad still
                     // holds the old CA in memory and signs with it until it
