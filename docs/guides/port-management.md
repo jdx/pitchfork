@@ -334,8 +334,8 @@ that the PAC file is available instead of requiring system DNS resolution.
 |------|-------|-------|
 | DNS | Writes `/etc/resolver/<tld>` with sudo | With systemd-resolved, `.localhost` needs no change; other TLDs need a drop-in and service restart with sudo |
 | CA trust for HTTPS | Uses the login keychain; macOS may prompt for authorization | Installs the CA into the system trust store with sudo |
-| Standard ports with an unprivileged listener | Adds a `pf` redirect with sudo | Adds an IPv4 loopback iptables redirect with sudo |
-| Direct binding below port 1024 | Setup asks you to choose an unprivileged port | Grants the binary `cap_net_bind_service` with sudo |
+| Standard ports with an unprivileged listener | Adds a `pf` redirect and enables `pf` with sudo | Adds a loopback iptables redirect with sudo (ip6tables when `proxy.host` is IPv6) |
+| Direct binding below port 1024 | Setup asks you to choose an unprivileged port | Grants the binary `cap_net_bind_service` with sudo, unless it already carries other capabilities |
 
 Routing a custom TLD through systemd-resolved requires systemd 247 or newer.
 Restarting the service briefly interrupts DNS, including on repeated setup runs.
@@ -385,7 +385,8 @@ previous configurations before applying the new one.
 Undo checks ownership before removing files or proxy settings. It leaves
 unrelated files and PAC URLs alone, and removes `cap_net_bind_service` only when
 it is the binary's sole capability. On macOS, it removes pitchfork's firewall
-rules without disabling `pf`, which other software may use. The record itself is
+rules and releases the `pf` reference setup took with `pfctl -E`, so `pf` stays
+enabled only if other software still holds it. The record itself is
 treated as input when it is read back: its TLD is validated, and the system
 paths and the binary are rebuilt, so a record naming something else cannot
 point a privileged removal at it. Undo therefore revokes the capability from the

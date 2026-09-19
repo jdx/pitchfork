@@ -616,7 +616,7 @@ pub async fn serve(
     } else {
         // `plain_state` carries the tunnel tracker, which this path has to
         // drain too: `proxy.https = false` still serves CONNECT through the
-        // PAC file.
+        // PAC file, for `http://` and `ws://` URLs.
         serve_http(app, addr, effective_port, plain_state, bind_tx, cancel).await
     }
 }
@@ -691,7 +691,7 @@ async fn serve_https_with_http_fallback(
     use rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
 
-    let (cert_path, key_path) = resolve_tls_paths(s);
+    let (cert_path, key_path) = resolve_tls_paths(s)?;
 
     // Install ring as the default CryptoProvider if none has been set yet.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -825,8 +825,13 @@ async fn serve_https_with_http_fallback(
                 conn_tasks.spawn(async move {
                     // Peek at the first byte without consuming it.
                     // TLS ClientHello always starts with 0x16 (content type "handshake").
+                    //
+                    // One deadline covers the peek and the handshake together,
+                    // so a client that trickles its first byte in just in time
+                    // does not start a second full budget.
+                    let handshake_deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
                     let mut peek_buf = [0u8; 1];
-                    match tokio::time::timeout(HANDSHAKE_TIMEOUT, stream.peek(&mut peek_buf)).await {
+                    match tokio::time::timeout_at(handshake_deadline, stream.peek(&mut peek_buf)).await {
                         Ok(Ok(0)) | Ok(Err(_)) => return,
                         Err(_) => {
                             if let Some(suppressed) =
@@ -844,8 +849,8 @@ async fn serve_https_with_http_fallback(
 
                     if peek_buf[0] == 0x16 {
                         // TLS handshake → HTTP/2 or HTTP/1.1 (negotiated via ALPN)
-                        let accepted = match tokio::time::timeout(
-                            HANDSHAKE_TIMEOUT,
+                        let accepted = match tokio::time::timeout_at(
+                            handshake_deadline,
                             acceptor.accept(stream),
                         )
                         .await
@@ -948,8 +953,18 @@ async fn serve_https_with_http_fallback(
 ///
 /// If `tls_cert` / `tls_key` are empty, falls back to the auto-generated
 /// CA paths in `$PITCHFORK_STATE_DIR/proxy/`.
+///
+/// Setting only one of the two is refused. Filling the other half from the
+/// generated CA would pair a user's key with pitchfork's certificate, or the
+/// reverse, and when the CA does not exist yet, generating it would write a
+/// new CA key over the user's file.
 #[cfg(feature = "proxy-tls")]
-fn resolve_tls_paths(s: &crate::settings::Settings) -> (std::path::PathBuf, std::path::PathBuf) {
+fn resolve_tls_paths(
+    s: &crate::settings::Settings,
+) -> crate::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    if let Some(problem) = tls_pair_problem(&s.proxy.tls_cert, &s.proxy.tls_key) {
+        miette::bail!("{problem}");
+    }
     let proxy_dir = crate::env::PITCHFORK_STATE_DIR.join("proxy");
     let resolve = |configured: &str, default: &str| {
         if configured.is_empty() {
@@ -958,10 +973,28 @@ fn resolve_tls_paths(s: &crate::settings::Settings) -> (std::path::PathBuf, std:
             std::path::PathBuf::from(configured)
         }
     };
-    (
+    Ok((
         resolve(&s.proxy.tls_cert, "ca.pem"),
         resolve(&s.proxy.tls_key, "ca-key.pem"),
-    )
+    ))
+}
+
+/// Why `proxy.tls_cert` and `proxy.tls_key` cannot be used as configured:
+/// they are a pair, so both are set or neither is.
+pub(crate) fn tls_pair_problem(cert: &str, key: &str) -> Option<String> {
+    match (cert.is_empty(), key.is_empty()) {
+        (false, true) => Some(
+            "proxy.tls_cert is set but proxy.tls_key is empty; set both, or neither to use \
+             the generated CA"
+                .to_string(),
+        ),
+        (true, false) => Some(
+            "proxy.tls_key is set but proxy.tls_cert is empty; set both, or neither to use \
+             the generated CA"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 /// Generate a local root CA certificate and private key using `rcgen`.
@@ -1726,6 +1759,16 @@ fn url_host(ip: std::net::IpAddr) -> String {
     }
 }
 
+/// The port in a CONNECT authority (`host:port`, `[v6]:port`), if it names one.
+fn connect_port(authority: &str) -> Option<u16> {
+    let (host, port) = authority.rsplit_once(':')?;
+    // A bare IPv6 literal's last colon is inside the address, not before a port.
+    if host.contains(':') && !host.ends_with(']') {
+        return None;
+    }
+    port.parse().ok()
+}
+
 /// Handle a `CONNECT` request from a client using the PAC file.
 ///
 /// A proxy auto-config file routes `*.<tld>` through this listener, and a
@@ -1762,6 +1805,20 @@ async fn connect_handler(state: &ProxyState, req: Request, raw_host: &str) -> Re
             &format!(
                 "pitchfork only tunnels CONNECT for names under .{} — refusing {host}",
                 state.tld
+            ),
+        );
+    }
+
+    // With `proxy.https = false` the tunnel lands on a plain HTTP listener.
+    // That still carries `ws://` and `http://` traffic, which browsers send
+    // through CONNECT too, but a TLS handshake for an `https://` URL could
+    // only fail there, and with an error that names neither cause nor fix.
+    if !state.is_tls && connect_port(&authority) == Some(443) {
+        return error_response(
+            StatusCode::BAD_GATEWAY,
+            &format!(
+                "proxy.https is false, so pitchfork cannot serve https://{host}; \
+                 use http:// or enable proxy.https"
             ),
         );
     }
@@ -1876,8 +1933,14 @@ async fn connect_handler(state: &ProxyState, req: Request, raw_host: &str) -> Re
         // for hours.
         tokio::select! {
             r = tokio::io::copy_bidirectional(&mut client, &mut server) => {
-                if let Err(e) = r {
-                    log::debug!("CONNECT tunnel to {target} ended: {e}");
+                // Throttled like the setup steps: a client can end tunnels
+                // with errors as fast as it can open them.
+                if let Err(e) = r
+                    && let Some(n) = ABANDONED_TUNNEL.allow(REFUSAL_LOG_INTERVAL)
+                {
+                    log::debug!(
+                        "CONNECT tunnel to {target} ended: {e} ({n} similar since the last message)"
+                    );
                 }
             }
             _ = cancel.cancelled() => {
@@ -3333,6 +3396,26 @@ mod tests {
             "routed",
             "`any` did not deliver the POST to the handler"
         );
+    }
+
+    #[test]
+    fn connect_port_reads_the_authority() {
+        assert_eq!(connect_port("api.localhost:443"), Some(443));
+        assert_eq!(connect_port("api.localhost:80"), Some(80));
+        assert_eq!(connect_port("[::1]:443"), Some(443));
+        assert_eq!(connect_port("api.localhost"), None);
+        assert_eq!(connect_port("::1"), None);
+    }
+
+    #[test]
+    fn a_half_configured_certificate_pair_is_refused() {
+        // Either half alone would be filled in from the generated CA: the
+        // user's key signing with pitchfork's certificate, or a new CA key
+        // written over the user's file.
+        assert!(tls_pair_problem("", "/k.pem").is_some());
+        assert!(tls_pair_problem("/c.pem", "").is_some());
+        assert!(tls_pair_problem("", "").is_none());
+        assert!(tls_pair_problem("/c.pem", "/k.pem").is_none());
     }
 
     /// A resolver backed by a freshly generated CA in a temporary directory.

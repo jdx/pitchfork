@@ -593,6 +593,15 @@ fn resolution_check(
             Status::Pass,
             format!("not needed: the system proxy sends *.{tld} to pitchfork (PAC)"),
         ),
+        // A lookup that never came back is not the same as a name that does
+        // not resolve. Saying it failed would send someone to re-run setup
+        // over a wedged resolver that setup cannot fix. Ahead of the LAN and
+        // unknown-PAC arms, which both explain a name that did not resolve.
+        None => Check::new(
+            "system resolution",
+            Status::Warn,
+            format!("the system resolver did not answer in time, so {name} could not be checked"),
+        ),
         // LAN mode serves `.local`, which belongs to mDNS, and setup leaves
         // that namespace alone on purpose. So a name that does not resolve is
         // not evidence that setup failed, and telling the reader to run it
@@ -620,14 +629,6 @@ fn resolution_check(
                 "{name} does not resolve, but the system would not say whether \
                  a proxy auto-config file is in use, which would explain it"
             ),
-        ),
-        // A lookup that never came back is not the same as a name that does
-        // not resolve. Saying it failed would send someone to re-run setup
-        // over a wedged resolver that setup cannot fix.
-        None => Check::new(
-            "system resolution",
-            Status::Warn,
-            format!("the system resolver did not answer in time, so {name} could not be checked"),
         ),
         // The resolver's own words, rather than a guess at what went wrong.
         Some(Err(e)) => Check::new(
@@ -870,7 +871,12 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
     }
 
     // 5. Certificate trust.
-    if s.proxy.https {
+    if s.proxy.https
+        && let Some(problem) =
+            crate::proxy::server::tls_pair_problem(&s.proxy.tls_cert, &s.proxy.tls_key)
+    {
+        checks.push(Check::new("certificate", Status::Fail, problem));
+    } else if s.proxy.https {
         let custom = !s.proxy.tls_cert.is_empty();
         let ca_path = if custom {
             std::path::PathBuf::from(&s.proxy.tls_cert)
@@ -1185,7 +1191,7 @@ mod tests {
         // name that will not resolve is not grounds to re-run setup. It is
         // still a browser on this machine unable to reach the advertised URL,
         // so it must not pass silently either.
-        for answer in [None, Some(Err("boom".to_string())), Some(Ok(vec![]))] {
+        for answer in [Some(Err("boom".to_string())), Some(Ok(vec![]))] {
             let c = resolution_check("app.local", "local", no_pac, true, answer);
             assert_eq!(c.status, Status::Warn, "a broken mDNS path was hidden");
             assert!(
@@ -1201,6 +1207,13 @@ mod tests {
                 "LAN mode was told to re-run setup: {}",
                 c.detail
             );
+        }
+        // A lookup that timed out says so, in LAN mode or with the PAC state
+        // unknown, rather than being reported as a name that did not resolve.
+        for (pac, lan) in [(no_pac, true), (None, false)] {
+            let c = resolution_check("app.local", "local", pac, lan, None);
+            assert_eq!(c.status, Status::Warn);
+            assert!(c.detail.contains("did not answer in time"), "{}", c.detail);
         }
         // A name that does resolve in LAN mode passes as usual.
         assert_eq!(

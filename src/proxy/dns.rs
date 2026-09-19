@@ -63,6 +63,14 @@ static REFUSED_TCP: crate::proxy::LogThrottle = crate::proxy::LogThrottle::new()
 /// opening sockets and never writing to them.
 const MAX_TCP_CONNECTIONS: usize = 64;
 
+/// How long one TCP connection may stay open, however busy it is.
+///
+/// The idle timeout ends a connection that goes quiet, but not one that sends
+/// a small query every few seconds. Without an overall limit, a local process
+/// could hold every slot that way indefinitely. Real resolvers reconnect
+/// freely, so the only cost of a limit is an occasional new connection.
+const TCP_CONNECTION_LIFETIME: std::time::Duration = std::time::Duration::from_secs(60);
+
 const TYPE_A: u16 = 1;
 const TYPE_AAAA: u16 = 28;
 const CLASS_IN: u16 = 1;
@@ -488,8 +496,18 @@ pub async fn serve(
                 }
                 let cfg = Arc::clone(&cfg);
                 conns.spawn(async move {
-                    if let Err(e) = serve_tcp_conn(stream, &cfg, TCP_IDLE_TIMEOUT).await {
-                        log::debug!("DNS TCP connection from {peer} ended: {e}");
+                    match tokio::time::timeout(
+                        TCP_CONNECTION_LIFETIME,
+                        serve_tcp_conn(stream, &cfg, TCP_IDLE_TIMEOUT),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => log::debug!("DNS TCP connection from {peer} ended: {e}"),
+                        Err(_) => log::debug!(
+                            "DNS TCP connection from {peer} closed after \
+                             {TCP_CONNECTION_LIFETIME:?}"
+                        ),
                     }
                 });
             }

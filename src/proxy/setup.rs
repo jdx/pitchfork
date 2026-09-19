@@ -160,6 +160,19 @@ impl SetupContext {
         self.resolved_dropin_dir.join("pitchfork.conf")
     }
 
+    /// Address the port redirect points at: the one the proxy answers on,
+    /// without the brackets a URL needs.
+    fn redirect_target(&self) -> &str {
+        self.contact_host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+    }
+
+    /// Whether the proxy answers on IPv6, which decides the redirect's family.
+    fn ipv6(&self) -> bool {
+        self.redirect_target().contains(':')
+    }
+
     /// URL of the PAC script served by the proxy.
     fn pac_url(&self) -> String {
         super::pac::url(&self.contact_host, self.proxy_port)
@@ -277,6 +290,25 @@ pub enum Action {
     /// Its own action because `setcap -r` clears the whole set: whether that is
     /// safe depends on what else is on the file, which has to be read first.
     RevokeBindCapability { binary: PathBuf },
+    /// Add `cap_net_bind_service` to a binary's file capabilities.
+    ///
+    /// Its own action for the same reason as the revoke: `setcap` writes the
+    /// whole set, so `cap_net_bind_service=+ep` alone silently drops anything
+    /// else the file carried. What is already there has to be read first.
+    GrantBindCapability { binary: PathBuf },
+    /// Enable pf with `pfctl -Ef`, loading `pf_conf`, and keep the reference
+    /// token it returns in `token`.
+    ///
+    /// pf is shared. Apple's stock `pf.conf` asks every component to enable it
+    /// with `-E` and release it with `-X <token>`, so that it goes off only
+    /// once nothing holds it. Without the token undo could only leave pf on
+    /// for good, or switch it off under whoever else needs it.
+    EnablePf { pf_conf: PathBuf, token: PathBuf },
+    /// Reload `pf_conf` and release the reference `EnablePf` kept in `token`.
+    ///
+    /// One step with the enable's resource, so a re-run that still uses pf
+    /// does not release it only to take it again.
+    ReleasePf { pf_conf: PathBuf, token: PathBuf },
     /// Install the CA into the system trust store, in this process.
     TrustCa { path: PathBuf },
     /// Remove the CA from the system trust store.
@@ -302,7 +334,7 @@ pub enum Resource {
     /// A marked block inside a file pitchfork shares, by path.
     Block(PathBuf),
     /// A redirect from one port to another.
-    Redirect { from: u16, to: u16 },
+    Redirect { from: u16, to: u16, ipv6: bool },
     /// The bind capability on a binary.
     BindCapability(PathBuf),
     /// The CA in the system trust store.
@@ -341,7 +373,10 @@ impl Step {
             | Action::RemoveBlock { sudo, .. }
             | Action::Run { sudo, .. }
             | Action::RunIfPresent { sudo, .. } => *sudo,
-            Action::RevokeBindCapability { .. } => true,
+            Action::RevokeBindCapability { .. }
+            | Action::GrantBindCapability { .. }
+            | Action::EnablePf { .. }
+            | Action::ReleasePf { .. } => true,
             // macOS installs into the login keychain and prompts on its own;
             // on Linux the CA step is planned as a sudo'd re-invocation instead.
             Action::UntrustCa { sudo, .. } => *sudo,
@@ -401,10 +436,37 @@ fn resolved_dropin(tld: &str, dns_port: u16) -> String {
 }
 
 /// pf rules redirecting the standard port to the proxy's unprivileged port.
-fn pf_anchor_rules(standard_port: u16, proxy_port: u16) -> String {
+///
+/// `target` is the address the proxy answers on. Its family decides the rule's:
+/// with `proxy.host = "::1"` the resolver answers AAAA only, so clients connect
+/// over IPv6 and an `inet` rule would never see them.
+fn pf_anchor_rules(standard_port: u16, proxy_port: u16, target: &str) -> String {
+    let family = if target.contains(':') {
+        "inet6"
+    } else {
+        "inet"
+    };
     format!(
         "{OWNED_HEADER}\n\
-         rdr pass on lo0 inet proto tcp from any to any port {standard_port} -> 127.0.0.1 port {proxy_port}\n"
+         rdr pass on lo0 {family} proto tcp from any to any port {standard_port} -> {target} port {proxy_port}\n"
+    )
+}
+
+/// Reject a `proxy.port` the proxy itself would refuse to listen on.
+///
+/// Every other reader of this setting — the listener, `proxy doctor`, the URL
+/// builder — rejects a value outside 1..=65535. Setup used to fall back to 443
+/// instead, which meant configuring the machine for a port nothing will ever
+/// bind: a redirect to the standard port, or a capability granted, for a proxy
+/// that cannot start. Worse, that port went into the record, so undo would act
+/// on it too.
+pub fn validate_proxy_port(port: i64) -> Result<()> {
+    if u16::try_from(port).ok().filter(|&p| p > 0).is_some() {
+        return Ok(());
+    }
+    miette::bail!(
+        "proxy.port is {port}, which is not a usable port. \
+         Set it between 1 and 65535 before running setup."
     )
 }
 
@@ -735,14 +797,8 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
                     "grant {} permission to bind ports below 1024 (cap_net_bind_service)",
                     ctx.binary.display()
                 ),
-                action: Action::Run {
-                    argv: vec![
-                        "setcap".into(),
-                        "cap_net_bind_service=+ep".into(),
-                        ctx.binary.to_string_lossy().into_owned(),
-                    ],
-                    sudo: true,
-                    skip_if: None,
+                action: Action::GrantBindCapability {
+                    binary: ctx.binary.clone(),
                 },
                 resource: Some(Resource::BindCapability(ctx.binary.clone())),
             }),
@@ -784,7 +840,7 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
                 ),
                 action: Action::WriteFile {
                     path: ctx.pf_anchor.clone(),
-                    content: pf_anchor_rules(standard, ctx.proxy_port),
+                    content: pf_anchor_rules(standard, ctx.proxy_port, ctx.redirect_target()),
                     sudo: true,
                 },
                 resource: Some(Resource::File(ctx.pf_anchor.clone())),
@@ -807,14 +863,9 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
             });
             plan.steps.push(Step {
                 summary: "enable pf and load the new rules".to_string(),
-                action: Action::Run {
-                    argv: vec![
-                        "pfctl".into(),
-                        "-Ef".into(),
-                        ctx.pf_conf.to_string_lossy().into_owned(),
-                    ],
-                    sudo: true,
-                    skip_if: None,
+                action: Action::EnablePf {
+                    pf_conf: ctx.pf_conf.clone(),
+                    token: pf_token_path(),
                 },
                 resource: Some(Resource::ServiceReload("pf".into())),
             });
@@ -822,11 +873,12 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
         Platform::Linux => {
             plan.steps.push(Step {
                 summary: format!(
-                    "redirect loopback traffic for port {standard} to {} (iptables)",
-                    ctx.proxy_port
+                    "redirect loopback traffic for port {standard} to {} ({})",
+                    ctx.proxy_port,
+                    iptables_program(ctx.ipv6())
                 ),
                 action: Action::Run {
-                    argv: iptables_redirect_argv("-A", standard, ctx.proxy_port),
+                    argv: iptables_redirect_argv("-A", standard, ctx.proxy_port, ctx.ipv6()),
                     sudo: true,
                     // `-C` checks for the identical rule, so re-running setup
                     // does not stack duplicate NAT entries.
@@ -834,11 +886,13 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
                         "-C",
                         standard,
                         ctx.proxy_port,
+                        ctx.ipv6(),
                     ))),
                 },
                 resource: Some(Resource::Redirect {
                     from: standard,
                     to: ctx.proxy_port,
+                    ipv6: ctx.ipv6(),
                 }),
             });
         }
@@ -849,10 +903,18 @@ fn plan_ports(ctx: &SetupContext, plan: &mut Plan) {
     }
 }
 
+/// The iptables binary for the address family the proxy answers on.
+fn iptables_program(ipv6: bool) -> &'static str {
+    if ipv6 { "ip6tables" } else { "iptables" }
+}
+
 /// iptables arguments for the loopback redirect, parameterised by `-A`/`-D`.
-fn iptables_redirect_argv(op: &str, from: u16, to: u16) -> Vec<String> {
+///
+/// IPv6 traffic never passes through the `iptables` tables, so a proxy on
+/// `::1` needs its rule in `ip6tables`.
+fn iptables_redirect_argv(op: &str, from: u16, to: u16, ipv6: bool) -> Vec<String> {
     [
-        "iptables",
+        iptables_program(ipv6),
         "-t",
         "nat",
         op,
@@ -899,6 +961,13 @@ fn managed_resolver_files(dir: &Path, tld: &str, include_current: bool) -> Vec<P
 }
 
 /// Where the record of the last successful setup lives.
+/// Where the pf reference token taken by setup is kept, for undo to release.
+fn pf_token_path() -> PathBuf {
+    crate::env::PITCHFORK_STATE_DIR
+        .join("proxy")
+        .join("pf-token")
+}
+
 fn record_path() -> PathBuf {
     crate::env::PITCHFORK_STATE_DIR
         .join("proxy")
@@ -1310,15 +1379,13 @@ pub fn plan_undo(ctx: &SetupContext) -> Plan {
                 resource: Some(Resource::File(ctx.pf_anchor.clone())),
             });
             plan.steps.push(Step {
-                summary: format!("reload pf rules from {}", ctx.pf_conf.display()),
-                action: Action::Run {
-                    argv: vec![
-                        "pfctl".into(),
-                        "-f".into(),
-                        ctx.pf_conf.to_string_lossy().into_owned(),
-                    ],
-                    sudo: true,
-                    skip_if: None,
+                summary: format!(
+                    "reload pf rules from {} and release pitchfork's hold on pf",
+                    ctx.pf_conf.display()
+                ),
+                action: Action::ReleasePf {
+                    pf_conf: ctx.pf_conf.clone(),
+                    token: pf_token_path(),
                 },
                 resource: Some(Resource::ServiceReload("pf".into())),
             });
@@ -1330,7 +1397,8 @@ pub fn plan_undo(ctx: &SetupContext) -> Plan {
                     // remove, and two setups that differ only in `proxy.port` must
                     // not look like the same step.
                     summary: format!(
-                        "drop the iptables redirect from port {} to {}",
+                        "drop the {} redirect from port {} to {}",
+                        iptables_program(ctx.ipv6()),
                         ctx.standard_port(),
                         ctx.proxy_port
                     ),
@@ -1342,13 +1410,20 @@ pub fn plan_undo(ctx: &SetupContext) -> Plan {
                             "-C",
                             ctx.standard_port(),
                             ctx.proxy_port,
+                            ctx.ipv6(),
                         )),
-                        argv: iptables_redirect_argv("-D", ctx.standard_port(), ctx.proxy_port),
+                        argv: iptables_redirect_argv(
+                            "-D",
+                            ctx.standard_port(),
+                            ctx.proxy_port,
+                            ctx.ipv6(),
+                        ),
                         sudo: true,
                     },
                     resource: Some(Resource::Redirect {
                         from: ctx.standard_port(),
                         to: ctx.proxy_port,
+                        ipv6: ctx.ipv6(),
                     }),
                 });
             }
@@ -1663,15 +1738,22 @@ fn write_file(path: &Path, content: &str, sudo: bool) -> Result<()> {
             .stdin(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| miette::miette!("Failed to write {} via sudo: {e}", path.display()))?;
-        child
+        // The write's result is held until the child has been waited for: a
+        // `tee` that died early (a declined password, say) breaks the pipe,
+        // and returning then would leave it unreaped.
+        let written = child
             .stdin
-            .as_mut()
-            .ok_or_else(|| miette::miette!("Failed to open stdin for sudo tee"))?
-            .write_all(content.as_bytes())
-            .map_err(|e| miette::miette!("Failed to write {}: {e}", path.display()))?;
+            .take()
+            .ok_or_else(|| miette::miette!("Failed to open stdin for sudo tee"))
+            .and_then(|mut stdin| {
+                stdin
+                    .write_all(content.as_bytes())
+                    .map_err(|e| miette::miette!("Failed to write {}: {e}", path.display()))
+            });
         let status = child
             .wait()
             .map_err(|e| miette::miette!("Failed to write {}: {e}", path.display()))?;
+        written?;
         if !status.success() {
             miette::bail!(
                 "Failed to write {}: sudo tee exited nonzero",
@@ -1927,6 +2009,13 @@ fn already_done(action: &Action) -> bool {
         Action::RevokeBindCapability { binary } => {
             revoke_already_done(file_capabilities(binary).as_deref())
         }
+        // Already carrying it. An unreadable answer is not that, so the step
+        // runs and reports what it found rather than assuming.
+        Action::GrantBindCapability { binary } => {
+            file_capabilities(binary).is_some_and(|caps| caps.iter().any(|c| c == BIND_CAPABILITY))
+        }
+        // Both reload rules the other steps may just have changed.
+        Action::EnablePf { .. } | Action::ReleasePf { .. } => false,
         Action::TrustCa { path } => crate::proxy::trust::is_ca_trusted(path),
         // Skipped only when the certificate is present and demonstrably not
         // trusted. Two absences are deliberately not enough. A missing PEM is
@@ -2090,6 +2179,19 @@ fn execute(step: &Step) -> Result<()> {
             run(argv, *sudo)
         }
         Action::RevokeBindCapability { binary } => revoke_bind_capability(binary),
+        Action::EnablePf { pf_conf, token } => enable_pf(pf_conf, token),
+        Action::ReleasePf { pf_conf, token } => {
+            run(
+                &[
+                    "pfctl".into(),
+                    "-f".into(),
+                    pf_conf.to_string_lossy().into_owned(),
+                ],
+                true,
+            )?;
+            release_pf(token)
+        }
+        Action::GrantBindCapability { binary } => grant_bind_capability(binary),
         Action::TrustCa { path } => crate::proxy::trust::install_cert(path),
         Action::UntrustCa { path, sudo } => {
             if *sudo && !is_root() {
@@ -2203,6 +2305,164 @@ fn parse_capabilities(spec: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// Add `cap_net_bind_service` to `path`, refusing to discard any others.
+///
+/// `setcap` writes the whole set, so granting ours on its own would silently
+/// drop any other capability the file carried — the mirror of the hazard the
+/// revoke guards against.
+fn grant_bind_capability(path: &Path) -> Result<()> {
+    check_grant(path, file_capabilities(path).as_deref())?;
+    run(
+        &[
+            "setcap".into(),
+            format!("{BIND_CAPABILITY}=+ep"),
+            path.to_string_lossy().into_owned(),
+        ],
+        true,
+    )
+}
+
+/// Refuse a grant that would clear capabilities pitchfork did not set.
+///
+/// Carrying the others across is not attempted: `getcap` is read here only
+/// for names, and rewriting them with our flags could widen a capability
+/// that was, say, inheritable only. Separated from running `getcap` so the
+/// decision can be tested.
+fn check_grant(path: &Path, caps: Option<&[String]>) -> Result<()> {
+    // An unreadable answer is not "nothing there". Writing only our capability
+    // on that basis could clear one we never saw, so say so instead.
+    let Some(caps) = caps else {
+        miette::bail!(
+            "Could not read the capabilities on {} — `getcap` was not found or failed, \
+             so {BIND_CAPABILITY} was not granted.\n\
+             Check with: sudo getcap {}\n\
+             Grant with: sudo setcap {BIND_CAPABILITY}=+ep {}",
+            path.display(),
+            path.display(),
+            path.display()
+        );
+    };
+    let others: Vec<&str> = caps
+        .iter()
+        .map(String::as_str)
+        .filter(|c| *c != BIND_CAPABILITY)
+        .collect();
+    if !others.is_empty() {
+        miette::bail!(
+            "{} already carries {}, which pitchfork did not grant. \
+             `setcap` replaces the whole set, so granting {BIND_CAPABILITY} here \
+             would clear those; it has not been granted.\n\
+             Add it alongside them by hand, keeping their flags as `sudo getcap {}` prints them.",
+            path.display(),
+            others.join(", "),
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Enable pf, loading `pf_conf`, and record the reference that holds it on.
+///
+/// The new reference is taken before an earlier run's is let go, so pf never
+/// drops out in between; releasing the old one keeps re-runs from stacking
+/// references that undo would never give back.
+fn enable_pf(pf_conf: &Path, token: &Path) -> Result<()> {
+    let argv: Vec<String> = vec![
+        "pfctl".into(),
+        "-Ef".into(),
+        pf_conf.to_string_lossy().into_owned(),
+    ];
+    let (program, args): (&str, &[String]) = if is_root() {
+        (argv[0].as_str(), &argv[1..])
+    } else {
+        ("sudo", &argv[..])
+    };
+    // pfctl reports the token on stderr, alongside anything else it has to
+    // say, so the output is captured and passed on rather than swallowed.
+    let out = std::process::Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| miette::miette!("Failed to run `{}`: {e}", argv.join(" ")))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    eprint!("{stderr}");
+    if !out.status.success() {
+        miette::bail!(
+            "`{}` failed with exit code {}",
+            argv.join(" "),
+            out.status.code().unwrap_or(-1)
+        );
+    }
+
+    let previous = read_pf_token(token);
+    match (parse_pf_token(&stderr), boot_time()) {
+        (Some(new), Some(boot)) => {
+            if let Some(parent) = token.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(token, format!("{new}\n{boot}\n"))
+                .map_err(|e| miette::miette!("Failed to write {}: {e}", token.display()))?;
+        }
+        // Nothing to keep, so undo will leave pf as it is, as it always did.
+        _ => {
+            let _ = std::fs::remove_file(token);
+        }
+    }
+    if let Some(old) = previous {
+        // Best effort: the rules are loaded either way.
+        let _ = run(&["pfctl".into(), "-X".into(), old], true);
+    }
+    Ok(())
+}
+
+/// Release the pf reference `enable_pf` recorded, if it still means anything.
+fn release_pf(token: &Path) -> Result<()> {
+    let Some(held) = read_pf_token(token) else {
+        // None recorded, or one from before a reboot, which pf has forgotten.
+        let _ = std::fs::remove_file(token);
+        return Ok(());
+    };
+    run(&["pfctl".into(), "-X".into(), held], true)?;
+    let _ = std::fs::remove_file(token);
+    Ok(())
+}
+
+/// The token in `path`, when it was taken during the current boot.
+///
+/// References do not survive a reboot, and pf hands out tokens afresh, so a
+/// stale one could release a reference some other component holds.
+fn read_pf_token(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut lines = content.lines();
+    let token = lines.next()?.trim();
+    let boot = lines.next()?.trim();
+    (token.bytes().all(|b| b.is_ascii_digit())
+        && !token.is_empty()
+        && Some(boot) == boot_time().as_deref())
+    .then(|| token.to_string())
+}
+
+/// The reference token in `pfctl -E` output: `Token : 1234567890`.
+fn parse_pf_token(stderr: &str) -> Option<String> {
+    stderr.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        let value = value.trim();
+        (key.trim() == "Token" && !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| value.to_string())
+    })
+}
+
+/// When the machine booted, as the kernel reports it; stable for one boot.
+fn boot_time() -> Option<String> {
+    let out = std::process::Command::new("sysctl")
+        .args(["-n", "kern.boottime"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !text.is_empty()).then_some(text)
 }
 
 /// Remove `cap_net_bind_service` from `path`, leaving any others alone.
@@ -2487,7 +2747,13 @@ pub fn context_from_settings(s: &crate::settings::Settings, pac: bool) -> SetupC
         platform,
         tld,
         dns_port: super::dns::dns_port(s),
-        proxy_port: u16::try_from(s.proxy.port).unwrap_or(443),
+        // Falls back to the standard port only so the struct can be built;
+        // `validate_proxy_port` refuses the run before any plan is made from
+        // it, and undo works from the recorded port rather than this one.
+        proxy_port: u16::try_from(s.proxy.port)
+            .ok()
+            .filter(|&p| p > 0)
+            .unwrap_or(443),
         https: s.proxy.https,
         dns_enabled: s.proxy.dns,
         pac,
@@ -3439,7 +3705,8 @@ mod tests {
                 format!("[sudo] remove {resolver}"),
                 "[sudo] remove the pitchfork anchor from /etc/pf.conf".to_string(),
                 "[sudo] remove /etc/pf.anchors/pitchfork".to_string(),
-                "[sudo] reload pf rules from /etc/pf.conf".to_string(),
+                "[sudo] reload pf rules from /etc/pf.conf and release pitchfork's hold on pf"
+                    .to_string(),
                 "remove the pitchfork CA at /state/proxy/ca.pem from the system trust store"
                     .to_string(),
             ]
@@ -3927,6 +4194,55 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
     }
 
     #[test]
+    fn an_unusable_proxy_port_is_refused_rather_than_coerced() {
+        // The listener, `proxy doctor` and the URL builder all reject a port
+        // outside 1..=65535. Setup used to fall back to 443, which configures
+        // the machine for a port nothing will ever bind — and records it, so
+        // undo acts on it too.
+        for bad in [0, -1, 65536, i64::MAX, i64::MIN] {
+            assert!(
+                validate_proxy_port(bad).is_err(),
+                "proxy.port {bad} was accepted"
+            );
+        }
+        for good in [1, 80, 443, 8443, 65535] {
+            assert!(
+                validate_proxy_port(good).is_ok(),
+                "proxy.port {good} was refused"
+            );
+        }
+    }
+
+    #[test]
+    fn granting_the_bind_capability_never_clears_others() {
+        // `setcap` writes the whole set, so granting ours on its own drops
+        // anything else the binary carried, silently. The revoke side already
+        // guards against that hazard; the grant has to as well.
+        let bin = Path::new("/usr/local/bin/pitchfork");
+        let caps = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+
+        assert!(check_grant(bin, Some(&[])).is_ok());
+        // Ours already there is a re-grant of the same set.
+        assert!(check_grant(bin, Some(&caps(&[BIND_CAPABILITY]))).is_ok());
+        let err = check_grant(bin, Some(&caps(&["cap_net_raw", BIND_CAPABILITY])))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cap_net_raw"), "{err}");
+        // Unknown is not empty.
+        assert!(check_grant(bin, None).is_err());
+
+        // And the plan uses the action that checks, not a bare `setcap`.
+        let mut c = ctx(Platform::Linux);
+        c.proxy_port = 443;
+        let step = plan(&c)
+            .steps
+            .into_iter()
+            .find(|s| s.summary.contains("cap_net_bind_service"))
+            .expect("linux plans a capability grant for a privileged port");
+        assert!(matches!(step.action, Action::GrantBindCapability { .. }));
+    }
+
+    #[test]
     fn undo_keeps_the_anchor_while_pf_conf_still_names_it() {
         // The mirror of the forward guard. `apply` continues past a failed
         // step, so a `RemoveBlock` that did not go through would be followed
@@ -3935,7 +4251,7 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
         let dir = tempfile::tempdir().unwrap();
         let conf = dir.path().join("pf.conf");
         let anchor = dir.path().join("pitchfork-anchor");
-        std::fs::write(&anchor, pf_anchor_rules(443, 8443)).unwrap();
+        std::fs::write(&anchor, pf_anchor_rules(443, 8443, "127.0.0.1")).unwrap();
         std::fs::write(
             &conf,
             format!("{APPLE_PF_CONF}{MARKER_START}\nload anchor \"pitchfork\"\n{MARKER_END}\n"),
@@ -3994,7 +4310,7 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
         assert!(!anchor.exists());
 
         // And with the block gone the ordinary removal goes through.
-        std::fs::write(&anchor, pf_anchor_rules(443, 8443)).unwrap();
+        std::fs::write(&anchor, pf_anchor_rules(443, 8443, "127.0.0.1")).unwrap();
         std::fs::write(&conf, APPLE_PF_CONF).unwrap();
         execute(&step).expect("the anchor was kept with nothing referencing it");
         assert!(!anchor.exists());
@@ -4055,7 +4371,7 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
         assert_eq!(std::fs::read_to_string(&conf).unwrap(), APPLE_PF_CONF);
 
         // Once our own anchor is in place the same step goes through.
-        std::fs::write(&anchor, pf_anchor_rules(443, 8443)).unwrap();
+        std::fs::write(&anchor, pf_anchor_rules(443, 8443, "127.0.0.1")).unwrap();
         execute(&step).expect("the block was refused with the anchor in place");
         assert!(
             std::fs::read_to_string(&conf)
@@ -4215,6 +4531,107 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
         assert!(dropin.contains("DNS=127.0.0.1:15353"));
         // A routing-only domain, so other lookups keep using the link's servers.
         assert!(dropin.contains("Domains=~test"));
-        assert!(pf_anchor_rules(443, 8443).contains("port 443 -> 127.0.0.1 port 8443"));
+        assert!(
+            pf_anchor_rules(443, 8443, "127.0.0.1")
+                .contains("lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443")
+        );
+    }
+
+    #[test]
+    fn the_pf_reference_is_kept_and_given_back() {
+        // pfctl -E prints the token among its other chatter.
+        let stderr = "No ALTQ support in kernel\nALTQ related functions disabled\n\
+                      pf enabled\nToken : 11083498731209435137\n";
+        assert_eq!(
+            parse_pf_token(stderr).as_deref(),
+            Some("11083498731209435137")
+        );
+        assert_eq!(parse_pf_token("pf already enabled\n"), None);
+        assert_eq!(parse_pf_token("Token : ; rm -rf /\n"), None);
+
+        // Setup takes the reference, undo gives it back, and a re-run that
+        // still redirects through pf does not release it in between: the two
+        // steps share a resource, so reconcile leaves the release out.
+        let mac = ctx(Platform::MacOs);
+        let forward = plan(&mac);
+        assert!(
+            forward
+                .steps
+                .iter()
+                .any(|s| matches!(s.action, Action::EnablePf { .. }))
+        );
+        assert!(
+            plan_undo(&mac)
+                .steps
+                .iter()
+                .any(|s| matches!(s.action, Action::ReleasePf { .. }))
+        );
+        assert!(
+            !plan_with_reconcile(&mac, std::slice::from_ref(&mac))
+                .steps
+                .iter()
+                .any(|s| matches!(s.action, Action::ReleasePf { .. }))
+        );
+
+        // Switching to PAC drops the redirect, so the reference goes too.
+        let mut pac = mac.clone();
+        pac.pac = true;
+        assert!(
+            plan_with_reconcile(&pac, std::slice::from_ref(&mac))
+                .steps
+                .iter()
+                .any(|s| matches!(s.action, Action::ReleasePf { .. }))
+        );
+    }
+
+    #[test]
+    fn the_redirect_follows_the_family_the_proxy_answers_on() {
+        // With `proxy.host = "::1"` the resolver answers AAAA only, so clients
+        // arrive over IPv6 and an IPv4-only redirect never sees them.
+        let mut linux = ctx(Platform::Linux);
+        linux.contact_host = "[::1]".into();
+        let step = plan(&linux)
+            .steps
+            .into_iter()
+            .find(|s| matches!(s.resource, Some(Resource::Redirect { .. })))
+            .expect("a redirect for an unprivileged port");
+        let Action::Run { argv, skip_if, .. } = &step.action else {
+            panic!("unexpected action {:?}", step.action);
+        };
+        assert_eq!(argv[0], "ip6tables");
+        assert_eq!(skip_if.as_ref().unwrap().argv[0], "ip6tables");
+        let undo = plan_undo(&linux);
+        let undo = undo
+            .steps
+            .iter()
+            .find(|s| s.resource == step.resource)
+            .expect("undo removes the same redirect");
+        let Action::RunIfPresent { argv, .. } = &undo.action else {
+            panic!("unexpected action {:?}", undo.action);
+        };
+        assert_eq!(argv[0], "ip6tables");
+
+        let mut mac = ctx(Platform::MacOs);
+        mac.contact_host = "[::1]".into();
+        let anchor = plan(&mac)
+            .steps
+            .into_iter()
+            .find_map(|s| match s.action {
+                Action::WriteFile { path, content, .. } if path == mac.pf_anchor => Some(content),
+                _ => None,
+            })
+            .expect("an anchor file");
+        assert!(
+            anchor.contains("lo0 inet6 proto tcp from any to any port 443 -> ::1 port 8443"),
+            "{anchor}"
+        );
+
+        // The IPv4 default is unchanged.
+        let step = plan(&ctx(Platform::Linux))
+            .steps
+            .into_iter()
+            .find(|s| matches!(s.resource, Some(Resource::Redirect { .. })))
+            .unwrap();
+        assert!(matches!(&step.action, Action::Run { argv, .. } if argv[0] == "iptables"));
     }
 }

@@ -130,14 +130,18 @@ impl Setup {
         }
 
         // Refuse a TLD that would steer a privileged write somewhere it does
-        // not belong, before any plan is built from it.
+        // not belong, or a port the proxy itself would refuse to listen on,
+        // before any plan is built from them. The TLD checked is the one the
+        // plan uses: LAN mode always serves `local`, whatever `proxy.tld` says.
         //
-        // Undoing is not refused for it. Changing `proxy.tld` to something
-        // invalid after a setup must not strand the resolver files, redirects
-        // and trust-store changes that setup really installed; those come from
-        // the records, which were validated when written. Only the
-        // current-settings half of the plan is dropped.
-        let tld_error = match setup::validate_tld(&s.proxy.tld) {
+        // Undoing is not refused for them. Changing `proxy.tld` or
+        // `proxy.port` to something invalid after a setup must not strand the
+        // resolver files, redirects and trust-store changes that setup really
+        // installed; those come from the records, which were validated when
+        // written. Only the current-settings half of the plan is dropped.
+        let settings_error = match setup::validate_tld(crate::proxy::effective_tld(&s))
+            .and_then(|()| setup::validate_proxy_port(s.proxy.port))
+        {
             Ok(()) => None,
             Err(e) if self.undo => Some(e),
             Err(e) => return Err(e),
@@ -157,12 +161,12 @@ impl Setup {
         // behind.
         let recorded = setup::load_records();
         let plan = if self.undo {
-            if let Some(e) = &tld_error {
-                println!("Ignoring the configured proxy.tld: {e}");
+            if let Some(e) = &settings_error {
+                println!("Ignoring the current proxy settings: {e}");
                 println!("Undoing from the recorded setups only.");
                 println!();
             }
-            setup::plan_undo_from(tld_error.is_none().then_some(&ctx), &recorded)
+            setup::plan_undo_from(settings_error.is_none().then_some(&ctx), &recorded)
         } else {
             // Removes what an earlier setup installed that this one replaces,
             // before installing the new configuration.
