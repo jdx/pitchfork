@@ -596,10 +596,14 @@ fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     // submodule and a `--separate-git-dir` checkout also have a `.git` file,
     // and both are checkouts in their own right whose worktrees must still be
     // listed.
-    if main_checkout_root(project_dir).is_some() {
+    if let Some(main) = main_checkout_root(project_dir) {
         // Keep this checkout's own branch and URL name: discovery lists every
         // worktree of the repository, so take the entry for this directory.
-        let own = discover_cached(project_dir)
+        //
+        // Discovery runs from the main checkout, not from here: `jj workspace
+        // list` reports `default` for whichever directory it ran in, so asking
+        // this workspace would name it `default` instead of itself.
+        let own = discover_cached(&main)
             .into_iter()
             .find(|wt| canonical(&wt.path) == project_canonical);
         let (branch, name) = match own {
