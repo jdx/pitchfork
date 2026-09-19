@@ -136,8 +136,13 @@ pub(crate) fn plan_idle_stops(
             .cloned()
             .collect();
         if level.is_empty() {
-            // A dependency cycle: nothing can go first, so stop them together.
-            level = chosen.iter().cloned().collect();
+            // What is left is a dependency cycle and what it depends on.
+            // Nothing in a cycle can go first, and stopping its members
+            // together cannot be undone if one of them then fails to stop,
+            // which would leave the rest running without it. `depends` cycles
+            // are refused at start, so one only appears through a later
+            // config edit; leave it running.
+            break;
         }
         level.sort();
         for id in &level {
@@ -226,10 +231,12 @@ impl Supervisor {
     /// starting while the level is handled: a request arriving meanwhile
     /// waits and starts the daemon again once it has stopped.
     ///
-    /// Members of a dependency cycle share a level and depend on each other,
-    /// so each is checked with the other claimed members set aside. A member
-    /// that no longer qualifies leaves that set and the rest are checked
-    /// again, so nothing goes while a member that stays still needs it.
+    /// The planner leaves dependency cycles out, so members of a level do not
+    /// depend on each other; each is still checked with the other claimed
+    /// members set aside, and one that no longer qualifies leaves that set
+    /// and has its claim released at once, so requests for it do not wait on
+    /// the rest of the level and nothing goes while a member that stays still
+    /// needs it.
     /// The last check for each member runs under its stop lock, since a
     /// request, an explicit start, a shell or a new dependent may have
     /// arrived since the plan was made.
@@ -243,7 +250,6 @@ impl Supervisor {
                 _ => debug!("idle stop of {id} called off: it was active again"),
             }
         }
-        let claimed: Vec<DaemonId> = group.iter().cloned().collect();
 
         loop {
             let mut blocked = Vec::new();
@@ -257,7 +263,9 @@ impl Supervisor {
                 break;
             }
             for id in blocked {
+                // Staying up, so requests for it must not wait on this level.
                 group.remove(&id);
+                ACTIVITY.release_idle_stop(&id);
             }
         }
 
@@ -293,6 +301,8 @@ impl Supervisor {
                     }
                 }
             };
+            // Handled either way: requests for it no longer wait on this level.
+            ACTIVITY.release_idle_stop(&id);
             if stopped {
                 self.add_notification(Info, format!("stopped idle {id}"))
                     .await;
@@ -301,10 +311,6 @@ impl Supervisor {
                 // what it needs.
                 group.remove(&id);
             }
-        }
-
-        for id in &claimed {
-            ACTIVITY.release_idle_stop(id);
         }
     }
 
@@ -491,8 +497,14 @@ mod tests {
     }
 
     #[test]
-    fn a_dependency_cycle_stops_together() {
-        let f = Fixture::new().add("a", G, &["b"]).add("b", G, &["a"]);
-        assert_eq!(f.plan(&[], &["a", "b"]), vec![vec!["a", "b"]]);
+    fn a_dependency_cycle_is_left_running() {
+        // `web` depends on the cycle and goes; the cycle and `db`, which it
+        // needs, stay.
+        let f = Fixture::new()
+            .add("db", G, &[])
+            .add("a", G, &["b", "db"])
+            .add("b", G, &["a"])
+            .add("web", G, &["a"]);
+        assert_eq!(f.plan(&[], &["db", "a", "b", "web"]), vec![vec!["web"]]);
     }
 }
