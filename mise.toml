@@ -1,4 +1,4 @@
-min_version = "2026.8.16"
+min_version = "2026.9.2"
 
 [env]
 _.path = ["target/debug", "test/bats/bin"]
@@ -100,7 +100,7 @@ run = [
 ]
 
 [tools]
-mr-boxington = "1.11.1"
+mr-boxington = "1.14.0"
 usage = "6.9.1"
 # Pinned rather than "latest" because tak is the measuring instrument: an
 # upgrade that changes how it samples would land in the series as a step change
@@ -127,7 +127,7 @@ env = { MBX_CARGO_SHIM_MODE = "1" }
 [tasks.perf]
 depends = ["build:ui"]
 dir = "{{config_root}}"
-run = ["mbx build --release", "tak run"]
+run = ["cargo build --release", "tak run"]
 
 # Same measurement, appended to refs/notes/tak for this commit. Run by the
 # `perf` workflow on every push to main; the notes are the history. Safe to run
@@ -135,4 +135,4 @@ run = ["mbx build --release", "tak run"]
 [tasks."perf:record"]
 depends = ["build:ui"]
 dir = "{{config_root}}"
-run = ["mbx build --release", "tak run --record"]
+run = ["cargo build --release", "tak run --record"]
