@@ -3372,12 +3372,29 @@ async fn resolve_target(host: &str, tld: &str) -> ResolveResult {
 enum Running {
     /// Still running; forward while holding this.
     Yes(ActivityGuard),
-    /// Being stopped for inactivity. The request waits for the stop to finish
-    /// and then starts the daemon again, rather than reaching a daemon that is
-    /// going away.
+    /// Still being stopped for inactivity after waiting as long as an
+    /// auto-start may take.
     Stopping,
-    /// Stopped since the state was read.
+    /// Stopped since the state was read, including by an idle stop the
+    /// request waited out: start it again.
     No,
+}
+
+/// Wait for any stop for inactivity of `ids` to finish, for at most
+/// `proxy.auto_start_timeout`. Returns whether none is under way any more.
+///
+/// A request that arrives while its daemon is being stopped waits here and
+/// then starts it again, rather than reaching a daemon that is going away or
+/// being turned away while it goes.
+async fn wait_out_idle_stops(ids: &[DaemonId]) -> bool {
+    let deadline = tokio::time::Instant::now() + settings().proxy_auto_start_timeout();
+    while ids.iter().any(|id| ACTIVITY.is_idle_stopping(id)) {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    true
 }
 
 /// Record a request for a daemon that the state showed running, then check
@@ -3388,7 +3405,11 @@ enum Running {
 /// as long as the request holds the guard.
 async fn begin_running(id: &DaemonId) -> Running {
     let Some(activity) = ACTIVITY.begin(id) else {
-        return Running::Stopping;
+        return if wait_out_idle_stops(std::slice::from_ref(id)).await {
+            Running::No
+        } else {
+            Running::Stopping
+        };
     };
     let running = {
         let state_file = SUPERVISOR.state_file.lock().await;
@@ -3742,10 +3763,20 @@ async fn try_auto_start_inner(
         crate::deps::resolve_dependencies(std::slice::from_ref(daemon_id), &pt.daemons)
             .map(|order| order.levels.into_iter().flatten().collect())
             .unwrap_or_else(|_| vec![daemon_id.clone()]);
-    let Some(mut activity) = ACTIVITY.begin_all(&closure) else {
-        return ResolveResult::Starting {
-            slug: slug.to_string(),
-        };
+    let mut activity = match ACTIVITY.begin_all(&closure) {
+        Some(activity) => activity,
+        None => {
+            // Bounded by the auto-start timeout this runs under.
+            wait_out_idle_stops(&closure).await;
+            match ACTIVITY.begin_all(&closure) {
+                Some(activity) => activity,
+                None => {
+                    return ResolveResult::Starting {
+                        slug: slug.to_string(),
+                    };
+                }
+            }
+        }
     };
 
     // Reuse CLI startup so dependencies, oneshots, readiness, and port
@@ -4518,6 +4549,24 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A request for a daemon mid idle-stop waits the stop out, so it can
+    /// start the daemon again, instead of being answered "Starting…".
+    #[tokio::test]
+    async fn a_request_waits_out_an_idle_stop() {
+        let id = DaemonId::new("waitproj", "api");
+        assert!(ACTIVITY.claim_idle_stop(&id, std::time::Duration::ZERO));
+        let releaser = {
+            let id = id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                ACTIVITY.release_idle_stop(&id);
+            })
+        };
+        assert!(matches!(begin_running(&id).await, Running::No));
+        releaser.await.unwrap();
+        assert!(ACTIVITY.begin(&id).is_some());
+    }
 
     /// Axum answers a path match with no method match itself, so a route
     /// registered for `GET` alone takes that path away from `fallback` for

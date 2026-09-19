@@ -344,8 +344,8 @@ daemon that needs them.
   default), so a daemon stops between the grace period and the grace period
   plus one interval after its last activity.
 - A request that arrives while a daemon is being stopped for inactivity waits
-  for the stop to finish and then starts the daemon again. The browser sees the
-  "Starting…" page meanwhile.
+  for the stop to finish and then starts the daemon again, within
+  `proxy.auto_start_timeout`.
 - Only traffic through the proxy counts. Clients that connect to the daemon's
   port directly are invisible to it. To keep such a daemon running, start it
   explicitly, or send a periodic request through its proxy URL as a heartbeat:
