@@ -958,10 +958,12 @@ enum SniProbe {
 /// it*, so the same bytes are still available to whichever path handles the
 /// connection.
 ///
-/// `timeout` bounds the wait for a hello that arrives in pieces. Note that a
-/// client which sends part of a hello and then closes cannot be detected here:
-/// `peek` keeps returning the buffered bytes rather than reporting end of file,
-/// so such a connection is held until the timeout and then reported as
+/// `timeout` bounds the whole probe, including a read that never completes:
+/// a peer that opens a connection and then sends nothing more is given up on
+/// rather than holding the connection task open. Note that a client which
+/// sends part of a hello and then closes cannot be detected here: `peek` keeps
+/// returning the buffered bytes rather than reporting end of file, so such a
+/// connection is held until the timeout and then reported as
 /// [`SniProbe::Undetermined`].
 #[cfg(feature = "proxy-tls")]
 async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniProbe {
@@ -971,14 +973,21 @@ async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniP
     let mut buf = vec![0u8; 2048];
 
     loop {
-        let n = match stream.peek(&mut buf).await {
+        // The deadline has to bound the read itself: a peer that opens a
+        // connection and then stops sending leaves `peek` waiting forever, and
+        // the check further down never runs to end it.
+        let n = match tokio::time::timeout_at(deadline, stream.peek(&mut buf)).await {
             // End of file with nothing buffered: the client hung up before
             // saying anything, so there is nothing to route and nothing to
             // downgrade.
-            Ok(0) => return SniProbe::NoHost,
-            Ok(n) => n,
-            Err(e) => {
+            Ok(Ok(0)) => return SniProbe::NoHost,
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
                 log::debug!("Failed to peek at a TLS connection: {e}");
+                return SniProbe::Undetermined;
+            }
+            Err(_elapsed) => {
+                log::debug!("Timed out waiting for a client that sent no ClientHello");
                 return SniProbe::Undetermined;
             }
         };
@@ -3970,6 +3979,27 @@ mod tests {
         .await;
 
         assert_eq!(probe, SniProbe::Undetermined);
+    }
+
+    /// A peer that opens a connection and then sends nothing is given up on
+    /// at the deadline. Without the read itself being bounded this waits for
+    /// as long as the peer keeps the socket open.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_gives_up_on_a_silent_peer() {
+        let started = std::time::Instant::now();
+        let (probe, _) = probe_over_socket(
+            vec![],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(150),
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Undetermined);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the probe must end at its deadline, not wait on the peer"
+        );
     }
 
     /// Something that is not a TLS handshake is a definite "no hostname", so
