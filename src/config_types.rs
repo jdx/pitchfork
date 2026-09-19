@@ -2124,23 +2124,13 @@ impl Default for Dir {
     Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
-// The schema keeps one short line per item: an editor tooltip wants a label,
-// and every byte here is serialised on each `pitchfork schema` run. The
-// reference documentation carries the detail.
-#[schemars(description = "How the proxy handles TLS for this daemon's hostname: \
-                          `terminate` (default) or `passthrough`.")]
 pub enum ProxyTlsMode {
-    // Plain comments rather than doc comments: a documented variant makes
-    // schemars emit a `oneOf` of annotated constants where a bare string enum
-    // does, which is several times the JSON for the same information. The
-    // enum's own description names both values.
-    //
-    // Terminate: the proxy answers the handshake with its own certificate and
-    // forwards plain HTTP to the daemon. The historical behavior.
+    /// The proxy terminates TLS with its own certificate and forwards plain
+    /// HTTP to the daemon (the historical behavior).
     #[default]
     Terminate,
-    // Passthrough: the proxy reads the SNI hostname from the ClientHello and
-    // splices the raw TCP stream to the daemon, which terminates TLS itself.
+    /// The proxy reads the SNI hostname from the TLS ClientHello and splices
+    /// the raw TCP stream to the daemon, which terminates TLS itself.
     Passthrough,
 }
 
