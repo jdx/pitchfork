@@ -2431,6 +2431,14 @@ fn generate_ca(cert: &Path, key: &Path) -> Result<()> {
             Some(problem) => {
                 if cert.exists() && key.exists() {
                     println!("  the existing CA cannot be used ({problem}); generating a new one");
+                    // A supervisor started before the files went bad still
+                    // holds the old CA in memory and signs with it until it
+                    // restarts, so the certificates it serves would not chain
+                    // to the one about to be trusted.
+                    println!(
+                        "  restart the supervisor so it signs with the new CA: \
+                         pitchfork supervisor start --force"
+                    );
                 }
                 false
             }

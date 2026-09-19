@@ -882,6 +882,27 @@ pub async fn serve(
     }
 }
 
+/// Serve one accepted connection until it ends, asking it to close gracefully
+/// once `cancel` fires.
+///
+/// Shared by every listener path. Without the graceful request an idle
+/// keep-alive connection or an HTTP/2 session never ends on its own, so each
+/// one would run out the whole shutdown drain budget and then be aborted.
+macro_rules! serve_conn_until_cancelled {
+    ($io:expr, $svc:expr, $cancel:expr) => {{
+        let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+        let conn = builder.serve_connection_with_upgrades($io, $svc);
+        tokio::pin!(conn);
+        tokio::select! {
+            r = conn.as_mut() => r,
+            _ = $cancel.cancelled() => {
+                conn.as_mut().graceful_shutdown();
+                conn.await
+            }
+        }
+    }};
+}
+
 /// Serve plain HTTP.
 async fn serve_http(
     app: Router,
@@ -941,20 +962,7 @@ async fn serve_http(
                 conn_tasks.spawn(async move {
                     let io = hyper_util::rt::TokioIo::new(stream);
                     let svc = hyper_util::service::TowerToHyperService::new(app);
-                    let builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
-                    let conn = builder.serve_connection_with_upgrades(io, svc);
-                    tokio::pin!(conn);
-                    let result = tokio::select! {
-                        r = conn.as_mut() => r,
-                        // Let an idle keep-alive connection close now and a
-                        // request in flight finish, rather than every open
-                        // connection running out the whole drain budget.
-                        _ = cancel.cancelled() => {
-                            conn.as_mut().graceful_shutdown();
-                            conn.await
-                        }
-                    };
-                    if let Err(e) = result {
+                    if let Err(e) = serve_conn_until_cancelled!(io, svc, cancel) {
                         log::debug!("Connection error: {e}");
                     }
                 });
@@ -1141,6 +1149,7 @@ async fn serve_https_with_http_fallback(
                     .layer(axum::Extension(axum::extract::ConnectInfo(peer_addr)));
                 let redirect_app = redirect_app.clone();
                 let tld = effective_tld.clone();
+                let cancel = cancel.clone();
 
                 conn_tasks.spawn(async move {
                     // Peek at the first byte without consuming it.
@@ -1185,7 +1194,13 @@ async fn serve_https_with_http_fallback(
                                     // it lasts; it must not keep a slot meant
                                     // for connections still negotiating.
                                     drop(handshake_permit);
-                                    serve_passthrough(stream, &host, &tld).await;
+                                    // Ended by shutdown like any other
+                                    // connection, rather than by the drain
+                                    // budget running out.
+                                    tokio::select! {
+                                        _ = serve_passthrough(stream, &host, &tld) => {}
+                                        _ = cancel.cancelled() => {}
+                                    }
                                     return;
                                 }
                             }
@@ -1238,10 +1253,7 @@ async fn serve_https_with_http_fallback(
                             Ok(tls_stream) => {
                                 let io = hyper_util::rt::TokioIo::new(tls_stream);
                                 let svc = hyper_util::service::TowerToHyperService::new(app);
-                                if let Err(e) = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                                    .serve_connection_with_upgrades(io, svc)
-                                    .await
-                                {
+                                if let Err(e) = serve_conn_until_cancelled!(io, svc, cancel) {
                                     // HTTP/2 RST_STREAM errors from cancelled browser requests
                                     // (navigation, HMR) are normal — log at debug to avoid noise.
                                     log::debug!("Connection error: {e}");
@@ -1257,9 +1269,7 @@ async fn serve_https_with_http_fallback(
                         drop(handshake_permit);
                         let io = hyper_util::rt::TokioIo::new(stream);
                         let svc = hyper_util::service::TowerToHyperService::new(redirect_app);
-                        let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
-                            .serve_connection_with_upgrades(io, svc)
-                            .await;
+                        let _ = serve_conn_until_cancelled!(io, svc, cancel);
                     }
                 });
 
