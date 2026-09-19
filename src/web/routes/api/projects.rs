@@ -673,27 +673,29 @@ fn gitdir_link(dir: &StdPath) -> Option<PathBuf> {
 /// Whether `dir` is a linked git worktree or a secondary jj workspace, rather
 /// than a checkout that owns its repository.
 ///
-/// A linked worktree's `.git` file points inside the repository's `worktrees/`
-/// directory. A submodule's points at `modules/` instead, and a
-/// `--separate-git-dir` checkout at the repository root itself, so neither is
-/// linked. This is deliberately separate from finding the main checkout: with
-/// an external git directory there is no `.git` ancestor to walk back to, but
-/// the directory is still a linked worktree.
+/// Git gives a linked worktree its own directory under the repository, holding
+/// `commondir` and `gitdir` files that point back at the shared repository and
+/// at this worktree. A repository root has neither, whether it is in-tree, a
+/// submodule's `modules/<name>`, or an external `--separate-git-dir`
+/// directory, so the relationship is read from those files rather than guessed
+/// from the path.
 fn is_linked_worktree(dir: &StdPath) -> bool {
     if dir.join(".jj").join("repo").is_file() {
         return true;
     }
-    gitdir_link(dir).is_some_and(|gitdir| gitdir.components().any(|c| c.as_os_str() == "worktrees"))
+    gitdir_link(dir)
+        .is_some_and(|gitdir| gitdir.join("commondir").is_file() && gitdir.join("gitdir").is_file())
 }
 
 /// The main checkout of the repository `dir` belongs to, when `dir` is a linked
-/// git worktree or a secondary jj workspace and that path can be reconstructed.
+/// git worktree or a secondary jj workspace and that checkout can be derived.
 ///
-/// Both record where the real repository lives: `.git` is a file reading
-/// `gitdir: <main>/.git/worktrees/<name>`, and `.jj/repo` is a file holding the
-/// path of `<main>/.jj/repo`. A repository with an external git directory has
-/// no `.git` ancestor to walk back to, so this answers `None` there even though
-/// [`is_linked_worktree`] is true.
+/// A linked worktree's `commondir` names the shared git directory. That yields
+/// a checkout only for the in-tree layout, where the git directory is the
+/// checkout's own `.git`; a repository with an external git directory has no
+/// checkout to derive, so this answers `None` there even though
+/// [`is_linked_worktree`] is true. A secondary jj workspace records the path of
+/// `<main>/.jj/repo`, which always names one.
 fn main_checkout_root(dir: &StdPath) -> Option<PathBuf> {
     let jj_repo = dir.join(".jj").join("repo");
     if jj_repo.is_file() {
@@ -709,19 +711,20 @@ fn main_checkout_root(dir: &StdPath) -> Option<PathBuf> {
     }
 
     let gitdir = gitdir_link(dir)?;
-    // Only a linked worktree points at <main>/.git/worktrees/<name>. A
-    // submodule's .git file points at <super>/.git/modules/<name>, which must
-    // not make the superproject its main checkout.
-    if !gitdir.components().any(|c| c.as_os_str() == "worktrees") {
-        return None;
-    }
-    let mut current = gitdir.as_path();
-    loop {
-        let parent = current.parent()?;
-        if current.file_name().is_some_and(|name| name == ".git") {
-            return Some(parent.to_path_buf());
-        }
-        current = parent;
+    let common = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let common = PathBuf::from(common.trim());
+    let common = if common.is_absolute() {
+        common
+    } else {
+        gitdir.join(common)
+    };
+    let common = common.canonicalize().ok()?;
+    // <main>/.git → <main>. Any other name is a git directory that lives
+    // outside a checkout.
+    if common.file_name().is_some_and(|name| name == ".git") {
+        common.parent().map(StdPath::to_path_buf)
+    } else {
+        None
     }
 }
 
@@ -1156,18 +1159,28 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let main = temp.path().join("repo");
         let linked = temp.path().join("repo-feature");
-        std::fs::create_dir_all(main.join(".git").join("worktrees").join("feature")).unwrap();
+        let worktree_gitdir = main.join(".git").join("worktrees").join("feature");
+        std::fs::create_dir_all(&worktree_gitdir).unwrap();
         std::fs::create_dir_all(&linked).unwrap();
         std::fs::write(
             linked.join(".git"),
-            format!(
-                "gitdir: {}\n",
-                main.join(".git/worktrees/feature").display()
-            ),
+            format!("gitdir: {}\n", worktree_gitdir.display()),
+        )
+        .unwrap();
+        // The files git writes to mark a linked worktree's own git directory.
+        std::fs::write(worktree_gitdir.join("commondir"), "../..\n").unwrap();
+        std::fs::write(
+            worktree_gitdir.join("gitdir"),
+            format!("{}\n", linked.join(".git").display()),
         )
         .unwrap();
 
-        assert_eq!(main_checkout_root(&linked), Some(main.clone()));
+        assert!(is_linked_worktree(&linked));
+        assert!(!is_linked_worktree(&main));
+        assert_eq!(
+            main_checkout_root(&linked).map(|p| canonical(&p)),
+            Some(canonical(&main))
+        );
         // The main checkout itself is not a linked worktree.
         assert_eq!(main_checkout_root(&main), None);
     }
@@ -1266,6 +1279,54 @@ mod tests {
 
         // The main checkout still lists the whole repository.
         assert_eq!(worktree_views(&repo).len(), 2);
+    }
+
+    /// A checkout whose external git directory happens to sit under a path
+    /// segment named `worktrees` is still a checkout of its own, so it must
+    /// keep listing its linked worktrees.
+    #[test]
+    fn git_dir_under_a_worktrees_path_is_not_a_linked_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("shop");
+        let gitdir = temp.path().join("worktrees").join("shop.git");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(gitdir.parent().unwrap()).unwrap();
+        if !git(
+            &repo,
+            &[
+                "init",
+                "-q",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                gitdir.to_str().unwrap(),
+                ".",
+            ],
+        ) {
+            return; // no usable git here
+        }
+        std::fs::write(
+            repo.join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"true\"\n",
+        )
+        .unwrap();
+        assert!(git(&repo, &["add", "-A"]));
+        assert!(git(&repo, &["commit", "-qm", "init"]));
+        assert!(git(
+            &repo,
+            &["worktree", "add", "-q", "../shop-feat", "-b", "feature-a"]
+        ));
+
+        // The gitdir path contains a `worktrees` segment, but the metadata says
+        // it is a repository root, not a worktree of one.
+        assert!(repo.join(".git").is_file());
+        assert!(!is_linked_worktree(&repo));
+
+        let names: Vec<String> = worktree_views(&repo).into_iter().map(|w| w.name).collect();
+        assert!(names.contains(&"feature-a".to_string()), "got {names:?}");
+
+        // Its linked worktree is still recognised as one.
+        assert!(is_linked_worktree(&temp.path().join("shop-feat")));
     }
 
     /// A checkout whose `.git` is a file but not a linked worktree — a
