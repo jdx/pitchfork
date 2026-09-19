@@ -27,7 +27,7 @@ use crate::pitchfork_toml::WatchMode;
 use crate::procs::PROCS;
 use crate::state_file::DiskRecord;
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn should_clean_daemon(
@@ -581,12 +581,7 @@ impl Supervisor {
     /// sessions. These are the directories that should keep auto-stop daemons
     /// alive.
     pub(crate) async fn get_active_directories(&self) -> Vec<PathBuf> {
-        let state = self.state_file.lock().await;
-        let mut dirs: HashSet<PathBuf> = state.shell_dirs.values().cloned().collect();
-        for (_, dir, _) in state.iter_project_sessions() {
-            dirs.insert(dir.clone());
-        }
-        dirs.into_iter().collect()
+        self.state_file.lock().await.active_directories()
     }
 
     /// Collect all project sessions as `(pid, dir, liveness_title)`. Every

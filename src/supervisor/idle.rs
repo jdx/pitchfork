@@ -323,8 +323,10 @@ impl Supervisor {
         id: &DaemonId,
         stopping_with: &HashSet<DaemonId>,
     ) -> Option<&'static str> {
-        let active_dirs = self.get_active_directories().await;
+        // Shells and sessions are read under the same lock as the rest, so a
+        // shell entering the directory cannot slip in between the two.
         let state_file = self.state_file.lock().await;
+        let active_dirs = state_file.active_directories();
         let Some(daemon) = state_file.daemons.get(id) else {
             return Some("it is no longer known");
         };

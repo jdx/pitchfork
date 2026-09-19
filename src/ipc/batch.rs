@@ -1353,8 +1353,19 @@ impl IpcClient {
             );
         }
 
-        self.claim_daemons(std::slice::from_ref(&run_opts.id))
-            .await?;
+        // Claimed with the configured daemon's dependencies, as the other
+        // explicit starts do: the ad-hoc run records no `depends` of its own,
+        // so nothing else would keep a proxy-started dependency it may be
+        // using from being stopped when idle.
+        let claimed: Vec<DaemonId> = PitchforkToml::all_merged_all_namespaces()
+            .ok()
+            .filter(|pt| pt.daemons.contains_key(&run_opts.id))
+            .and_then(|pt| {
+                resolve_dependencies(std::slice::from_ref(&run_opts.id), &pt.daemons).ok()
+            })
+            .map(|order| order.levels.into_iter().flatten().collect())
+            .unwrap_or_else(|| vec![run_opts.id.clone()]);
+        self.claim_daemons(&claimed).await?;
         self.run(run_opts).await
     }
 }

@@ -396,6 +396,16 @@ impl StateFile {
 
     /// Flat iterator over all project sessions yielding `(pid_str, dir, session)`
     /// for every entry. Used by the supervisor refresh loop to evaluate liveness.
+    /// Every directory a tracked shell or project session is in.
+    pub fn active_directories(&self) -> Vec<PathBuf> {
+        let mut dirs: std::collections::HashSet<PathBuf> =
+            self.shell_dirs.values().cloned().collect();
+        for (_, dir, _) in self.iter_project_sessions() {
+            dirs.insert(dir.clone());
+        }
+        dirs.into_iter().collect()
+    }
+
     pub fn iter_project_sessions(&self) -> Vec<(&str, &PathBuf, &ProjectSession)> {
         let mut out: Vec<(&str, &PathBuf, &ProjectSession)> = Vec::new();
         for (pid_str, inner) in &self.project_sessions {
