@@ -263,11 +263,12 @@ pub(crate) fn config_daemon_entry(
     daemon_config: &crate::pitchfork_toml::PitchforkTomlDaemon,
     global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
     settings: &crate::settings::Settings,
+    is_disabled: bool,
 ) -> ApiDaemonEntry {
     let entry = DaemonListEntry {
         id: id.clone(),
         daemon: crate::daemon_list::build_placeholder_daemon(id, daemon_config),
-        is_disabled: false,
+        is_disabled,
         is_available: true,
     };
     entry_to_api(

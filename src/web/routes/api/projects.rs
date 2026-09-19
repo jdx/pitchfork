@@ -843,6 +843,17 @@ async fn daemon_index(
     extra_dirs: &[PathBuf],
     wanted: &[DaemonId],
 ) -> Result<(DaemonIndex, Resolvable), StatusCode> {
+    // Daemons that only exist in config still carry the supervisor's disabled
+    // state, which the state file holds independently of whether one ever ran.
+    let disabled: HashSet<DaemonId> = crate::supervisor::SUPERVISOR
+        .state_file
+        .lock()
+        .await
+        .disabled
+        .iter()
+        .cloned()
+        .collect();
+
     let mut index: DaemonIndex = build_api_daemons()
         .await
         .map_err(|e| {
@@ -856,7 +867,7 @@ async fn daemon_index(
     let dirs = extra_dirs.to_vec();
     let wanted = wanted.to_vec();
     let (extra, resolvable) =
-        tokio::task::spawn_blocking(move || config_entries_blocking(&dirs, &wanted))
+        tokio::task::spawn_blocking(move || config_entries_blocking(&dirs, &wanted, &disabled))
             .await
             .map_err(|e| {
                 log::error!("Failed to load worktree configs: {e}");
@@ -877,6 +888,7 @@ async fn daemon_index(
 fn config_entries_blocking(
     dirs: &[PathBuf],
     wanted: &[DaemonId],
+    disabled: &HashSet<DaemonId>,
 ) -> (Vec<(String, ApiDaemonEntry)>, Resolvable) {
     // The same view the supervisor's start path builds, so "resolvable" here
     // means exactly "a start request would find a config".
@@ -901,7 +913,13 @@ fn config_entries_blocking(
                     if seen.insert(qualified.clone()) {
                         entries.push((
                             qualified,
-                            config_daemon_entry(id, daemon_config, &slugs, &settings),
+                            config_daemon_entry(
+                                id,
+                                daemon_config,
+                                &slugs,
+                                &settings,
+                                disabled.contains(id),
+                            ),
                         ));
                     }
                 }
@@ -923,7 +941,13 @@ fn config_entries_blocking(
                 seen.insert(qualified.clone());
                 entries.push((
                     qualified,
-                    config_daemon_entry(id, daemon_config, &slugs, &settings),
+                    config_daemon_entry(
+                        id,
+                        daemon_config,
+                        &slugs,
+                        &settings,
+                        disabled.contains(id),
+                    ),
                 ));
             }
         }
