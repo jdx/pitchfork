@@ -506,10 +506,26 @@ fn groups_for_dir(dir: &StdPath) -> GroupsResult {
     }
 
     let groups = read_groups(&paths);
-    if let Ok(mut cache) = cache.lock() {
+    // A failure is not cached: restoring a file's permissions changes neither
+    // its modification time nor its size, so a cached error would outlive the
+    // problem and leave the stack without controls.
+    if groups.1.is_none()
+        && let Ok(mut cache) = cache.lock()
+    {
         cache.insert(dir.to_path_buf(), (snapshot, groups.clone()));
     }
     groups
+}
+
+/// Drop every cached group set, for `pitchfork settings reload`.
+///
+/// The snapshot catches ordinary edits, but a replacement that preserves both
+/// modification time and size does not change it, which is what that command
+/// exists to recover from.
+pub(crate) fn invalidate_group_cache() {
+    if let Ok(mut cache) = groups_cache().lock() {
+        cache.clear();
+    }
 }
 
 type GroupsResult = (IndexMap<String, Vec<DaemonId>>, Option<String>);
@@ -1474,6 +1490,70 @@ mod tests {
         let (third, _) = groups_for_dir(&project);
         assert!(third.contains_key("backend"));
         assert!(!third.contains_key("web"));
+    }
+
+    /// `pitchfork settings reload` must reach this cache: a replacement that
+    /// preserves modification time and size is invisible to the snapshot, and
+    /// that command is the escape hatch for exactly that case.
+    #[test]
+    fn reload_drops_cached_groups_after_a_metadata_preserving_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = project.join("pitchfork.toml");
+        std::fs::write(
+            &config,
+            "[daemons.api]\nrun = \"true\"\n\n[groups.web]\ndaemons = [\"api\"]\n",
+        )
+        .unwrap();
+
+        assert!(groups_for_dir(&project).0.contains_key("web"));
+        let before = std::fs::metadata(&config).unwrap().modified().unwrap();
+
+        // Same length, same modification time: the snapshot cannot see it.
+        std::fs::write(
+            &config,
+            "[daemons.api]\nrun = \"true\"\n\n[groups.svc]\ndaemons = [\"api\"]\n",
+        )
+        .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&config)
+            .unwrap()
+            .set_modified(before)
+            .unwrap();
+        assert!(
+            groups_for_dir(&project).0.contains_key("web"),
+            "the stale entry is what reload exists to clear"
+        );
+
+        crate::pitchfork_toml::invalidate_config_cache();
+        let groups = groups_for_dir(&project).0;
+        assert!(groups.contains_key("svc"));
+        assert!(!groups.contains_key("web"));
+    }
+
+    /// An unreadable config must not leave the stack stuck on that error once
+    /// the file can be read again, which restoring permissions does without
+    /// changing its modification time or size.
+    #[test]
+    fn a_read_failure_is_not_cached() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("shop");
+        std::fs::create_dir_all(&project).unwrap();
+        let config = project.join("pitchfork.toml");
+        std::fs::write(&config, "[groups.web]\ndaemons = [\"api\"\n").unwrap();
+
+        let (groups, error) = groups_for_dir(&project);
+        assert!(groups.is_empty());
+        assert!(error.is_some());
+
+        // Same size, so only the absence of a cached failure lets this
+        // succeed on the next read.
+        std::fs::write(&config, "[groups.web]\ndaemons = [\"api\"]").unwrap();
+        let (groups, error) = groups_for_dir(&project);
+        assert!(error.is_none(), "{error:?}");
+        assert!(groups.contains_key("web"));
     }
 
     /// A config file that cannot be read must not leave the groups the files

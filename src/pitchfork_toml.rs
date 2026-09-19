@@ -583,6 +583,9 @@ fn snapshot_meta(paths: &[PathBuf]) -> Vec<(PathBuf, Option<(SystemTime, u64)>)>
 /// supervisor's cache.
 pub fn invalidate_config_cache() {
     crate::extra_configs::invalidate();
+    // The web project pages keep their own parsed-group cache, validated the
+    // same way, so it must be dropped here too.
+    crate::web::routes::api::projects::invalidate_group_cache();
     if let Ok(mut cache) = CONFIG_CACHE.lock() {
         cache.clear();
     }
