@@ -839,7 +839,10 @@ async fn collect_project_views() -> Vec<ProjectView> {
 /// added as available entries, so a worktree that has never run still shows its
 /// stack. Every config read here happens on a blocking worker: parsing takes
 /// the global config lock, which must not run on the async executor.
-async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<(DaemonIndex, Resolvable), StatusCode> {
+async fn daemon_index(
+    extra_dirs: &[PathBuf],
+    wanted: &[DaemonId],
+) -> Result<(DaemonIndex, Resolvable), StatusCode> {
     let mut index: DaemonIndex = build_api_daemons()
         .await
         .map_err(|e| {
@@ -851,12 +854,14 @@ async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<(DaemonIndex, Resolvable
         .collect();
 
     let dirs = extra_dirs.to_vec();
-    let (extra, resolvable) = tokio::task::spawn_blocking(move || config_entries_blocking(&dirs))
-        .await
-        .map_err(|e| {
-            log::error!("Failed to load worktree configs: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let wanted = wanted.to_vec();
+    let (extra, resolvable) =
+        tokio::task::spawn_blocking(move || config_entries_blocking(&dirs, &wanted))
+            .await
+            .map_err(|e| {
+                log::error!("Failed to load worktree configs: {e}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
 
     for (qualified, entry) in extra {
         index.entry(qualified).or_insert(entry);
@@ -869,16 +874,19 @@ async fn daemon_index(extra_dirs: &[PathBuf]) -> Result<(DaemonIndex, Resolvable
 ///
 /// Runs entirely on a blocking worker: it parses config files and reads the
 /// global slug registry, which lock and hit the filesystem.
-fn config_entries_blocking(dirs: &[PathBuf]) -> (Vec<(String, ApiDaemonEntry)>, Resolvable) {
+fn config_entries_blocking(
+    dirs: &[PathBuf],
+    wanted: &[DaemonId],
+) -> (Vec<(String, ApiDaemonEntry)>, Resolvable) {
     // The same view the supervisor's start path builds, so "resolvable" here
     // means exactly "a start request would find a config".
-    let resolvable: Resolvable = match PitchforkToml::all_merged_all_namespaces() {
-        Ok(config) => config.daemons.keys().map(|id| id.qualified()).collect(),
-        Err(e) => {
-            log::warn!("Failed to load merged config: {e}");
-            Resolvable::new()
-        }
-    };
+    let merged = PitchforkToml::all_merged_all_namespaces()
+        .inspect_err(|e| log::warn!("Failed to load merged config: {e}"))
+        .ok();
+    let resolvable: Resolvable = merged
+        .as_ref()
+        .map(|config| config.daemons.keys().map(|id| id.qualified()).collect())
+        .unwrap_or_default();
 
     let slugs = PitchforkToml::read_global_slugs();
     let settings = crate::settings::settings();
@@ -902,7 +910,38 @@ fn config_entries_blocking(dirs: &[PathBuf]) -> (Vec<(String, ApiDaemonEntry)>, 
         }
     }
 
+    // Daemons a group names that live outside those directories: a member of
+    // another project the supervisor can resolve but that has never started is
+    // a real, startable daemon, not a missing one.
+    if let Some(config) = &merged {
+        for id in wanted {
+            let qualified = id.qualified();
+            if seen.contains(&qualified) {
+                continue;
+            }
+            if let Some(daemon_config) = config.daemons.get(id) {
+                seen.insert(qualified.clone());
+                entries.push((
+                    qualified,
+                    config_daemon_entry(id, daemon_config, &slugs, &settings),
+                ));
+            }
+        }
+    }
+
     (entries, resolvable)
+}
+
+/// Every daemon these worktrees' groups name, so the index can include members
+/// that live outside the worktrees themselves.
+fn group_member_ids(worktrees: &[WorktreeView]) -> Vec<DaemonId> {
+    let mut seen = HashSet::new();
+    worktrees
+        .iter()
+        .flat_map(|w| w.groups.values().flatten())
+        .filter(|id| seen.insert(id.qualified()))
+        .cloned()
+        .collect()
 }
 
 // ─── handlers ────────────────────────────────────────────────────────────────
@@ -915,7 +954,8 @@ pub async fn list() -> Result<Json<Vec<ApiProjectSummary>>, StatusCode> {
         .iter()
         .flat_map(|p| p.worktrees.iter().map(|w| w.path.clone()))
         .collect();
-    let (daemons, _) = daemon_index(&dirs).await?;
+    // The project list renders no groups, so no group members are needed.
+    let (daemons, _) = daemon_index(&dirs, &[]).await?;
     Ok(Json(build_project_summaries(&projects, &daemons)))
 }
 
@@ -925,7 +965,8 @@ pub async fn show(Path(name): Path<String>) -> Result<Json<ApiProject>, StatusCo
         .ok_or(StatusCode::NOT_FOUND)?
         .clone();
     let dirs: Vec<PathBuf> = project.worktrees.iter().map(|w| w.path.clone()).collect();
-    let (daemons, resolvable) = daemon_index(&dirs).await?;
+    let wanted = group_member_ids(&project.worktrees);
+    let (daemons, resolvable) = daemon_index(&dirs, &wanted).await?;
     Ok(Json(build_project(&project, &daemons, &resolvable)))
 }
 
@@ -935,7 +976,8 @@ pub async fn stack(
     let projects = collect_project_views().await;
     let project = find_project(&projects, &name).ok_or(StatusCode::NOT_FOUND)?;
     let wt = find_worktree(project, &worktree).ok_or(StatusCode::NOT_FOUND)?;
-    let (daemons, resolvable) = daemon_index(std::slice::from_ref(&wt.path)).await?;
+    let wanted = group_member_ids(std::slice::from_ref(wt));
+    let (daemons, resolvable) = daemon_index(std::slice::from_ref(&wt.path), &wanted).await?;
     Ok(Json(build_stack(project, wt, &daemons, &resolvable)))
 }
 
@@ -1581,6 +1623,27 @@ mod tests {
         let (groups, error) = groups_for_dir(&project);
         assert!(groups.is_empty());
         assert!(error.is_some());
+    }
+
+    /// Group members are collected across worktrees and deduplicated, so the
+    /// index can be asked for daemons that live in another project.
+    #[test]
+    fn group_member_ids_spans_worktrees_without_duplicates() {
+        let projects = fixture_projects();
+        let shop = find_project(&projects, "shop").unwrap();
+        let ids: Vec<String> = group_member_ids(&shop.worktrees)
+            .iter()
+            .map(|id| id.qualified())
+            .collect();
+
+        // Both worktrees' groups contribute, each id once.
+        assert!(ids.contains(&"shop/api".to_string()));
+        assert!(ids.contains(&"shop-feature-a/worker".to_string()));
+        assert!(ids.contains(&"shop-feature-a/gone".to_string()));
+        let mut deduped = ids.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(deduped.len(), ids.len());
     }
 
     /// A group can name daemons of other namespaces. Those are rendered by the
