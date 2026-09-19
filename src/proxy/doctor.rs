@@ -812,7 +812,10 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
     // The same holds with `proxy.dns = false`: nothing answers wildcards then,
     // and only names written to /etc/hosts (by `proxy.sync_hosts`, or by hand)
     // resolve, which are the published slugs.
-    let published_only = lan || !s.proxy.dns;
+    //
+    // Not under a working PAC file, though: names never reach the system
+    // resolver there, and the regular check already passes it as such.
+    let published_only = lan || (!s.proxy.dns && pac_ready != Some(true));
     let system_name = if published_only {
         // Off the async task and under the same budget as the rest: this reads
         // the global config behind a file lock, so a concurrent `proxy add` or
@@ -835,10 +838,22 @@ pub async fn run(s: &crate::settings::Settings) -> Vec<Check> {
     match system_name {
         // LAN mode with nothing registered yet. There is no published name to
         // look up, so there is nothing this check can find out.
-        SystemName::NonePublished => checks.push(Check::new(
+        SystemName::NonePublished if lan => checks.push(Check::new(
             "system resolution",
             Status::Pass,
             "nothing is published yet — add one with `pitchfork proxy add <slug>`",
+        )),
+        // The resolver is off and no slug is written anywhere, so automatic
+        // project hostnames have nothing to resolve them. A warning rather
+        // than a failure: browsers resolve `*.localhost` on their own.
+        SystemName::NonePublished => checks.push(Check::new(
+            "system resolution",
+            Status::Warn,
+            format!(
+                "proxy.dns is false and no slug is published, so *.{tld} names resolve \
+                 only where the system or browser does so itself — enable proxy.dns and \
+                 run `pitchfork proxy setup`, or register a slug with proxy.sync_hosts on"
+            ),
         )),
         SystemName::Unreadable => checks.push(Check::new(
             "system resolution",
