@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
+  bats_require_minimum_version 1.5.0
   load test_helper/common_setup
   _common_setup
 }
@@ -416,10 +417,13 @@ EOF
   pitchfork start notime
   wait_for_logs notime "testline" 10
 
-  run pitchfork logs notime --no-timestamp
+  # stdout only: with PITCHFORK_LOG=debug the CLI's stderr quotes the state
+  # dir, and a random name such as /tmp/pf-test-d20pWf would trip a substring
+  # check. Match the default `%m-%d %H:%M:%S` prefix shape instead.
+  run --separate-stderr pitchfork logs notime --no-timestamp
   assert_success
   assert_output --partial "testline"
-  [[ "$output" != *"20"* ]]
+  refute_output --regexp '[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}'
 
   pitchfork stop notime
 }

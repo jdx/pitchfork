@@ -1,4 +1,4 @@
-min_version = "2026.9.2"
+min_version = "2026.9.11"
 
 [env]
 _.path = ["target/debug", "test/bats/bin"]
@@ -19,10 +19,15 @@ if [ -n "$TRANCHE" ] && [ -n "$TRANCHE_COUNT" ]; then
 else
   tests="test"
 fi
-if command -v parallel >/dev/null 2>&1; then
-  bats --jobs 16 $tests
+# bats needs GNU parallel or rush to run files concurrently. rush is a mise
+# tool so it is always present; GNU parallel is accepted when it happens to be
+# installed. Without either, bats silently runs ~430 tests one at a time.
+if command -v rush >/dev/null 2>&1; then
+  bats --jobs "${BATS_JOBS:-16}" --parallel-binary-name rush $tests
+elif command -v parallel >/dev/null 2>&1; then
+  bats --jobs "${BATS_JOBS:-16}" $tests
 else
-  echo "GNU parallel not found, running sequentially" >&2
+  echo "neither rush nor GNU parallel found, running bats sequentially (slow)" >&2
   bats $tests
 fi
 '''
@@ -71,6 +76,9 @@ outputs = ["dist/**/*"]
 
 [tasks."build:docs"]
 dir = "docs"
+# `render` rewrites docs/cli and docs/public while this task reads them, so
+# when both are scheduled (ci-dev) run this one afterwards.
+wait_for = ["render"]
 run = "aube install && exec aube run docs:build"
 
 [tasks.render]
@@ -112,6 +120,8 @@ communique = "latest"
 hk = "latest"
 node = "24"
 pkl = "latest"
+# Parallel runner for bats (see test:bats); replaces GNU parallel.
+rush = "latest"
 "cargo:cargo-nextest" = "latest"
 rust = "stable"
 
