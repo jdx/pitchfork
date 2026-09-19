@@ -247,6 +247,121 @@ sys.exit("no port free for both UDP and TCP")
 PY
 }
 
+_start_dependency_proxy() {
+  PITCHFORK_PROXY_ENABLE=true \
+    PITCHFORK_PROXY_HTTPS=false \
+    PITCHFORK_PROXY_AUTO_START_TIMEOUT="${dependency_timeout:-30s}" \
+    PITCHFORK_PROXY_DNS=false \
+    PITCHFORK_PROXY_SYNC_HOSTS=false \
+    PITCHFORK_PROXY_TLD=localhost \
+    PITCHFORK_PROXY_PORT="$proxy_port" \
+    pitchfork supervisor start --force >/dev/null 2>&1
+}
+
+@test "proxy cold start waits for foreign and oneshot dependencies" {
+  local foreign="$TEST_TEMP_DIR/services" proj="$TEST_TEMP_DIR/app"
+  local proxy_port daemon_port http_script
+  proxy_port=$(_free_port)
+  daemon_port=$(_free_port)
+  http_script="$(to_shell_path "$(script_path http_server.py)")"
+  mkdir -p "$foreign" "$proj"
+  cd "$foreign"
+  create_pitchfork_toml <<EOF
+[daemons.database]
+run = 'sleep 1; echo database >> "$proj/order"; sleep 60'
+ready_cmd = 'test -f "$proj/order"'
+EOF
+  run pitchfork proxy add database --daemon database
+  assert_success
+
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.migrate]
+run = 'test -f order && sleep 1 && echo migrate >> order'
+oneshot = true
+depends = ["services/database"]
+[daemons.api]
+run = 'test "\$(tail -1 order)" = migrate && echo api >> order && python3 -u $http_script 0 $daemon_port'
+port = $daemon_port
+ready_http = "http://127.0.0.1:$daemon_port/health"
+depends = ["migrate"]
+EOF
+  run pitchfork proxy add cold --daemon api
+  assert_success
+  # The supervisor's cwd must not control config lookup.
+  cd "$TEST_TEMP_DIR"
+  _start_dependency_proxy
+
+  # Concurrent access must share startup rather than rerun the migration.
+  curl -sS --max-time 30 -H 'Host: cold.localhost' "http://127.0.0.1:$proxy_port/health" >"$proj/concurrent" &
+  local request_pid=$!
+  run curl -sS --max-time 30 -H 'Host: cold.localhost' "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  wait "$request_pid"
+  run curl -fsS --max-time 30 -H 'Host: cold.localhost' "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  assert_output "OK"
+  run cat "$proj/order"
+  assert_output $'database\nmigrate\napi'
+  run curl -fsS --max-time 5 -H 'Host: cold.localhost' "http://127.0.0.1:$proxy_port/health"
+  assert_success
+  run cat "$proj/order"
+  assert_output $'database\nmigrate\napi'
+}
+
+@test "proxy cold start does not run an application after a dependency fails" {
+  local proj="$TEST_TEMP_DIR/failed-app" proxy_port daemon_port
+  proxy_port=$(_free_port)
+  daemon_port=$(_free_port)
+  mkdir -p "$proj"
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.migrate]
+run = "exit 7"
+oneshot = true
+[daemons.api]
+run = "touch should-not-start; sleep 60"
+port = $daemon_port
+depends = ["migrate"]
+EOF
+  run pitchfork proxy add failing --daemon api
+  assert_success
+  _start_dependency_proxy
+  run curl -sS --max-time 30 -w '\n%{http_code}' -H 'Host: failing.localhost' "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "dependencies"
+  assert_output --partial "502"
+  assert_file_not_exist "$proj/should-not-start"
+}
+
+@test "proxy cold start timeout covers prerequisite readiness" {
+  local proj="$TEST_TEMP_DIR/slow-app" proxy_port daemon_port dependency_timeout=1s
+  proxy_port=$(_free_port)
+  daemon_port=$(_free_port)
+  mkdir -p "$proj"
+  cd "$proj"
+  create_pitchfork_toml <<EOF
+[daemons.migrate]
+run = "sleep 3; touch migrated"
+oneshot = true
+[daemons.api]
+run = "touch should-not-start; sleep 60"
+port = $daemon_port
+depends = ["migrate"]
+EOF
+  run pitchfork proxy add slow --daemon api
+  assert_success
+  _start_dependency_proxy
+  run curl -sS --max-time 10 -H 'Host: slow.localhost' "http://127.0.0.1:$proxy_port/"
+  assert_success
+  assert_output --partial "timed out"
+  # Finishing an in-flight prerequisite after the request deadline must not
+  # continue starting the rest of the dependency graph.
+  sleep 4
+  assert_file_exist "$proj/migrated"
+  assert_file_not_exist "$proj/should-not-start"
+}
+
 @test "list shows proxy URL when proxy is enabled" {
   local proj="$TEST_TEMP_DIR/proxy-list"
   mkdir -p "$proj"
@@ -563,6 +678,9 @@ port = $daemon_port
 ready_http = "http://127.0.0.1:$daemon_port/"
 EOF
 
+  run pitchfork proxy add wtproject --daemon api
+  assert_success
+
   git worktree add -q ../fix-login -b fix-login
   cp pitchfork.toml ../fix-login/
 
@@ -572,12 +690,8 @@ EOF
     PITCHFORK_PROXY_PORT=$proxy_port \
     pitchfork supervisor start --force >/dev/null 2>&1
 
-  # Start only the worktree's copy, so the primary checkout's daemon cannot be
-  # the one answering.
-  cd "$TEST_TEMP_DIR/fix-login"
-  run pitchfork start api
-  assert_success
-  sleep 3
+  # Leave both daemons stopped. The worktree URL must load and start the
+  # routed checkout even though the supervisor started in the primary one.
 
   # The worktree's hostname carries its label, and the daemon received that
   # same URL in its environment.
@@ -1217,4 +1331,3 @@ EOF
   assert_output --partial "passthrough"
   assert_output --partial "settings.proxy.https = true"
 }
-

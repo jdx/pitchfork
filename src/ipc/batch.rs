@@ -539,6 +539,17 @@ impl IpcClient {
         opts: StartOptions,
     ) -> Result<StartResult> {
         let pt = PitchforkToml::all_merged_all_namespaces()?;
+        self.start_daemons_with_config(ids, opts, pt).await
+    }
+
+    /// Start a dependency graph loaded from the request's project rather than
+    /// the client's working directory (for example, a proxy worktree route).
+    pub(crate) async fn start_daemons_with_config(
+        self: &Arc<Self>,
+        ids: &[DaemonId],
+        opts: StartOptions,
+        pt: PitchforkToml,
+    ) -> Result<StartResult> {
         let disabled_daemons = self.get_disabled_daemons().await?;
 
         // Get all active daemons for ad-hoc restart support
