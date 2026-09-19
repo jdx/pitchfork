@@ -226,6 +226,15 @@ impl Supervisor {
         }
         let pitchfork_id = DaemonId::pitchfork();
         let state = self.state_file.lock().await;
+        // Checked again under the lock: `close()` may have begun while this
+        // waited for it. (Its removal of the record happens under this lock
+        // too, so a restore can never outlive it; this just skips the work.)
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
         let Some(own) = state
             .daemons
             .get(&pitchfork_id)

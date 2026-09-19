@@ -61,16 +61,17 @@ pub struct IpcServerHandle {
 }
 
 impl IpcServerHandle {
-    /// Signal the IPC server to shut down gracefully and wait (briefly) for it
-    /// to stop accepting connections and remove its socket file. A supervisor
+    /// Signal the IPC server to shut down gracefully and wait for it to stop
+    /// accepting connections and remove its socket file. A supervisor
     /// replacing this one waits for the socket to go away before binding it,
-    /// so it must be gone before this process exits.
+    /// so it must be gone before this process exits. After the signal the
+    /// task only removes the file and drops the listener, so this is prompt.
     pub async fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
         if let Some(task) = self.task.take() {
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
+            let _ = task.await;
         }
     }
 }
