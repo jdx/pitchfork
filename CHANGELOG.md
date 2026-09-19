@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.27.0](https://github.com/jdx/pitchfork/compare/v2.26.0...v2.27.0) - 2026-09-19
+
+### Added
+
+- *(proxy)* stop idle proxy-started daemons ([#892](https://github.com/jdx/pitchfork/pull/892))
+- *(proxy)* add setup and diagnostics for local HTTPS URLs ([#882](https://github.com/jdx/pitchfork/pull/882))
+- *(proxy)* add TLS passthrough for daemon certificates and mTLS ([#881](https://github.com/jdx/pitchfork/pull/881))
+- *(web)* manage project and worktree daemon stacks ([#879](https://github.com/jdx/pitchfork/pull/879))
+
+### Fixed
+
+- *(deps)* preserve project environment defaults for shared dependencies ([#888](https://github.com/jdx/pitchfork/pull/888))
+- *(supervisor)* set HOME, USER, and LOGNAME when switching users ([#895](https://github.com/jdx/pitchfork/pull/895))
+- *(boot)* preserve the invoking user's configuration in system services ([#894](https://github.com/jdx/pitchfork/pull/894))
+- *(proxy)* start dependencies before serving auto-started apps ([#891](https://github.com/jdx/pitchfork/pull/891))
+- *(supervisor)* never start a second supervisor beside one that lost its state record ([#887](https://github.com/jdx/pitchfork/pull/887))
+- *(supervisor)* stop leaking the caller's file descriptors into the background supervisor ([#886](https://github.com/jdx/pitchfork/pull/886))
+
+### Other
+
+- make process and path checks portable to macOS ([#889](https://github.com/jdx/pitchfork/pull/889))
+- *(deps)* update rust crate xx to v2.6.2 ([#884](https://github.com/jdx/pitchfork/pull/884))
+
 ## [2.26.0](https://github.com/jdx/pitchfork/compare/v2.25.0...v2.26.0) - 2026-09-19
 
 ### Added
