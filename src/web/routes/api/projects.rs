@@ -596,14 +596,18 @@ fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     // submodule and a `--separate-git-dir` checkout also have a `.git` file,
     // and both are checkouts in their own right whose worktrees must still be
     // listed.
-    if let Some(main) = main_checkout_root(project_dir) {
+    if is_linked_worktree(project_dir) {
         // Keep this checkout's own branch and URL name: discovery lists every
         // worktree of the repository, so take the entry for this directory.
         //
-        // Discovery runs from the main checkout, not from here: `jj workspace
-        // list` reports `default` for whichever directory it ran in, so asking
-        // this workspace would name it `default` instead of itself.
-        let own = discover_cached(&main)
+        // Discovery runs from the main checkout where that is known, not from
+        // here: `jj workspace list` reports `default` for whichever directory
+        // it ran in, so asking this workspace would name it `default` instead
+        // of itself. Git lists the same set from any checkout, which is the
+        // fallback when the main one cannot be reconstructed.
+        let discovery_dir =
+            main_checkout_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf());
+        let own = discover_cached(&discovery_dir)
             .into_iter()
             .find(|wt| canonical(&wt.path) == project_canonical);
         let (branch, name) = match own {
@@ -651,12 +655,45 @@ fn worktree_views(project_dir: &StdPath) -> Vec<WorktreeView> {
     views
 }
 
-/// The main checkout of the repository `dir` belongs to, when `dir` is a
-/// linked git worktree or a secondary jj workspace.
+/// The git directory a `.git` *file* points at, when `dir` has one.
+fn gitdir_link(dir: &StdPath) -> Option<PathBuf> {
+    let git = dir.join(".git");
+    if !git.is_file() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&git).ok()?;
+    let gitdir = PathBuf::from(content.trim().strip_prefix("gitdir:")?.trim());
+    Some(if gitdir.is_absolute() {
+        gitdir
+    } else {
+        dir.join(gitdir)
+    })
+}
+
+/// Whether `dir` is a linked git worktree or a secondary jj workspace, rather
+/// than a checkout that owns its repository.
+///
+/// A linked worktree's `.git` file points inside the repository's `worktrees/`
+/// directory. A submodule's points at `modules/` instead, and a
+/// `--separate-git-dir` checkout at the repository root itself, so neither is
+/// linked. This is deliberately separate from finding the main checkout: with
+/// an external git directory there is no `.git` ancestor to walk back to, but
+/// the directory is still a linked worktree.
+fn is_linked_worktree(dir: &StdPath) -> bool {
+    if dir.join(".jj").join("repo").is_file() {
+        return true;
+    }
+    gitdir_link(dir).is_some_and(|gitdir| gitdir.components().any(|c| c.as_os_str() == "worktrees"))
+}
+
+/// The main checkout of the repository `dir` belongs to, when `dir` is a linked
+/// git worktree or a secondary jj workspace and that path can be reconstructed.
 ///
 /// Both record where the real repository lives: `.git` is a file reading
 /// `gitdir: <main>/.git/worktrees/<name>`, and `.jj/repo` is a file holding the
-/// path of `<main>/.jj/repo`.
+/// path of `<main>/.jj/repo`. A repository with an external git directory has
+/// no `.git` ancestor to walk back to, so this answers `None` there even though
+/// [`is_linked_worktree`] is true.
 fn main_checkout_root(dir: &StdPath) -> Option<PathBuf> {
     let jj_repo = dir.join(".jj").join("repo");
     if jj_repo.is_file() {
@@ -671,33 +708,21 @@ fn main_checkout_root(dir: &StdPath) -> Option<PathBuf> {
         return target.parent()?.parent().map(StdPath::to_path_buf);
     }
 
-    let git = dir.join(".git");
-    if git.is_file() {
-        let content = std::fs::read_to_string(&git).ok()?;
-        let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
-        let gitdir = PathBuf::from(gitdir);
-        let gitdir = if gitdir.is_absolute() {
-            gitdir
-        } else {
-            dir.join(gitdir)
-        };
-        // Only a linked worktree points at <main>/.git/worktrees/<name>. A
-        // submodule's .git file points at <super>/.git/modules/<name>, which
-        // must not make the superproject its main checkout.
-        if !gitdir.components().any(|c| c.as_os_str() == "worktrees") {
-            return None;
-        }
-        let mut current = gitdir.as_path();
-        loop {
-            let parent = current.parent()?;
-            if current.file_name().is_some_and(|name| name == ".git") {
-                return Some(parent.to_path_buf());
-            }
-            current = parent;
-        }
+    let gitdir = gitdir_link(dir)?;
+    // Only a linked worktree points at <main>/.git/worktrees/<name>. A
+    // submodule's .git file points at <super>/.git/modules/<name>, which must
+    // not make the superproject its main checkout.
+    if !gitdir.components().any(|c| c.as_os_str() == "worktrees") {
+        return None;
     }
-
-    None
+    let mut current = gitdir.as_path();
+    loop {
+        let parent = current.parent()?;
+        if current.file_name().is_some_and(|name| name == ".git") {
+            return Some(parent.to_path_buf());
+        }
+        current = parent;
+    }
 }
 
 /// Build the project views from the global namespace registry.
@@ -1286,6 +1311,21 @@ mod tests {
         let names: Vec<String> = worktree_views(&repo).into_iter().map(|w| w.name).collect();
         assert!(names.contains(&"main".to_string()), "got {names:?}");
         assert!(names.contains(&"feature-a".to_string()), "got {names:?}");
+
+        // Its linked worktree points at <external>/worktrees/<name>, which has
+        // no `.git` ancestor, so the main checkout cannot be reconstructed from
+        // it. It is still a linked worktree and must stay scoped to itself.
+        let linked = temp.path().join("shop-feat");
+        assert!(is_linked_worktree(&linked));
+        // `git worktree list` reports this repository's main worktree as the
+        // external git directory, not as the checkout, so there is no main
+        // checkout to fold into: the registration simply stays its own project.
+        assert_eq!(main_checkout_root(&linked), None);
+
+        let views = worktree_views(&linked);
+        assert_eq!(views.len(), 1, "got {:?}", views);
+        assert_eq!(canonical(&views[0].path), canonical(&linked));
+        assert_eq!(views[0].branch, "feature-a");
     }
 
     /// A config file that cannot be read must not leave the groups the files
