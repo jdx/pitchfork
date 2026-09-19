@@ -244,12 +244,14 @@ proxy returns an error identifying the conflicting checkouts. See
 
 ### Reserved Addresses and Conflicts
 
-`<project>.<tld>` and `<worktree>.<project>.<tld>` redirect to the project and
-stack pages in the [web UI](/guides/web-ui), at `/projects/<project>` and
-`/projects/<project>/<worktree>`. They do not route to an individual daemon.
-When the web UI is not running, they show that checkout's daemons and explain
-how to enable it. If the checkout is not part of a registered project, the
-address shows registration instructions instead.
+`<project>.<tld>` opens the project page, and `<worktree>.<project>.<tld>`
+opens that worktree's stack in the [web UI](/guides/web-ui#projects-and-stacks).
+Both redirect to the web UI's address. Opening these pages does not start any
+daemons.
+
+If the web UI is off, these addresses list the checkout's daemons and explain
+how to enable it. If the checkout has no registered project page, they explain
+how to register its directory.
 
 A worktree label takes precedence over a daemon label. If a worktree is named
 `api`, `api.myproject.localhost` displays the worktree page. Rename the worktree

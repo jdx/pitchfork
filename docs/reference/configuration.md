@@ -821,10 +821,11 @@ daemons = ["postgres", "redis", "api", "worker"]
 - Groups merge like other config values: later definitions override earlier ones
 - `pitchfork start --group backend` resolves dependencies and starts daemons in parallel as usual
 
-In the [web UI](/guides/web-ui#projects-and-stacks), each worktree's project
-groups form a stack. A group named `default` appears first with **Start stack**,
-**Stop stack**, and **Restart stack** controls. Other groups have their own
-controls. User and system config groups are excluded from stack pages.
+The [web UI stack page](/guides/web-ui#run-a-stack) provides start, stop, and
+restart controls for groups in a worktree's project configuration. A group
+named `default` appears first and supplies the **Start stack**, **Stop stack**,
+and **Restart stack** actions. Groups from user and system configs are excluded
+from the stack page.
 
 ## Complete example
 
