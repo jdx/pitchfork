@@ -1594,7 +1594,35 @@ pub fn ensure_ca(
         return Ok(false);
     }
     generate_ca(cert_path, key_path)?;
+    // Leaves cached from a previous CA would still load — they are only
+    // checked for expiry — and be served for names the new CA never signed.
+    // They are all stale now, so they go.
+    clear_host_certs(&host_certs_dir_for(cert_path));
     Ok(true)
+}
+
+/// Where leaves signed by the CA at `ca_cert_path` are cached.
+#[cfg(feature = "proxy-tls")]
+fn host_certs_dir_for(ca_cert_path: &std::path::Path) -> std::path::PathBuf {
+    ca_cert_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("host-certs")
+}
+
+/// Remove every cached leaf certificate in `dir`, leaving other files alone.
+#[cfg(feature = "proxy-tls")]
+fn clear_host_certs(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for path in entries.filter_map(|e| e.ok()).map(|e| e.path()) {
+        if path.extension().is_some_and(|x| x == "pem")
+            && let Err(e) = std::fs::remove_file(&path)
+        {
+            log::debug!("Could not remove stale cached cert {}: {e}", path.display());
+        }
+    }
 }
 
 /// Generate a local root CA certificate and private key using `rcgen`.
@@ -1900,10 +1928,7 @@ impl SniCertResolver {
             .map_err(|e| miette::miette!("Failed to parse CA cert: {e}"))?;
 
         // Ensure the host-certs directory exists
-        let host_certs_dir = ca_cert_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("host-certs");
+        let host_certs_dir = host_certs_dir_for(ca_cert_path);
         std::fs::create_dir_all(&host_certs_dir)
             .map_err(|e| miette::miette!("Failed to create host-certs dir: {e}"))?;
         // The in-memory cache starts empty on every run, so without this the
@@ -4333,6 +4358,28 @@ mod tests {
         // A truncated certificate.
         std::fs::write(&cert, "-----BEGIN CERTIFICATE-----\nAAAA\n").unwrap();
         assert!(ca_pair_problem(&cert, &key).is_some());
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn a_new_ca_clears_leaves_signed_by_the_old_one() {
+        // Cached leaves are checked only for expiry when loaded, so after a
+        // regeneration they would be served for names the new CA never signed.
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
+        let host_certs = host_certs_dir_for(&cert);
+        std::fs::create_dir_all(&host_certs).unwrap();
+        std::fs::write(host_certs.join("api.localhost.pem"), "old leaf").unwrap();
+        std::fs::write(host_certs.join("notes.txt"), "keep me").unwrap();
+
+        // Kept while the pair is usable.
+        assert!(!ensure_ca(&cert, &key, || true).unwrap());
+        assert!(host_certs.join("api.localhost.pem").exists());
+
+        // Gone once a new pair is written; unrelated files stay.
+        assert!(ensure_ca(&cert, &key, || false).unwrap());
+        assert!(!host_certs.join("api.localhost.pem").exists());
+        assert!(host_certs.join("notes.txt").exists());
     }
 
     #[cfg(feature = "proxy-tls")]
