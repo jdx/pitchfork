@@ -480,6 +480,12 @@ pub async fn serve(
                 // Drop the connection rather than queue it without bound: a
                 // local process could otherwise pin a task and a socket per
                 // connection by never sending the query it promised.
+                //
+                // Reaped again here, not only at the top of the loop:
+                // connections that finished while `accept` was waiting would
+                // otherwise still count, and a burst that just completed could
+                // get the next client refused with nothing in flight.
+                while conns.try_join_next().is_some() {}
                 if conns.len() >= MAX_TCP_CONNECTIONS {
                     // Throttled: a client can provoke this as fast as it can
                     // open sockets, and one line each would let it fill the
