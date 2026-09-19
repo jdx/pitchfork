@@ -20,10 +20,16 @@ When run as a normal user, registers a user-level entry:
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
 
-To run the supervisor as root but keep state files and IPC sockets in a
-specific user's home directory, set `settings.supervisor.user` in the global
-pitchfork configuration (~/.config/pitchfork/config.toml or
-/etc/pitchfork/config.toml).
+A system-level entry registered through sudo records the invoking user
+(`supervisor run --boot --invoking-user <user>`). At boot, the root supervisor
+behaves as if that user had started it with sudo: it reads their
+~/.config/pitchfork/config.toml, keeps state files and IPC sockets in their
+home directory, and runs daemons as that user unless `settings.supervisor.user`
+or a daemon's `user` says otherwise. A system-level entry registered from a
+root login shell records no user and runs entirely as root.
+
+Running `enable` again rewrites an existing entry, for example to record the
+invoking user in an entry created by an older version.
 
 Subcommands:
 

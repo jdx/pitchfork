@@ -42,6 +42,13 @@ async fn main() -> Result<()> {
     // Required because reqwest is built with `rustls-tls-*-no-provider`, which
     // avoids pulling in aws-lc-sys but requires the caller to install a provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    // Reject an unusable `supervisor run --invoking-user` before logging and
+    // settings resolve paths: they would fall back to root's home and touch
+    // its configuration and state.
+    #[cfg(unix)]
+    if let Err(e) = &*env::INVOKING_USER {
+        return Err(miette::miette!("{e}"));
+    }
     logger::init();
     // Re-apply log levels now that settings (env + config files) are loaded.
     // logger::init() only sees env vars; this picks up pitchfork.toml values.

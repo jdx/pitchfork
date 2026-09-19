@@ -860,7 +860,7 @@ Default Unix user for daemon processes spawned by the supervisor.
 
 When set, all daemons run as this user unless an individual daemon sets `user = "..."`. The value may be a username (for example `"postgres"`) or a numeric UID (for example `"501"`).
 
-If unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root.
+If unset and the supervisor is running as root via `sudo`, daemons default to the sudo-calling user from `SUDO_UID`/`SUDO_GID` instead of running as root. A system boot service registered with `sudo pitchfork boot enable` records that user as `--invoking-user` and defaults to them in the same way.
 
 ## `supervisor.watch_interval`
 

@@ -30,22 +30,8 @@ docs again after rendering and review staged changes before committing.
 
 ## mbx build cache
 
-The normal `mise run build`, `mise run test`, and `mise run lint` workflows use
-[mbx](https://mr-boxington.jdx.dev) for compilation-heavy Cargo work. If mbx
-appears to be the problem, first run `mise run build:ui`, then use the
-equivalent Cargo commands to unblock yourself without skipping or weakening the
-check:
-
-```sh
-cargo build
-cargo nextest run
-git submodule update --init --recursive
-mise run test:bats
-cargo clippy --manifest-path Cargo.toml --quiet -- -D warnings
-```
-
-If Cargo succeeds where mbx fails, or mbx introduces a papercut, please start a
-[mr-boxington Discussion](https://github.com/jdx/mr-boxington/discussions).
-Include the repository and commit, operating system, `mbx --version`, both
-commands and their output, the mbx cache summary, and an `MBX_BYPASS_LOG` when
-relevant (for example, `MBX_BYPASS_LOG=mbx-bypasses.log mise run build`).
+mise wraps `cargo` with [mbx](https://mr-boxington.jdx.dev), so compiled work is
+shared across checkouts. `mise run` tasks and `mise exec -- cargo …` use the
+wrapper; plain `cargo` does too once mise is [activated in your
+shell](https://mise.jdx.dev/getting-started.html#activate-mise). Builds that set
+`MBX_DISABLE=1`, including CI, skip the cache.

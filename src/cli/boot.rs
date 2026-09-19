@@ -21,10 +21,16 @@ When run as a normal user, registers a user-level entry:
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
 
-To run the supervisor as root but keep state files and IPC sockets in a
-specific user's home directory, set `settings.supervisor.user` in the global
-pitchfork configuration (~/.config/pitchfork/config.toml or
-/etc/pitchfork/config.toml).
+A system-level entry registered through sudo records the invoking user
+(`supervisor run --boot --invoking-user <user>`). At boot, the root supervisor
+behaves as if that user had started it with sudo: it reads their
+~/.config/pitchfork/config.toml, keeps state files and IPC sockets in their
+home directory, and runs daemons as that user unless `settings.supervisor.user`
+or a daemon's `user` says otherwise. A system-level entry registered from a
+root login shell records no user and runs entirely as root.
+
+Running `enable` again rewrites an existing entry, for example to record the
+invoking user in an entry created by an older version.
 
 Subcommands:
 
@@ -62,9 +68,13 @@ When run as a normal user: creates a user-level entry
     macOS: ~/Library/LaunchAgents/pitchfork.plist
     Linux: ~/.config/systemd/user/pitchfork.service
 
-If you want the supervisor to run as root but keep state files and IPC sockets
-under a specific user's home directory, configure `settings.supervisor.user`
-in your pitchfork configuration.")]
+Through sudo, the system-level entry records the invoking user so the root
+supervisor uses that user's configuration, state directory, and identity at
+boot, as `sudo pitchfork supervisor start` would. Set `settings.supervisor.user`
+to choose a different user for state and daemons.
+
+If an entry already exists at this level, it is rewritten with the current
+binary path and invoking user.")]
     Enable(BootEnable),
     /// Disable boot start for pitchfork supervisor
     #[usage(long_help = "\
@@ -105,17 +115,34 @@ impl BootEnable {
         let boot_manager = BootManager::new()?;
 
         if boot_manager.is_current_level_enabled()? {
-            // Even if already enabled, clean up any leftover legacy entry
-            // from a partial migration on a previous attempt.
-            #[cfg(target_os = "macos")]
-            boot_manager.cleanup_legacy(false)?;
-            println!("Boot start is already enabled");
-            return Ok(());
+            if boot_manager.is_current_level_up_to_date()? {
+                // Even if already enabled, clean up any leftover legacy entry
+                // from a partial migration on a previous attempt.
+                #[cfg(target_os = "macos")]
+                boot_manager.cleanup_legacy(false)?;
+                println!("Boot start is already enabled");
+            } else {
+                // An entry from an older version, or one registered from a
+                // different account, gets the current binary path and
+                // invoking user.
+                boot_manager.refresh()?;
+                println!("Boot start is already enabled; registration updated");
+                println!(
+                    "The running service keeps its old settings until it is reloaded or the system restarts"
+                );
+            }
+        } else {
+            // enable() will error if the other privilege level is already registered.
+            boot_manager.enable()?;
+            info!("✓ Boot start enabled");
         }
 
-        // enable() will error if the other privilege level is already registered.
-        boot_manager.enable()?;
-        info!("✓ Boot start enabled");
+        if let Some(user) = boot_manager.invoking_user() {
+            info!(
+                "the system service runs on behalf of {user}: it reads their pitchfork \
+                configuration and runs daemons as {user} unless configured otherwise"
+            );
+        }
 
         Ok(())
     }
@@ -164,6 +191,18 @@ impl BootStatus {
             ),
             (false, false) if boot_manager.is_enabled()? => info!("Boot start is enabled"),
             (false, false) => info!("Boot start is disabled"),
+        }
+
+        if boot_manager.is_system_level_enabled()? {
+            match boot_manager.system_invoking_user() {
+                Some(user) => info!(
+                    "The system-level entry runs on behalf of {user}, using their configuration and state"
+                ),
+                None => info!(
+                    "The system-level entry records no invoking user and runs with root's configuration; \
+                    run `sudo pitchfork boot enable` from your account to use your configuration"
+                ),
+            }
         }
 
         Ok(())

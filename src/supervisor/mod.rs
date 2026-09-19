@@ -1625,7 +1625,8 @@ impl Supervisor {
 /// Fix ownership on the state directory so non-root users can access files
 /// created by a `sudo`-started supervisor.
 ///
-/// When `[settings.supervisor] user` or `SUDO_UID`/`SUDO_GID` are set, we
+/// When `[settings.supervisor] user`, a recorded invoking user (see
+/// [`env::InvokingUser`]), or `SUDO_UID`/`SUDO_GID` are set, we
 /// `chown` the state directory and safe subdirectories back to that non-root
 /// runtime user. This is strictly better than `chmod 0o666` because it does not
 /// widen the permission bits — the files stay owner-only (0o600/0o700) but the
@@ -1636,9 +1637,10 @@ impl Supervisor {
 /// generated it. Changing its ownership or permissions would expose the CA
 /// private key to other local users.
 ///
-/// If neither `user` nor `SUDO_UID`/`SUDO_GID` are available (e.g. direct
-/// root login), we fall back to relaxing permissions on only the `sock/` and
-/// `logs/` subdirectories (plus `state.toml`) so CLI clients can still function.
+/// If none of these are available (e.g. a direct root login, or a boot service
+/// installed from a root shell), we fall back to relaxing permissions on only
+/// the `sock/` and `logs/` subdirectories (plus `state.toml`) so CLI clients
+/// can still function.
 #[cfg(unix)]
 fn fix_state_dir_permissions() {
     let state_dir = &*env::PITCHFORK_STATE_DIR;
@@ -1685,13 +1687,13 @@ pub(crate) fn state_owner_ids() -> Option<(u32, u32)> {
     if !user.is_empty() {
         return resolve_supervisor_user_ids(user).or_else(|| {
             warn!(
-                "failed to resolve supervisor.user '{user}' for state ownership; falling back to SUDO_UID/SUDO_GID"
+                "failed to resolve supervisor.user '{user}' for state ownership; falling back to the invoking user"
             );
-            parse_sudo_ids()
+            env::invoking_user_ids()
         });
     }
 
-    parse_sudo_ids()
+    env::invoking_user_ids()
 }
 
 #[cfg(unix)]
@@ -1706,21 +1708,6 @@ fn resolve_supervisor_user_ids(user: &str) -> Option<(u32, u32)> {
     }?;
 
     Some((user_record.uid.as_raw(), user_record.gid.as_raw()))
-}
-
-/// Parse `SUDO_UID` and `SUDO_GID` environment variables into numeric IDs.
-///
-/// Returns `None` unless the effective UID is 0 (root). This prevents stale
-/// `SUDO_UID`/`SUDO_GID` values inherited into non-sudo environments from
-/// triggering incorrect `chown` operations.
-#[cfg(unix)]
-fn parse_sudo_ids() -> Option<(u32, u32)> {
-    if !nix::unistd::Uid::effective().is_root() {
-        return None;
-    }
-    let uid: u32 = std::env::var("SUDO_UID").ok()?.parse().ok()?;
-    let gid: u32 = std::env::var("SUDO_GID").ok()?.parse().ok()?;
-    Some((uid, gid))
 }
 
 /// Recursively `chown` a directory tree. If `skip_proxy` is true, the `proxy/`
