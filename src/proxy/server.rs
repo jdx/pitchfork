@@ -100,6 +100,46 @@ pub struct CachedSlugEntry {
     pub worktree_tls: std::collections::HashMap<String, ProxyTlsRoute>,
 }
 
+impl CachedSlugEntry {
+    /// The route this entry recorded for its main checkout, provided the slug
+    /// still names the same daemon in the same directory and namespace. A slug
+    /// repointed elsewhere must not carry the old daemon's mode and port over
+    /// to a new target whose config cannot be read.
+    fn known_route(
+        &self,
+        dir: &std::path::Path,
+        namespace: Option<&str>,
+        daemon_name: &str,
+    ) -> Option<ProxyTlsRoute> {
+        (self.dir == dir
+            && self.namespace.as_deref() == namespace
+            && self.daemon_name == daemon_name)
+            .then_some(self.tls)
+    }
+
+    /// The route this entry recorded for a worktree, provided the same daemon
+    /// was known there at the same path and namespace.
+    fn known_worktree_route(
+        &self,
+        wt: &crate::proxy::worktree::WorktreeEntry,
+        daemon_name: &str,
+    ) -> Option<ProxyTlsRoute> {
+        if self.daemon_name != daemon_name {
+            return None;
+        }
+        let branch = wt.sanitized_branch.to_ascii_lowercase();
+        self.worktrees
+            .iter()
+            .any(|known| {
+                known.sanitized_branch.eq_ignore_ascii_case(&branch)
+                    && known.path == wt.path
+                    && known.namespace == wt.namespace
+            })
+            .then(|| self.worktree_tls.get(&branch).copied())
+            .flatten()
+    }
+}
+
 /// In-memory cache for the global slug registry + derived namespaces.
 struct SlugCache {
     entries: Arc<std::collections::HashMap<String, CachedSlugEntry>>,
@@ -320,7 +360,7 @@ fn build_slug_entries(
         // known route; with none known yet, there is nothing else to go on.
         let tls = route_or_last_known(
             read_proxy_tls_route(&dir, ns.as_deref(), &daemon_name),
-            prev.map(|p| p.tls),
+            prev.and_then(|p| p.known_route(&dir, ns.as_deref(), &daemon_name)),
             &dir,
             &daemon_name,
         )
@@ -334,7 +374,7 @@ fn build_slug_entries(
                 let branch = wt.sanitized_branch.to_ascii_lowercase();
                 route_or_last_known(
                     read_proxy_tls_route(&wt.path, wt.namespace.as_deref(), &daemon_name),
-                    prev.and_then(|p| p.worktree_tls.get(&branch).copied()),
+                    prev.and_then(|p| p.known_worktree_route(wt, &daemon_name)),
                     &wt.path,
                     &daemon_name,
                 )
@@ -3477,6 +3517,39 @@ mod tests {
             route_or_last_known(Ok(None), Some(known), dir.path(), "api"),
             None
         );
+    }
+
+    /// A route is only carried over while the slug still points at the same
+    /// daemon, directory and namespace; a repointed slug starts from nothing.
+    #[test]
+    fn test_known_route_requires_the_same_target() {
+        let known = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        let mut entry = make_entry("api");
+        entry.namespace = Some("proj".to_string());
+        entry.tls = known;
+        let dir = entry.dir.clone();
+
+        assert_eq!(entry.known_route(&dir, Some("proj"), "api"), Some(known));
+        assert_eq!(entry.known_route(&dir, Some("proj"), "web"), None);
+        assert_eq!(entry.known_route(&dir, Some("other"), "api"), None);
+        assert_eq!(
+            entry.known_route(std::path::Path::new("/elsewhere"), Some("proj"), "api"),
+            None
+        );
+
+        let wt = make_worktree("feature/x", "feature-x");
+        entry.worktrees = vec![wt.clone()];
+        entry.worktree_tls.insert("feature-x".to_string(), known);
+        assert_eq!(entry.known_worktree_route(&wt, "api"), Some(known));
+        assert_eq!(entry.known_worktree_route(&wt, "web"), None);
+        let moved = crate::proxy::worktree::WorktreeEntry {
+            path: std::path::PathBuf::from("/elsewhere/feature-x"),
+            ..wt
+        };
+        assert_eq!(entry.known_worktree_route(&moved, "api"), None);
     }
 
     /// A worktree whose own config describes the daemon is authoritative,
