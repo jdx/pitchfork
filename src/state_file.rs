@@ -441,7 +441,20 @@ impl StateFile {
     pub(crate) fn restore_daemon_in_file(path: &Path, daemon: &Daemon) -> Result<DiskRecord> {
         let canonical_path = normalized_lock_path(path);
         let _lock = xx::fslock::get(&canonical_path, false)?;
-        let raw = std::fs::read_to_string(path).unwrap_or_default();
+        // A missing file (deleted since) just gets the entry back; any other
+        // read failure must not be mistaken for an empty file, which would
+        // replace the existing records.
+        let raw = match std::fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(source) => {
+                return Err(FileError::ReadError {
+                    path: path.to_path_buf(),
+                    source,
+                }
+                .into());
+            }
+        };
         let Ok(mut on_disk) = toml::from_str::<Self>(&raw) else {
             return Ok(DiskRecord::Unparseable);
         };
