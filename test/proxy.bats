@@ -267,8 +267,10 @@ _start_dependency_proxy() {
   mkdir -p "$foreign" "$proj"
   cd "$foreign"
   create_pitchfork_toml <<EOF
+[env]
+OWNER = "services"
 [daemons.database]
-run = 'sleep 1; echo database >> "$proj/order"; sleep 60'
+run = 'test "{{ env.OWNER }}" = services && test "\$OWNER" = services && test -z "\${APP_ONLY:-}" && sleep 1 && echo database >> "$proj/order"; sleep 60'
 ready_cmd = 'test -f "$proj/order"'
 EOF
   run pitchfork proxy add database --daemon database
@@ -276,8 +278,11 @@ EOF
 
   cd "$proj"
   create_pitchfork_toml <<EOF
+[env]
+OWNER = "app"
+APP_ONLY = "private-to-app"
 [daemons.migrate]
-run = 'test -f order && sleep 1 && echo migrate >> order'
+run = 'test "{{ env.OWNER }}" = app && test -f order && sleep 1 && echo migrate >> order'
 oneshot = true
 depends = ["services/database"]
 [daemons.api]

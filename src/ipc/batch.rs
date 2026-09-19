@@ -696,12 +696,29 @@ impl IpcClient {
                                     &ports,
                                     &pt.daemons,
                                 );
-                                let result = crate::template::render_daemon_templates(
-                                    &mut rendered_config,
-                                    &mut template_ctx,
-                                    pt.env.as_ref(),
-                                )
-                                .map(|()| rendered_config);
+                                // Foreign prerequisites keep their project's defaults;
+                                // the requesting checkout's env must not leak into them.
+                                let result = (|| -> Result<_> {
+                                    let owner = daemon_config
+                                        .path
+                                        .as_deref()
+                                        .map(|path| {
+                                            PitchforkToml::all_merged_from(
+                                                &resolve_config_base_dir(Some(path)),
+                                            )
+                                        })
+                                        .transpose()?;
+                                    let top_env = owner
+                                        .as_ref()
+                                        .map_or(pt.env.as_ref(), |pt| pt.env.as_ref());
+                                    crate::template::render_daemon_templates(
+                                        &mut rendered_config,
+                                        &mut template_ctx,
+                                        top_env,
+                                    )
+                                    .map_err(|e| miette::miette!("{e}"))?;
+                                    Ok(rendered_config)
+                                })();
                                 Some((id, result))
                             })
                             .collect::<Vec<_>>()
