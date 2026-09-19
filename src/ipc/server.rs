@@ -1,7 +1,6 @@
 use crate::Result;
-#[cfg(unix)]
 use crate::env;
-use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize};
+use crate::ipc::{IpcRequest, IpcResponse, deserialize, fs_name, serialize, socket_display};
 use crate::settings::settings;
 use interprocess::local_socket::ListenerOptions;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf};
@@ -58,27 +57,73 @@ pub struct IpcServer {
 /// Handle for triggering graceful shutdown of the IPC server
 pub struct IpcServerHandle {
     shutdown_tx: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl IpcServerHandle {
-    /// Signal the IPC server to shut down gracefully
-    pub fn shutdown(&mut self) {
+    /// Signal the IPC server to shut down gracefully and wait for it to stop
+    /// accepting connections and remove its socket file. A supervisor
+    /// replacing this one waits for the socket to go away before binding it,
+    /// so it must be gone before this process exits. After the signal the
+    /// task only removes the file and drops the listener, so this is prompt.
+    pub async fn shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
+        }
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
         }
     }
 }
 
+/// Exclusive right to start a supervisor for this state directory, held from
+/// before a starting supervisor checks for a running one until its IPC
+/// listener is bound (see [`IpcServer::new`]). Two supervisors starting at
+/// the same time are thereby serialized: the second only proceeds once the
+/// first is listening, and then sees it and backs off, instead of both
+/// finding the socket free and both starting daemons.
+pub struct StartupLock(#[allow(dead_code)] Option<xx::fslock::LockFile>);
+
+impl StartupLock {
+    pub async fn acquire() -> Result<Self> {
+        // The key only has to be the same for every supervisor sharing this
+        // state directory; it names no file (the lock lives in the temp dir).
+        let key = env::PITCHFORK_STATE_DIR.join("sock");
+        // Waiting can take as long as another supervisor's startup, so keep
+        // it off the async workers.
+        let lock = tokio::task::spawn_blocking(move || xx::fslock::get(&key, false))
+            .await
+            .into_diagnostic()??;
+        Ok(Self(lock))
+    }
+}
+
 impl IpcServer {
-    pub fn new() -> Result<(Self, IpcServerHandle)> {
-        // Unix: create the socket directory and remove any stale socket file.
+    /// Bind the supervisor's IPC socket. `_startup` must be held since before
+    /// this supervisor checked that no other one is running; it is released
+    /// once the listener is bound.
+    pub async fn new(_startup: StartupLock) -> Result<(Self, IpcServerHandle)> {
+        #[cfg(unix)]
+        xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
+        // Never displace a live supervisor: replacing its socket would leave
+        // it running, unreachable, and invisible to `supervisor stop`.
+        if super::supervisor_listening().await {
+            bail!(
+                "another pitchfork supervisor is already listening on {}",
+                socket_display()
+            );
+        }
+        // Unix: remove any stale socket file (it refused the connection above).
         // Windows: named pipes exist in a flat kernel namespace — no files to create or clean up.
         #[cfg(unix)]
-        {
-            xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
-            let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
-        }
-        let opts = ListenerOptions::new().name(fs_name("main")?);
+        let _ = xx::file::remove_file(&*env::IPC_SOCK_MAIN);
+        // The socket file is removed explicitly on graceful shutdown while the
+        // listener is still accepting. Reclaiming it again when the listener
+        // is dropped could unlink the socket of a supervisor that started in
+        // between.
+        let opts = ListenerOptions::new()
+            .name(fs_name("main")?)
+            .reclaim_name(false);
         #[cfg(unix)]
         debug!("Listening on {}", env::IPC_SOCK_MAIN.display());
         #[cfg(windows)]
@@ -119,7 +164,7 @@ impl IpcServer {
             }
         }
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             loop {
                 tokio::select! {
                     biased;
@@ -152,14 +197,19 @@ impl IpcServer {
                     }
                 }
             }
-            // Clean up socket file on graceful shutdown (Unix only)
+            // Clean up the socket file on graceful shutdown (Unix only) while
+            // the listener still accepts: until then a replacement supervisor
+            // sees this one listening and waits, so it cannot have bound the
+            // path yet. Only then stop listening.
             #[cfg(unix)]
             let _ = std::fs::remove_file(&*env::IPC_SOCK_MAIN);
+            drop(listener);
             debug!("IPC server shut down cleanly");
         });
         let server = Self { rx };
         let handle = IpcServerHandle {
             shutdown_tx: Some(shutdown_tx),
+            task: Some(task),
         };
         Ok((server, handle))
     }

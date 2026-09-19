@@ -25,6 +25,7 @@ use crate::pitchfork_toml::Retry;
 use crate::pitchfork_toml::StopConfig;
 use crate::pitchfork_toml::WatchMode;
 use crate::procs::PROCS;
+use crate::state_file::DiskRecord;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -207,6 +208,78 @@ impl UpsertDaemonOptsBuilder {
 }
 
 impl Supervisor {
+    /// Put this supervisor's record back into the state file if the file no
+    /// longer has it.
+    ///
+    /// The CLI decides whether a supervisor is running, and which process
+    /// `supervisor stop` signals, from this record. The supervisor only
+    /// writes the file when its own state changes, so if the file is replaced
+    /// or rewritten by something else the record could stay missing
+    /// indefinitely, leaving this supervisor running but unaccounted for.
+    /// Only the record is restored; the rest of the file is left as it is.
+    pub(crate) async fn restore_own_record(&self) {
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
+        let pitchfork_id = DaemonId::pitchfork();
+        let state = self.state_file.lock().await;
+        // Checked again under the lock: `close()` may have begun while this
+        // waited for it. (Its removal of the record happens under this lock
+        // too, so a restore can never outlive it; this just skips the work.)
+        if self
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
+        let Some(own) = state
+            .daemons
+            .get(&pitchfork_id)
+            .filter(|d| d.pid.is_some())
+            .cloned()
+        else {
+            return;
+        };
+        let own_pid = own.pid.unwrap_or_default();
+        let path = state.path.clone();
+        // The state lock stays held across the file work, as it is for a
+        // flush, so the two cannot interleave.
+        let result = tokio::task::spawn_blocking(move || {
+            crate::state_file::StateFile::restore_daemon_in_file(&path, &own)
+        })
+        .await;
+        match result {
+            Ok(Ok(DiskRecord::Present)) => {}
+            Ok(Ok(DiskRecord::Restored)) => {
+                // Not flushed yet (e.g. a client connecting right after
+                // startup): the record was simply written early.
+                if state.is_dirty() {
+                    debug!("recorded this supervisor in the state file ahead of the next flush");
+                } else {
+                    warn!(
+                        "state file {} no longer recorded this supervisor (pid {own_pid}); restored it",
+                        state.path.display()
+                    );
+                }
+                // The file now differs from what this supervisor last wrote,
+                // so its next flush must not be skipped as unchanged.
+                state.forget_written_snapshot();
+            }
+            Ok(Ok(DiskRecord::Unparseable)) => {
+                warn!(
+                    "state file {} cannot be parsed; rewriting it from the supervisor's state",
+                    state.path.display()
+                );
+                state.force_next_write();
+            }
+            Ok(Err(e)) => warn!("failed to restore the supervisor record in the state file: {e}"),
+            Err(e) => warn!("failed to restore the supervisor record in the state file: {e}"),
+        }
+    }
+
     /// Upsert a daemon's state, merging with existing values
     pub(crate) async fn upsert_daemon(&self, opts: UpsertDaemonOpts) -> Result<Daemon> {
         info!(

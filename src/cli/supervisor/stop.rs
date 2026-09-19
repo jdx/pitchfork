@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::cli::supervisor::KillOrStopOutcome;
-use crate::cli::supervisor::resolve_existing_supervisor;
+use crate::cli::supervisor::{resolve_existing_supervisor, unidentified_supervisor_error};
 use crate::daemon_id::DaemonId;
 use crate::env;
 use crate::state_file::StateFile;
@@ -13,6 +13,9 @@ pub struct Stop {}
 impl Stop {
     pub async fn run(&self) -> Result<()> {
         let (existing_pid, outcome) = resolve_existing_supervisor(true).await?;
+        if outcome == KillOrStopOutcome::Unidentified {
+            return Err(unidentified_supervisor_error());
+        }
         let Some(pid) = existing_pid else {
             warn!("Pitchfork daemon is not running");
             return Ok(());
@@ -46,6 +49,7 @@ impl Stop {
             KillOrStopOutcome::StillRunning => {
                 unreachable!("stop always passes force=true")
             }
+            KillOrStopOutcome::Unidentified => unreachable!("handled above"),
         }
         Ok(())
     }

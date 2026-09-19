@@ -2,6 +2,7 @@ use crate::Result;
 use crate::daemon::Daemon;
 use crate::daemon_id::DaemonId;
 use crate::env;
+use crate::ipc::client::IpcClient;
 use crate::pitchfork_toml::StopSignal;
 use crate::procs::PROCS;
 use crate::state_file::StateFile;
@@ -20,6 +21,22 @@ pub enum KillOrStopOutcome {
     AlreadyDead,
     /// Existing process is running and --force was not passed.
     StillRunning,
+    /// A supervisor is listening on the IPC socket, but the state file does
+    /// not identify its process (and it did not restore its record when
+    /// connected to, as supervisors older than this check do not), so it can
+    /// be neither signalled nor safely started beside.
+    Unidentified,
+}
+
+/// The error for acting on a supervisor that is running but that the state
+/// file does not identify (see [`KillOrStopOutcome::Unidentified`]).
+pub fn unidentified_supervisor_error() -> miette::Report {
+    miette::miette!(
+        "a pitchfork supervisor is listening on {}, but the state file does not record its pid, \
+         so it cannot be stopped or replaced automatically. Stop its `pitchfork supervisor run` \
+         process manually.",
+        crate::ipc::socket_display()
+    )
 }
 
 /// Start, stop, and check the status of the pitchfork supervisor daemon
@@ -109,13 +126,30 @@ pub fn existing_supervisor() -> Result<Option<Daemon>> {
     Ok(sf.daemons.get(&DaemonId::pitchfork()).cloned())
 }
 
+/// Find the running supervisor and, if `force` is true, kill it.
+///
+/// The state-file record is the only way to identify the supervisor's
+/// process, but it can be lost (e.g. state.toml replaced) while the
+/// supervisor keeps running. So when the record is missing or stale, the IPC
+/// socket decides: if a supervisor answers there, connecting to it makes it
+/// restore its record, which is then read again.
 pub async fn resolve_existing_supervisor(force: bool) -> Result<(Option<u32>, KillOrStopOutcome)> {
-    let record = existing_supervisor()?;
-    let existing_pid = record.as_ref().and_then(|d| d.pid);
-    let outcome = if let Some(record) = &record {
-        kill_or_stop(record, force).await?
-    } else {
-        KillOrStopOutcome::AlreadyDead
-    };
-    Ok((existing_pid, outcome))
+    let mut record = existing_supervisor()?;
+    if !record.as_ref().is_some_and(supervisor_record_is_live) {
+        if !crate::ipc::supervisor_listening().await {
+            let existing_pid = record.and_then(|d| d.pid);
+            return Ok((existing_pid, KillOrStopOutcome::AlreadyDead));
+        }
+        debug!("supervisor is listening on the IPC socket but not recorded; asking it to restore");
+        if let Err(err) = IpcClient::connect(false).await {
+            debug!("failed to connect to the unrecorded supervisor: {err:?}");
+        }
+        record = existing_supervisor()?;
+        if !record.as_ref().is_some_and(supervisor_record_is_live) {
+            return Ok((None, KillOrStopOutcome::Unidentified));
+        }
+    }
+    let record = record.expect("a live record was found above");
+    let outcome = kill_or_stop(&record, force).await?;
+    Ok((record.pid, outcome))
 }

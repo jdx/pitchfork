@@ -52,7 +52,7 @@ pub struct IpcClient {
 impl IpcClient {
     pub async fn connect(autostart: bool) -> Result<Self> {
         if autostart && settings().supervisor.auto_start {
-            supervisor::start_if_not_running()?;
+            supervisor::start_if_not_running().await?;
         }
         let id = Uuid::new_v4().to_string();
         let client = Self::connect_(&id, "main").await?;

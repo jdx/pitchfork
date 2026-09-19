@@ -1,7 +1,9 @@
 use crate::Result;
-use crate::cli::supervisor::{KillOrStopOutcome, resolve_existing_supervisor};
+use crate::cli::supervisor::{
+    KillOrStopOutcome, resolve_existing_supervisor, unidentified_supervisor_error,
+};
 use crate::ipc::client::IpcClient;
-use crate::procs::PROCS;
+use crate::ipc::socket_display;
 use crate::settings::settings;
 use crate::supervisor;
 
@@ -19,6 +21,16 @@ impl Start {
         let (existing_pid, outcome) = resolve_existing_supervisor(self.force).await?;
 
         match outcome {
+            KillOrStopOutcome::Unidentified if self.force => {
+                return Err(unidentified_supervisor_error());
+            }
+            KillOrStopOutcome::Unidentified => {
+                warn!(
+                    "Pitchfork supervisor is already running (listening on {}).",
+                    socket_display()
+                );
+                return Ok(());
+            }
             KillOrStopOutcome::StillRunning => {
                 // --force was not passed and the supervisor is already running.
                 let pid = existing_pid.expect("StillRunning implies a pid exists");
@@ -29,13 +41,10 @@ impl Start {
             }
             KillOrStopOutcome::Killed => {
                 let pid = existing_pid.expect("Killed implies a pid exists");
-                // Wait briefly for the old process to fully exit
-                for _ in 0..20 {
-                    if !PROCS.is_running(pid) {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
+                // The old supervisor keeps serving IPC until it has stopped
+                // its daemons. Wait for it to let go of the socket, so the
+                // connect below reaches the new supervisor, not the old one.
+                supervisor::wait_for_ipc_socket_release().await?;
                 info!("Killed existing supervisor with pid {pid}");
             }
             KillOrStopOutcome::AlreadyDead => {}

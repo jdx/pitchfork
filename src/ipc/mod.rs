@@ -226,6 +226,46 @@ fn fs_name(name: &str) -> Result<Name<'_>> {
     }
 }
 
+/// Human-readable location of the supervisor's IPC endpoint, for messages.
+pub(crate) fn socket_display() -> String {
+    #[cfg(unix)]
+    {
+        env::IPC_SOCK_MAIN.display().to_string()
+    }
+    #[cfg(windows)]
+    {
+        "the supervisor named pipe".to_string()
+    }
+}
+
+/// Whether a supervisor is accepting connections on the IPC socket right now.
+///
+/// This is the ground truth for "is a supervisor running": the state-file
+/// record can be lost or rewritten while the supervisor keeps serving, and a
+/// supervisor started on that basis would take the socket over and leave the
+/// original running but unreachable. A stale socket file left by a crashed
+/// supervisor refuses connections, so it does not count.
+pub(crate) async fn supervisor_listening() -> bool {
+    use interprocess::local_socket::traits::tokio::Stream as _;
+    let Ok(name) = fs_name("main") else {
+        return false;
+    };
+    let connect = interprocess::local_socket::tokio::Stream::connect(name);
+    // A live supervisor accepts at once (the kernel queues the connection);
+    // the timeout only guards against a platform where connecting blocks.
+    match tokio::time::timeout(std::time::Duration::from_secs(1), connect).await {
+        Ok(Ok(_)) => true,
+        Ok(Err(err)) => {
+            trace!("no supervisor listening on the IPC socket: {err}");
+            false
+        }
+        Err(_) => {
+            debug!("timed out probing the IPC socket; treating it as not listening");
+            false
+        }
+    }
+}
+
 fn serialize<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>> {
     if *env::IPC_JSON {
         serde_json::to_vec(msg)

@@ -26,7 +26,7 @@ mod watchers;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::deps::compute_reverse_stop_order;
-use crate::ipc::server::{IpcServer, IpcServerHandle};
+use crate::ipc::server::{IpcServer, IpcServerHandle, StartupLock};
 
 use crate::procs::PROCS;
 use crate::settings::settings;
@@ -143,6 +143,9 @@ pub struct Supervisor {
     /// exit), and starts/orphan-cleanup acquire it first — serializing them
     /// against in-flight stops instead of racing the Stopping window.
     pub(crate) stop_locks: Mutex<HashMap<DaemonId, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// Set when `close()` begins. From then on this supervisor's own
+    /// state-file record is on its way out and must not be restored.
+    pub(crate) shutting_down: AtomicBool,
 }
 
 /// A line of daemon output on its way to the monitoring task.
@@ -176,14 +179,57 @@ pub(crate) fn interval_duration() -> Duration {
 pub static SUPERVISOR: Lazy<Supervisor> =
     Lazy::new(|| Supervisor::new().expect("Error creating supervisor"));
 
-pub fn start_if_not_running() -> Result<()> {
+pub async fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
     if let Some(d) = sf.daemons.get(&DaemonId::pitchfork())
         && supervisor_record_is_live(d)
     {
         return Ok(());
     }
+    // The record can be missing or stale while a supervisor keeps serving
+    // IPC, e.g. when state.toml was replaced or rewritten by another tool.
+    // Starting another one would take over the socket and leave the running
+    // supervisor, and every daemon it manages, unreachable.
+    if crate::ipc::supervisor_listening().await {
+        debug!("supervisor is listening on the IPC socket but not recorded in the state file");
+        return Ok(());
+    }
     start_in_background()
+}
+
+/// How long `supervisor start/run --force` waits for the supervisor it
+/// replaces to stop serving IPC. A supervisor being stopped keeps its socket until its daemons
+/// have stopped, which can take a while.
+pub(crate) const IPC_SOCKET_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Wait until no supervisor is listening on the IPC socket, failing if one
+/// still is after [`IPC_SOCKET_RELEASE_TIMEOUT`].
+///
+/// Used when replacing a supervisor: the old one keeps serving IPC while it
+/// shuts down, and binding the socket before it lets go would leave clients
+/// talking to whichever supervisor they happen to reach.
+pub(crate) async fn wait_for_ipc_socket_release() -> Result<()> {
+    let deadline = time::Instant::now() + IPC_SOCKET_RELEASE_TIMEOUT;
+    let mut waiting = false;
+    while crate::ipc::supervisor_listening().await {
+        if time::Instant::now() >= deadline {
+            return Err(miette::miette!(
+                "another pitchfork supervisor is still listening on {} after {}s; \
+                 stop it with `pitchfork supervisor stop` before starting a new one",
+                crate::ipc::socket_display(),
+                IPC_SOCKET_RELEASE_TIMEOUT.as_secs()
+            ));
+        }
+        if !waiting {
+            info!(
+                "waiting for the supervisor listening on {} to shut down",
+                crate::ipc::socket_display()
+            );
+            waiting = true;
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
 }
 
 /// Whether the supervisor's own state-file record still describes a live
@@ -549,6 +595,7 @@ impl Supervisor {
             monitored: std::sync::Mutex::new(HashMap::new()),
             sink_output: std::sync::Mutex::new(HashMap::new()),
             stop_locks: Mutex::new(HashMap::new()),
+            shutting_down: AtomicBool::new(false),
         })
     }
 
@@ -575,6 +622,21 @@ impl Supervisor {
         // from reading/writing state or connecting to the IPC socket.
         #[cfg(unix)]
         fix_state_dir_permissions();
+
+        // Refuse to run beside a supervisor that is already listening, and
+        // do so before recording ourselves in the state file or starting any
+        // daemons: taking over its socket would leave it running but
+        // unreachable. (`--force` has already waited for the one it replaced
+        // to let go of the socket.) The lock is held until our own listener
+        // is bound, so a supervisor starting at the same time waits here and
+        // then finds this one listening.
+        let startup_lock = StartupLock::acquire().await?;
+        if crate::ipc::supervisor_listening().await {
+            return Err(miette::miette!(
+                "another pitchfork supervisor is already listening on {}",
+                crate::ipc::socket_display()
+            ));
+        }
 
         let pid = std::process::id();
         // Ensure PROCS has data for the supervisor PID before upsert_daemon reads title()
@@ -803,7 +865,7 @@ impl Supervisor {
             crate::proxy::server::get_cached_slugs().await;
         });
 
-        let (ipc, ipc_handle) = IpcServer::new()?;
+        let (ipc, ipc_handle) = IpcServer::new(startup_lock).await?;
         *self.ipc_shutdown.lock().await = Some(ipc_handle);
         self.start_state_flush_task();
         self.conn_watch(ipc).await
@@ -1120,6 +1182,8 @@ impl Supervisor {
         let mut last_refreshed_at = self.last_refreshed_at.lock().await;
         *last_refreshed_at = time::Instant::now();
 
+        self.restore_own_record().await;
+
         #[cfg_attr(not(unix), allow(unused_mut))]
         let mut dirs_to_leave: Vec<PathBuf> = Vec::new();
 
@@ -1402,6 +1466,7 @@ impl Supervisor {
     }
 
     pub(crate) async fn close(&self) {
+        self.shutting_down.store(true, atomic::Ordering::Release);
         // Signal the proxy server to stop accepting new connections
         // and drain in-flight ones, *before* stopping daemons so the
         // proxy has time to finish forwarding active requests.
@@ -1505,7 +1570,7 @@ impl Supervisor {
 
         // Signal IPC server to shut down gracefully
         if let Some(mut handle) = self.ipc_shutdown.lock().await.take() {
-            handle.shutdown();
+            handle.shutdown().await;
         }
 
         // Wait for all in-flight monitoring tasks to finish registering their
@@ -1540,9 +1605,13 @@ impl Supervisor {
             }
         }
 
-        // Unix: remove the socket directory. Windows: named pipes have no filesystem component.
+        // Unix: remove the socket directory if it is empty. The IPC server
+        // already removed our socket; anything left belongs to a supervisor
+        // that replaced this one (e.g. `supervisor run --force`) while we
+        // were stopping daemons, and must not be deleted.
+        // Windows: named pipes have no filesystem component.
         #[cfg(unix)]
-        let _ = fs::remove_dir_all(&*env::IPC_SOCK_DIR);
+        let _ = fs::remove_dir(&*env::IPC_SOCK_DIR);
     }
 
     pub(crate) async fn add_notification(&self, level: log::LevelFilter, message: String) {

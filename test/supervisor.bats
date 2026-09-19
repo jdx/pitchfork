@@ -220,6 +220,65 @@ start_bystander() {
   wait "$bystander" 2>/dev/null || true
 }
 
+# Replace the state file with one that no longer records the supervisor, as
+# when state.toml is replaced, hand-edited or rewritten by another tool while
+# the supervisor keeps running.
+drop_supervisor_record() {
+  echo 'disabled = []' >"$PITCHFORK_STATE_DIR/state.toml"
+  run get_supervisor_pid
+  assert_output ""
+}
+
+@test "a lost supervisor record does not start a second supervisor" {
+  run pitchfork supervisor start --force
+  assert_success
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  drop_supervisor_record
+
+  # Before the fix this auto-started a second supervisor, which took over the
+  # IPC socket and left the first one running, unreachable and unrecorded.
+  # fd 3 is closed so that a regression, whose leftover supervisor would
+  # inherit bats' output pipe, fails this test instead of hanging the run.
+  run pitchfork list 3>&-
+  assert_success
+
+  # The running supervisor restores its own record when a client connects.
+  run get_supervisor_pid
+  assert_output "$sup_pid"
+
+  # So `supervisor stop` reaches it, and no supervisor is left behind.
+  run pitchfork supervisor stop
+  assert_success
+  assert_output --partial "Stopped pitchfork daemon with pid $sup_pid"
+  for _ in $(seq 1 50); do
+    pid_alive "$sup_pid" || break
+    sleep 0.2
+  done
+  run pid_alive "$sup_pid"
+  assert_failure
+  run pitchfork supervisor status --json
+  assert_output --partial '"down"'
+}
+
+@test "supervisor start does not start beside an unrecorded running supervisor" {
+  run pitchfork supervisor start --force
+  assert_success
+  local sup_pid
+  sup_pid="$(get_supervisor_pid)"
+  [[ -n "$sup_pid" ]]
+
+  drop_supervisor_record
+
+  run pitchfork supervisor start 3>&-
+  assert_success
+  assert_output --partial "already running with pid $sup_pid"
+  run get_supervisor_pid
+  assert_output "$sup_pid"
+}
+
 @test "supervisor run starts in foreground and can be killed" {
   pitchfork supervisor stop 2>/dev/null || true
   pitchfork supervisor run &
