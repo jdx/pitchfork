@@ -441,7 +441,9 @@ List of daemon IDs that must be started before this daemon. Dependencies can be:
 - short IDs in the same namespace (e.g. `postgres`)
 - fully qualified cross-namespace IDs (e.g. `global/postgres`)
 
-When you start a daemon, its dependencies are automatically started first in the correct order.
+Running `pitchfork start` starts the requested daemon's dependencies first.
+Opening a stopped daemon's proxy URL does the same when
+[proxy auto-start](/guides/port-management#auto-start) is enabled (the default).
 
 ```toml
 [daemons.api]
@@ -451,7 +453,7 @@ depends = ["postgres", "redis"]
 
 **Behavior:**
 
-- **Auto-start**: Running `pitchfork start api` will automatically start `postgres` and `redis` first
+- **Readiness**: Dependencies must become ready before their dependents start
 - **Transitive dependencies**: If `postgres` depends on `storage`, that will be started too
 - **Parallel starting**: Dependencies at the same level start in parallel for faster startup
 - **Skip running**: Already-running services are skipped (not restarted)
