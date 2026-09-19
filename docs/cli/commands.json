@@ -2234,6 +2234,134 @@
         ],
         "usage": "proxy <SUBCOMMAND>",
         "subcommands": {
+          "setup": {
+            "full_cmd": [
+              "proxy",
+              "setup"
+            ],
+            "usage": "proxy setup [FLAGS]",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "pac",
+                "usage": "--pac",
+                "help": "Configure a proxy auto-config (PAC) file instead of the system resolver",
+                "help_first_line": "Configure a proxy auto-config (PAC) file instead of the system resolver",
+                "short": [],
+                "long": [
+                  "pac"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "undo",
+                "usage": "--undo",
+                "help": "Reverse everything setup did",
+                "help_first_line": "Reverse everything setup did",
+                "short": [],
+                "long": [
+                  "undo"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "yes",
+                "usage": "-y --yes",
+                "help": "Apply without asking for confirmation",
+                "help_first_line": "Apply without asking for confirmation",
+                "short": [
+                  "y"
+                ],
+                "long": [
+                  "yes"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "dry-run",
+                "usage": "--dry-run",
+                "help": "Print the plan and exit without changing anything",
+                "help_first_line": "Print the plan and exit without changing anything",
+                "short": [],
+                "long": [
+                  "dry-run"
+                ],
+                "hide": false,
+                "global": false
+              },
+              {
+                "name": "help",
+                "usage": "-h --help",
+                "help": "Print help",
+                "help_first_line": "Print help",
+                "short": [
+                  "h"
+                ],
+                "long": [
+                  "help"
+                ],
+                "hide": false,
+                "global": false,
+                "action": "help",
+                "builtin": true
+              }
+            ],
+            "mounts": [],
+            "effect": "write",
+            "unknown_flags": null,
+            "hide": false,
+            "args_override_self": true,
+            "help": "Point this machine's DNS, trust store and ports at the proxy",
+            "help_long": "Point this machine's DNS, trust store and ports at the proxy\n\nConfigure hostname resolution, HTTPS certificate trust, and access through\nport 443 (or 80 for HTTP). Prints a plan and asks for confirmation before\napplying changes. Use `--dry-run` to preview the plan without applying it.\n\nThe supervisor can run as your normal user. Setup uses sudo for system DNS\nfiles, Linux CA trust, and port redirects or Linux bind capabilities. On\nmacOS, choose an unprivileged `proxy.port`, such as 8443, for the redirect.\nLinux can also grant permission to bind the default port, 443, directly.\n\nWith `--pac`, applications that honor proxy settings use pitchfork's proxy\nauto-config file instead of system DNS. This skips DNS changes and port\nredirects. Use an unprivileged listener port to avoid bind privileges;\nLinux still needs sudo for CA trust if the CA is not already trusted.\nmacOS may request authorization for keychain or network settings changes.\n\nUse `--undo` to reverse setup using its saved configuration records, even\nafter proxy settings change. Files and proxy settings are checked for\npitchfork ownership before removal.\n\nExample:\n\n```text\npitchfork proxy setup --dry-run\npitchfork proxy setup\npitchfork proxy doctor\npitchfork proxy setup --undo\n```",
+            "name": "setup",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": [],
+            "headings": []
+          },
+          "doctor": {
+            "full_cmd": [
+              "proxy",
+              "doctor"
+            ],
+            "usage": "proxy doctor",
+            "subcommands": {},
+            "args": [],
+            "flags": [
+              {
+                "name": "help",
+                "usage": "-h --help",
+                "help": "Print help",
+                "help_first_line": "Print help",
+                "short": [
+                  "h"
+                ],
+                "long": [
+                  "help"
+                ],
+                "hide": false,
+                "global": false,
+                "action": "help",
+                "builtin": true
+              }
+            ],
+            "mounts": [],
+            "effect": "read",
+            "unknown_flags": null,
+            "hide": false,
+            "args_override_self": true,
+            "help": "Check everything a proxy URL needs in order to work",
+            "help_long": "Check everything a proxy URL needs in order to work\n\nPrints one line per check: the proxy listener, the loopback DNS resolver,\nwhether a random name under your TLD resolves through the system resolver,\ncertificate trust, and whether the standard port reaches the proxy.\n\nExample:\n\n```text\npitchfork proxy doctor\n```",
+            "name": "doctor",
+            "aliases": [],
+            "hidden_aliases": [],
+            "examples": [],
+            "headings": []
+          },
           "trust": {
             "full_cmd": [
               "proxy",
@@ -2585,7 +2713,7 @@
         "subcommand_required": true,
         "args_override_self": true,
         "help": "Manage the pitchfork reverse proxy",
-        "help_long": "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable URLs to the daemon's actual\nlistening port. Every daemon with a `port` gets a hostname automatically,\nbuilt from the daemon, worktree and project names plus the configured TLD:\n\n    https://api.myproject.localhost\n    https://api.fix-login.myproject.localhost\n\nSlugs are the older mechanism and still work. They are defined in the global\nconfig (~/.config/pitchfork/config.toml) under [slugs], each mapping to a\nproject directory and daemon name, and are resolved before hostnames.\n\nEnable the proxy in your pitchfork.toml or settings:\n\n    [settings.proxy]\n    enable = true\n\nSubcommands:\n\n    trust     Install the proxy's TLS certificate into the system trust store\n    untrust   Remove the proxy's TLS certificate from the system trust store\n    add       Add a slug mapping to the global config (legacy)\n    remove    Remove a slug mapping from the global config (legacy)\n    status    Show hostnames and registered slugs with their current state",
+        "help_long": "Manage the pitchfork reverse proxy\n\nThe reverse proxy routes requests from stable URLs to the daemon's actual\nlistening port. Every daemon with a `port` gets a hostname automatically,\nbuilt from the daemon, worktree and project names plus the configured TLD:\n\n    https://api.myproject.localhost\n    https://api.fix-login.myproject.localhost\n\nSlugs are the older mechanism and still work. They are defined in the global\nconfig (~/.config/pitchfork/config.toml) under [slugs], each mapping to a\nproject directory and daemon name, and are resolved before hostnames.\n\nEnable the proxy in your pitchfork.toml or settings:\n\n    [settings.proxy]\n    enable = true\n\nSubcommands:\n\n    setup     Point this machine's DNS, trust store and ports at the proxy\n    doctor    Check everything a proxy URL needs in order to work\n    trust     Install the proxy's TLS certificate into the system trust store\n    untrust   Remove the proxy's TLS certificate from the system trust store\n    add       Add a slug mapping to the global config (legacy)\n    remove    Remove a slug mapping from the global config (legacy)\n    status    Show hostnames and registered slugs with their current state",
         "name": "proxy",
         "aliases": [],
         "hidden_aliases": [],
@@ -6002,6 +6130,70 @@
         "default_list": [],
         "extensions": []
       },
+      "proxy.dns": {
+        "default": true,
+        "default_note": null,
+        "data_type": "boolean",
+        "value_type": {
+          "kind": "base",
+          "of": "bool"
+        },
+        "env": "PITCHFORK_PROXY_DNS",
+        "envs": [
+          "PITCHFORK_PROXY_DNS"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Run a loopback DNS resolver for the proxy TLD",
+        "long_help": "Run a loopback DNS resolver for the proxy TLD\n\nWhile the proxy is running, answer UDP and TCP DNS queries on `127.0.0.1:<proxy.dns_port>` for names under `proxy.tld`, including nested project and worktree hostnames. Answers follow `proxy.host`, or the LAN IPv4 address in LAN mode. Names outside the TLD receive REFUSED; queries are never forwarded.\n\nRun `pitchfork proxy setup` to configure system resolution separately. Set to `false` when using another resolver or when DNS is not needed.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
+      "proxy.dns_port": {
+        "default": 15353,
+        "default_note": null,
+        "data_type": "integer",
+        "value_type": {
+          "kind": "base",
+          "of": "int"
+        },
+        "env": "PITCHFORK_PROXY_DNS_PORT",
+        "envs": [
+          "PITCHFORK_PROXY_DNS_PORT"
+        ],
+        "cli": [],
+        "bindings": {},
+        "help": "Port the loopback DNS resolver listens on",
+        "long_help": "Port the loopback DNS resolver listens on\n\nThe resolver binds `127.0.0.1:<dns_port>` on both UDP and TCP.\n\nThe default avoids privileged port 53 and the mDNS port, 5353.",
+        "help_heading": null,
+        "choices": [],
+        "merge": "replace",
+        "scope": "any",
+        "deprecated": null,
+        "deprecated_warn_at": null,
+        "deprecated_remove_at": null,
+        "renamed_to": null,
+        "hide": false,
+        "since": null,
+        "parse": null,
+        "writes_to": null,
+        "examples": [],
+        "default_list": [],
+        "extensions": []
+      },
       "proxy.enable": {
         "default": false,
         "default_note": null,
@@ -6208,8 +6400,8 @@
         ],
         "cli": [],
         "bindings": {},
-        "help": "Automatically sync slug hostnames to /etc/hosts",
-        "long_help": "Automatically sync slug hostnames to /etc/hosts\n\nWhen enabled (default), pitchfork automatically adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them.\n\nThis is needed because Safari does not auto-resolve `.localhost` subdomains, and custom TLDs (e.g. `.test`) always require DNS entries.\n\nEntries are managed in a marked block in `/etc/hosts` and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.\n\nSet to `false` to disable automatic hosts file management. You will need to configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS).",
+        "help": "Automatically sync slug hostnames to /etc/hosts (deprecated)",
+        "long_help": "Automatically sync slug hostnames to /etc/hosts (deprecated)\n\nDeprecated and scheduled for removal after one release. Run `pitchfork proxy setup`, check resolution with `pitchfork proxy doctor`, then set `sync_hosts = false`. The loopback DNS resolver supports nested hostnames without per-host entries.\n\nWhen enabled (default), pitchfork adds entries to `/etc/hosts` for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can resolve them. Entries are managed in a marked block and cleaned up when the proxy shuts down. Writing to `/etc/hosts` may require `sudo`, and it only ever covers registered slugs, never wildcard names.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
@@ -6273,7 +6465,7 @@
         "cli": [],
         "bindings": {},
         "help": "Path to TLS certificate file (PEM format) for HTTPS proxy",
-        "long_help": "Path to TLS certificate file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded TLS certificate file used when `proxy.https = true`.\n\nIf left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.",
+        "long_help": "Path to TLS certificate file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded TLS certificate file used when `proxy.https = true`. It is served as-is for every host name, and must match `proxy.tls_key`.\n\nIf left empty and `proxy.https = true`, pitchfork generates a local certificate authority at `$PITCHFORK_STATE_DIR/proxy/ca.pem` and signs a certificate per host name from it on the first TLS handshake, caching them in `$PITCHFORK_STATE_DIR/proxy/host-certs/`. Trusting the CA once with `pitchfork proxy trust` covers every proxy host name.\n\nWith a custom certificate, pitchfork does not generate certificates or install a CA. Your certificate must cover every hostname you use, and clients must trust its issuer.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",
@@ -6305,7 +6497,7 @@
         "cli": [],
         "bindings": {},
         "help": "Path to TLS private key file (PEM format) for HTTPS proxy",
-        "long_help": "Path to TLS private key file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded private key file used when `proxy.https = true`.\n\nIf left empty and `proxy.https = true`, pitchfork will auto-generate a self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.",
+        "long_help": "Path to TLS private key file (PEM format) for HTTPS proxy\n\nPath to a PEM-encoded private key file matching `proxy.tls_cert`. The pair is checked at startup, so a mismatch is reported rather than failing every handshake.\n\nIf left empty and `proxy.https = true`, pitchfork generates a CA key at `$PITCHFORK_STATE_DIR/proxy/ca-key.pem` instead. See `proxy.tls_cert`.",
         "help_heading": null,
         "choices": [],
         "merge": "replace",

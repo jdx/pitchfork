@@ -129,6 +129,10 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# `test-util` for `#[tokio::test(start_paused = true)]`, so tests that assert a
+# timeout holds do not have to sleep through it. Features are additive, and a
+# dev-dependency does not reach the shipped binary.
+tokio = { version = "1", features = ["test-util"] }
 
 
 [profile.dev]

@@ -60,6 +60,7 @@ pub fn sync_hosts_from_settings() {
 pub fn sync_hosts_from_settings_with_slugs(slug_names: &[String]) {
     let s = settings();
     if s.proxy.enable && s.proxy.sync_hosts {
+        warn_deprecated_once();
         let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
         let tld = if lan_enabled { "local" } else { &s.proxy.tld };
         // In LAN mode, map to the LAN IP (or configured lan_ip) so that
@@ -80,6 +81,23 @@ pub fn sync_hosts_from_settings_with_slugs(slug_names: &[String]) {
         };
         sync_hosts_file_with_slugs(&ip, tld, slug_names);
     }
+}
+
+/// Warn once per process that `/etc/hosts` sync is on its way out.
+///
+/// The loopback resolver covers every name under the TLD without touching a
+/// root-owned file, so this path exists only to keep existing setups working
+/// for one release.
+fn warn_deprecated_once() {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    log::warn!(
+        "proxy.sync_hosts is deprecated and will be removed in a future release. \
+         Run `pitchfork proxy setup` to use the loopback DNS resolver instead, \
+         then set proxy.sync_hosts = false."
+    );
 }
 
 /// Remove the pitchfork-managed block from /etc/hosts.

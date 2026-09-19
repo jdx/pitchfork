@@ -122,7 +122,9 @@ Open `http://api.myproject.localhost:8088` in a browser that resolves
 set `proxy = false`. There is no need to register a slug.
 
 The supervisor reads proxy settings at startup; restart it after editing them.
-Continue below for standard ports, HTTPS, custom domains, and LAN access.
+For system-wide hostname resolution and HTTPS on standard ports, continue to
+[hostname resolution setup](#hostname-resolution). See also
+[custom TLDs](#custom-tld) and [LAN access](#lan-mode).
 
 ## Auto-Start
 
@@ -285,51 +287,214 @@ Slugs are resolved before automatic hostnames, so an existing slug wins a
 matching route. Use them for existing integrations, global daemons, or LAN
 mDNS discovery. Project daemons can use automatic hostnames without a slug.
 
-## Standard Ports (80/443)
+## Hostname Resolution
 
-To use standard HTTP/HTTPS ports without the port number in URLs:
+`pitchfork proxy setup` configures hostname resolution, certificate trust, and
+access through the standard HTTP or HTTPS port. It shows a plan and asks for
+confirmation before applying changes. The supervisor can keep running as your
+normal user; setup requests privileges for the steps that need them.
 
-```
-http://api.myproject.localhost   (port 80)
-https://api.myproject.localhost  (port 443)
-```
+For local HTTPS, use an unprivileged listener port in your user config:
 
-### Binding to Privileged Ports
-
-If your operating system restricts binding ports below 1024, start the supervisor with `sudo`:
-
-```bash
-# HTTP on port 80
-sudo PITCHFORK_PROXY_PORT=80 PITCHFORK_PROXY_HTTPS=false pitchfork supervisor start
-
-# HTTPS on port 443 (default)
-sudo pitchfork supervisor start
-```
-
-Or in `pitchfork.toml`:
 ```toml
+# ~/.config/pitchfork/config.toml
 [settings.proxy]
 enable = true
-port = 80     # requires: sudo pitchfork supervisor start
-https = false
+https = true
+port = 8443
 ```
 
-If binding fails, use an unprivileged port such as `8088` or `8443`, or run the supervisor with the required permissions.
+Apply setup, restart the supervisor to load the settings, and check the result:
+
+```sh
+pitchfork proxy setup --dry-run  # Preview changes without applying them
+pitchfork proxy setup
+pitchfork supervisor start --force
+pitchfork proxy doctor
+```
+
+On supported systems, setup routes names under your TLD to pitchfork and
+redirects port 443 to 8443. You can then open `https://api.myproject.localhost`
+without a port number. Follow any manual instructions printed by setup, such as
+configuring DNS on Linux without systemd-resolved.
+
+### Checking the Setup {#checking-it}
+
+`pitchfork proxy doctor` checks the listener, DNS responder, system hostname
+resolution, certificate trust, and standard-port access. It uses a fresh hostname
+for the resolution check so an existing `/etc/hosts` entry cannot mask missing
+wildcard DNS.
+
+When doctor detects pitchfork's PAC URL in the system proxy settings, it checks
+that the PAC file is available instead of requiring system DNS resolution.
+
+### Platform Requirements {#what-needs-sudo}
+
+| Step | macOS | Linux |
+|------|-------|-------|
+| DNS | Writes `/etc/resolver/<tld>` with sudo | With systemd-resolved, `.localhost` needs no change; other TLDs need a drop-in and service restart with sudo |
+| CA trust for HTTPS | Uses the login keychain; macOS may prompt for authorization | Installs the CA into the system trust store with sudo |
+| Standard ports with an unprivileged listener | Adds a `pf` redirect with sudo | Adds an IPv4 loopback iptables redirect with sudo |
+| Direct binding below port 1024 | Setup asks you to choose an unprivileged port | Grants the binary `cap_net_bind_service` with sudo |
+
+Routing a custom TLD through systemd-resolved requires systemd 247 or newer.
+Restarting the service briefly interrupts DNS, including on repeated setup runs.
+Without systemd-resolved, setup prints dnsmasq instructions for you to apply.
+
+On macOS, `/etc/resolver/localhost` makes subdomains such as
+`api.myproject.localhost` depend on the supervisor's DNS responder. Plain
+`localhost` continues to resolve through `/etc/hosts`.
+
+### Routing Without Changing DNS {#routing-without-touching-dns}
+
+Use a proxy auto-config (PAC) file for applications that support system or
+browser proxy settings:
+
+```sh
+pitchfork proxy setup --pac
+```
+
+The PAC file sends names under `proxy.tld` through pitchfork and leaves other
+requests direct. Setup configures active network services on macOS and the
+user's proxy settings under GNOME. On other desktops, it prints the URL to enter
+in your browser's automatic proxy settings:
+`http://127.0.0.1:<proxy.port>/proxy.pac` with the default `proxy.host`.
+
+PAC avoids system DNS changes and port redirects. Use an unprivileged listener
+port, such as 8443, so the browser can connect directly without a bind capability.
+Linux still needs sudo to trust the CA for HTTPS if it is not already trusted;
+macOS may request authorization for keychain or network settings changes.
+Applications that ignore PAC settings still need DNS and a reachable proxy port.
+
+HTTPS requests use CONNECT tunnels restricted to names under the configured TLD,
+with a cap on how many are open at once.
+
+### Undoing Setup {#undoing-it}
+
+```sh
+pitchfork proxy setup --undo --dry-run
+pitchfork proxy setup --undo
+```
+
+Undo removes pitchfork's resolver configuration, port redirects, PAC settings,
+bind capability, and CA trust. Setup records configurations in
+`$PITCHFORK_STATE_DIR/proxy/setup.toml`, so undo can find resources even after
+settings such as `proxy.port` or `proxy.tld` change. Re-running setup reconciles
+previous configurations before applying the new one.
+
+Undo checks ownership before removing files or proxy settings. It leaves
+unrelated files and PAC URLs alone, and removes `cap_net_bind_service` only when
+it is the binary's sole capability. On macOS, it removes pitchfork's firewall
+rules without disabling `pf`, which other software may use. The record itself is
+treated as input when it is read back: its TLD is validated, and the system
+paths and the binary are rebuilt, so a record naming something else cannot
+point a privileged removal at it. Undo therefore revokes the capability from the
+running pitchfork only.
+
+### After a Reboot or Upgrade {#what-does-not-survive-a-reboot-or-an-upgrade}
+
+Some system changes need to be reapplied:
+
+| Change | When it may be lost | Recovery |
+|--------|---------------------|----------|
+| Linux bind capability | pitchfork upgrade or reinstall | Run `pitchfork proxy setup` |
+| Linux iptables redirect | Reboot, unless the distribution restores NAT rules | Run `pitchfork proxy setup` |
+| macOS `pf` enablement | Reboot; the anchor remains, but `pf` may be disabled | Run `pitchfork proxy setup` |
+
+Run `pitchfork proxy doctor` when URLs stop working after a reboot or upgrade.
+
+### DNS Resolver Reference {#the-loopback-resolver}
+
+With `proxy.dns = true` (the default), the supervisor listens for UDP and TCP DNS
+queries on `127.0.0.1:15353`. Change `proxy.dns_port` if that port is occupied.
+The default avoids privileged port 53 and the mDNS port, 5353.
+
+The responder answers names under `proxy.tld`, including nested names such as
+`api.fix-login.myproject.localhost`, without per-host entries. DNS resolution
+does not register a daemon or create a proxy route. Names outside the configured
+TLD receive REFUSED; the responder does not forward queries.
+
+The returned addresses follow the proxy listener:
+
+| `proxy.host` | A record | AAAA record |
+|--------------|----------|-------------|
+| `127.0.0.1` (default) | `127.0.0.1` | None |
+| `0.0.0.0` | `127.0.0.1` | None |
+| `::1` | None | `::1` |
+| `::` | `127.0.0.1` | `::1` |
+| A specific address | That address if IPv4 | That address if IPv6 |
+
+Unsupported record types and address families receive NODATA. The `::` case
+assumes a dual-stack host. Setup's port redirects are IPv4-only.
+
+In LAN mode, DNS answers use the LAN IPv4 address, but setup leaves system
+resolution of `.local` to mDNS. See [LAN mode](#lan-mode) for slug discovery.
+
+### Migrating from /etc/hosts {#etchosts-sync-is-deprecated}
+
+`proxy.sync_hosts` is deprecated and scheduled for removal after one release.
+It still defaults to `true` and maintains exact `/etc/hosts` entries for
+registered slugs; it cannot cover automatic project hostnames or subdomains.
+
+Run `pitchfork proxy setup`, verify resolution with `pitchfork proxy doctor`,
+then disable hosts-file synchronization and restart the supervisor:
+
+```toml
+[settings.proxy]
+sync_hosts = false
+```
+
+## Standard Ports (80/443)
+
+Use `proxy.port = 8443` with HTTPS, or `proxy.port = 8088` with HTTP, then run
+`pitchfork proxy setup`. Setup redirects local IPv4 traffic from port 443 or 80
+to the listener, so you can omit the port in URLs. The supervisor remains
+unprivileged.
+
+On Linux, you can instead keep the default `proxy.port = 443`; setup grants the
+binary permission to bind privileged ports. On macOS, choose an unprivileged
+port and use the redirect. PAC connects directly to the configured listener and
+does not install a redirect. See [platform requirements](#what-needs-sudo).
 
 ## HTTPS Support
 
 ### Auto-Generated Certificate
 
-When `proxy.https = true` (the default) and no certificate is configured, pitchfork auto-generates a self-signed certificate:
+With `proxy.https = true` (the default) and no custom certificate configured,
+pitchfork generates a local certificate authority (CA). Its certificate is stored
+at `$PITCHFORK_STATE_DIR/proxy/ca.pem`; its private key is stored alongside it.
+Trust the CA with `pitchfork proxy setup` to use HTTPS across your proxy hostnames.
+
+### Per-Hostname Certificates
+
+On the first TLS connection to a hostname under your TLD, pitchfork signs a
+certificate for that name using its local CA. Certificates are cached in
+`$PITCHFORK_STATE_DIR/proxy/host-certs/` across restarts. The cache is bounded;
+evicted certificates are generated again when needed.
+
+A certificate for the exact hostname supports nested names such as
+`api.fix-login.myproject.localhost`. A wildcard such as `*.localhost` covers
+only one label. Pitchfork refuses to generate certificates outside its TLD.
+
+### Daemons trusting the CA
+
+Daemons started by pitchfork get the CA path in their environment, so services
+that call each other through the proxy over HTTPS can verify it:
+
+| Variable | Value |
+|----------|-------|
+| `PITCHFORK_CA_FILE` | Path to the CA certificate |
+| `NODE_EXTRA_CA_CERTS` | The same path, for Node.js |
+
+Most TLS libraries take a CA bundle path from configuration, and several read
+one from the environment. Daemon commands run through the shell, so you can
+forward it to whichever name your runtime expects, such as `SSL_CERT_FILE` for
+OpenSSL or `REQUESTS_CA_BUNDLE` for Python requests:
 
 ```toml
-[settings.proxy]
-enable = true
-# https = true is the default
-# port = 443 is the default
+[daemons.worker]
+run = "REQUESTS_CA_BUNDLE=$PITCHFORK_CA_FILE python worker.py"
 ```
-
-The certificate is stored in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
 
 ### Auto-Trust
 
@@ -342,9 +507,9 @@ On **macOS**, auto-trust triggers a system authorization dialog (Touch ID or
 password) the first time. Subsequent starts skip the prompt because the
 certificate is already trusted.
 
-On **Linux**, auto-trust requires write access to the system CA directory, which
-typically means the supervisor must be started with `sudo`. If auto-trust fails
-(e.g. due to permissions), it is silently skipped and a warning is logged.
+On **Linux**, auto-trust requires write access to the system CA directory, so use
+`pitchfork proxy setup` to perform that step with sudo. If auto-trust fails,
+pitchfork logs a warning and continues starting the proxy.
 
 To disable auto-trust:
 
@@ -383,15 +548,10 @@ sudo pitchfork proxy untrust
 
 ### Custom Certificate
 
-Provide your own certificate (e.g., from mkcert or Let's Encrypt):
-
-```toml
-[settings.proxy]
-enable = true
-https = true
-tls_cert = "/path/to/cert.pem"
-tls_key = "/path/to/key.pem"
-```
+Set `proxy.tls_cert` and `proxy.tls_key` to a matching PEM certificate and key.
+Pitchfork serves that certificate as supplied for every hostname and does not
+generate or install a CA. The certificate must cover the names you use, and
+clients must trust its issuer.
 
 A certificate wildcard covers one label: `*.localhost` does not cover
 `api.myproject.localhost`. Include each project and worktree you need. For
@@ -401,12 +561,10 @@ example, using [mkcert](https://github.com/FiloSottile/mkcert):
 # Install mkcert and set up local CA
 mkcert -install
 
-# Generate certificate for your TLD
+# Cover the primary checkout and the fix-login worktree
 mkcert -cert-file cert.pem -key-file key.pem \
   "*.myproject.localhost" "*.fix-login.myproject.localhost" \
   myproject.localhost localhost 127.0.0.1
-
-# Configure pitchfork to use it
 ```
 
 ```toml
@@ -427,51 +585,28 @@ enable = true
 tld = "test"
 ```
 
-Automatic hostnames such as `api.myproject.test` need local DNS resolution.
-Pitchfork does not add them to `/etc/hosts`. Configure a local resolver such as
-`dnsmasq` for the custom TLD; see [wildcard subdomains](#wildcard-subdomain-matching)
-below for an example.
-
-For registered slugs only, `proxy.sync_hosts = true` (the default) maintains
-exact entries in `/etc/hosts`. A slug named `api` gets an entry for `api.test`,
-but not for its subdomains. If pitchfork cannot write the file, provide those
-entries or DNS resolution yourself.
+Restart the supervisor after changing the TLD, then run
+`pitchfork proxy setup` to configure resolution for names such as
+`api.myproject.test`. On macOS this creates `/etc/resolver/test`; on Linux with
+systemd-resolved it installs a routing drop-in. Without systemd-resolved, follow
+the dnsmasq instructions printed by setup. See
+[platform requirements](#what-needs-sudo).
 
 ## Wildcard Subdomain Matching
 
-When `proxy.wildcard = true` (the default), the proxy matches not only exact
-hostnames but also their subdomains. Extra labels on the left route to the same
-daemon, so `api.myproject.localhost` and `tenant.api.myproject.localhost` reach
-the same place. The same holds for a legacy slug: `myapp.localhost` and
-`tenant.myapp.localhost` both route to `myapp`.
+With `proxy.wildcard = true` (the default), extra labels on the left of a
+hostname route to the same daemon. For example, `api.myproject.localhost` and
+`tenant.api.myproject.localhost` reach the same service. This also works for
+legacy slugs: `tenant.myapp.localhost` routes to `myapp`.
 
-However, whether the subdomain actually resolves depends on the TLD:
+The loopback DNS responder resolves these nested names without extra entries.
+For HTTPS, the local CA signs a certificate for each requested hostname. If you
+supply a custom certificate, it must cover those names itself.
 
-| TLD | Automatic hostnames and subdomains | Registered slugs |
-|-----|------------------------------------|------------------|
-| `.localhost` (default) | Resolve in browsers with `.localhost` support | Resolve in browsers with `.localhost` support |
-| Custom (`.test`, etc.) | Need local DNS configuration | Exact names can use `/etc/hosts`; subdomains need DNS |
-
-With the default `.localhost` TLD, wildcard subdomains work out of the box in
-Chrome and Firefox (which auto-resolve `.localhost` per RFC 2606). Safari
-does not auto-resolve `.localhost` subdomains, so wildcard subdomains will not
-resolve unless you configure a local DNS resolver such as `dnsmasq`.
-
-To set up wildcard DNS resolution for a custom TLD, install `dnsmasq` and add
-a wildcard entry:
-
-```text
-# /etc/dnsmasq.d/pitchfork (or equivalent)
-address=/test/127.0.0.1
-```
-
-Then point your system resolver at the local dnsmasq instance. On macOS, you
-can create `/etc/resolver/test`:
-
-```text
-nameserver 127.0.0.1
-port 53
-```
+Browser support for `.localhost` subdomains varies. Use
+[hostname resolution setup](#hostname-resolution) for system-wide resolution,
+or PAC for applications that honor proxy settings. Custom TLDs need local DNS
+configuration or PAC as well.
 
 ## LAN Mode
 
@@ -490,22 +625,35 @@ enable = true
 lan = true
 ```
 
-2. Start the supervisor:
+2. Grant the privileged parts once, if you are on the default port 443:
 
 ```bash
-sudo pitchfork supervisor start --force
+pitchfork proxy setup
 ```
 
-3. Register a slug for the daemon you want to reach (from its project directory):
+On Linux this grants the binary `cap_net_bind_service`. On macOS, set an
+unprivileged `proxy.port` instead, since nothing there lets an unprivileged
+process bind 443. With a port above 1023, no bind capability is needed. Setup
+may still be needed for local CA trust.
+
+3. Register a slug for the daemon you want to reach, from its project
+   directory. LAN mode publishes slugs over mDNS, not automatic hostnames:
 
 ```sh
 pitchfork proxy add myapp --daemon api
 ```
 
-4. Open the proxy URL from another device on the same network:
+4. Start the supervisor, without `sudo`:
+
+```bash
+pitchfork supervisor start --force
+```
+
+5. Open the proxy URL from another device on the same network. Include the
+   listener port when it is not 443; for example, with `proxy.port = 8443`:
 
 ```
-https://myapp.local
+https://myapp.local:8443
 ```
 
 ### How it works
@@ -532,11 +680,16 @@ Setting `lan_ip` implies `lan = true`, so you can omit the `lan` flag.
 
 ### HTTPS on LAN
 
-Other devices need to trust the **proxy host's** certificate to use HTTPS.
-Copy `proxy/cert.pem` from that host's state directory and install it using the
-client device's certificate settings. On a supported desktop with pitchfork,
-use `pitchfork proxy trust --cert /path/to/copied-cert.pem` (with `sudo` on Linux).
-Running `proxy trust` without `--cert` would select that device's own certificate.
+Other devices need to trust the **proxy host's** certificate authority to use
+HTTPS. Copy `proxy/ca.pem` from that host's state directory and install it using
+the client device's certificate settings. Trusting that one CA covers every
+proxy host name, because the proxy signs a certificate per name from it. On a
+supported desktop with pitchfork, use
+`pitchfork proxy trust --cert /path/to/copied-ca.pem` (with `sudo` on Linux).
+Running `proxy trust` without `--cert` would select that device's own CA.
+
+If you configured `proxy.tls_cert` instead, there is no pitchfork CA: distribute
+whatever issued your certificate, exactly as you would for any other service.
 
 For HTTP-only access on a trusted development network:
 
@@ -545,12 +698,24 @@ For HTTP-only access on a trusted development network:
 enable = true
 lan = true
 https = false
-port = 80
+port = 8088
 ```
 
 ## Proxy Commands
 
 ```bash
+# Point this machine's DNS, trust store and ports at the proxy
+pitchfork proxy setup
+
+# Same, but routing names through a PAC file instead of the system resolver
+pitchfork proxy setup --pac
+
+# Reverse everything setup did
+pitchfork proxy setup --undo
+
+# Check everything a proxy URL needs in order to work
+pitchfork proxy doctor
+
 # Show hostnames, slugs, and routing conflicts
 pitchfork proxy status
 

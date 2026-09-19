@@ -114,6 +114,8 @@ pub struct Supervisor {
     pub(crate) proxy_cancel: Mutex<Option<tokio_util::sync::CancellationToken>>,
     /// Join handle for the proxy task so shutdown can wait for cleanup.
     pub(crate) proxy_task: Mutex<Option<JoinHandle<()>>>,
+    /// Join handle for the loopback DNS resolver, cancelled by `proxy_cancel`.
+    pub(crate) dns_task: Mutex<Option<JoinHandle<()>>>,
     /// mDNS publisher for LAN mode (None if LAN mode is disabled).
     /// Shared with the LAN IP monitor task so it can re-publish on IP change.
     pub(crate) mdns_publisher:
@@ -437,6 +439,7 @@ impl Supervisor {
             monitor_done: Notify::new(),
             proxy_cancel: Mutex::new(None),
             proxy_task: Mutex::new(None),
+            dns_task: Mutex::new(None),
             mdns_publisher: Mutex::new(None),
             lan_monitor_task: Mutex::new(None),
             flush_cancel: std::sync::Mutex::new(None),
@@ -670,7 +673,11 @@ impl Supervisor {
             match bind_rx.await {
                 Ok(Ok(())) => {
                     info!("Proxy server bound successfully");
-                    self.start_mdns().await;
+                    // Resolved once and shared: mDNS and the DNS resolver
+                    // must advertise the same address.
+                    let lan_ip = self.resolve_lan_ip().await;
+                    self.start_mdns(lan_ip).await;
+                    self.start_dns_resolver(lan_ip).await;
                 }
                 Ok(Err(msg)) => {
                     error!("{msg}");
@@ -696,43 +703,169 @@ impl Supervisor {
         self.conn_watch(ipc).await
     }
 
+    /// Start the loopback DNS resolver for the proxy TLD.
+    ///
+    /// The resolver shares the proxy's cancellation token, so it stops with the
+    /// proxy. A bind failure is a notification rather than a fatal error: the
+    /// proxy still works for anyone who reaches it some other way.
+    async fn start_dns_resolver(&self, lan_ip: Option<std::net::Ipv4Addr>) {
+        let s = crate::settings::settings();
+        if !s.proxy.dns {
+            return;
+        }
+        let cfg = crate::proxy::dns::config_from_settings(&s, lan_ip);
+        let port = crate::proxy::dns::dns_port(&s);
+        // Loopback only: the resolver is for this machine's stub resolver, and
+        // LAN peers are served by mDNS instead.
+        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+
+        let Some(cancel) = self.proxy_cancel.lock().await.clone() else {
+            return;
+        };
+        let (bind_tx, bind_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            if let Err(e) = crate::proxy::dns::serve(cfg, addr, bind_tx, cancel).await {
+                error!("DNS resolver error: {e}");
+            }
+        });
+        *self.dns_task.lock().await = Some(task);
+        match bind_rx.await {
+            Ok(Ok(())) => info!("DNS resolver bound successfully"),
+            Ok(Err(msg)) => {
+                let msg = format!(
+                    "{msg}\nProxy host names will not resolve through pitchfork. \
+                     Choose another port with proxy.dns_port, or set proxy.dns = false."
+                );
+                error!("{msg}");
+                self.add_notification(log::LevelFilter::Error, msg).await;
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// Watch the LAN address and keep the DNS responder, and mDNS when it is
+    /// running, pointed at the current one.
+    ///
+    /// Started even when the mDNS publisher could not be created: the DNS
+    /// responder serves this machine regardless, and an address it keeps
+    /// answering with after the interface has moved is worse than useless.
+    ///
+    /// Does nothing when `proxy.lan_ip` pins an address. That is a choice to
+    /// respect, not a starting point to drift from — the check lives here so
+    /// neither caller can forget it.
+    async fn start_lan_ip_monitor(
+        &self,
+        initial_ip: std::net::Ipv4Addr,
+        port: u16,
+        publisher: Option<std::sync::Arc<tokio::sync::Mutex<crate::proxy::mdns::MdnsPublisher>>>,
+    ) {
+        if !crate::settings::settings().proxy.lan_ip.is_empty() {
+            return;
+        }
+        // No cancellation token means `close` has already taken it, so shutdown
+        // is under way. Spawning here would leave a task polling with no way to
+        // stop it, and past the point where `close` collects the handle.
+        let Some(cancel) = self.proxy_cancel.lock().await.clone() else {
+            debug!("Not starting the LAN IP monitor: the supervisor is shutting down");
+            return;
+        };
+        let monitor_cancel = Some(cancel);
+        let task = tokio::spawn(async move {
+            let mut last_ip = initial_ip;
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+            ticker.tick().await; // first tick is immediate
+            loop {
+                // Cancellation is raced against the tick, not checked after
+                // it. Checking afterwards means the task only notices once the
+                // full interval has elapsed, so a shutdown that waits a second
+                // for it always gives up and aborts instead — the graceful
+                // path would never once be taken.
+                match monitor_cancel.as_ref() {
+                    Some(cancel) => {
+                        tokio::select! {
+                            _ = ticker.tick() => {}
+                            _ = cancel.cancelled() => break,
+                        }
+                    }
+                    None => {
+                        ticker.tick().await;
+                    }
+                }
+                if let Some(new_ip) = crate::proxy::lan_ip::detect_lan_ip_if_changed(last_ip).await
+                {
+                    log::info!("LAN IP changed: {last_ip} → {new_ip}");
+                    last_ip = new_ip;
+                    crate::proxy::dns::update_lan_ip(new_ip);
+                    if let Some(publisher) = publisher.as_ref() {
+                        publisher.lock().await.republish_all(new_ip, port);
+                    }
+                }
+            }
+        });
+        *self.lan_monitor_task.lock().await = Some(task);
+    }
+
     /// Start mDNS publishing for LAN mode (called after the proxy binds successfully).
-    async fn start_mdns(&self) {
+    /// The LAN address mDNS publishes and the DNS resolver answers with.
+    ///
+    /// Resolved once and handed to both. Detecting separately in each let them
+    /// disagree when the interface address changed in between, which would
+    /// advertise one address over mDNS and serve another over DNS, and probed
+    /// the network twice at startup for one answer.
+    ///
+    /// `None` means LAN mode is off, or is on and the address could not be
+    /// determined; either way the caller has nothing to publish. The reason is
+    /// reported here so it is said once rather than by each caller.
+    async fn resolve_lan_ip(&self) -> Option<std::net::Ipv4Addr> {
+        let s = crate::settings::settings();
+        let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
+        if !s.proxy.enable || !lan_enabled {
+            return None;
+        }
+        if s.proxy.lan_ip.is_empty() {
+            let detected = crate::proxy::lan_ip::detect_lan_ip().await;
+            if detected.is_none() {
+                error!(
+                    "LAN mode is enabled but no LAN IP address could be detected. \
+                     Set proxy.lan_ip to a specific address, or ensure you are connected to a network."
+                );
+            }
+            return detected;
+        }
+        match s.proxy.lan_ip.parse::<std::net::Ipv4Addr>() {
+            Ok(ip) => Some(ip),
+            Err(e) => {
+                let msg = format!(
+                    concat!(
+                        "proxy.lan_ip {:?} is not a valid IPv4 address: {}. ",
+                        "LAN mode will not start; fix the setting or clear it ",
+                        "to auto-detect."
+                    ),
+                    s.proxy.lan_ip, e
+                );
+                error!("{msg}");
+                self.add_notification(log::LevelFilter::Error, msg).await;
+                None
+            }
+        }
+    }
+
+    async fn start_mdns(&self, lan_ip: Option<std::net::Ipv4Addr>) {
         let s = crate::settings::settings();
         let lan_enabled = s.proxy.lan || !s.proxy.lan_ip.is_empty();
         if !s.proxy.enable || !lan_enabled {
             return;
         }
 
-        let lan_ip = if !s.proxy.lan_ip.is_empty() {
-            match s.proxy.lan_ip.parse::<std::net::Ipv4Addr>() {
-                Ok(ip) => Some(ip),
-                Err(e) => {
-                    error!(
-                        "proxy.lan_ip {:?} is not a valid IPv4 address: {e}",
-                        s.proxy.lan_ip
-                    );
-                    return;
-                }
-            }
-        } else {
-            match crate::proxy::lan_ip::detect_lan_ip().await {
-                Some(ip) => Some(ip),
-                None => {
-                    error!(
-                        "LAN mode is enabled but no LAN IP address could be detected. \
-                         Set proxy.lan_ip to a specific address, or ensure you are connected to a network."
-                    );
-                    return;
-                }
-            }
-        };
-
         let Some(lan_ip) = lan_ip else { return };
         let port = u16::try_from(s.proxy.port).unwrap_or(443);
 
         let Some(mut publisher) = crate::proxy::mdns::MdnsPublisher::new(lan_ip) else {
             error!("Failed to start mDNS publisher. Is Avahi (Linux) or Bonjour (macOS) running?");
+            // The DNS responder hands out this address too, and it is useful on
+            // this machine whether or not mDNS came up. Keep watching the
+            // interface so its answers do not go stale.
+            self.start_lan_ip_monitor(lan_ip, port, None).await;
             return;
         };
 
@@ -750,35 +883,10 @@ impl Supervisor {
 
         let publisher = std::sync::Arc::new(tokio::sync::Mutex::new(publisher));
 
-        // Start the IP monitor (only when IP is auto-detected, not pinned).
-        let ip_pinned = !s.proxy.lan_ip.is_empty();
-        if !ip_pinned {
-            let monitor_cancel = self.proxy_cancel.lock().await.clone();
-            let publisher_clone = publisher.clone();
-            let task = tokio::spawn(async move {
-                let mut last_ip = lan_ip;
-                let interval = std::time::Duration::from_secs(5);
-                let mut ticker = tokio::time::interval(interval);
-                ticker.tick().await; // first tick is immediate
-                loop {
-                    ticker.tick().await;
-                    if let Some(cancel) = monitor_cancel.as_ref()
-                        && cancel.is_cancelled()
-                    {
-                        break;
-                    }
-                    if let Some(new_ip) =
-                        crate::proxy::lan_ip::detect_lan_ip_if_changed(last_ip).await
-                    {
-                        log::info!("LAN IP changed: {last_ip} → {new_ip}");
-                        last_ip = new_ip;
-                        let mut pub_guard = publisher_clone.lock().await;
-                        pub_guard.republish_all(new_ip, port);
-                    }
-                }
-            });
-            *self.lan_monitor_task.lock().await = Some(task);
-        }
+        // Start the IP monitor. It declines on its own when the address is
+        // pinned rather than auto-detected.
+        self.start_lan_ip_monitor(lan_ip, port, Some(publisher.clone()))
+            .await;
 
         *self.mdns_publisher.lock().await = Some(publisher);
     }
@@ -1182,8 +1290,14 @@ impl Supervisor {
             cancel.cancel();
         }
 
-        // Stop the LAN IP monitor task.
-        if let Some(monitor_task) = self.lan_monitor_task.lock().await.take() {
+        // Stop the LAN IP monitor task. It watches the token that was just
+        // cancelled, so give it a moment to come back on its own rather than
+        // cutting it off mid-iteration the instant after asking it to stop.
+        if let Some(mut monitor_task) = self.lan_monitor_task.lock().await.take()
+            && tokio::time::timeout(Duration::from_secs(1), &mut monitor_task)
+                .await
+                .is_err()
+        {
             monitor_task.abort();
         }
 
@@ -1192,8 +1306,18 @@ impl Supervisor {
             publisher.lock().await.shutdown();
         }
 
+        if let Some(dns_task) = self.dns_task.lock().await.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(5), dns_task).await;
+        }
+
         if let Some(proxy_task) = self.proxy_task.lock().await.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(12), proxy_task).await;
+            // Longer than the proxy's own drain budget, so the task finishes on
+            // its own terms rather than being cut off mid-drain.
+            let _ = tokio::time::timeout(
+                crate::proxy::server::SHUTDOWN_DRAIN_BUDGET + Duration::from_secs(2),
+                proxy_task,
+            )
+            .await;
         }
 
         // Clean up /etc/hosts entries managed by pitchfork

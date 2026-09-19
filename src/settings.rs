@@ -514,6 +514,27 @@ pub struct SettingsProxy {
     #[usage(env = "PITCHFORK_PROXY_AUTO_TRUST", default = true)]
     pub auto_trust: bool,
 
+    /// Run a loopback DNS resolver for the proxy TLD
+    ///
+    /// While the proxy is running, answer UDP and TCP DNS queries on
+    /// `127.0.0.1:<proxy.dns_port>` for names under `proxy.tld`, including nested
+    /// project and worktree hostnames. Answers follow `proxy.host`, or the LAN
+    /// IPv4 address in LAN mode. Names outside the TLD receive REFUSED; queries
+    /// are never forwarded.
+    ///
+    /// Run `pitchfork proxy setup` to configure system resolution separately.
+    /// Set to `false` when using another resolver or when DNS is not needed.
+    #[usage(env = "PITCHFORK_PROXY_DNS", default = true)]
+    pub dns: bool,
+
+    /// Port the loopback DNS resolver listens on
+    ///
+    /// The resolver binds `127.0.0.1:<dns_port>` on both UDP and TCP.
+    ///
+    /// The default avoids privileged port 53 and the mDNS port, 5353.
+    #[usage(env = "PITCHFORK_PROXY_DNS_PORT", default = 15353)]
+    pub dns_port: i64,
+
     /// Enable the reverse proxy server for daemons
     ///
     /// When enabled, pitchfork starts a reverse proxy that routes a stable
@@ -591,20 +612,18 @@ pub struct SettingsProxy {
     #[usage(env = "PITCHFORK_PROXY_PORT", default = 443)]
     pub port: i64,
 
-    /// Automatically sync slug hostnames to /etc/hosts
+    /// Automatically sync slug hostnames to /etc/hosts (deprecated)
     ///
-    /// When enabled (default), pitchfork automatically adds entries to `/etc/hosts`
-    /// for registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers
-    /// can resolve them.
+    /// Deprecated and scheduled for removal after one release. Run
+    /// `pitchfork proxy setup`, check resolution with `pitchfork proxy doctor`,
+    /// then set `sync_hosts = false`. The loopback DNS resolver supports nested
+    /// hostnames without per-host entries.
     ///
-    /// This is needed because Safari does not auto-resolve `.localhost` subdomains,
-    /// and custom TLDs (e.g. `.test`) always require DNS entries.
-    ///
-    /// Entries are managed in a marked block in `/etc/hosts` and cleaned up when
-    /// the proxy shuts down. Writing to `/etc/hosts` may require `sudo`.
-    ///
-    /// Set to `false` to disable automatic hosts file management. You will need to
-    /// configure DNS resolution yourself (e.g. `dnsmasq`, `/etc/resolver/` on macOS).
+    /// When enabled (default), pitchfork adds entries to `/etc/hosts` for
+    /// registered slugs (e.g. `127.0.0.1 myapp.localhost`) so that browsers can
+    /// resolve them. Entries are managed in a marked block and cleaned up when
+    /// the proxy shuts down. Writing to `/etc/hosts` may require `sudo`, and it
+    /// only ever covers registered slugs, never wildcard names.
     #[usage(env = "PITCHFORK_PROXY_SYNC_HOSTS", default = true)]
     pub sync_hosts: bool,
 
@@ -623,18 +642,28 @@ pub struct SettingsProxy {
     /// Path to TLS certificate file (PEM format) for HTTPS proxy
     ///
     /// Path to a PEM-encoded TLS certificate file used when `proxy.https = true`.
+    /// It is served as-is for every host name, and must match `proxy.tls_key`.
     ///
-    /// If left empty and `proxy.https = true`, pitchfork will auto-generate a
-    /// self-signed certificate and store it in `$PITCHFORK_STATE_DIR/proxy/cert.pem`.
+    /// If left empty and `proxy.https = true`, pitchfork generates a local
+    /// certificate authority at `$PITCHFORK_STATE_DIR/proxy/ca.pem` and signs a
+    /// certificate per host name from it on the first TLS handshake, caching
+    /// them in `$PITCHFORK_STATE_DIR/proxy/host-certs/`. Trusting the CA once
+    /// with `pitchfork proxy trust` covers every proxy host name.
+    ///
+    /// With a custom certificate, pitchfork does not generate certificates or
+    /// install a CA. Your certificate must cover every hostname you use, and
+    /// clients must trust its issuer.
     #[usage(env = "PITCHFORK_PROXY_TLS_CERT", default = "")]
     pub tls_cert: String,
 
     /// Path to TLS private key file (PEM format) for HTTPS proxy
     ///
-    /// Path to a PEM-encoded private key file used when `proxy.https = true`.
+    /// Path to a PEM-encoded private key file matching `proxy.tls_cert`. The
+    /// pair is checked at startup, so a mismatch is reported rather than
+    /// failing every handshake.
     ///
-    /// If left empty and `proxy.https = true`, pitchfork will auto-generate a
-    /// self-signed key and store it in `$PITCHFORK_STATE_DIR/proxy/key.pem`.
+    /// If left empty and `proxy.https = true`, pitchfork generates a CA key at
+    /// `$PITCHFORK_STATE_DIR/proxy/ca-key.pem` instead. See `proxy.tls_cert`.
     #[usage(env = "PITCHFORK_PROXY_TLS_KEY", default = "")]
     pub tls_key: String,
 
@@ -1794,6 +1823,10 @@ settings_partial! {
         auto_start_timeout: String,
         /// Automatically install the proxy TLS certificate into the system trust store
         auto_trust: bool,
+        /// Run a loopback DNS resolver for the proxy TLD
+        dns: bool,
+        /// Port the loopback DNS resolver listens on
+        dns_port: i64,
         /// Enable the reverse proxy server for daemons
         enable: bool,
         /// Bind address for the reverse proxy server
@@ -1806,7 +1839,7 @@ settings_partial! {
         lan_ip: String,
         /// Port the reverse proxy server listens on
         port: i64,
-        /// Automatically sync slug hostnames to /etc/hosts
+        /// Automatically sync slug hostnames to /etc/hosts (deprecated)
         sync_hosts: bool,
         /// Top-level domain used for proxy URLs
         tld: String,
@@ -2099,12 +2132,16 @@ mod tests {
             .iter()
             .map(|meta| meta.key)
             .collect();
-        assert_eq!(keys.len(), 76, "{keys:?}");
+        // 75 before either change, plus `supervisor.oneshot_timeout` from main
+        // and `proxy.dns` / `proxy.dns_port` from this branch.
+        assert_eq!(keys.len(), 78, "{keys:?}");
         assert!(keys.contains(&"general.autostop_delay"));
         assert!(keys.contains(&"supervisor.oneshot_timeout"));
         assert!(keys.contains(&"logs.archive_hook.command"));
         assert!(keys.contains(&"supervisor.health_check_interval"));
         assert!(keys.contains(&"supervisor.watch_interval"));
+        assert!(keys.contains(&"proxy.dns"));
+        assert!(keys.contains(&"proxy.dns_port"));
 
         let registry = Settings::SETTINGS_REGISTRY;
         let interval = registry.get(registry.lookup("general.interval").unwrap().id);
