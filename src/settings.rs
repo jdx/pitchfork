@@ -465,29 +465,26 @@ pub struct SettingsLogs {
 pub struct SettingsProxy {
     /// Automatically start daemons when accessed via proxy URL
     ///
-    /// When enabled (default), visiting a proxy URL for a stopped daemon will
-    /// automatically start that daemon. The browser receives a "Starting…" page
-    /// that refreshes every 2 seconds until the daemon is ready, at which point
-    /// the request is proxied normally.
+    /// Enabled by default. Opening a stopped daemon's proxy URL starts its
+    /// `depends` dependencies first, using the same startup order and readiness
+    /// checks as `pitchfork start`. Oneshot dependencies must complete successfully.
     ///
-    /// Set to `false` to disable auto-start and return a plain 502 error for
-    /// stopped daemons (the previous behaviour).
+    /// The first request waits for startup. Additional requests to the same daemon
+    /// receive a "Starting…" page that refreshes every two seconds until it is ready.
+    /// Opening a project or stack page does not start any daemons.
+    ///
+    /// Set to `false` to return a 502 error for stopped daemons and require manual startup.
     #[usage(env = "PITCHFORK_PROXY_AUTO_START", default = true)]
     pub auto_start: bool,
 
     /// Maximum time to wait for an auto-started daemon to become ready
     ///
-    /// When a daemon is auto-started via a proxy request, the proxy waits up to
-    /// this duration for the **entire** auto-start operation to complete — including
-    /// waiting for the daemon's readiness signal and detecting the bound port.
+    /// Limits the auto-start operation, including dependency startup, readiness
+    /// checks, and detection of the daemon's bound port. Defaults to 30 seconds.
     ///
-    /// If the daemon does not become ready and bind a port within this timeout,
-    /// the browser receives an error page indicating the startup timed out.
-    ///
-    /// **Examples:**
-    /// - `"15s"` - Shorter timeout for fast-starting services
-    /// - `"30s"` - Default, suitable for most daemons
-    /// - `"60s"` - For daemons with slow initialisation (e.g. large Java apps)
+    /// On timeout, the request receives an error page and the remaining startup
+    /// sequence is cancelled. Processes already started are not stopped.
+    /// Increase this setting for a longer startup sequence, for example `"60s"`.
     #[usage(
         env = "PITCHFORK_PROXY_AUTO_START_TIMEOUT",
         default = "30s",

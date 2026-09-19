@@ -262,18 +262,69 @@ host; LAN clients must use the listener port. See
 
 ## Auto-Start
 
-When you visit a proxy URL for a daemon that isn't running, pitchfork can automatically start it for you. Instead of a `502 Bad Gateway` error, you'll see a "Starting…" page that refreshes every 2 seconds until the daemon is ready.
+Opening a stopped daemon's proxy URL starts the daemon and its
+[`depends`](/reference/configuration#depends) dependencies, just like
+`pitchfork start`. Auto-start is enabled by default once the proxy is configured.
+Opening a project or stack page does not start any daemons.
 
-This is enabled by default. No extra setup is needed beyond the normal proxy configuration.
+### Start Dependencies Before the App
 
-Auto-start follows the daemon's `depends` graph, including dependencies in registered projects. Prerequisites must become ready (and oneshot prerequisites must exit successfully) before dependent services start. A failed prerequisite prevents the application from starting. The startup timeout covers the whole dependency graph.
+For an app that needs a database and a migration, define the startup order in
+`pitchfork.toml`:
 
-The entire auto-start operation — including waiting for the daemon's readiness signal and detecting its bound port — is bounded by `proxy.auto_start_timeout` (default 30 s). If the daemon doesn't become ready within this window the browser receives a timeout error. Increase the timeout for daemons with slow initialisation:
+```toml
+[daemons.db]
+run = "postgres -D ./data"
+ready_port = 5432
+
+[daemons.migrate]
+run = "./migrate.sh"
+oneshot = true
+depends = ["db"]
+
+[daemons.app]
+run = "npm run dev"
+port = 3000
+depends = ["migrate"]
+```
+
+This example assumes an initialized PostgreSQL data directory, a migration
+script, and an app that listens on port 3000. With all three stopped, opening
+`app.<project>.localhost` starts `db`, waits for port 5432, runs `migrate` to
+successful completion, and then starts `app`. Use the scheme and proxy port
+from your [proxy configuration](#quick-start).
+
+Dependencies at the same level start in parallel. Running services are reused;
+an in-flight `oneshot` is awaited, and a completed `oneshot` runs again.
+Dependencies in other registered projects use a qualified ID such as
+`depends = ["shared/db"]`. The proxy loads configuration from the checkout
+identified by the hostname, including linked worktrees. Each dependency uses
+its own project's `[env]` defaults, so the app's environment does not leak into
+services in another project.
+
+If a dependency fails, the app stays stopped and the proxy returns a `502`
+error page. Check the dependency logs for the cause.
+
+### Wait for Startup
+
+The first request waits for startup and is forwarded when the daemon is ready
+and its port is known. Additional requests to the same daemon during startup
+receive a "Starting…" page that refreshes every two seconds.
+
+`proxy.auto_start_timeout` limits this wait to 30 seconds by default, including
+dependency startup, readiness checks, and port detection. On timeout, the
+request receives an error page and the remaining startup sequence is cancelled.
+Processes already started are not stopped; an in-flight migration can still
+finish, but later dependencies and the app are not started by that request.
+For a longer startup sequence, increase the timeout:
 
 ```toml
 [settings.proxy]
 auto_start_timeout = "60s"
 ```
+
+To require manual startup instead, set `auto_start = false` in
+`[settings.proxy]`. Requests to stopped daemons then return a `502` error.
 
 ## Viewing Proxy URLs
 
@@ -616,8 +667,9 @@ passthrough off the LAN.
 
 ### Auto-Start with Passthrough
 
-When auto-start is enabled, a request to a stopped daemon starts it as usual.
-The proxy holds the connection until the daemon is ready, so the client sees
+When auto-start is enabled, a request to a stopped daemon starts it and its
+dependencies as described in [auto-start](#auto-start). The proxy holds the
+connection until the daemon is ready, so the client sees
 a delayed TLS handshake instead of the HTML "Starting…" page.
 
 `proxy.auto_start_timeout` bounds the startup wait, including time spent
