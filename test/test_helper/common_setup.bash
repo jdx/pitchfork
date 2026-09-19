@@ -92,6 +92,29 @@ _common_setup() {
   # if the test rewrites the state file and loses the record `supervisor stop`
   # relies on.
   _SETUP_SUPERVISOR_PID="$(_recorded_supervisor_pid)"
+  _SETUP_SUPERVISOR_IDENTITY=""
+  if [[ -n "$_SETUP_SUPERVISOR_PID" ]]; then
+    _SETUP_SUPERVISOR_IDENTITY="$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")"
+  fi
+}
+
+# Print an identity token for $1 if it is a `pitchfork supervisor run` process,
+# or nothing. The token includes the process start time, so it differs once the
+# PID is reused. Linux reads the start time in clock ticks from /proc; other
+# Unix systems use `ps -o lstart=`, which has one-second resolution. Returns
+# nothing on Windows, where `ps` does not see the Windows PIDs pitchfork records.
+_supervisor_identity() {
+  local pid="$1" args start
+  args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 0
+  [[ "$args" =~ ^[^\ ]*pitchfork\ supervisor\ run$ ]] || return 0
+  if [[ -r "/proc/$pid/stat" ]]; then
+    start="$(sed -E 's/^.*\) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')"
+  else
+    start="$(ps -p "$pid" -o lstart= 2>/dev/null)"
+  fi
+  if [[ -n "$start" ]]; then
+    echo "$pid:$start"
+  fi
 }
 
 # The supervisor PID recorded in the state file, or nothing.
@@ -105,45 +128,50 @@ _recorded_supervisor_pid() {
 # Stop any supervisor from this test that `pitchfork supervisor stop` missed.
 # Candidates are the supervisor started in setup and, on Linux, any supervisor
 # whose environment points at this test's state directory (for example one a
-# CLI command auto-started). A PID is only signalled while it still runs
-# pitchfork. Unix only: Windows PIDs are handled by taskkill, and the Windows
-# supervisor is spawned without inheriting handles, so it cannot hold bats'
-# pipes open.
+# CLI command auto-started). Each candidate is bound to its identity (PID plus
+# start time) when it is found, and is only signalled while that identity still
+# matches, so a PID reused by another test's supervisor is never touched.
+# Unix only: Windows PIDs are handled by taskkill, and the Windows supervisor is
+# spawned without inheriting handles, so it cannot hold bats' pipes open.
 _stop_leaked_supervisors() {
   if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
     return 0
   fi
-  local -a pids=()
-  [[ -n "${_SETUP_SUPERVISOR_PID:-}" ]] && pids+=("$_SETUP_SUPERVISOR_PID")
-  local pid
+  local -a ids=()
+  local pid id
+  if [[ -n "${_SETUP_SUPERVISOR_IDENTITY:-}" ]] &&
+    [[ "$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")" == "$_SETUP_SUPERVISOR_IDENTITY" ]]; then
+    ids+=("$_SETUP_SUPERVISOR_IDENTITY")
+  fi
   for pid in $(pgrep -f '^[^ ]*pitchfork supervisor run$' 2>/dev/null); do
-    if grep -qzxF "PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" "/proc/$pid/environ" 2>/dev/null; then
-      pids+=("$pid")
-    fi
+    grep -qzxF "PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" "/proc/$pid/environ" 2>/dev/null || continue
+    id="$(_supervisor_identity "$pid")"
+    [[ -n "$id" && " ${ids[*]} " != *" $id "* ]] && ids+=("$id")
   done
+  ((${#ids[@]})) || return 0
 
-  local -a leaked=()
-  for pid in "${pids[@]}"; do
-    [[ " ${leaked[*]} " == *" $pid "* ]] && continue
-    if ps -p "$pid" -o args= 2>/dev/null | grep -qE '^[^ ]*pitchfork supervisor run$'; then
-      leaked+=("$pid")
-    fi
-  done
-  ((${#leaked[@]})) || return 0
-
-  echo "# teardown: stopping leaked supervisor(s): ${leaked[*]}" >&3
+  echo "# teardown: stopping leaked supervisor(s): ${ids[*]%%:*}" >&3
   # SIGTERM first so the supervisor stops its own daemons, then SIGKILL.
-  kill "${leaked[@]}" 2>/dev/null || true
-  local _ alive
+  _signal_supervisors TERM "${ids[@]}"
+  local _
   for _ in $(seq 1 50); do
-    alive=0
-    for pid in "${leaked[@]}"; do
-      pid_alive "$pid" && alive=1
-    done
-    ((alive)) || return 0
+    _signal_supervisors 0 "${ids[@]}" || return 0
     sleep 0.1
   done
-  kill -9 "${leaked[@]}" 2>/dev/null || true
+  _signal_supervisors KILL "${ids[@]}"
+}
+
+# Send signal $1 to each identity in $2.. whose process still matches it.
+# Returns non-zero when none of them still match.
+_signal_supervisors() {
+  local sig="$1" id matched=1
+  shift
+  for id in "$@"; do
+    [[ "$(_supervisor_identity "${id%%:*}")" == "$id" ]] || continue
+    matched=0
+    kill -s "$sig" "${id%%:*}" 2>/dev/null || true
+  done
+  return "$matched"
 }
 
 # Skip a test on Windows (Git Bash / MSYS2).

@@ -20,7 +20,12 @@ stop_supervisor_for_state_rewrite() {
   [[ -n "${_SETUP_SUPERVISOR_PID:-}" ]] || return 0
   local _
   for _ in $(seq 1 100); do
-    pid_alive "$_SETUP_SUPERVISOR_PID" || return 0
+    if [[ -n "${_SETUP_SUPERVISOR_IDENTITY:-}" ]]; then
+      # Compare identities so a reused PID does not look like the supervisor.
+      [[ "$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")" == "$_SETUP_SUPERVISOR_IDENTITY" ]] || return 0
+    else
+      pid_alive "$_SETUP_SUPERVISOR_PID" || return 0
+    fi
     sleep 0.1
   done
   echo "supervisor $_SETUP_SUPERVISOR_PID still running after stop" >&2
