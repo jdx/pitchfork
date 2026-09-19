@@ -319,6 +319,8 @@ pub fn proxy_tls_mode(
         entry.resolve_namespace().as_deref(),
         daemon_name,
     )
+    .ok()
+    .flatten()
     .map(|route| route.mode)
     .unwrap_or_default()
 }

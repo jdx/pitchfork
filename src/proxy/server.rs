@@ -199,13 +199,18 @@ fn reject_case_colliding_worktrees(
 /// Read a daemon's TLS route (`proxy_tls`, `proxy_tls_port`) from the config
 /// that applies in `dir`.
 ///
-/// `None` means that directory says nothing about the daemon, because its
-/// config could not be read or does not describe it. That is deliberately not
-/// the same as a route of `terminate`: a worktree the proxy knows nothing
-/// about inherits its slug's mode, where a synthesized `terminate` would
-/// silently stop splicing a passthrough daemon and answer with the proxy's
-/// certificate instead. A directory that *does* describe the daemon is
-/// authoritative, including when it leaves `proxy_tls` out and so terminates.
+/// `Ok(None)` means that directory says nothing about the daemon: its config
+/// does not describe it. That is deliberately not the same as a route of
+/// `terminate`: a worktree the proxy knows nothing about inherits its slug's
+/// mode, where a synthesized `terminate` would silently stop splicing a
+/// passthrough daemon and answer with the proxy's certificate instead. A
+/// directory that *does* describe the daemon is authoritative, including when
+/// it leaves `proxy_tls` out and so terminates.
+///
+/// `Err` means the config could not be read at all, which says nothing about
+/// the daemon either way. The merged config fails as a whole, so an error in
+/// an unrelated daemon lands here too; callers that already know a route keep
+/// it rather than treat the error as `terminate`.
 ///
 /// Any other way of resolving a hostname to a daemon can reuse this to get the
 /// same TLS decision, since the mode belongs to the daemon rather than to the
@@ -217,22 +222,35 @@ pub(crate) fn read_proxy_tls_route(
     dir: &std::path::Path,
     namespace: Option<&str>,
     daemon_name: &str,
-) -> Option<ProxyTlsRoute> {
-    let id = DaemonId::try_new(namespace?, daemon_name).ok()?;
-    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(dir) {
-        Ok(pt) => pt,
-        Err(e) => {
-            log::debug!(
-                "Proxy TLS route: could not read config in {}: {e}",
-                dir.display()
-            );
-            return None;
-        }
+) -> miette::Result<Option<ProxyTlsRoute>> {
+    let Some(id) = namespace.and_then(|ns| DaemonId::try_new(ns, daemon_name).ok()) else {
+        return Ok(None);
     };
-    let cfg = pt.daemons.get(&id)?;
-    Some(ProxyTlsRoute {
+    let pt = crate::pitchfork_toml::PitchforkToml::all_merged_from(dir)?;
+    Ok(pt.daemons.get(&id).map(|cfg| ProxyTlsRoute {
         mode: cfg.proxy_tls.unwrap_or_default(),
         port: cfg.effective_proxy_tls_port(),
+    }))
+}
+
+/// The result of [`read_proxy_tls_route`], falling back to `known` — the route
+/// recorded by the previous slug-table refresh — when the config is unreadable.
+///
+/// The warning is logged once per distinct error, since the table refreshes
+/// every couple of seconds and the error persists until the config is fixed.
+fn route_or_last_known(
+    read: miette::Result<Option<ProxyTlsRoute>>,
+    known: Option<ProxyTlsRoute>,
+    dir: &std::path::Path,
+    daemon_name: &str,
+) -> Option<ProxyTlsRoute> {
+    read.unwrap_or_else(|e| {
+        crate::proxy::hostname::warn_once(&format!(
+            "Proxy TLS route for daemon '{daemon_name}': could not read config in {}; \
+             keeping its last known TLS mode until the config is fixed: {e}",
+            dir.display()
+        ));
+        known
     })
 }
 
@@ -242,7 +260,14 @@ pub(crate) fn read_proxy_tls_route(
 /// Keys are ASCII-lowercased, and slugs that collide once folded are left out
 /// entirely — see [`reject_case_colliding_worktrees`] for why ambiguity is
 /// rejected rather than resolved.
-fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
+///
+/// `previous` is the table being replaced. When a directory's config cannot be
+/// read, the route recorded there is kept, so a config error — even one in an
+/// unrelated daemon — cannot quietly turn a running passthrough daemon into a
+/// terminated one that answers with the proxy's certificate.
+fn build_slug_entries(
+    previous: &std::collections::HashMap<String, CachedSlugEntry>,
+) -> std::collections::HashMap<String, CachedSlugEntry> {
     let global_slugs = crate::pitchfork_toml::PitchforkToml::read_global_slugs();
     let collisions = crate::proxy::ascii_case_collisions(global_slugs.keys().map(String::as_str));
     let mut folded: Vec<&String> = collisions.iter().collect();
@@ -289,16 +314,31 @@ fn build_slug_entries() -> std::collections::HashMap<String, CachedSlugEntry> {
             (vec![], std::collections::HashSet::new())
         };
         let dir = entry.resolve_dir().unwrap_or_default();
+        let prev = previous.get(&key);
         // The slug's own directory has nothing to inherit from, so silence
-        // there is the default route.
-        let tls = read_proxy_tls_route(&dir, ns.as_deref(), &daemon_name).unwrap_or_default();
+        // there is the default route. An unreadable config keeps the last
+        // known route; with none known yet, there is nothing else to go on.
+        let tls = route_or_last_known(
+            read_proxy_tls_route(&dir, ns.as_deref(), &daemon_name),
+            prev.map(|p| p.tls),
+            &dir,
+            &daemon_name,
+        )
+        .unwrap_or_default();
         // A worktree only gets an entry when its own config describes the
-        // daemon; the rest inherit the slug's route at lookup time.
+        // daemon, or when it did last time and cannot be read now; the rest
+        // inherit the slug's route at lookup time.
         let worktree_tls = worktrees
             .iter()
             .filter_map(|wt| {
-                read_proxy_tls_route(&wt.path, wt.namespace.as_deref(), &daemon_name)
-                    .map(|route| (wt.sanitized_branch.to_ascii_lowercase(), route))
+                let branch = wt.sanitized_branch.to_ascii_lowercase();
+                route_or_last_known(
+                    read_proxy_tls_route(&wt.path, wt.namespace.as_deref(), &daemon_name),
+                    prev.and_then(|p| p.worktree_tls.get(&branch).copied()),
+                    &wt.path,
+                    &daemon_name,
+                )
+                .map(|route| (branch, route))
             })
             .collect();
         entries.insert(
@@ -342,8 +382,9 @@ pub async fn get_cached_slugs() -> Arc<std::collections::HashMap<String, CachedS
     }
 
     // Build from disk on a blocking thread (involves subprocess calls).
+    let previous = slug_snapshot();
     let new_entries = Arc::new(
-        tokio::task::spawn_blocking(build_slug_entries)
+        tokio::task::spawn_blocking(move || build_slug_entries(&previous))
             .await
             .unwrap_or_else(|e| {
                 log::warn!("Failed to refresh slug cache: {e}");
@@ -2324,12 +2365,13 @@ fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> 
         .unwrap_or(&[]);
     if let Some(idx) = configured.iter().position(|&p| p == want)
         && let Some(&resolved) = daemon.resolved_port.get(idx)
+    {
         // A recorded 0 is a port the daemon asked the operating system to
         // choose and nothing has detected yet, so it is no more connectable
-        // here than on the path that takes the daemon's first port.
-        && resolved != 0
-    {
-        return Some(resolved);
+        // here than on the path that takes the daemon's first port. That is a
+        // daemon still starting, not a mismatch, so it is not warned about:
+        // auto-start polls through this state several times a second.
+        return (resolved != 0).then_some(resolved);
     }
     if daemon.resolved_port.contains(&want) {
         return Some(want);
@@ -2339,13 +2381,14 @@ fn select_daemon_port(route: &ProxyTlsRoute, daemon: &crate::daemon::Daemon) -> 
         // information there is, so use it.
         return Some(want);
     }
-    log::warn!(
+    // Every request to the hostname lands here until the daemon restarts, so
+    // the warning is logged once per daemon and port set, not per request.
+    crate::proxy::hostname::warn_once(&format!(
         "Daemon {} has proxy_tls_port {want}, which is not among its resolved ports {:?}; \
          refusing to route rather than forwarding to a port it never bound. \
          Restart the daemon if its ports changed.",
-        daemon.id,
-        daemon.resolved_port,
-    );
+        daemon.id, daemon.resolved_port,
+    ));
     None
 }
 
@@ -3381,7 +3424,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         // A directory with no config at all.
-        assert_eq!(read_proxy_tls_route(dir.path(), Some("proj"), "api"), None);
+        assert_eq!(
+            read_proxy_tls_route(dir.path(), Some("proj"), "api").unwrap(),
+            None
+        );
 
         // A config that describes some other daemon.
         std::fs::write(
@@ -3390,13 +3436,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_proxy_tls_route(dir.path(), Some("proj"), "api"),
+            read_proxy_tls_route(dir.path(), Some("proj"), "api").unwrap(),
             None,
             "a config without this daemon says nothing about it"
         );
 
         // No namespace to resolve the daemon against.
-        assert_eq!(read_proxy_tls_route(dir.path(), None, "api"), None);
+        assert_eq!(read_proxy_tls_route(dir.path(), None, "api").unwrap(), None);
+    }
+
+    /// A config that cannot be read — here because an unrelated daemon is
+    /// invalid — is an error, not a route of `terminate`, and a refresh keeps
+    /// the route it already knew instead of downgrading a passthrough daemon.
+    #[test]
+    fn test_unreadable_config_keeps_the_last_known_route() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pitchfork.toml"),
+            "[daemons.api]\nrun = \"serve\"\nport = 8443\nproxy_tls = \"passthrough\"\n\n\
+             [daemons.broken]\nrun = \"serve\"\nproxy_tls = \"passthrough\"\n",
+        )
+        .unwrap();
+        let read = read_proxy_tls_route(dir.path(), Some("proj"), "api");
+        assert!(
+            read.is_err(),
+            "an invalid sibling makes the config unreadable"
+        );
+
+        let known = ProxyTlsRoute {
+            mode: ProxyTlsMode::Passthrough,
+            port: Some(8443),
+        };
+        assert_eq!(
+            route_or_last_known(read, Some(known), dir.path(), "api"),
+            Some(known)
+        );
+
+        // A readable answer replaces what was known, even when it is silence.
+        assert_eq!(
+            route_or_last_known(Ok(None), Some(known), dir.path(), "api"),
+            None
+        );
     }
 
     /// A worktree whose own config describes the daemon is authoritative,

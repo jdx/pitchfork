@@ -574,9 +574,9 @@ connection is treated as plain HTTP on the TLS port.
 
 ### Seeing Which Mode a Daemon Uses
 
-`pitchfork status` prints the mode next to the URL, and `pitchfork list`
-annotates the URL when a daemon is in passthrough mode (the default
-`terminate` is left unannotated to keep the table readable):
+`pitchfork status` and `pitchfork list` annotate the proxy URL when a daemon
+is in passthrough mode. The default `terminate` is left unannotated, so the
+common case reads as it always has:
 
 ```console
 $ pitchfork status api
