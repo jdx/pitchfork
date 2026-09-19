@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.26.0](https://github.com/jdx/pitchfork/compare/v2.25.0...v2.26.0) - 2026-09-19
+
+### Added
+
+- *(proxy)* add automatic hostnames for projects and worktrees ([#880](https://github.com/jdx/pitchfork/pull/880))
+- *(config)* add oneshot daemons that are ready when they exit 0 ([#876](https://github.com/jdx/pitchfork/pull/876))
+
+### Fixed
+
+- *(supervisor)* stop trusting a stale supervisor pid after reboot or pid reuse ([#878](https://github.com/jdx/pitchfork/pull/878))
+- *(proxy)* match slugs and worktree names case-insensitively ([#858](https://github.com/jdx/pitchfork/pull/858))
+- *(deps)* update rust crate dirs to v7 ([#867](https://github.com/jdx/pitchfork/pull/867))
+- make clippy pass on windows and check it in ci ([#854](https://github.com/jdx/pitchfork/pull/854))
+- *(config)* add general.windows_shell defaulting to cmd /C ([#852](https://github.com/jdx/pitchfork/pull/852))
+
+### Other
+
+- *(deps)* lock file maintenance ([#861](https://github.com/jdx/pitchfork/pull/861))
+
 ## [2.25.0](https://github.com/jdx/pitchfork/compare/v2.24.2...v2.25.0) - 2026-09-11
 
 ### Added
