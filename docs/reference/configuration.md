@@ -238,6 +238,8 @@ user = "501"
 - Otherwise, if the supervisor was started as root via `sudo`, daemons run as the sudo-calling user from `SUDO_UID`/`SUDO_GID`.
 - If no run user can be derived, the daemon runs as the supervisor's current user.
 - Switching to another user requires the supervisor to have root privileges; otherwise startup fails.
+- When the daemon runs as a different user than the supervisor, `HOME`, `USER`, and `LOGNAME` are set from that user's passwd entry instead of being inherited from the supervisor (typically root). Tools such as mise, npm, and git then use the run user's home directory and config. If the user has no passwd entry (for example, a `SUDO_UID` with no matching account), these variables are unset rather than left pointing at root. Values set in the daemon's [`env`](#env) take precedence.
+- Hooks and `ready_cmd` probes run as the supervisor's user, not as the daemon's `user`.
 
 ### `retry`
 
