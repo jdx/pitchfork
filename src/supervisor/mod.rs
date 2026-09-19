@@ -719,7 +719,14 @@ impl Supervisor {
         // LAN peers are served by mDNS instead.
         let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
 
-        let Some(cancel) = self.proxy_cancel.lock().await.clone() else {
+        // The token's guard is held until the handle is stored. `close` takes
+        // the token under this lock before it collects `dns_task`, so it either
+        // runs first — and there is no token to spawn with — or waits until
+        // the handle is in place to be drained. Releasing it earlier left a
+        // window where `close` found no handle and the task outlived shutdown
+        // holding the resolver's sockets.
+        let cancel_guard = self.proxy_cancel.lock().await;
+        let Some(cancel) = cancel_guard.clone() else {
             return;
         };
         let (bind_tx, bind_rx) = tokio::sync::oneshot::channel();
@@ -729,6 +736,7 @@ impl Supervisor {
             }
         });
         *self.dns_task.lock().await = Some(task);
+        drop(cancel_guard);
         match bind_rx.await {
             Ok(Ok(())) => info!("DNS resolver bound successfully"),
             Ok(Err(msg)) => {
@@ -765,7 +773,11 @@ impl Supervisor {
         // No cancellation token means `close` has already taken it, so shutdown
         // is under way. Spawning here would leave a task polling with no way to
         // stop it, and past the point where `close` collects the handle.
-        let Some(cancel) = self.proxy_cancel.lock().await.clone() else {
+        //
+        // Held until the handle is stored, for the reason `start_dns_resolver`
+        // gives: otherwise `close` can collect `lan_monitor_task` in between.
+        let cancel_guard = self.proxy_cancel.lock().await;
+        let Some(cancel) = cancel_guard.clone() else {
             debug!("Not starting the LAN IP monitor: the supervisor is shutting down");
             return;
         };
@@ -803,6 +815,7 @@ impl Supervisor {
             }
         });
         *self.lan_monitor_task.lock().await = Some(task);
+        drop(cancel_guard);
     }
 
     /// Start mDNS publishing for LAN mode (called after the proxy binds successfully).
