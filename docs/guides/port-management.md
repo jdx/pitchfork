@@ -435,6 +435,19 @@ hostnames is therefore not supported yet: a list of hostnames on one daemon
 be the way to express it. Until then, split the process into two daemons, each
 with its own port and slug.
 
+### Worktrees
+
+Each git worktree or jj workspace of a slug's project is routable under its own
+hostname prefix, and each has its own `pitchfork.toml`, so a worktree sets its
+own `proxy_tls` and `proxy_tls_port` there.
+
+A worktree whose config pitchfork cannot read — mid-edit, momentarily invalid,
+or a checkout that predates the daemon — inherits the slug's mode, so a
+passthrough hostname is not quietly terminated with the proxy's certificate
+while the file is broken. It does not inherit the slug's `proxy_tls_port`,
+which names a position in one daemon's port list: the hostname falls back to
+that worktree daemon's own first port instead.
+
 ### Why Plain TCP Is Not Proxied
 
 Passthrough routes on the hostname inside the TLS ClientHello. A plain TCP

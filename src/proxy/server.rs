@@ -419,6 +419,30 @@ fn match_worktree_prefix<'a>(cached: &'a CachedSlugEntry, prefix: &str) -> Prefi
     PrefixMatch::Unknown
 }
 
+/// The TLS route for a worktree of `cached`.
+///
+/// A worktree whose own config describes the daemon is authoritative. One the
+/// proxy knows nothing about — an unreadable or momentarily invalid config, a
+/// checkout that predates the daemon — inherits the slug's *mode* but not its
+/// port.
+///
+/// Inheriting the mode is what keeps a passthrough slug from quietly being
+/// terminated with the proxy's certificate while its config is unreadable. The
+/// port is deliberately not inherited: `proxy_tls_port` names a position in one
+/// daemon's port list, and the daemon behind a worktree hostname is a different
+/// process with its own ports, so the hostname falls back to that daemon's own
+/// first port rather than to a number chosen for another checkout.
+fn worktree_route(cached: &CachedSlugEntry, sanitized_branch: &str) -> ProxyTlsRoute {
+    cached
+        .worktree_tls
+        .get(&sanitized_branch.to_ascii_lowercase())
+        .copied()
+        .unwrap_or(ProxyTlsRoute {
+            mode: cached.tls.mode,
+            port: None,
+        })
+}
+
 /// Strip a trailing `.{suffix}` from `s`, ignoring ASCII case.
 ///
 /// Returns the remaining prefix, or `None` when `s` does not end that way.
@@ -1995,11 +2019,7 @@ async fn resolve_route_context(host: &str, tld: &str) -> Result<RouteContext, Re
                         );
                         cached.namespace.clone()
                     });
-                    let route = cached
-                        .worktree_tls
-                        .get(&wt.sanitized_branch.to_ascii_lowercase())
-                        .copied()
-                        .unwrap_or(cached.tls);
+                    let route = worktree_route(&cached, &wt.sanitized_branch);
                     (ns, Some(wt.path.clone()), route)
                 }
                 PrefixMatch::Ambiguous => {
@@ -2060,11 +2080,7 @@ fn resolve_tls_mode_in(
         && let Some(prefix) = strip_dot_suffix_ignore_case(&subdomain, &cached.slug)
         && let PrefixMatch::Worktree(wt) = match_worktree_prefix(cached, &prefix)
     {
-        return cached
-            .worktree_tls
-            .get(&wt.sanitized_branch.to_ascii_lowercase())
-            .map(|route| route.mode)
-            .unwrap_or(cached.tls.mode);
+        return worktree_route(cached, &wt.sanitized_branch).mode;
     }
 
     cached.tls.mode
@@ -2781,6 +2797,26 @@ mod tests {
             mode("feature-unknown.spliced.localhost"),
             ProxyTlsMode::Passthrough,
             "a worktree with nothing recorded inherits the slug"
+        );
+
+        // The port is not inherited with the mode: it names a position in one
+        // daemon's port list, and a worktree hostname reaches a different
+        // process with its own ports.
+        let cached = entries.get("spliced").unwrap();
+        assert_eq!(
+            worktree_route(cached, "feature-unknown"),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Passthrough,
+                port: None,
+            }
+        );
+        // An explicit worktree route is taken whole, port included.
+        assert_eq!(
+            worktree_route(cached, "feature-known"),
+            ProxyTlsRoute {
+                mode: ProxyTlsMode::Terminate,
+                port: None,
+            }
         );
     }
 
