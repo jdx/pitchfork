@@ -56,6 +56,14 @@
       "additionalProperties": {
         "$ref": "#/$defs/SlugEntryRaw"
       }
+    },
+    "worktree_label": {
+      "description": "Hostname label for this checkout when it is a linked git worktree.\n\nOverrides the worktree directory's name in proxy hostnames.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
     }
   },
   "$defs": {
@@ -513,6 +521,17 @@
             }
           ]
         },
+        "proxy": {
+          "description": "Proxy routing: `false` opts out of the automatic hostname, a string\noverrides the daemon label used in it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProxyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "proxy_port": {
           "description": "Shorter spelling of `proxy_tls_port`. Set one or the other, not both.\n\nKept separate rather than folded so that a config keeps the spelling\nits author chose when pitchfork rewrites it. Read\n[`Self::effective_proxy_tls_port`] rather than either field.",
           "type": [
@@ -789,6 +808,17 @@
               }
             }
           }
+        }
+      ]
+    },
+    "ProxyConfig": {
+      "description": "Proxy routing: false = no hostname, true = default hostname, string = daemon label override",
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
         }
       ]
     },

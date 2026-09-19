@@ -6,12 +6,16 @@
 
 Manage the pitchfork reverse proxy
 
-The reverse proxy routes requests from stable slug-based URLs like
-`https://myapp.localhost` to the daemon's actual listening port (e.g.
-localhost:3000).
+The reverse proxy routes requests from stable URLs to the daemon's actual
+listening port. Every daemon with a `port` gets a hostname automatically,
+built from the daemon, worktree and project names plus the configured TLD:
 
-Slugs are defined in the global config (~/.config/pitchfork/config.toml)
-under [slugs]. Each slug maps to a project directory and daemon name.
+    https://api.myproject.localhost
+    https://api.fix-login.myproject.localhost
+
+Slugs are the older mechanism and still work. They are defined in the global
+config (~/.config/pitchfork/config.toml) under [slugs], each mapping to a
+project directory and daemon name, and are resolved before hostnames.
 
 Enable the proxy in your pitchfork.toml or settings:
 
@@ -22,9 +26,9 @@ Subcommands:
 
     trust     Install the proxy's TLS certificate into the system trust store
     untrust   Remove the proxy's TLS certificate from the system trust store
-    add       Add a slug mapping to the global config
-    remove    Remove a slug mapping from the global config
-    status    Show all registered slugs and their current state
+    add       Add a slug mapping to the global config (legacy)
+    remove    Remove a slug mapping from the global config (legacy)
+    status    Show hostnames and registered slugs with their current state
 
 ## Flags
 - **`-h --help`** — Print help

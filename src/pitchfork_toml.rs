@@ -16,8 +16,9 @@ use std::time::SystemTime;
 // Re-export config value types so existing `use crate::pitchfork_toml::X` paths keep working.
 pub use crate::config_types::{
     CpuLimit, CronRetrigger, Dir, HealthCmd, HealthHttp, HealthPort, MemoryLimit, OnOutputHook,
-    PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlHooks, PortBump, PortConfig, ProxyTlsMode,
-    ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, StopSignal, WatchMode,
+    PitchforkTomlAuto, PitchforkTomlCron, PitchforkTomlHooks, PortBump, PortConfig, ProxyConfig,
+    ProxyTlsMode, ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort, Retry, StopConfig, StopSignal,
+    WatchMode,
 };
 
 /// Raw slug entry as read from TOML (uses String for dir path).
@@ -117,6 +118,9 @@ pub struct NamespaceEntry {
 struct PitchforkTomlRaw {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub namespace: Option<String>,
+    /// Hostname label for this checkout when it is a linked git worktree.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worktree_label: Option<String>,
     #[serde(default)]
     pub daemons: IndexMap<String, PitchforkTomlDaemonRaw>,
     /// Top-level environment variables applied to all daemons as defaults.
@@ -195,6 +199,9 @@ struct PitchforkTomlDaemonRaw {
     /// New port configuration (preferred)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub port: Option<PortConfig>,
+    /// Proxy routing: `false` opts out, a string overrides the daemon's hostname label.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy: Option<ProxyConfig>,
     /// Deprecated: use `port` instead
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub expected_port: Vec<u16>,
@@ -282,6 +289,11 @@ pub struct PitchforkToml {
     /// This applies to per-file read/write flows. Merged configs may contain
     /// daemons from multiple namespaces and leave this as `None`.
     pub namespace: Option<String>,
+    /// Hostname label for this checkout when it is a linked git worktree.
+    ///
+    /// Overrides the worktree directory's name in proxy hostnames.
+    #[schemars(default, with = "Option<String>")]
+    pub worktree_label: Option<String>,
     /// Settings configuration (merged from all config files).
     ///
     /// **Note:** This field exists for serialization round-trips and for
@@ -309,7 +321,7 @@ pub struct PitchforkToml {
     pub path: Option<PathBuf>,
 }
 
-pub(crate) fn is_global_config(path: &Path) -> bool {
+pub fn is_global_config(path: &Path) -> bool {
     path == *env::PITCHFORK_GLOBAL_CONFIG_USER || path == *env::PITCHFORK_GLOBAL_CONFIG_SYSTEM
 }
 
@@ -348,7 +360,7 @@ fn read_namespace_override_from_file(path: &Path) -> Result<Option<String>> {
     parse_namespace_override_from_content(path, &content)
 }
 
-pub(crate) fn project_dir_for_config(path: &Path) -> Option<PathBuf> {
+pub fn project_dir_for_config(path: &Path) -> Option<PathBuf> {
     crate::extra_configs::project_dir(path).or_else(|| {
         if is_dot_config_pitchfork(path) {
             path.parent().and_then(Path::parent).map(Path::to_path_buf)
@@ -826,6 +838,31 @@ impl PitchforkToml {
         namespace_from_path(&dir.join("pitchfork.toml"))
     }
 
+    /// Return the `worktree_label` declared for this project, ignoring configs
+    /// inherited from parent directories.
+    ///
+    /// This covers the project's own four config files and any external file
+    /// registered to this directory with `pitchfork config add --dir`, which is
+    /// where a generator such as mise writes its configuration. Later files win,
+    /// matching the ordinary configuration precedence.
+    pub fn project_worktree_label(dir: &Path) -> Option<String> {
+        let mut label = None;
+        let candidates = project_config_family(&dir.join("pitchfork.toml"))
+            .into_iter()
+            .chain(crate::extra_configs::configs_for_dir(dir));
+        for candidate in candidates {
+            if !candidate.exists() {
+                continue;
+            }
+            if let Ok(pt) = Self::read(&candidate)
+                && let Some(found) = pt.worktree_label
+            {
+                label = Some(found);
+            }
+        }
+        label
+    }
+
     /// Return the explicit namespace shared by this project's own configuration files.
     pub fn project_namespace_override(dir: &Path) -> Result<Option<String>> {
         directory_namespace_override(&dir.join("pitchfork.toml"), None)
@@ -1209,6 +1246,7 @@ impl PitchforkToml {
             daemons: Default::default(),
             env: None,
             namespace: None,
+            worktree_label: None,
             settings: SettingsPartial::default(),
             slugs: IndexMap::new(),
             groups: IndexMap::new(),
@@ -1235,6 +1273,7 @@ impl PitchforkToml {
         let namespace = namespace_from_path_with_override(path, explicit.as_deref())?;
         let mut pt = Self::new(path.to_path_buf());
         pt.namespace = raw_config.namespace.clone();
+        pt.worktree_label = raw_config.worktree_label.clone();
 
         for (short_name, raw_daemon) in raw_config.daemons {
             let id = match DaemonId::try_new(&namespace, &short_name) {
@@ -1387,6 +1426,7 @@ impl PitchforkToml {
                 health_http: raw_daemon.health_http,
                 health_port: raw_daemon.health_port,
                 port,
+                proxy: raw_daemon.proxy,
                 proxy_tls: raw_daemon.proxy_tls,
                 proxy_tls_port: raw_daemon.proxy_tls_port,
                 proxy_port: raw_daemon.proxy_port,
@@ -1533,6 +1573,7 @@ impl PitchforkToml {
             // doesn't drop `[settings.*]`. Gate on is_empty to avoid a bare `[settings]`.
             let mut raw = PitchforkTomlRaw {
                 namespace: self.namespace.clone(),
+                worktree_label: self.worktree_label.clone(),
                 env: self.env.clone(),
                 settings: (!self.settings.is_empty()).then(|| self.settings.clone()),
                 ..PitchforkTomlRaw::default()
@@ -1563,6 +1604,7 @@ impl PitchforkToml {
                     health_http: daemon.health_http.clone(),
                     health_port: daemon.health_port.clone(),
                     port: port.cloned(),
+                    proxy: daemon.proxy.clone(),
                     proxy_tls: daemon.proxy_tls,
                     proxy_tls_port: daemon.proxy_tls_port,
                     proxy_port: daemon.proxy_port,
@@ -1676,6 +1718,9 @@ impl PitchforkToml {
     /// Since read() already qualifies daemon IDs with namespace, this just inserts them.
     /// Settings are also merged - later values override earlier ones.
     pub fn merge(&mut self, pt: Self) {
+        if pt.worktree_label.is_some() {
+            self.worktree_label = pt.worktree_label.clone();
+        }
         for (id, d) in pt.daemons {
             self.daemons.insert(id, d);
         }
@@ -2011,6 +2056,10 @@ pub struct PitchforkTomlDaemon {
     pub health_port: Option<HealthPort>,
     /// Port configuration: expected ports and auto-bump settings
     pub port: Option<PortConfig>,
+    /// Proxy routing: `false` opts out of the automatic hostname, a string
+    /// overrides the daemon label used in it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub proxy: Option<ProxyConfig>,
     /// TLS handling for this daemon's proxy hostname.
     ///
     /// - `terminate` (default): the proxy terminates TLS with its own
@@ -2152,20 +2201,12 @@ impl PitchforkTomlDaemon {
             self.path.as_deref(),
             effective_user.as_deref(),
         );
-        let slug = crate::pitchfork_toml::PitchforkToml::read_global_slugs()
-            .into_iter()
-            .find(|(slug, entry)| {
-                let daemon_name = entry.daemon.as_deref().unwrap_or(slug);
-                if daemon_name != id.name() {
-                    return false;
-                }
-
-                match entry.resolve_namespace() {
-                    Some(namespace) => namespace == id.namespace(),
-                    None => false,
-                }
-            })
-            .map(|(slug, _)| slug);
+        // The same lookup the proxy and the CLI use, so a slug the proxy
+        // refuses to route as ambiguous is not handed to the daemon either.
+        let slug = PitchforkToml::find_slug_for_daemon_in_registry(
+            id,
+            &PitchforkToml::read_global_slugs(),
+        );
 
         RunOptions {
             id: id.clone(),

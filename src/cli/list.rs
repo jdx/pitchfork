@@ -97,6 +97,13 @@ impl List {
         let ns_filter = NamespaceFilter::from_flags(&self.namespace, self.project)?;
         let mut entries = get_all_daemons(&client, &ns_filter).await?;
         let global_slugs = PitchforkToml::read_global_slugs();
+        // Hostnames are derived from where each daemon's config lives, so the
+        // full cross-namespace config is needed to build them.
+        let host_config = s
+            .proxy
+            .enable
+            .then(PitchforkToml::all_merged_all_namespaces)
+            .and_then(|r| r.ok());
 
         if !self.status.is_empty() {
             entries.retain(|entry| {
@@ -144,12 +151,23 @@ impl List {
                         && (entry.daemon.active_port.is_some()
                             || !entry.daemon.resolved_port.is_empty())
                     {
-                        let slug = PitchforkToml::find_slug_for_daemon_in_registry(
+                        let host = crate::proxy::hostname::host_for_daemon(
                             &entry.id,
+                            host_config
+                                .as_ref()
+                                .and_then(|pt| pt.daemons.get(&entry.id)),
                             &global_slugs,
                         );
-                        build_proxy_url(slug.as_deref(), &s)
-                            .map(|url| (url, proxy_tls_mode(slug.as_deref(), &global_slugs)))
+                        build_proxy_url(host.as_deref(), &s).map(|url| {
+                            let mode = proxy_tls_mode(
+                                &entry.id,
+                                host_config
+                                    .as_ref()
+                                    .and_then(|pt| pt.daemons.get(&entry.id)),
+                                &global_slugs,
+                            );
+                            (url, mode)
+                        })
                     } else {
                         None
                     };
@@ -166,8 +184,9 @@ impl List {
                         oneshot: entry.daemon.oneshot,
                         disabled: entry.is_disabled,
                         available: entry.is_available,
+                        proxy_url: proxy_url.clone(),
+                        url: proxy_url,
                         proxy_tls,
-                        proxy_url,
                         error: entry.daemon.status.error_message(),
                         active_port: entry.daemon.active_port,
                         port: entry.daemon.resolved_port.clone(),
@@ -213,13 +232,19 @@ impl List {
             // co-occur, so color follows priority: error > disabled > proxy.
             let error_msg = entry.daemon.status.error_message().unwrap_or_default();
             let proxy_url = if s.proxy.enable {
-                let slug =
-                    PitchforkToml::find_slug_for_daemon_in_registry(&entry.id, &global_slugs);
-                build_proxy_url(slug.as_deref(), &s)
+                let daemon_config = host_config
+                    .as_ref()
+                    .and_then(|pt| pt.daemons.get(&entry.id));
+                let host = crate::proxy::hostname::host_for_daemon(
+                    &entry.id,
+                    daemon_config,
+                    &global_slugs,
+                );
+                build_proxy_url(host.as_deref(), &s)
                     .filter(|_| {
                         entry.daemon.active_port.is_some() || !entry.daemon.resolved_port.is_empty()
                     })
-                    .map(|url| (url, proxy_tls_mode(slug.as_deref(), &global_slugs)))
+                    .map(|url| (url, proxy_tls_mode(&entry.id, daemon_config, &global_slugs)))
             } else {
                 None
             };
@@ -266,31 +291,29 @@ impl List {
 
 /// The TLS mode the proxy uses for a daemon's hostname.
 ///
-/// Resolved exactly as the router resolves it: from the config in the slug's
-/// own registered directory, reached through the same slug entry the URL was
-/// built from.
-///
-/// Reading the daemon's recorded state instead would report the mode it
-/// started with, and reading config rooted at the current directory would miss
-/// a slug whose project is registered by directory rather than as a namespace.
-/// Either way the displayed mode could disagree with the live route. A slug
-/// that resolves to no directory, or a directory whose config no longer
-/// describes the daemon, reports `terminate`, the mode it would be routed
-/// with.
+/// Read from the daemon's own config, which is where the router reads it too:
+/// its recorded state would report the mode it started with. When the merged
+/// config does not describe the daemon — a project reachable only through a
+/// legacy slug's registered directory — the slug's directory is consulted the
+/// way the router consults it, and anything still unresolved reports
+/// `terminate`, the mode it would be routed with.
 pub fn proxy_tls_mode(
-    slug: Option<&str>,
+    id: &crate::daemon_id::DaemonId,
+    config: Option<&crate::pitchfork_toml::PitchforkTomlDaemon>,
     global_slugs: &indexmap::IndexMap<String, crate::pitchfork_toml::SlugEntry>,
 ) -> crate::pitchfork_toml::ProxyTlsMode {
-    let Some(entry) = slug.and_then(|slug| global_slugs.get(slug)) else {
+    if let Some(config) = config {
+        return config.proxy_tls.unwrap_or_default();
+    }
+
+    let slug = PitchforkToml::find_slug_for_daemon_in_registry(id, global_slugs);
+    let Some(entry) = slug.as_deref().and_then(|slug| global_slugs.get(slug)) else {
         return crate::pitchfork_toml::ProxyTlsMode::default();
     };
     let Some(dir) = entry.resolve_dir() else {
         return crate::pitchfork_toml::ProxyTlsMode::default();
     };
-    let daemon_name = entry
-        .daemon
-        .as_deref()
-        .unwrap_or_else(|| slug.expect("slug is Some when its registry entry was found"));
+    let daemon_name = entry.daemon.as_deref().unwrap_or_else(|| id.name());
     crate::proxy::server::read_proxy_tls_route(
         &dir,
         entry.resolve_namespace().as_deref(),
@@ -300,45 +323,64 @@ pub fn proxy_tls_mode(
     .unwrap_or_default()
 }
 
-/// Build the proxy URL for a daemon based on its slug and proxy settings.
+/// Build the proxy URL for a daemon's hostname.
 ///
-/// Only daemons with a `slug` are routable through the proxy — no slug means
-/// not proxied.  This matches the routing logic in `resolve_target_port`.
-///
-/// Returns `None` if:
-/// - The daemon has no slug (not proxied)
-/// - `proxy.port` is invalid (out of range or zero)
-pub fn build_proxy_url(slug: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
-    // No slug = not proxied.
-    let slug = slug?;
-
-    let scheme = if s.proxy.https { "https" } else { "http" };
-    let tld = &s.proxy.tld;
-    let standard_port = if s.proxy.https { 443u16 } else { 80u16 };
-
-    // Return None for an invalid port so callers don't display a broken URL.
-    let effective_port = u16::try_from(s.proxy.port).ok().filter(|&p| p > 0)?;
-
-    let host = format!("{slug}.{tld}");
-
-    // Omit port for standard ports (80 for http, 443 for https)
-    Some(if effective_port == standard_port {
-        format!("{scheme}://{host}")
-    } else {
-        format!("{scheme}://{host}:{effective_port}")
-    })
+/// Re-exported here because the CLI display paths grew up around this name; the
+/// implementation lives in [`crate::proxy::build_proxy_url`].
+pub fn build_proxy_url(host: Option<&str>, s: &crate::settings::Settings) -> Option<String> {
+    crate::proxy::build_proxy_url(host, s)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pitchfork_toml::{ProxyTlsMode, SlugEntry};
+    use crate::daemon_id::DaemonId;
+    use crate::pitchfork_toml::{PitchforkTomlDaemon, ProxyTlsMode, SlugEntry};
 
-    /// A slug whose project is registered by directory reports the mode from
-    /// that directory's config, which is the one the router reads. Config
-    /// rooted at the working directory would not describe this daemon at all.
+    fn slug_entry(
+        dir: &std::path::Path,
+        daemon: Option<&str>,
+    ) -> indexmap::IndexMap<String, SlugEntry> {
+        let mut slugs = indexmap::IndexMap::new();
+        slugs.insert(
+            "dirslug".to_string(),
+            SlugEntry {
+                dir: Some(dir.to_path_buf()),
+                namespace: None,
+                daemon: daemon.map(str::to_string),
+            },
+        );
+        slugs
+    }
+
+    /// The daemon's own config is authoritative, which is where the router
+    /// reads the mode from too.
     #[test]
-    fn test_proxy_tls_mode_reads_the_slug_directory() {
+    fn test_proxy_tls_mode_reads_the_daemon_config() {
+        let id = DaemonId::try_new("proj", "secure").unwrap();
+        let config = PitchforkTomlDaemon {
+            proxy_tls: Some(ProxyTlsMode::Passthrough),
+            ..PitchforkTomlDaemon::default()
+        };
+        assert_eq!(
+            proxy_tls_mode(&id, Some(&config), &indexmap::IndexMap::new()),
+            ProxyTlsMode::Passthrough
+        );
+
+        // A daemon that leaves the setting out terminates.
+        let plain = PitchforkTomlDaemon::default();
+        assert_eq!(
+            proxy_tls_mode(&id, Some(&plain), &indexmap::IndexMap::new()),
+            ProxyTlsMode::Terminate
+        );
+    }
+
+    /// With no config entry — a project reachable only through a legacy slug's
+    /// registered directory — the slug's own directory is consulted, the way
+    /// the router consults it. Config rooted at the working directory would not
+    /// describe this daemon at all.
+    #[test]
+    fn test_proxy_tls_mode_falls_back_to_the_slug_directory() {
         let dir = tempfile::tempdir().unwrap();
         let project = dir.path().join("dirslug-project");
         std::fs::create_dir_all(&project).unwrap();
@@ -348,20 +390,9 @@ mod tests {
         )
         .unwrap();
 
-        let mut slugs = indexmap::IndexMap::new();
-        slugs.insert(
-            "dirslug".to_string(),
-            SlugEntry {
-                dir: Some(project.clone()),
-                namespace: None,
-                daemon: Some("secure".to_string()),
-            },
-        );
-
-        assert_eq!(
-            proxy_tls_mode(Some("dirslug"), &slugs),
-            ProxyTlsMode::Passthrough
-        );
+        let id = DaemonId::try_new("dirslug-project", "secure").unwrap();
+        let slugs = slug_entry(&project, Some("secure"));
+        assert_eq!(proxy_tls_mode(&id, None, &slugs), ProxyTlsMode::Passthrough);
     }
 
     /// A slug whose daemon name defaults to the slug itself resolves the same
@@ -378,42 +409,21 @@ mod tests {
         )
         .unwrap();
 
-        let mut slugs = indexmap::IndexMap::new();
-        slugs.insert(
-            "dirslug".to_string(),
-            SlugEntry {
-                dir: Some(project.clone()),
-                namespace: None,
-                daemon: None,
-            },
-        );
-        assert_eq!(
-            proxy_tls_mode(Some("dirslug"), &slugs),
-            ProxyTlsMode::Passthrough
-        );
+        let id = DaemonId::try_new("named-like-slug", "dirslug").unwrap();
+        let slugs = slug_entry(&project, None);
+        assert_eq!(proxy_tls_mode(&id, None, &slugs), ProxyTlsMode::Passthrough);
 
-        // No slug, an unregistered slug, and a slug pointing at a directory
-        // with no matching daemon all fall back to terminate.
-        assert_eq!(proxy_tls_mode(None, &slugs), ProxyTlsMode::Terminate);
+        // A daemon that no slug names, and a slug pointing at a directory with
+        // no matching daemon, both fall back to terminate.
+        let unknown = DaemonId::try_new("other", "nothing").unwrap();
         assert_eq!(
-            proxy_tls_mode(Some("missing"), &slugs),
+            proxy_tls_mode(&unknown, None, &slugs),
             ProxyTlsMode::Terminate
         );
 
         let empty = dir.path().join("empty-project");
         std::fs::create_dir_all(&empty).unwrap();
-        let mut other = indexmap::IndexMap::new();
-        other.insert(
-            "dirslug".to_string(),
-            SlugEntry {
-                dir: Some(empty),
-                namespace: None,
-                daemon: None,
-            },
-        );
-        assert_eq!(
-            proxy_tls_mode(Some("dirslug"), &other),
-            ProxyTlsMode::Terminate
-        );
+        let other = slug_entry(&empty, None);
+        assert_eq!(proxy_tls_mode(&id, None, &other), ProxyTlsMode::Terminate);
     }
 }
