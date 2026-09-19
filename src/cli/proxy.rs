@@ -120,6 +120,19 @@ impl Setup {
     async fn run(&self) -> Result<()> {
         use crate::proxy::setup;
 
+        // Setup elevates only the steps that need it. Run whole under sudo, it
+        // would record its setups, generate the CA and pick paths in root's
+        // state directory, while the supervisor runs as the user from theirs:
+        // the CA trusted would not be the one served, and the records undo
+        // reads would be somewhere the user's `--undo` never looks.
+        if let Some(user) = setup::invoked_through_sudo() {
+            miette::bail!(
+                "Run `pitchfork proxy setup` as {user}, without sudo. It asks for sudo \
+                 itself for the steps that need it, and running it as root would set up \
+                 root's pitchfork instead of yours."
+            );
+        }
+
         let s = crate::settings::settings();
         if !s.proxy.enable && !self.undo {
             println!("Proxy: disabled");

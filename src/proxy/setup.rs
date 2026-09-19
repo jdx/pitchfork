@@ -1669,6 +1669,16 @@ pub fn plan_undo(ctx: &SetupContext) -> Plan {
 
 /// Whether the current process is already root, in which case `sudo` is
 /// unnecessary (and may not even be installed).
+/// The user who ran this process through sudo, when it is running as root
+/// on their behalf rather than as a genuine root login.
+pub fn invoked_through_sudo() -> Option<String> {
+    sudo_user(is_root(), std::env::var("SUDO_USER").ok())
+}
+
+fn sudo_user(root: bool, sudo_user: Option<String>) -> Option<String> {
+    sudo_user.filter(|u| root && !u.is_empty() && u != "root")
+}
+
 fn is_root() -> bool {
     #[cfg(unix)]
     {
@@ -4603,6 +4613,19 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
             pf_anchor_rules(443, 8443, "127.0.0.1")
                 .contains("lo0 inet proto tcp from any to any port 443 -> 127.0.0.1 port 8443")
         );
+    }
+
+    #[test]
+    fn only_a_sudo_elevated_run_counts_as_sudo() {
+        assert_eq!(
+            sudo_user(true, Some("alice".into())).as_deref(),
+            Some("alice")
+        );
+        // A genuine root login (a container, say) runs the supervisor as root too.
+        assert_eq!(sudo_user(true, None), None);
+        assert_eq!(sudo_user(true, Some("root".into())), None);
+        // SUDO_USER left in the environment of an unprivileged process.
+        assert_eq!(sudo_user(false, Some("alice".into())), None);
     }
 
     #[test]
