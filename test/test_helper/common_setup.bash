@@ -90,8 +90,15 @@ _common_setup() {
 
   # Remember which supervisor this test started, so teardown can still stop it
   # if the test rewrites the state file and loses the record `supervisor stop`
-  # relies on.
-  _SETUP_SUPERVISOR_PID="$(_recorded_supervisor_pid)"
+  # relies on. The supervisor flushes its state asynchronously, so the record
+  # may land shortly after `supervisor start` returns; poll briefly for it.
+  local _
+  _SETUP_SUPERVISOR_PID=""
+  for _ in $(seq 1 30); do
+    _SETUP_SUPERVISOR_PID="$(_recorded_supervisor_pid)"
+    [[ -n "$_SETUP_SUPERVISOR_PID" ]] && break
+    sleep 0.1
+  done
   _SETUP_SUPERVISOR_IDENTITY=""
   if [[ -n "$_SETUP_SUPERVISOR_PID" ]]; then
     _SETUP_SUPERVISOR_IDENTITY="$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")"
@@ -151,14 +158,15 @@ _stop_leaked_supervisors() {
   ((${#ids[@]})) || return 0
 
   echo "# teardown: stopping leaked supervisor(s): ${ids[*]%%:*}" >&3
-  # SIGTERM first so the supervisor stops its own daemons, then SIGKILL.
-  _signal_supervisors TERM "${ids[@]}"
+  # SIGTERM first so the supervisor stops its own daemons, then SIGKILL. A
+  # non-zero status only means every candidate already exited.
+  _signal_supervisors TERM "${ids[@]}" || return 0
   local _
   for _ in $(seq 1 50); do
     _signal_supervisors 0 "${ids[@]}" || return 0
     sleep 0.1
   done
-  _signal_supervisors KILL "${ids[@]}"
+  _signal_supervisors KILL "${ids[@]}" || true
 }
 
 # Send signal $1 to each identity in $2.. whose process still matches it.
