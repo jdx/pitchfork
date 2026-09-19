@@ -1041,17 +1041,22 @@ enum SniProbe {
 ///
 /// `timeout` bounds the whole probe, including a read that never completes:
 /// a peer that opens a connection and then sends nothing more is given up on
-/// rather than holding the connection task open. Note that a client which
-/// sends part of a hello and then closes cannot be detected here: `peek` keeps
-/// returning the buffered bytes rather than reporting end of file, so such a
-/// connection is held until the timeout and then reported as
-/// [`SniProbe::Undetermined`].
+/// rather than holding the connection task open. A client that sends part of
+/// a hello and then closes is noticed as soon as its close arrives, even
+/// though `peek` keeps returning the buffered bytes rather than end of file,
+/// and is reported as [`SniProbe::Undetermined`] without waiting out the
+/// timeout.
 #[cfg(feature = "proxy-tls")]
 async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniProbe {
     use crate::proxy::sni::{SniPeek, parse_sni};
 
+    const MIN_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+    const MAX_PAUSE: std::time::Duration = std::time::Duration::from_millis(200);
+
     let deadline = tokio::time::Instant::now() + timeout;
     let mut buf = vec![0u8; 2048];
+    let mut last_n = 0;
+    let mut pause = MIN_PAUSE;
 
     loop {
         // The deadline has to bound the read itself: a peer that opens a
@@ -1091,9 +1096,31 @@ async fn peek_sni_host(stream: &TcpStream, timeout: std::time::Duration) -> SniP
             log::debug!("Timed out waiting for a complete ClientHello ({n} bytes read)");
             return SniProbe::Undetermined;
         }
-        // Peeked data stays in the socket buffer, so `readable()` would return
-        // immediately and spin. Sleep briefly instead and re-peek.
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        // Peeked data stays in the socket buffer, so the socket always reads as
+        // readable and waiting on that would spin. Its readiness does record
+        // the peer's close, though, which `peek` cannot report while bytes are
+        // still buffered: a client that sent part of a hello and hung up will
+        // never finish it.
+        match stream.ready(tokio::io::Interest::READABLE).await {
+            Ok(ready) if ready.is_read_closed() => {
+                log::debug!("Client closed after {n} bytes of an incomplete ClientHello");
+                return SniProbe::Undetermined;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::debug!("Failed to poll a TLS connection: {e}");
+                return SniProbe::Undetermined;
+            }
+        }
+        // Re-peek soon while the hello is still arriving, and back off while
+        // it has stalled, so a slow client is not polled hundreds of times.
+        pause = if n > last_n {
+            MIN_PAUSE
+        } else {
+            (pause * 2).min(MAX_PAUSE)
+        };
+        last_n = n;
+        tokio::time::sleep_until((tokio::time::Instant::now() + pause).min(deadline)).await;
     }
 }
 
@@ -4058,6 +4085,18 @@ mod tests {
         gap: std::time::Duration,
         timeout: std::time::Duration,
     ) -> (SniProbe, Vec<u8>) {
+        probe_over_socket_then(writes, gap, timeout, false).await
+    }
+
+    /// [`probe_over_socket`], optionally shutting down the client's write side
+    /// once everything is sent.
+    #[cfg(feature = "proxy-tls")]
+    async fn probe_over_socket_then(
+        writes: Vec<Vec<u8>>,
+        gap: std::time::Duration,
+        timeout: std::time::Duration,
+        close_after: bool,
+    ) -> (SniProbe, Vec<u8>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -4072,6 +4111,9 @@ mod tests {
                 sock.write_all(&chunk).await.unwrap();
                 sock.flush().await.unwrap();
                 tokio::time::sleep(gap).await;
+            }
+            if close_after {
+                sock.shutdown().await.unwrap();
             }
             // Hold the connection open so the server can read back what it
             // only peeked at.
@@ -4132,6 +4174,30 @@ mod tests {
         .await;
 
         assert_eq!(probe, SniProbe::Undetermined);
+    }
+
+    /// A client that sends part of a hello and then closes is given up on as
+    /// soon as the close arrives, not after the whole timeout: `peek` keeps
+    /// returning the buffered bytes, so only the socket's readiness shows it.
+    #[cfg(feature = "proxy-tls")]
+    #[tokio::test]
+    async fn test_peek_sni_host_notices_a_client_that_closes_mid_hello() {
+        let wire = client_hello_wire("api.localhost");
+        let truncated = wire[..wire.len() / 2].to_vec();
+        let started = std::time::Instant::now();
+        let (probe, _) = probe_over_socket_then(
+            vec![truncated],
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(5),
+            true,
+        )
+        .await;
+
+        assert_eq!(probe, SniProbe::Undetermined);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "the probe must end when the client closes, not at its deadline"
+        );
     }
 
     /// A peer that opens a connection and then sends nothing is given up on
