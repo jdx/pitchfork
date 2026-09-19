@@ -2042,7 +2042,7 @@ fn already_done(action: &Action) -> bool {
         }
         // Both reload rules the other steps may just have changed.
         Action::EnablePf { .. } | Action::ReleasePf { .. } => false,
-        Action::GenerateCa { cert, key } => cert.exists() && key.exists(),
+        Action::GenerateCa { cert, key } => ca_pair_problem(cert, key).is_none(),
         Action::TrustCa { path } => crate::proxy::trust::is_ca_trusted(path),
         // Skipped only when the certificate is present and demonstrably not
         // trusted. Two absences are deliberately not enough. A missing PEM is
@@ -2391,10 +2391,35 @@ fn check_grant(path: &Path, caps: Option<&[String]>) -> Result<()> {
     Ok(())
 }
 
+/// Why the CA pair cannot be used, or `None` when it is ready to trust.
+fn ca_pair_problem(cert: &Path, key: &Path) -> Option<String> {
+    if !cert.exists() || !key.exists() {
+        return Some("not generated yet".to_string());
+    }
+    #[cfg(feature = "proxy-tls")]
+    {
+        crate::proxy::server::ca_pair_problem(cert, key)
+    }
+    #[cfg(not(feature = "proxy-tls"))]
+    {
+        None
+    }
+}
+
 /// Generate the local CA pair, as the supervisor does on its first HTTPS start.
+///
+/// A pair that exists but cannot sign — truncated, or a key from another CA —
+/// is replaced rather than trusted: the proxy cannot start with it, so there
+/// is nothing in it worth keeping.
 fn generate_ca(cert: &Path, key: &Path) -> Result<()> {
     #[cfg(feature = "proxy-tls")]
     {
+        if cert.exists()
+            && key.exists()
+            && let Some(problem) = ca_pair_problem(cert, key)
+        {
+            println!("  the existing CA cannot be used ({problem}); generating a new one");
+        }
         crate::proxy::server::generate_ca(cert, key)
     }
     #[cfg(not(feature = "proxy-tls"))]

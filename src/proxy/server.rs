@@ -2228,6 +2228,47 @@ impl rustls::server::ResolvesServerCert for SniCertResolver {
     }
 }
 
+/// Why the CA pair at `cert` and `key` cannot sign certificates, if it cannot.
+///
+/// Existence is not enough: a truncated file or a key that belongs to another
+/// certificate stops the HTTPS listener from starting, and trusting such a
+/// certificate would install something the proxy never serves from.
+#[cfg(feature = "proxy-tls")]
+pub(crate) fn ca_pair_problem(cert: &std::path::Path, key: &std::path::Path) -> Option<String> {
+    use rcgen::PublicKeyData;
+
+    let cert_pem = match std::fs::read_to_string(cert) {
+        Ok(p) => p,
+        Err(e) => return Some(format!("cannot read {}: {e}", cert.display())),
+    };
+    let key_pem = match std::fs::read_to_string(key) {
+        Ok(p) => p,
+        Err(e) => return Some(format!("cannot read {}: {e}", key.display())),
+    };
+    let key_pair = match rcgen::KeyPair::from_pem(&key_pem) {
+        Ok(k) => k,
+        Err(e) => return Some(format!("cannot parse {}: {e}", key.display())),
+    };
+    let Some(Ok(der)) = rustls_pemfile::certs(&mut cert_pem.as_bytes()).next() else {
+        return Some(format!("no certificate in {}", cert.display()));
+    };
+    let parsed = match x509_parser::parse_x509_certificate(&der) {
+        Ok((_, c)) => c,
+        Err(e) => return Some(format!("cannot parse {}: {e}", cert.display())),
+    };
+    if parsed.public_key().subject_public_key.data.as_ref() != key_pair.der_bytes() {
+        return Some(format!(
+            "{} is not the key for {}",
+            key.display(),
+            cert.display()
+        ));
+    }
+    if let Err(e) = rcgen::Issuer::from_ca_cert_pem(&cert_pem, key_pair) {
+        return Some(format!("{} cannot sign certificates: {e}", cert.display()));
+    }
+    None
+}
+
 /// A file name for `domain`'s cached certificate, distinct for distinct names.
 ///
 /// Letters, digits, `-` and `.` are kept, since they are safe in a file name
@@ -4225,6 +4266,24 @@ mod tests {
             "routed",
             "`any` did not deliver the POST to the handler"
         );
+    }
+
+    #[cfg(feature = "proxy-tls")]
+    #[test]
+    fn a_ca_pair_is_checked_not_just_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = (dir.path().join("ca.pem"), dir.path().join("ca-key.pem"));
+        generate_ca(&cert, &key).unwrap();
+        assert_eq!(ca_pair_problem(&cert, &key), None);
+
+        // A key from a different CA.
+        let (other_cert, other_key) = (dir.path().join("b.pem"), dir.path().join("b-key.pem"));
+        generate_ca(&other_cert, &other_key).unwrap();
+        assert!(ca_pair_problem(&cert, &other_key).is_some());
+
+        // A truncated certificate.
+        std::fs::write(&cert, "-----BEGIN CERTIFICATE-----\nAAAA\n").unwrap();
+        assert!(ca_pair_problem(&cert, &key).is_some());
     }
 
     #[cfg(feature = "proxy-tls")]
