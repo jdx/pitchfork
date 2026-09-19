@@ -166,7 +166,7 @@ Never expose the API to a public network without authentication. The bundled web
 ## API reference
 
 See the [HTTP API reference](/reference/http-api) for daemon control, log streaming,
-namespace management, and response examples.
+namespace management, and [project and stack data](/reference/http-api#get-api-projects).
 
 ## Features
 
@@ -184,6 +184,93 @@ Control daemons directly from the browser:
 - **Stop** — Gracefully stop a running daemon
 - **Restart** — Stop and start a daemon
 - **Enable/Disable** — Control whether a daemon can be started
+
+### Projects and stacks
+
+Open **Projects** to browse registered projects and their Git worktrees or jj
+workspaces. Each worktree has a **stack**: the daemon groups defined by its
+project configuration.
+
+Opening a project or stack page never starts a daemon. Use the start or restart
+buttons to run services. Visiting a daemon's proxy hostname can still start
+that daemon on demand.
+
+#### Find a project
+
+Projects come from the [namespace registry](/reference/configuration#namespace-registry).
+To add a project, register its directory in your user config:
+
+```toml
+# ~/.config/pitchfork/config.toml
+[namespaces.shop]
+dir = "/path/to/shop"
+```
+
+The project page lists each worktree's namespace and daemon counts, including
+configured daemons that have never run. Select a worktree to open its stack;
+the primary checkout's stack also appears on the project page.
+**Last activity** shows the start time of the most recently started daemon
+still running; it is empty when no daemons are running.
+
+A registered linked worktree appears under its main checkout when that checkout
+is also registered. Otherwise, it appears as a separate project containing only
+that worktree. Deleted project directories remain listed as **missing** until
+you remove their registry entries.
+
+#### Run a stack
+
+Define groups in your project's `pitchfork.toml` to control daemons together:
+
+```toml
+# shop/pitchfork.toml
+[daemons.api]
+run = "npm run api"
+
+[daemons.worker]
+run = "npm run worker"
+
+[groups.default]
+daemons = ["api", "worker"]
+```
+
+The `default` group appears first, with **Start stack**, **Stop stack**, and
+**Restart stack** buttons. In this example, they control `shop/api` and
+`shop/worker`. Stop runs in reverse declaration order: worker, then API.
+Other groups have their own start, stop, and restart buttons. Daemons outside
+any group appear under **ungrouped**, and each daemon has individual controls
+and a link to its logs.
+
+The stack uses groups from the worktree's project configuration chain,
+excluding user and system config files. See
+[daemon groups](/reference/configuration#daemon-groups) for group syntax and
+merge rules.
+
+#### Resolve unavailable actions
+
+Start and Restart are disabled for daemons whose configuration the supervisor
+cannot find, and for groups containing those daemons. Stop remains available.
+To make a worktree's daemons startable, register its directory under
+`[namespaces]` in your user config, or run `pitchfork proxy add` from that
+worktree, then reload the page. If a group references a daemon in another
+namespace, restore or register that namespace's directory instead.
+
+The page also reports unreadable configuration files and group members that do
+not match a known daemon. Correct the configuration to restore the missing
+groups or members. Daemons belonging to a missing directory cannot be started
+or restarted; restore the directory or remove its stale registry entry.
+
+#### Open a project by hostname
+
+With the proxy enabled, `<project>.<tld>` opens the project page and
+`<worktree>.<project>.<tld>` opens the worktree's stack. For example, with
+`proxy.tld = "test"`, use `shop.test` or `feature-a.shop.test`.
+These addresses redirect to `/projects/...` on the web UI's address; use the
+resulting URL for bookmarks.
+
+If the web UI is off, the hostname explains how to enable it. If the checkout
+has no registered project page, it explains how to register the directory.
+See [reserved addresses](/guides/port-management#reserved-addresses-and-conflicts)
+for hostname rules and conflicts.
 
 ### Live Logs
 

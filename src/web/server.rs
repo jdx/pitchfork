@@ -97,6 +97,12 @@ fn api_router(token: String) -> Router {
             axum::routing::delete(routes::api::namespaces::remove),
         )
         .route("/api/proxies", get(routes::api::proxies::list))
+        .route("/api/projects", get(routes::api::projects::list))
+        .route("/api/projects/{project}", get(routes::api::projects::show))
+        .route(
+            "/api/projects/{project}/{worktree}",
+            get(routes::api::projects::stack),
+        )
         .route(
             "/api/processes/{id}/tree",
             get(routes::api::processes::tree),

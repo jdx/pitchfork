@@ -60,8 +60,8 @@ export interface DaemonEntry {
 
 export interface NamespaceEntry {
   name: string
-  daemon_count: number
-  is_active: boolean
+  /** Project directory the namespace resolves daemons from. */
+  dir: string
 }
 
 export interface NamespaceRegistration {
@@ -117,4 +117,93 @@ export interface ProcessTree {
   thread_count: number
   status: string
   children: ProcessTree[]
+}
+
+export interface DaemonCounts {
+  total: number
+  running: number
+  stopped: number
+  /** Oneshot daemons that ran and exited successfully. */
+  completed: number
+  /** On the way up or down: waiting or stopping. */
+  transitioning: number
+  failed: number
+  available: number
+}
+
+export interface ProjectSummary {
+  name: string
+  dir: string
+  worktree_count: number
+  /** False when the registered directory no longer exists. */
+  dir_exists: boolean
+  daemons: DaemonCounts
+  last_activity: string | null
+  url: string
+  api_url: string
+}
+
+export interface WorktreeSummary {
+  name: string
+  branch: string
+  path: string
+  /** Null when no namespace can be derived for this worktree. */
+  namespace: string | null
+  /** Why no namespace could be derived, when none could. */
+  namespace_error?: string
+  is_primary: boolean
+  /** False when the supervisor cannot resolve config for some of its daemons. */
+  can_start: boolean
+  /** False when the worktree directory no longer exists. */
+  dir_exists: boolean
+  group_count: number
+  daemons: DaemonCounts
+  last_activity: string | null
+  url: string
+  api_url: string
+  /** Absent when pitchfork does not track data directories for the daemons. */
+  disk_usage_bytes?: number
+}
+
+export interface StackGroup {
+  name: string
+  is_default: boolean
+  daemons: DaemonEntry[]
+  missing: string[]
+  running: number
+  total: number
+}
+
+export interface Stack {
+  project: string
+  worktree: string
+  branch: string
+  /** Null when no namespace can be derived for this worktree. */
+  namespace: string | null
+  /** Why no namespace could be derived, when none could. */
+  namespace_error?: string
+  dir: string
+  is_primary: boolean
+  /** False when `unresolvable_daemons` is non-empty. */
+  can_start: boolean
+  /** Listed daemons the supervisor has no config for. */
+  unresolvable_daemons: string[]
+  /** False when the worktree directory no longer exists. */
+  dir_exists: boolean
+  /** Why the worktree's config could not be read, when it could not be. */
+  config_error?: string
+  groups: StackGroup[]
+  ungrouped: DaemonEntry[]
+  daemons: DaemonCounts
+  url: string
+}
+
+export interface Project {
+  name: string
+  dir: string
+  dir_exists: boolean
+  daemons: DaemonCounts
+  last_activity: string | null
+  worktrees: WorktreeSummary[]
+  stack?: Stack
 }

@@ -1,4 +1,4 @@
-mod routes;
+pub(crate) mod routes;
 mod server;
 mod static_files;
 

@@ -1,6 +1,15 @@
-import { ref, shallowRef, watchEffect, type Ref } from 'vue'
+import { computed, ref, shallowRef, watchEffect, type Ref } from 'vue'
 import { toast } from 'vue-sonner'
-import type { DaemonEntry, DaemonStats, NamespaceEntry, ProcessTree, StructuredLogEntry } from '@/types/api'
+import type {
+  DaemonEntry,
+  DaemonStats,
+  NamespaceEntry,
+  ProcessTree,
+  Project,
+  ProjectSummary,
+  Stack,
+  StructuredLogEntry,
+} from '@/types/api'
 
 const API_BASE = (() => {
   const base = (window as any).__PITCHFORK_BASE__ as string | undefined
@@ -112,6 +121,27 @@ function daemonName(id: string): string {
   return id.split('.').pop() ?? id
 }
 
+/**
+ * Send one daemon control request, distinguishing a real failure from a member
+ * that is already in the requested state. The endpoints answer the latter with
+ * `{ok: false, noop: true}`, which is not a failure of the group action.
+ */
+async function daemonAction(id: string, endpoint: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/daemons/${encodeURIComponent(id)}/${endpoint}`,
+      { method: 'POST', headers: getAuthHeaders() },
+    )
+    const body = await res.json().catch(() => null) as
+      { ok?: boolean; noop?: boolean; error?: string } | null
+    if (!res.ok) return body?.error ?? `HTTP ${res.status}`
+    if (body?.ok === false && body.noop !== true) return body.error ?? 'unknown error'
+    return null
+  } catch (e: any) {
+    return e.message ?? 'unknown error'
+  }
+}
+
 async function toastAction(
   name: string,
   verb: string,
@@ -156,30 +186,29 @@ export function useDaemonActions() {
     }
   }
 
+  // A daemon already in the requested state answers `noop`, which is not a
+  // failure: the click got what it asked for, so it is not reported as one.
+  function act(id: string, verb: string, endpoint: string) {
+    return toastAction(daemonName(id), verb, wrap(id, async () => {
+      const failure = await daemonAction(id, endpoint)
+      if (failure) throw new Error(failure)
+    }))
+  }
+
   function start(id: string) {
-    return toastAction(daemonName(id), 'Start', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/start`, { method: 'POST' }),
-    ))
+    return act(id, 'Start', 'start')
   }
   function stop(id: string) {
-    return toastAction(daemonName(id), 'Stop', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
-    ))
+    return act(id, 'Stop', 'stop')
   }
   function restart(id: string) {
-    return toastAction(daemonName(id), 'Restart', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/restart`, { method: 'POST' }),
-    ))
+    return act(id, 'Restart', 'restart')
   }
   function enable(id: string) {
-    return toastAction(daemonName(id), 'Enable', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/enable`, { method: 'POST' }),
-    ))
+    return act(id, 'Enable', 'enable')
   }
   function disable(id: string) {
-    return toastAction(daemonName(id), 'Disable', wrap(id, () =>
-      api(`/daemons/${encodeURIComponent(id)}/disable`, { method: 'POST' }),
-    ))
+    return act(id, 'Disable', 'disable')
   }
   return { start, stop, restart, enable, disable, acting }
 }
@@ -484,4 +513,172 @@ export function useProcessTree(id: Ref<string>, pollInterval = 3000) {
   })
 
   return { tree, loading, error, refresh: fetchTree }
+}
+
+/**
+ * Poll a JSON endpoint, keeping the last good value on transient errors.
+ *
+ * Requests never overlap, and a request made while one is in flight is not
+ * dropped: it runs as soon as the current one finishes. That matters after a
+ * start or stop, where the refresh must observe the new state rather than let
+ * an older in-flight poll write the pre-action one back.
+ */
+function usePolledResource<T>(
+  path: Ref<string | null>,
+  pollInterval = 3000,
+) {
+  const data = shallowRef<T | null>(null)
+  const loading = ref(true)
+  const error = ref<string | null>(null)
+  // Bumped when the polled path changes, so a response for the previous
+  // target is dropped instead of rendering under the new one.
+  let generation = 0
+  let active: Promise<void> | null = null
+  let queued = false
+
+  async function fetchOnce() {
+    const target = path.value
+    if (!target) return
+    const current = generation
+    try {
+      const value = await api<T>(target)
+      if (current !== generation) return
+      data.value = value
+      error.value = null
+    } catch (e: any) {
+      if (current !== generation) return
+      error.value = e.message ?? 'Unknown error'
+    } finally {
+      // A response for an earlier path must not clear the new one's spinner.
+      if (current === generation) loading.value = false
+    }
+  }
+
+  function refresh(): Promise<void> {
+    if (active) {
+      // Coalesce concurrent callers into a single follow-up fetch.
+      queued = true
+      return active
+    }
+    active = (async () => {
+      try {
+        do {
+          queued = false
+          await fetchOnce()
+        } while (queued)
+      } finally {
+        active = null
+        queued = false
+      }
+    })()
+    return active
+  }
+
+  watchEffect((onCleanup) => {
+    if (!path.value) return
+    // These views are reused across routes, so drop the previous target's
+    // payload before fetching the new one. Otherwise the old project's
+    // worktrees stay on screen under the new title, and a 404 renders the
+    // previous page next to the error. An in-flight request is left to finish
+    // and discard its result: the generation bump makes it a no-op.
+    generation++
+    data.value = null
+    error.value = null
+    loading.value = true
+    refresh()
+    const timer = setInterval(refresh, pollInterval)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  return { data, loading, error, refresh }
+}
+
+export function useProjects(pollInterval = 5000) {
+  const { data, loading, error, refresh } = usePolledResource<ProjectSummary[]>(
+    ref('/projects'),
+    pollInterval,
+  )
+  const projects = computed(() => data.value ?? [])
+  return { projects, loading, error, refresh }
+}
+
+export function useProject(name: Ref<string>, pollInterval = 3000) {
+  const path = computed(() => `/projects/${encodeURIComponent(name.value)}`)
+  const { data, loading, error, refresh } = usePolledResource<Project>(path, pollInterval)
+  return { project: data, loading, error, refresh }
+}
+
+export function useStack(project: Ref<string>, worktree: Ref<string>, pollInterval = 3000) {
+  const path = computed(
+    () => `/projects/${encodeURIComponent(project.value)}/${encodeURIComponent(worktree.value)}`,
+  )
+  const { data, loading, error, refresh } = usePolledResource<Stack>(path, pollInterval)
+  return { stack: data, loading, error, refresh }
+}
+
+/**
+ * Group actions, run as ordinary per-daemon start/stop/restart requests
+ * against the group's qualified ids. Nothing starts on its own: a stack only
+ * changes state when one of these is clicked.
+ */
+export function useGroupActions() {
+  const acting = ref<Set<string>>(new Set())
+
+  async function run(
+    key: string,
+    verb: 'Start' | 'Stop' | 'Restart',
+    ids: string[],
+    /** Group members with no matching daemon, which cannot be acted on. */
+    missing: string[] = [],
+  ): Promise<void> {
+    if (acting.value.has(key)) return
+    const completed = { Start: 'started', Stop: 'stopped', Restart: 'restarted' }[verb]
+    if (ids.length === 0) {
+      toast.error(`${verb} ${key} failed`, {
+        duration: 4000,
+        description: missing.length
+          ? `no daemon matches ${missing.join(', ')}`
+          : 'the group has no daemons',
+      })
+      return
+    }
+    acting.value = new Set(acting.value).add(key)
+    const endpoint = verb.toLowerCase()
+    // Stop tears the stack down in reverse declaration order so dependents
+    // go away before what they depend on.
+    const order = verb === 'Stop' ? [...ids].reverse() : ids
+    const toastId = toast.loading(`${verb} ${key}...`)
+    const failures: string[] = []
+    try {
+      for (const id of order) {
+        const failure = await daemonAction(id, endpoint)
+        if (failure) failures.push(`${daemonName(id)}: ${failure}`)
+      }
+      toast.dismiss(toastId)
+      const skipped = missing.map(id => `${daemonName(id)}: no matching daemon`)
+      const problems = [...failures, ...skipped]
+      if (problems.length === 0) {
+        toast.success(`${key} ${completed}`, { duration: 2000 })
+      } else if (failures.length < ids.length) {
+        toast.warning(`${key} partially ${completed}`, {
+          duration: 4000,
+          description: problems.join('\n'),
+        })
+      } else {
+        toast.error(`${verb} ${key} failed`, { duration: 4000, description: problems.join('\n') })
+      }
+    } finally {
+      const next = new Set(acting.value)
+      next.delete(key)
+      acting.value = next
+    }
+  }
+
+  return {
+    acting,
+    start: (key: string, ids: string[], missing?: string[]) => run(key, 'Start', ids, missing),
+    stop: (key: string, ids: string[], missing?: string[]) => run(key, 'Stop', ids, missing),
+    restart: (key: string, ids: string[], missing?: string[]) =>
+      run(key, 'Restart', ids, missing),
+  }
 }

@@ -6,7 +6,17 @@ import DaemonCard from './DaemonCard.vue'
 const props = defineProps<{
   daemons: DaemonEntry[]
   prefersCard: boolean
+  /**
+   * Why start/restart is unavailable, per qualified id: daemons of a worktree
+   * whose config the supervisor cannot resolve, or whose directory is gone.
+   * Ids that are absent keep their controls, and the reason is the tooltip.
+   */
+  disabledReasons?: Record<string, string>
 }>()
+
+function reasonFor(qualified: string): string | undefined {
+  return props.disabledReasons?.[qualified]
+}
 
 defineEmits<{ refresh: [] }>()
 </script>
@@ -28,6 +38,7 @@ defineEmits<{ refresh: [] }>()
         v-for="d in daemons"
         :key="d.id.qualified"
         :daemon="d"
+        :actions-disabled-reason="reasonFor(d.id.qualified)"
         @refresh="$emit('refresh')"
       />
     </tbody>
@@ -37,6 +48,7 @@ defineEmits<{ refresh: [] }>()
       v-for="d in daemons"
       :key="d.id.qualified"
       :daemon="d"
+      :actions-disabled-reason="reasonFor(d.id.qualified)"
       @refresh="$emit('refresh')"
     />
   </div>

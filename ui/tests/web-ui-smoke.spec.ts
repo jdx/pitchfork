@@ -16,7 +16,14 @@ type WebSupervisor = {
   cleanup: () => Promise<void>
 }
 
-async function startWebSupervisor(): Promise<WebSupervisor> {
+type SupervisorOptions = {
+  /** Extra project directories to create, keyed by name, with their pitchfork.toml. */
+  projects?: Record<string, string>
+  /** Global config contents, built from the created project directories. */
+  globalConfig?: (dirs: Record<string, string>) => string
+}
+
+async function startWebSupervisor(options: SupervisorOptions = {}): Promise<WebSupervisor> {
   const root = await mkdtemp(path.join(tmpdir(), 'pitchfork-web-ui-'))
   const home = path.join(root, 'home')
   const project = path.join(root, 'project')
@@ -27,6 +34,18 @@ async function startWebSupervisor(): Promise<WebSupervisor> {
     path.join(project, 'pitchfork.toml'),
     `[daemons.smoke]\nrun = "node -e 'setInterval(() => {}, 1000)'"\nready_delay = 0\n`,
   )
+
+  const dirs: Record<string, string> = {}
+  for (const [name, config] of Object.entries(options.projects ?? {})) {
+    const dir = path.join(root, name)
+    await mkdir(dir, { recursive: true })
+    await writeFile(path.join(dir, 'pitchfork.toml'), config)
+    dirs[name] = dir
+  }
+  if (options.globalConfig) {
+    await mkdir(path.join(home, '.config/pitchfork'), { recursive: true })
+    await writeFile(path.join(home, '.config/pitchfork/config.toml'), options.globalConfig(dirs))
+  }
 
   const child = spawn(pitchforkBin, ['supervisor', 'run', '--web-port', '0'], {
     cwd: project,
@@ -134,6 +153,96 @@ test('bundled web UI mounts, loads daemon data, and navigates routes', async ({ 
     await page.goto(`${supervisor.baseUrl}/proxies`)
     await expect(page.getByRole('heading', { name: 'Proxies', exact: true })).toBeVisible()
     await expect(page.getByText('No proxies registered')).toBeVisible()
+
+    expect(failures).toEqual([])
+  } finally {
+    await supervisor.cleanup()
+  }
+})
+
+test('project pages list projects, worktrees, and stack groups without auto-starting', async ({ page }) => {
+  const supervisor = await startWebSupervisor({
+    projects: {
+      shop: [
+        `[daemons.api]`,
+        `run = "node -e 'setInterval(() => {}, 1000)'"`,
+        `ready_delay = 0`,
+        ``,
+        `[daemons.worker]`,
+        `run = "node -e 'setInterval(() => {}, 1000)'"`,
+        `ready_delay = 0`,
+        ``,
+        `[groups.default]`,
+        `daemons = ["api", "worker"]`,
+        ``,
+        `[groups.partial]`,
+        `daemons = ["api", "ghost"]`,
+        ``,
+      ].join('\n'),
+      blog: [
+        `[daemons.site]`,
+        `run = "node -e 'setInterval(() => {}, 1000)'"`,
+        `ready_delay = 0`,
+        ``,
+      ].join('\n'),
+    },
+    globalConfig: dirs => [
+      `[namespaces.shop]`,
+      `dir = "${dirs.shop}"`,
+      ``,
+      `[namespaces.blog]`,
+      `dir = "${dirs.blog}"`,
+      ``,
+    ].join('\n'),
+  })
+  const failures = collectPageFailures(page)
+
+  try {
+    await page.goto(`${supervisor.baseUrl}/projects`)
+    await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'blog', exact: true })).toBeVisible()
+
+    await page.getByRole('link', { name: 'shop', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'shop', exact: true })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'default', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /Stack/ })).toBeVisible()
+
+    // Opening a stack page starts nothing: the daemons are still available.
+    const stackUrl = `${supervisor.baseUrl}/projects/shop/default`
+    await page.goto(stackUrl)
+    await expect(page.getByRole('heading', { name: 'default', level: 1 })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'default', level: 3 })).toBeVisible()
+    // Scoped to the default group: other groups show their own counts.
+    const stack = page.locator('section').filter({
+      has: page.getByRole('heading', { name: 'default', level: 3 }),
+    })
+    await expect(stack.getByText('0/2 running')).toBeVisible()
+
+    // Starting is a click.
+    await page.getByRole('button', { name: 'Start stack', exact: true }).click()
+    await expect(stack.getByText('2/2 running')).toBeVisible()
+
+    // Starting an already-running stack is a no-op per member, not a failure.
+    // Wait for the first action's toast to clear so the assertions below can
+    // only be satisfied by the second action's own result.
+    await expect(page.getByText(/ started$/)).toHaveCount(0)
+    await page.getByRole('button', { name: 'Start stack', exact: true }).click()
+    await expect(page.getByText(/ started$/)).toBeVisible()
+    await expect(page.getByText(/partially started|Start .* failed/)).toHaveCount(0)
+    await expect(stack.getByText('2/2 running')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Stop stack', exact: true }).click()
+    await expect(stack.getByText('0/2 running')).toBeVisible()
+
+    // A group member no daemon matches is reported, not counted as success.
+    const partial = page.locator('section').filter({
+      has: page.getByRole('heading', { name: 'partial', level: 3 }),
+    })
+    await expect(partial.getByText(/No daemon matches/)).toBeVisible()
+    // The group's own action, not the member row's Start button.
+    await partial.locator('.group-actions').getByRole('button', { name: 'Start', exact: true }).click()
+    await expect(page.getByText(/partially started/)).toBeVisible()
+    await expect(page.getByText(/ghost/).first()).toBeVisible()
 
     expect(failures).toEqual([])
   } finally {

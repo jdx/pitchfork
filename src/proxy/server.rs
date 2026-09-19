@@ -402,6 +402,10 @@ enum ResolveResult {
         project: String,
         worktree: Option<String>,
         daemons: Vec<String>,
+        /// The checkout the hostname resolved to, which is what maps the page
+        /// back to its URL in the web UI: hostname labels are sanitized and can
+        /// be overridden, so they are not the names those URLs use.
+        dir: Option<std::path::PathBuf>,
     },
     /// The hostname named a project or daemon that does not exist.
     Unknown { heading: String, known: Vec<String> },
@@ -1358,6 +1362,7 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 project,
                 worktree,
                 daemons,
+                dir,
             } => {
                 // A reserved name answers 200 while an unknown one answers 404,
                 // which tells anything on the network which projects exist. Off
@@ -1365,12 +1370,30 @@ async fn proxy_handler(State(state): State<ProxyState>, mut req: Request) -> Res
                 if !local_client {
                     return unknown_host_response(&host, "Not found", &[]);
                 }
+                // The project and stack pages live in the web UI, which is
+                // their canonical location, so this hostname redirects there.
+                // The page is found by the checkout the hostname resolved
+                // to, because its URL is built from the registered project
+                // name and the worktree's own name, neither of which has to
+                // match the sanitized, overridable labels in the hostname.
+                if let Some(base) = crate::web::url()
+                    && let Some(resolved) = dir.clone()
+                    && let Some(path) = tokio::task::spawn_blocking(move || {
+                        crate::web::routes::api::projects::page_path_for_dir(&resolved)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                {
+                    return page_redirect_response(&base, &path);
+                }
                 return page_placeholder_response(
                     &project,
                     worktree.as_deref(),
                     &daemons,
                     &state.tld,
                     &host_port_suffix(&raw_host),
+                    crate::web::url().as_deref(),
                 );
             }
             ResolveResult::Unknown { heading, known } => {
@@ -1930,28 +1953,24 @@ async fn resolve_registry_target(subdomain: &str) -> ResolveResult {
             resolve_registry_daemon(subdomain, dir, namespace, daemon, per_checkout).await
         }
         crate::proxy::hostname::HostTarget::ProjectPage { project } => {
-            let daemons = registry
-                .projects
-                .get(&project)
-                .map(|p| p.primary.labels())
-                .unwrap_or_default();
+            let entry = registry.projects.get(&project);
             ResolveResult::Page {
+                daemons: entry.map(|p| p.primary.labels()).unwrap_or_default(),
+                dir: entry.map(|p| p.primary.dir.clone()),
                 project,
                 worktree: None,
-                daemons,
             }
         }
         crate::proxy::hostname::HostTarget::WorktreePage { project, worktree } => {
-            let daemons = registry
+            let checkout = registry
                 .projects
                 .get(&project)
-                .and_then(|p| p.worktrees.get(&worktree))
-                .map(|c| c.labels())
-                .unwrap_or_default();
+                .and_then(|p| p.worktrees.get(&worktree));
             ResolveResult::Page {
+                daemons: checkout.map(|c| c.labels()).unwrap_or_default(),
+                dir: checkout.map(|c| c.dir.clone()),
                 project,
                 worktree: Some(worktree),
-                daemons,
             }
         }
         crate::proxy::hostname::HostTarget::UnknownProject { known } => ResolveResult::Unknown {
@@ -2210,17 +2229,42 @@ fn host_port_suffix(raw_host: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Redirect a reserved project or stack hostname to its page in the web UI.
+///
+/// The page lives at `/projects/<project>[/<worktree>]`, which is its canonical
+/// location. Both labels come from hostname labels, so they are already limited
+/// to characters that need no escaping in a path.
+fn page_redirect_response(base: &str, path: &str) -> Response {
+    let target = format!("{base}{path}");
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(axum::http::header::LOCATION, &target)
+        .header(axum::http::header::CACHE_CONTROL, "no-store")
+        .body(axum::body::Body::from(format!(
+            "This page is at {target}\n"
+        )))
+        .unwrap_or_else(|_| {
+            html_page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "pitchfork",
+                String::new(),
+            )
+        })
+}
+
 /// Serve the placeholder for a reserved project or stack hostname.
 ///
 /// `<project>.<tld>` and `<worktree>.<project>.<tld>` belong to the project and
-/// stack pages.  Until those pages exist this placeholder stands in, so the
-/// hostname never resolves to whichever daemon shares its name.
+/// stack pages, which the web UI serves. This stands in when the web UI is not
+/// running, so the hostname never resolves to whichever daemon shares its
+/// name.
 fn page_placeholder_response(
     project: &str,
     worktree: Option<&str>,
     daemons: &[String],
     tld: &str,
     port_suffix: &str,
+    web_url: Option<&str>,
 ) -> Response {
     let heading = match worktree {
         Some(wt) => format!("{} · {}", escape_html(project), escape_html(wt)),
@@ -2247,16 +2291,25 @@ fn page_placeholder_response(
             .collect();
         format!("<p>Daemons here:</p><ul>{items}</ul>")
     };
-    let body = format!(
-        "<h1>{heading}</h1>\
-         <p>This address is reserved for the {page} page, which is not built yet.</p>\
-         {list}",
-        page = if worktree.is_some() {
-            "stack"
-        } else {
-            "project"
-        },
-    );
+    let page = if worktree.is_some() {
+        "stack"
+    } else {
+        "project"
+    };
+    // The web UI has a page for a checkout only when a registered namespace
+    // covers its directory, while a hostname is reserved for any checkout the
+    // proxy knows, including ones known only from a slug or the state file. The
+    // two cases need different advice.
+    let explanation = match web_url {
+        Some(url) => format!(
+            "<p>This address is reserved for the {page} page, which the web UI serves.              No registered project covers this checkout, so it has no page yet: add its              directory under <code>[namespaces]</code> in your user config, or run              <code>pitchfork proxy add</code> from it.              <a href=\"{url}/projects\">Open the project list</a>.</p>",
+            url = escape_html(url),
+        ),
+        None => format!(
+            "<p>This address is reserved for the {page} page, which the web UI serves.              Enable it with <code>[settings.web] auto_start = true</code> to open this              address.</p>"
+        ),
+    };
+    let body = format!("<h1>{heading}</h1>{explanation}{list}");
     html_page(StatusCode::OK, "pitchfork", body)
 }
 
@@ -2476,6 +2529,59 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The placeholder has to say why there is no page: the web UI being off is
+    /// a different problem from a checkout no registered project covers, and
+    /// the advice differs.
+    #[tokio::test]
+    async fn test_page_placeholder_explains_which_step_is_missing() {
+        async fn body_of(response: Response) -> String {
+            let (_, body) = response.into_parts();
+            let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+            String::from_utf8(bytes.to_vec()).unwrap()
+        }
+
+        let disabled = page_placeholder_response("shop", None, &[], "localhost", "", None);
+        assert_eq!(disabled.status(), StatusCode::OK);
+        let disabled = body_of(disabled).await;
+        assert!(disabled.contains("auto_start"), "{disabled}");
+        assert!(!disabled.contains("[namespaces]"));
+
+        let running = page_placeholder_response(
+            "shop",
+            Some("feature-a"),
+            &[],
+            "localhost",
+            "",
+            Some("http://127.0.0.1:3120"),
+        );
+        let running = body_of(running).await;
+        assert!(running.contains("[namespaces]"), "{running}");
+        assert!(running.contains("http://127.0.0.1:3120/projects"));
+        assert!(!running.contains("auto_start"));
+    }
+
+    /// A reserved project or stack hostname sends the browser to the page in
+    /// the web UI, which is where those pages live.
+    #[test]
+    fn test_page_redirect_targets_the_web_ui() {
+        let response = page_redirect_response("http://127.0.0.1:3120", "/projects/shop/feature-a");
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .unwrap(),
+            "http://127.0.0.1:3120/projects/shop/feature-a"
+        );
+
+        let project = page_redirect_response("http://127.0.0.1:3120/ps", "/projects/shop");
+        assert_eq!(
+            project.headers().get(axum::http::header::LOCATION).unwrap(),
+            // The base carries the web UI's path prefix when one is set.
+            "http://127.0.0.1:3120/ps/projects/shop"
+        );
+    }
 
     #[test]
     fn test_strip_tld() {

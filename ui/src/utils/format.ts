@@ -13,3 +13,12 @@ export function formatUptime(secs: number | null): string {
   const m = Math.floor((secs % 3600) / 60)
   return `${h}h${m}m`
 }
+
+/** "3m ago" for an RFC 3339 timestamp; an em dash when unknown. */
+export function formatSince(timestamp: string | null | undefined): string {
+  if (!timestamp) return '—'
+  const then = Date.parse(timestamp)
+  if (Number.isNaN(then)) return '—'
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000))
+  return `${formatUptime(secs)} ago`
+}
