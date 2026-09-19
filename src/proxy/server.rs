@@ -3574,8 +3574,12 @@ impl Drop for AutoStartGuard {
 /// the second daemon start against a dependency that is not ready yet. A graph
 /// holds the lock of every daemon in it until it has finished starting, so an
 /// overlapping graph waits and then finds its shared dependencies ready.
+///
+/// Entries are weak: a lock lives only while a startup holds or awaits it, and
+/// dead entries are pruned on the next call, so daemons of worktrees that come
+/// and go do not accumulate for the life of the supervisor.
 static STARTUP_LOCKS: once_cell::sync::Lazy<
-    std::sync::Mutex<std::collections::HashMap<DaemonId, Arc<tokio::sync::Mutex<()>>>>,
+    std::sync::Mutex<std::collections::HashMap<DaemonId, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 > = once_cell::sync::Lazy::new(Default::default);
 
 /// Lock every daemon in `ids`, in sorted order so that overlapping graphs
@@ -3585,8 +3589,16 @@ async fn lock_startup_graph(mut ids: Vec<DaemonId>) -> Vec<tokio::sync::OwnedMut
     ids.dedup();
     let locks: Vec<Arc<tokio::sync::Mutex<()>>> = {
         let mut map = STARTUP_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, lock| lock.strong_count() > 0);
         ids.into_iter()
-            .map(|id| map.entry(id).or_default().clone())
+            .map(|id| {
+                let entry = map.entry(id).or_default();
+                entry.upgrade().unwrap_or_else(|| {
+                    let lock = Arc::new(tokio::sync::Mutex::new(()));
+                    *entry = Arc::downgrade(&lock);
+                    lock
+                })
+            })
             .collect()
     };
     let mut guards = Vec::with_capacity(locks.len());
@@ -4913,6 +4925,17 @@ mod tests {
             .expect("the waiting graph proceeds once the first releases")
             .unwrap();
         assert_eq!(second.len(), 2);
+        drop(second);
+        drop(disjoint);
+
+        // Once nothing holds or awaits them, the locks are not retained.
+        drop(lock_startup_graph(vec![id("unrelated")]).await);
+        let map = STARTUP_LOCKS.lock().unwrap();
+        assert!(
+            !map.keys()
+                .any(|k| k.namespace() == "startup-lock-test" && k.name() != "unrelated"),
+            "released startup locks must be pruned"
+        );
     }
 
     #[test]
