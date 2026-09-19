@@ -2648,7 +2648,7 @@ dir = "~/projects/web"
         let link = temp.path().join("link-to-sub");
         symlink(&sub, &link).unwrap();
 
-        assert_eq!(find_project_root(&link), Some(repo));
+        assert_eq!(find_project_root(&link), Some(repo.canonicalize().unwrap()));
     }
 
     /// Build a real git repository with a linked worktree and assert that

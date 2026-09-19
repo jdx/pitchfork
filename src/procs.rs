@@ -1507,7 +1507,7 @@ mod tests {
 
         let child = command.spawn().expect("failed to spawn test process");
         let pid = child.id();
-        let _child = ChildGuard(child);
+        let mut child = ChildGuard(child);
 
         PROCS.refresh_pids(&[pid]);
         let actual_start_time = PROCS
@@ -1525,6 +1525,13 @@ mod tests {
             .expect("identity-checked kill should not error");
 
         assert!(killed, "matching generation must be signalled");
+        // A terminated child remains visible to kill(pid, 0) until its parent
+        // reaps it. Poll with a deadline so a missed signal still fails.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while child.0.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "signalled child must exit");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         assert!(
             !PROCS.is_running(pid),
             "signalled process group must be gone"

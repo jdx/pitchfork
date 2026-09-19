@@ -286,6 +286,10 @@ assert_path_equal() {
     # -m = mixed format (C:/), -l = prefer long names over 8.3 short names
     expected="$(cygpath -m -l "$expected" 2>/dev/null || echo "$expected")"
     actual="$(cygpath -m -l "$actual" 2>/dev/null || echo "$actual")"
+  elif [[ -d "$expected" && -d "$actual" ]]; then
+    # macOS temp directories may be spelled /var or /private/var.
+    expected="$(cd "$expected" && pwd -P)"
+    actual="$(cd "$actual" && pwd -P)"
   fi
   expected="$prefix$expected"
   actual="$prefix$actual"

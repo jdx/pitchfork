@@ -497,7 +497,9 @@ EOF
   # no group to signal whatever the daemon code did. Its children make the blast
   # radius visible: signalling the group takes them too.
   local pidfile="$BATS_TEST_TMPDIR/bystander.pid"
-  setsid bash -c 'echo $$ > "$1"; sleep 300 & sleep 300 & wait' _ "$pidfile" >/dev/null 2>&1 &
+  # macOS provides setsid(2), but no setsid executable. Python is already a
+  # test prerequisite and gives both platforms the same session leader.
+  python3 -c 'import os, sys; os.setsid(); os.execvp("bash", ["bash", "-c", "echo $$ > \"$1\"; sleep 300 & sleep 300 & wait", "_", sys.argv[1]])' "$pidfile" >/dev/null 2>&1 &
   local i
   for i in $(seq 1 50); do [ -s "$pidfile" ] && break; sleep 0.1; done
   local bystander_pid
@@ -528,7 +530,7 @@ EOF
 
   # The unrelated process group must survive untouched.
   pid_alive "$bystander_pid"
-  assert_equal "$(pgrep -c -P "$bystander_pid" || true)" "2"
+  assert_equal "$(pgrep -P "$bystander_pid" . | awk 'END { print NR }')" "2"
 
   # ...and the daemon is reported as gone, since that PID is not its process.
   run pitchfork status recycled/stopvictim
