@@ -231,15 +231,39 @@ run = "./worker"
 user = "501"
 ```
 
-**Behavior:**
-- If `user` is set, the daemon runs as that user.
-- Otherwise, if `[settings.supervisor] user` is set, the daemon runs as that user.
-- When the supervisor is running as root and `[settings.supervisor] user` is set, the default state directory, logs, and IPC sockets are stored under that user's state directory unless `PITCHFORK_STATE_DIR` overrides it. Pitchfork also chowns those state files to the configured user so non-root clients can read and write them.
-- Otherwise, if the supervisor was started as root via `sudo`, daemons run as the sudo-calling user from `SUDO_UID`/`SUDO_GID`.
-- If no run user can be derived, the daemon runs as the supervisor's current user.
-- Switching to another user requires the supervisor to have root privileges; otherwise startup fails.
-- When the daemon runs as a different user than the supervisor, `HOME`, `USER`, and `LOGNAME` are set from that user's passwd entry instead of being inherited from the supervisor (typically root). Tools such as mise, npm, and git then use the run user's home directory and config. If the user has no passwd entry (for example, a `SUDO_UID` with no matching account), these variables are unset rather than left pointing at root. Values set in the daemon's [`env`](#env) take precedence.
-- Hooks and `ready_cmd` probes run as the supervisor's user, not as the daemon's `user`.
+Pitchfork chooses the daemon's user in this order:
+
+1. The daemon's `user`.
+2. `[settings.supervisor] user`.
+3. The sudo-calling user, when the supervisor runs as root with `SUDO_UID` and
+   `SUDO_GID`.
+4. The supervisor's current user.
+
+Switching to another user requires root privileges. Selecting the current UID
+and GID keeps the inherited identity and environment.
+
+When switching users, Pitchfork sets `HOME`, `USER`, and `LOGNAME` from the target
+account. Programs such as mise, npm, and git can then find that user's home and
+configuration. A daemon's explicit [`env`](#env) values override these defaults:
+
+```toml
+[daemons.worker]
+run = "./worker"
+user = "app"
+env = { HOME = "/srv/app" }
+```
+
+Here the process runs as `app` with `HOME=/srv/app`; `USER` and `LOGNAME` still
+name the `app` account. If a sudo UID has no matching account entry, Pitchfork
+unsets the three variables instead of retaining the supervisor's values.
+
+The daemon's `user` applies to its main process. Lifecycle hooks and command
+readiness probes run as the supervisor's user.
+
+For a root supervisor, `[settings.supervisor] user` also selects the default
+state, log, and IPC socket directory and owns those state files.
+`PITCHFORK_STATE_DIR` can override the state directory. Setting `user` on an
+individual daemon does not change where the supervisor stores its state.
 
 ### `retry`
 

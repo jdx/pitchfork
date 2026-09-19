@@ -2597,6 +2597,9 @@ fn resolve_run_identity(
     if current_uid.is_root()
         && let Some(identity) = resolve_sudo_identity(sudo_uid, sudo_gid)
     {
+        if identity.matches(current_uid, current_gid) {
+            return Ok(RunIdentity::Inherit);
+        }
         return Ok(identity);
     }
 
@@ -3429,6 +3432,16 @@ mod tests {
         assert_eq!(command_env(&command, "HOME"), None);
         assert_eq!(command_env(&command, "USER"), None);
         assert_eq!(command_env(&command, "LOGNAME"), None);
+    }
+
+    #[test]
+    fn test_root_sudo_to_root_preserves_environment() {
+        let identity = resolve_run_identity(None, 0, 0, Some("0"), Some("0")).unwrap();
+        assert_eq!(identity, RunIdentity::Inherit);
+        let command = daemon_command(&identity, None);
+        for key in ["HOME", "USER", "LOGNAME"] {
+            assert_eq!(command_env(&command, key), None);
+        }
     }
 
     #[test]
