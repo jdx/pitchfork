@@ -34,6 +34,17 @@ pub struct StateFile {
     pub(crate) last_content: Mutex<Option<String>>,
 }
 
+/// What [`StateFile::restore_daemon_in_file`] found in the file on disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiskRecord {
+    /// The file already had the entry.
+    Present,
+    /// The entry was missing and has been put back.
+    Restored,
+    /// The file could not be parsed and was left untouched.
+    Unparseable,
+}
+
 /// A project session entry. The owning host PID and tracked directory live in
 /// the nested map key, so the value only needs the liveness title snapshot
 /// used to mitigate PID reuse.
@@ -423,40 +434,39 @@ impl StateFile {
         Ok(())
     }
 
-    /// Put `daemon`'s entry back into the file on disk if the file no longer
-    /// has it (with the same PID), leaving the rest of the file as it is now.
-    /// The check and the write happen under one lock, so a concurrent writer's
-    /// update is not lost. A file that cannot be parsed is replaced with this
-    /// instance's state. Returns whether the file was written.
-    pub(crate) fn restore_daemon_on_disk(&self, daemon: &Daemon) -> Result<bool> {
-        let canonical_path = normalized_lock_path(&self.path);
+    /// Put `daemon`'s entry back into the state file at `path` if the file no
+    /// longer has it (with the same PID), leaving the rest of the file as it
+    /// is now. The check and the write happen under one lock, so a concurrent
+    /// writer's update is not lost. Blocking; run it off the async workers.
+    pub(crate) fn restore_daemon_in_file(path: &Path, daemon: &Daemon) -> Result<DiskRecord> {
+        let canonical_path = normalized_lock_path(path);
         let _lock = xx::fslock::get(&canonical_path, false)?;
-        let raw = std::fs::read_to_string(&self.path).unwrap_or_default();
-        let raw = match toml::from_str::<Self>(&raw) {
-            Ok(mut on_disk) => {
-                if on_disk.daemons.get(&daemon.id).and_then(|d| d.pid) == daemon.pid {
-                    return Ok(false);
-                }
-                on_disk.daemons.insert(daemon.id.clone(), daemon.clone());
-                toml::to_string(&on_disk)
-            }
-            Err(e) => {
-                warn!(
-                    "state file {} cannot be parsed ({e}); rewriting it",
-                    self.path.display()
-                );
-                toml::to_string(self)
-            }
+        let raw = std::fs::read_to_string(path).unwrap_or_default();
+        let Ok(mut on_disk) = toml::from_str::<Self>(&raw) else {
+            return Ok(DiskRecord::Unparseable);
+        };
+        if on_disk.daemons.get(&daemon.id).and_then(|d| d.pid) == daemon.pid {
+            return Ok(DiskRecord::Present);
         }
-        .map_err(|e| FileError::SerializeError {
-            path: self.path.clone(),
+        on_disk.daemons.insert(daemon.id.clone(), daemon.clone());
+        let raw = toml::to_string(&on_disk).map_err(|e| FileError::SerializeError {
+            path: path.to_path_buf(),
             source: e,
         })?;
-        Self::write_raw(&self.path, &raw)?;
-        // Whatever this instance flushes next differs from the file now, so
-        // forget the old snapshot rather than skip that write.
+        Self::write_raw(path, &raw)?;
+        Ok(DiskRecord::Restored)
+    }
+
+    /// Forget what this instance last wrote, because the file has changed
+    /// since: the next write must not be skipped as unchanged.
+    pub(crate) fn forget_written_snapshot(&self) {
         *self.last_content.lock().unwrap() = None;
-        Ok(true)
+    }
+
+    /// Rewrite the file with this state on the next flush.
+    pub(crate) fn force_next_write(&self) {
+        self.forget_written_snapshot();
+        self.mark_dirty();
     }
 
     /// Write the state file without acquiring the lock.

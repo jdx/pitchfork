@@ -25,6 +25,7 @@ use crate::pitchfork_toml::Retry;
 use crate::pitchfork_toml::StopConfig;
 use crate::pitchfork_toml::WatchMode;
 use crate::procs::PROCS;
+use crate::state_file::DiskRecord;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -225,21 +226,47 @@ impl Supervisor {
         }
         let pitchfork_id = DaemonId::pitchfork();
         let state = self.state_file.lock().await;
-        let Some(own) = state.daemons.get(&pitchfork_id).filter(|d| d.pid.is_some()) else {
+        let Some(own) = state
+            .daemons
+            .get(&pitchfork_id)
+            .filter(|d| d.pid.is_some())
+            .cloned()
+        else {
             return;
         };
-        match state.restore_daemon_on_disk(own) {
-            Ok(false) => {}
-            // Not flushed yet (e.g. a client connecting right after startup):
-            // the record was simply written early.
-            Ok(true) if state.is_dirty() => {
-                debug!("recorded this supervisor in the state file ahead of the next flush");
+        let own_pid = own.pid.unwrap_or_default();
+        let path = state.path.clone();
+        // The state lock stays held across the file work, as it is for a
+        // flush, so the two cannot interleave.
+        let result = tokio::task::spawn_blocking(move || {
+            crate::state_file::StateFile::restore_daemon_in_file(&path, &own)
+        })
+        .await;
+        match result {
+            Ok(Ok(DiskRecord::Present)) => {}
+            Ok(Ok(DiskRecord::Restored)) => {
+                // Not flushed yet (e.g. a client connecting right after
+                // startup): the record was simply written early.
+                if state.is_dirty() {
+                    debug!("recorded this supervisor in the state file ahead of the next flush");
+                } else {
+                    warn!(
+                        "state file {} no longer recorded this supervisor (pid {own_pid}); restored it",
+                        state.path.display()
+                    );
+                }
+                // The file now differs from what this supervisor last wrote,
+                // so its next flush must not be skipped as unchanged.
+                state.forget_written_snapshot();
             }
-            Ok(true) => warn!(
-                "state file {} no longer recorded this supervisor (pid {}); restored it",
-                state.path.display(),
-                own.pid.unwrap_or_default()
-            ),
+            Ok(Ok(DiskRecord::Unparseable)) => {
+                warn!(
+                    "state file {} cannot be parsed; rewriting it from the supervisor's state",
+                    state.path.display()
+                );
+                state.force_next_write();
+            }
+            Ok(Err(e)) => warn!("failed to restore the supervisor record in the state file: {e}"),
             Err(e) => warn!("failed to restore the supervisor record in the state file: {e}"),
         }
     }
