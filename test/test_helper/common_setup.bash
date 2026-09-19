@@ -81,7 +81,118 @@ _common_setup() {
   # to /dev/null (a file, not a pipe), there's no pipe to inherit, and
   # subsequent pitchfork commands connect to the already-running supervisor
   # without spawning a new background process.
-  pitchfork supervisor start --force >/dev/null 2>&1 || true
+  #
+  # Also close bats' extra descriptors (fd 3 is its TAP output pipe). On Unix
+  # the supervisor inherits every descriptor not marked close-on-exec, so if it
+  # ever outlived the test it would keep that pipe open and bats would wait on
+  # it forever after the last test passed.
+  pitchfork supervisor start --force >/dev/null 2>&1 3>&- 4>&- || true
+
+  # Remember which supervisor this test started, so teardown can still stop it
+  # if the test rewrites the state file and loses the record `supervisor stop`
+  # relies on. The supervisor flushes its state asynchronously, so the record
+  # may land shortly after `supervisor start` returns; poll briefly for it.
+  local _
+  _SETUP_SUPERVISOR_PID=""
+  for _ in $(seq 1 30); do
+    _SETUP_SUPERVISOR_PID="$(_recorded_supervisor_pid)"
+    [[ -n "$_SETUP_SUPERVISOR_PID" ]] && break
+    sleep 0.1
+  done
+  _SETUP_SUPERVISOR_IDENTITY=""
+  if [[ -n "$_SETUP_SUPERVISOR_PID" ]]; then
+    _SETUP_SUPERVISOR_IDENTITY="$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")"
+  fi
+}
+
+# Print an identity token for $1 if it is a `pitchfork supervisor run` process
+# (with or without flags such as --boot), or nothing. The token includes the process start time, so it differs once the
+# PID is reused. Linux reads the start time in clock ticks from /proc; other
+# Unix systems use `ps -o lstart=`, which has one-second resolution. Returns
+# nothing on Windows, where `ps` does not see the Windows PIDs pitchfork records.
+_supervisor_identity() {
+  local pid="$1" args start
+  args="$(ps -p "$pid" -o args= 2>/dev/null)" || return 0
+  [[ "$args" =~ ^[^\ ]*pitchfork\ supervisor\ run(\ |$) ]] || return 0
+  if [[ -r "/proc/$pid/stat" ]]; then
+    start="$(sed -E 's/^.*\) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')"
+  else
+    start="$(ps -p "$pid" -o lstart= 2>/dev/null)"
+  fi
+  if [[ -n "$start" ]]; then
+    echo "$pid:$start"
+  fi
+}
+
+# Whether process $1 runs with this test's PITCHFORK_STATE_DIR. Linux reads
+# /proc/<pid>/environ; elsewhere (macOS, BSD) the BSD-style `ps eww` appends the
+# environment to the command line.
+_process_uses_state_dir() {
+  local pid="$1" out
+  if [[ -r "/proc/$pid/environ" ]]; then
+    grep -qzxF "PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR" "/proc/$pid/environ" 2>/dev/null
+    return
+  fi
+  out="$(ps eww -p "$pid" -o command= 2>/dev/null)" || return 1
+  [[ " $out " == *" PITCHFORK_STATE_DIR=$PITCHFORK_STATE_DIR "* ]]
+}
+
+# The supervisor PID recorded in the state file, or nothing.
+_recorded_supervisor_pid() {
+  grep -A 10 '^\[daemons\."global/pitchfork"\]' "$PITCHFORK_STATE_DIR/state.toml" 2>/dev/null |
+    grep -E '^pid = [0-9]+$' |
+    head -1 |
+    sed -E 's/.*= //'
+}
+
+# Stop any supervisor from this test that `pitchfork supervisor stop` missed.
+# Candidates are the supervisor started in setup and any supervisor whose
+# environment points at this test's state directory (for example one a CLI
+# command auto-started). Each candidate is bound to its identity (PID plus
+# start time) when it is found, and is only signalled while that identity still
+# matches, so a PID reused by another test's supervisor is never touched.
+# Unix only: Windows PIDs are handled by taskkill, and the Windows supervisor is
+# spawned without inheriting handles, so it cannot hold bats' pipes open.
+_stop_leaked_supervisors() {
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+    return 0
+  fi
+  local -a ids=()
+  local pid id
+  if [[ -n "${_SETUP_SUPERVISOR_IDENTITY:-}" ]] &&
+    [[ "$(_supervisor_identity "$_SETUP_SUPERVISOR_PID")" == "$_SETUP_SUPERVISOR_IDENTITY" ]]; then
+    ids+=("$_SETUP_SUPERVISOR_IDENTITY")
+  fi
+  for pid in $(pgrep -f '^[^ ]*pitchfork supervisor run( |$)' 2>/dev/null); do
+    _process_uses_state_dir "$pid" || continue
+    id="$(_supervisor_identity "$pid")"
+    [[ -n "$id" && " ${ids[*]} " != *" $id "* ]] && ids+=("$id")
+  done
+  ((${#ids[@]})) || return 0
+
+  echo "# stopping leftover supervisor(s): ${ids[*]%%:*}" >&3
+  # SIGTERM first so the supervisor stops its own daemons, then SIGKILL. A
+  # non-zero status only means every candidate already exited.
+  _signal_supervisors TERM "${ids[@]}" || return 0
+  local _
+  for _ in $(seq 1 50); do
+    _signal_supervisors 0 "${ids[@]}" || return 0
+    sleep 0.1
+  done
+  _signal_supervisors KILL "${ids[@]}" || true
+}
+
+# Send signal $1 to each identity in $2.. whose process still matches it.
+# Returns non-zero when none of them still match.
+_signal_supervisors() {
+  local sig="$1" id matched=1
+  shift
+  for id in "$@"; do
+    [[ "$(_supervisor_identity "${id%%:*}")" == "$id" ]] || continue
+    matched=0
+    kill -s "$sig" "${id%%:*}" 2>/dev/null || true
+  done
+  return "$matched"
 }
 
 # Skip a test on Windows (Git Bash / MSYS2).
@@ -206,6 +317,7 @@ _common_teardown() {
   # Use timeout to prevent hang if supervisor stop is stuck (e.g. daemon
   # cleanup on Windows where POSIX signals are unavailable).
   timeout 10 pitchfork supervisor stop 2>/dev/null || true
+  _stop_leaked_supervisors
 
   # Preserve temp dirs on failure for post-mortem debugging
   if [[ -n "$BATS_TEST_COMPLETED" && "$BATS_TEST_COMPLETED" == "1" ]]; then
