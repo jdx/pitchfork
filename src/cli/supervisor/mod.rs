@@ -136,7 +136,7 @@ pub fn existing_supervisor() -> Result<Option<Daemon>> {
 pub async fn resolve_existing_supervisor(force: bool) -> Result<(Option<u32>, KillOrStopOutcome)> {
     let mut record = existing_supervisor()?;
     if !record.as_ref().is_some_and(supervisor_record_is_live) {
-        if !crate::ipc::supervisor_listening() {
+        if !crate::ipc::supervisor_listening().await {
             let existing_pid = record.and_then(|d| d.pid);
             return Ok((existing_pid, KillOrStopOutcome::AlreadyDead));
         }

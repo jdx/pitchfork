@@ -75,17 +75,38 @@ impl IpcServerHandle {
     }
 }
 
+/// Exclusive right to start a supervisor for this state directory, held from
+/// before a starting supervisor checks for a running one until its IPC
+/// listener is bound (see [`IpcServer::new`]). Two supervisors starting at
+/// the same time are thereby serialized: the second only proceeds once the
+/// first is listening, and then sees it and backs off, instead of both
+/// finding the socket free and both starting daemons.
+pub struct StartupLock(#[allow(dead_code)] Option<xx::fslock::LockFile>);
+
+impl StartupLock {
+    pub async fn acquire() -> Result<Self> {
+        // The key only has to be the same for every supervisor sharing this
+        // state directory; it names no file (the lock lives in the temp dir).
+        let key = env::PITCHFORK_STATE_DIR.join("sock");
+        // Waiting can take as long as another supervisor's startup, so keep
+        // it off the async workers.
+        let lock = tokio::task::spawn_blocking(move || xx::fslock::get(&key, false))
+            .await
+            .into_diagnostic()??;
+        Ok(Self(lock))
+    }
+}
+
 impl IpcServer {
-    pub fn new() -> Result<(Self, IpcServerHandle)> {
+    /// Bind the supervisor's IPC socket. `_startup` must be held since before
+    /// this supervisor checked that no other one is running; it is released
+    /// once the listener is bound.
+    pub async fn new(_startup: StartupLock) -> Result<(Self, IpcServerHandle)> {
         #[cfg(unix)]
         xx::file::mkdirp(&*env::IPC_SOCK_DIR)?;
-        // Serialize the check-then-bind below across supervisors starting at
-        // the same time, so the second one sees the first listening instead
-        // of both finding the socket free.
-        let _lock = xx::fslock::get(&env::IPC_SOCK_DIR, false)?;
         // Never displace a live supervisor: replacing its socket would leave
         // it running, unreachable, and invisible to `supervisor stop`.
-        if super::supervisor_listening() {
+        if super::supervisor_listening().await {
             bail!(
                 "another pitchfork supervisor is already listening on {}",
                 socket_display()

@@ -26,7 +26,7 @@ mod watchers;
 use crate::daemon_id::DaemonId;
 use crate::daemon_status::DaemonStatus;
 use crate::deps::compute_reverse_stop_order;
-use crate::ipc::server::{IpcServer, IpcServerHandle};
+use crate::ipc::server::{IpcServer, IpcServerHandle, StartupLock};
 
 use crate::procs::PROCS;
 use crate::settings::settings;
@@ -177,7 +177,7 @@ pub(crate) fn interval_duration() -> Duration {
 pub static SUPERVISOR: Lazy<Supervisor> =
     Lazy::new(|| Supervisor::new().expect("Error creating supervisor"));
 
-pub fn start_if_not_running() -> Result<()> {
+pub async fn start_if_not_running() -> Result<()> {
     let sf = StateFile::get();
     if let Some(d) = sf.daemons.get(&DaemonId::pitchfork())
         && supervisor_record_is_live(d)
@@ -188,15 +188,15 @@ pub fn start_if_not_running() -> Result<()> {
     // IPC, e.g. when state.toml was replaced or rewritten by another tool.
     // Starting another one would take over the socket and leave the running
     // supervisor, and every daemon it manages, unreachable.
-    if crate::ipc::supervisor_listening() {
+    if crate::ipc::supervisor_listening().await {
         debug!("supervisor is listening on the IPC socket but not recorded in the state file");
         return Ok(());
     }
     start_in_background()
 }
 
-/// How long a starting supervisor waits for the one it replaces to stop
-/// serving IPC. A supervisor being stopped keeps its socket until its daemons
+/// How long `supervisor start/run --force` waits for the supervisor it
+/// replaces to stop serving IPC. A supervisor being stopped keeps its socket until its daemons
 /// have stopped, which can take a while.
 pub(crate) const IPC_SOCKET_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -209,7 +209,7 @@ pub(crate) const IPC_SOCKET_RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) async fn wait_for_ipc_socket_release() -> Result<()> {
     let deadline = time::Instant::now() + IPC_SOCKET_RELEASE_TIMEOUT;
     let mut waiting = false;
-    while crate::ipc::supervisor_listening() {
+    while crate::ipc::supervisor_listening().await {
         if time::Instant::now() >= deadline {
             return Err(miette::miette!(
                 "another pitchfork supervisor is still listening on {} after {}s; \
@@ -517,11 +517,20 @@ impl Supervisor {
         #[cfg(unix)]
         fix_state_dir_permissions();
 
-        // A supervisor being replaced (`--force`) keeps serving IPC until it
-        // has stopped its daemons. Wait for it before recording ourselves in
-        // the state file, and refuse to run beside one that stays up: taking
-        // over its socket would leave it running but unreachable.
-        wait_for_ipc_socket_release().await?;
+        // Refuse to run beside a supervisor that is already listening, and
+        // do so before recording ourselves in the state file or starting any
+        // daemons: taking over its socket would leave it running but
+        // unreachable. (`--force` has already waited for the one it replaced
+        // to let go of the socket.) The lock is held until our own listener
+        // is bound, so a supervisor starting at the same time waits here and
+        // then finds this one listening.
+        let startup_lock = StartupLock::acquire().await?;
+        if crate::ipc::supervisor_listening().await {
+            return Err(miette::miette!(
+                "another pitchfork supervisor is already listening on {}",
+                crate::ipc::socket_display()
+            ));
+        }
 
         let pid = std::process::id();
         // Ensure PROCS has data for the supervisor PID before upsert_daemon reads title()
@@ -743,7 +752,7 @@ impl Supervisor {
             crate::proxy::server::get_cached_slugs().await;
         });
 
-        let (ipc, ipc_handle) = IpcServer::new()?;
+        let (ipc, ipc_handle) = IpcServer::new(startup_lock).await?;
         *self.ipc_shutdown.lock().await = Some(ipc_handle);
         self.start_state_flush_task();
         self.conn_watch(ipc).await

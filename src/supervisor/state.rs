@@ -207,14 +207,15 @@ impl UpsertDaemonOptsBuilder {
 }
 
 impl Supervisor {
-    /// Rewrite the state file if it no longer records this supervisor.
+    /// Put this supervisor's record back into the state file if the file no
+    /// longer has it.
     ///
     /// The CLI decides whether a supervisor is running, and which process
     /// `supervisor stop` signals, from this record. The supervisor only
     /// writes the file when its own state changes, so if the file is replaced
     /// or rewritten by something else the record could stay missing
     /// indefinitely, leaving this supervisor running but unaccounted for.
-    /// The in-memory state is authoritative, so it is written back whole.
+    /// Only the record is restored; the rest of the file is left as it is.
     pub(crate) async fn restore_own_record(&self) {
         if self
             .shutting_down
@@ -224,27 +225,22 @@ impl Supervisor {
         }
         let pitchfork_id = DaemonId::pitchfork();
         let state = self.state_file.lock().await;
-        let Some(own_pid) = state.daemons.get(&pitchfork_id).and_then(|d| d.pid) else {
+        let Some(own) = state.daemons.get(&pitchfork_id).filter(|d| d.pid.is_some()) else {
             return;
         };
-        let recorded_pid = crate::state_file::StateFile::read(&state.path)
-            .ok()
-            .and_then(|sf| sf.daemons.get(&pitchfork_id).and_then(|d| d.pid));
-        if recorded_pid == Some(own_pid) {
-            return;
-        }
-        if state.is_dirty() {
+        match state.restore_daemon_on_disk(own) {
+            Ok(false) => {}
             // Not flushed yet (e.g. a client connecting right after startup):
-            // this is just an early flush.
-            debug!("flushing state file early to record this supervisor");
-        } else {
-            warn!(
-                "state file {} no longer records this supervisor (pid {own_pid}); restoring it",
-                state.path.display()
-            );
-        }
-        if let Err(e) = state.rewrite() {
-            warn!("failed to restore the supervisor record in the state file: {e}");
+            // the record was simply written early.
+            Ok(true) if state.is_dirty() => {
+                debug!("recorded this supervisor in the state file ahead of the next flush");
+            }
+            Ok(true) => warn!(
+                "state file {} no longer recorded this supervisor (pid {}); restored it",
+                state.path.display(),
+                own.pid.unwrap_or_default()
+            ),
+            Err(e) => warn!("failed to restore the supervisor record in the state file: {e}"),
         }
     }
 

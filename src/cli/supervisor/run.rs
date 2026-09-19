@@ -48,6 +48,9 @@ impl Run {
             }
             KillOrStopOutcome::Killed => {
                 let pid = existing_pid.expect("Killed implies a pid exists");
+                // The old supervisor keeps serving IPC until it has stopped
+                // its daemons; starting before it lets go would be refused.
+                crate::supervisor::wait_for_ipc_socket_release().await?;
                 info!("Killed existing supervisor with pid {pid}");
             }
             KillOrStopOutcome::AlreadyDead => {}

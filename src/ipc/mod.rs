@@ -245,15 +245,22 @@ pub(crate) fn socket_display() -> String {
 /// supervisor started on that basis would take the socket over and leave the
 /// original running but unreachable. A stale socket file left by a crashed
 /// supervisor refuses connections, so it does not count.
-pub(crate) fn supervisor_listening() -> bool {
-    use interprocess::local_socket::traits::Stream as _;
+pub(crate) async fn supervisor_listening() -> bool {
+    use interprocess::local_socket::traits::tokio::Stream as _;
     let Ok(name) = fs_name("main") else {
         return false;
     };
-    match interprocess::local_socket::Stream::connect(name) {
-        Ok(_) => true,
-        Err(err) => {
+    let connect = interprocess::local_socket::tokio::Stream::connect(name);
+    // A live supervisor accepts at once (the kernel queues the connection);
+    // the timeout only guards against a platform where connecting blocks.
+    match tokio::time::timeout(std::time::Duration::from_secs(1), connect).await {
+        Ok(Ok(_)) => true,
+        Ok(Err(err)) => {
             trace!("no supervisor listening on the IPC socket: {err}");
+            false
+        }
+        Err(_) => {
+            debug!("timed out probing the IPC socket; treating it as not listening");
             false
         }
     }
