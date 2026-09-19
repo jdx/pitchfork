@@ -411,201 +411,157 @@ tls_cert = "/path/to/cert.pem"
 tls_key = "/path/to/key.pem"
 ```
 
-A certificate configured here is the one the *proxy* serves. If a daemon has to
-terminate TLS itself — to present its own certificate, or to require client
-certificates — see [TLS Passthrough](#tls-passthrough) instead.
+These settings configure the certificate served by the proxy. To let a daemon
+present its own certificate or require client certificates, use
+[TLS passthrough](#tls-passthrough).
 
 ## TLS Passthrough
 
-By default the proxy terminates TLS itself: it answers the handshake with a
-certificate signed by its own CA and forwards plain HTTP to your daemon. That
-is what you want for an ordinary web app, and it is why `https://api.localhost`
-works without the daemon knowing anything about TLS.
+By default, pitchfork terminates TLS with its own certificate and forwards
+plain HTTP to the daemon. Set `proxy_tls = "passthrough"` when the daemon needs
+to handle TLS itself, for example to use its own certificate, require mutual
+TLS (mTLS), or serve gRPC over TLS.
 
-Some daemons need to terminate TLS themselves — because they present a specific
-certificate, require client certificates (mTLS), or speak a protocol tunnelled
-inside TLS that the proxy would mangle. Set `proxy_tls = "passthrough"` on the
-daemon:
+### Configure a TLS Daemon
+
+Enable the proxy and declare the daemon's TLS port in `pitchfork.toml`:
 
 ```toml
+[settings.proxy]
+enable = true
+https = true
+
 [daemons.api]
-run = "./serve --tls-cert server.pem --tls-key server-key.pem"
+run = "./serve --port 8443 --tls-cert server.pem --tls-key server-key.pem"
 port = 8443
-proxy_tls = "passthrough"   # default: "terminate"
+proxy_tls = "passthrough"
 ```
+
+Replace `./serve` and its flags with your server's command. The server must
+listen for TLS on the declared port. Passthrough requires a nonzero `port`
+and a build with the `proxy-tls` feature, which is enabled by default.
+
+[Register the project](#project-discovery) or start the daemon once, then
+connect using its [automatic hostname](#hostnames). For a project named
+`myproject`:
 
 ```bash
-pitchfork proxy add api
+pitchfork start api
+curl --cacert ca.pem https://api.myproject.localhost/
 ```
 
-The proxy then reads the hostname from the TLS ClientHello (the SNI extension)
-on its 443 listener and splices the raw TCP stream to `127.0.0.1:8443` without
-decrypting anything:
+The daemon's certificate must cover `api.myproject.localhost`, and the client
+must trust its issuing CA (`ca.pem` in this example). `pitchfork proxy trust`
+trusts the proxy's CA; it does not install trust for the daemon's certificate.
+For mTLS, configure the server to require and verify client certificates, then
+supply a client certificate and key:
 
 ```bash
-curl --cacert ca.pem --cert client.pem --key client-key.pem https://api.localhost/
+curl --cacert ca.pem --cert client.pem --key client-key.pem \
+  https://api.myproject.localhost/
 ```
 
-What survives, precisely because the proxy never terminates:
+The proxy reads the SNI hostname from the TLS ClientHello and forwards the
+connection to the daemon on `127.0.0.1`, without decrypting it. The daemon's
+certificate, client certificates, SNI, and ALPN negotiation pass through
+unchanged, including for HTTP/2 and gRPC. Existing [slugs](#slugs-legacy) also
+support passthrough.
 
-- The daemon's **own certificate**, presented to the client unchanged.
-- **Client certificates**, so mTLS works end to end. A terminating proxy cannot
-  forward them, since it is the party completing the handshake.
-- The **ALPN protocol** the daemon negotiates, so HTTP/2 and gRPC connections
-  pass through as-is.
-- The **SNI hostname** the client sent, which the daemon can read for its own
-  virtual hosting.
+::: warning All clients appear to connect from loopback
 
-The trade-off is that the proxy cannot see the request. There are no
-`X-Forwarded-*` headers, no request logging, and no HTML error pages for a
-passthrough hostname: on a raw TLS stream there is nothing to write them into.
-When routing fails, the connection is closed and the reason is logged to the
-supervisor log.
+The daemon sees every proxied client as `127.0.0.1`. Pitchfork cannot add
+`X-Forwarded-For` or other HTTP headers to an encrypted stream.
 
-::: warning The daemon loses the client's address
-
-A terminating hostname gives the daemon an `X-Forwarded-For` header with the
-address the connection came from. A spliced hostname cannot: the daemon sees a
-connection from `127.0.0.1` for every client, because the proxy opened it.
-
-That matters when `proxy.lan` is on, since the proxy then binds `0.0.0.0` and
-accepts connections from the network. A daemon that treats loopback as trusted
-— an admin route with no auth, a debug endpoint, a permissive CORS rule — would
-be extending that trust to everything that can reach the proxy host. Either
-authenticate such routes properly, use a daemon that terminates TLS with its own
-client-certificate check, or keep passthrough off the LAN.
+With `proxy.lan = true`, network clients also appear to come from loopback.
+Do not rely on the client's IP address to protect admin or debug endpoints.
+Require authentication, such as mTLS verified by the daemon, or keep
+passthrough off the LAN.
 
 :::
 
-The hostname is read from the ClientHello, which is sent in the clear. Under
-Encrypted Client Hello the inner name is not visible, so routing follows the
-outer `public_name`, as it must for any proxy that routes on SNI.
-
-A connection whose ClientHello the proxy cannot read before the handshake — it
-stalls, exceeds the inspection window, or never reconciles its own length
-fields — is handed to the TLS listener like any other. If the handshake then
-turns out to name a passthrough hostname, the proxy fails it rather than
-answering with its own certificate, and logs why. A passthrough hostname is
-therefore never quietly downgraded, and connections for ordinary terminating
-hostnames are unaffected.
-
-Passthrough requires the `proxy-tls` feature (enabled in default builds) and
-`proxy.https = true`, because it only applies to the TLS listener. Plain HTTP
-requests to a passthrough hostname are redirected to HTTPS as usual.
-
 ### Auto-Start with Passthrough
 
-Auto-start works the same way as for terminated hostnames, except that the
-client sees no "Starting…" page — a raw TLS stream has no place to put one.
-Instead the proxy holds the connection open, starts the daemon, waits for it to
-become ready, and only then splices the stream through. The wait is bounded by
-`proxy.auto_start_timeout` (default 30 s); if the daemon is not ready by then,
-the connection is closed.
+When auto-start is enabled, a request to a stopped daemon starts it as usual.
+The proxy holds the connection until the daemon is ready, so the client sees
+a delayed TLS handshake instead of the HTML "Starting…" page.
 
-One budget covers the whole wait, including the case where another connection
-is already starting the same daemon. From the client's side this looks like a
-slow handshake, so both its own timeout and `proxy.auto_start_timeout` need to
-be longer than the daemon takes to start:
+`proxy.auto_start_timeout` bounds the startup wait, including time spent
+waiting for another request to start the same daemon. The default is 30 seconds.
+For a slower daemon, increase the budget and the client's handshake timeout:
 
 ```toml
 [settings.proxy]
 auto_start_timeout = "60s"
 ```
 
-### Choosing a Port on a Multi-Port Daemon
+If startup fails or times out, the proxy closes the connection and logs the
+reason. It cannot return an HTML error page or log HTTP requests inside the
+encrypted stream.
 
-A hostname maps to the daemon's **first** port by default. When a daemon
-declares several ports, `proxy_tls_port` selects which one the hostname maps to:
+### Worktrees
+
+Automatic worktree hostnames, such as `api.fix-login.myproject.localhost`,
+use `proxy_tls` and `proxy_tls_port` from that checkout's configuration. Include
+the worktree hostname in the daemon's certificate and give each checkout a
+[distinct namespace](#worktree-namespaces) to run them together.
+
+For legacy slug worktree routes, an unavailable worktree configuration falls
+back to its last known TLS route. If no worktree route is known, it inherits
+the slug's TLS mode but uses the worktree daemon's first port.
+
+### Connection Requirements and Errors
+
+- Clients must send the destination hostname as SNI. Changing only the HTTP
+  `Host` header cannot select a passthrough route. A connection without SNI
+  fails the TLS handshake.
+- With Encrypted Client Hello, routing uses the visible outer name; the proxy
+  cannot route on the encrypted inner name.
+- If the proxy cannot inspect a ClientHello before the handshake, it refuses
+  to terminate TLS for a passthrough hostname with its own certificate.
+- Plain HTTP sent to the HTTPS listener is redirected to HTTPS. With
+  `proxy.https = false`, requests for a passthrough hostname receive a 502
+  error explaining that HTTPS is required.
+
+### Why Plain TCP Is Not Proxied
+
+Passthrough requires a TLS ClientHello with an SNI hostname at the start of
+the connection. Plain TCP services such as Redis and PostgreSQL connections
+that begin with `SSLRequest` do not meet this requirement. Connect to those
+services directly using the port shown by `pitchfork status <daemon>`.
+
+### Seeing Which Mode a Daemon Uses
+
+`pitchfork status` and `pitchfork list` append `(passthrough)` to the proxy URL
+for a passthrough daemon. Terminating daemons have no mode annotation. Both
+commands include `proxy_tls` in `--json` output when a proxy URL is available.
+
+## Choosing a Port on a Multi-Port Daemon
+
+Use `proxy_tls_port` to choose which declared port receives proxy traffic.
+Despite its name, this setting applies to both TLS modes: it selects the TLS
+listener for passthrough or the HTTP listener for termination.
 
 ```toml
 [daemons.api]
 run = "./serve --http 8080 --grpc 9443"
 port = [8080, 9443]
 proxy_tls = "passthrough"
-proxy_tls_port = 9443       # route api.localhost to the gRPC port
+proxy_tls_port = 9443
 ```
 
-`proxy_port` is accepted as a shorter spelling of the same setting; set one or
-the other, not both, and pitchfork keeps whichever spelling the file already
-uses when it rewrites it. Either way the setting applies to terminated
-hostnames too, where it chooses which port the proxy forwards HTTP to.
+Here, the daemon's hostname routes to its gRPC listener on port 9443.
+`proxy_port` is an alternative spelling; use one spelling per daemon.
+Pitchfork preserves that spelling when it rewrites the configuration.
 
-The port is matched by its **position** in the daemon's `port` list, so the
-mapping follows [auto-bump](#auto-port-bumping): if the ports above bump to
-`[8081, 9444]`, `api.localhost` routes to 9444 rather than to a port nothing is
-listening on. `proxy_tls_port` has to name one of the ports in `port`; config
-that points it somewhere else is rejected when it is read, rather than routing
-traffic to a port the daemon never bound.
+The selected port must be a nonzero value declared in `port`. Pitchfork
+rejects invalid selections when it reads the configuration. Selection follows
+the port's position in the list after [auto-bump](#auto-port-bumping): if
+`[8080, 9443]` becomes `[8081, 9444]`, the hostname routes to port 9444.
 
-`proxy_tls_port` is a property of the daemon, not of the hostname that reached
-it, so registering a second slug for the same daemon gives a second hostname
-that routes to the same port. Exposing two of a daemon's ports under two
-hostnames is therefore not supported yet: a list of hostnames on one daemon
-(such as `proxy = ["core", "core-internal"]`) mapping to ports in order would
-be the way to express it. Until then, split the process into two daemons, each
-with its own port and slug.
-
-### Worktrees
-
-Each git worktree or jj workspace of a slug's project is routable under its own
-hostname prefix, and each has its own `pitchfork.toml`, so a worktree sets its
-own `proxy_tls` and `proxy_tls_port` there.
-
-A worktree whose config pitchfork cannot read — mid-edit, momentarily invalid,
-or a checkout that predates the daemon — inherits the slug's mode, so a
-passthrough hostname is not quietly terminated with the proxy's certificate
-while the file is broken. It does not inherit the slug's `proxy_tls_port`,
-which names a position in one daemon's port list: the hostname falls back to
-that worktree daemon's own first port instead.
-
-### Why Plain TCP Is Not Proxied
-
-Passthrough routes on the hostname inside the TLS ClientHello. A plain TCP
-protocol — Postgres, Redis, a raw socket server — carries no hostname before
-its first application byte, so a single listener has no way to tell which
-daemon a connection is for. Databases and other plain-TCP services are
-therefore reached directly on their own port (`pitchfork status <daemon>` prints
-it), not through the proxy. Giving each such service its own listener port would
-be the same as connecting to the daemon directly.
-
-Postgres' own `SSLRequest` handshake is not TLS either: the connection opens
-with a Postgres message, so the ClientHello check does not match it and the
-connection is treated as plain HTTP on the TLS port.
-
-### Seeing Which Mode a Daemon Uses
-
-`pitchfork status` and `pitchfork list` annotate the proxy URL when a daemon
-is in passthrough mode. The default `terminate` is left unannotated, so the
-common case reads as it always has:
-
-```console
-$ pitchfork status api
-Name: myproject/api
-PID: 51321
-Status: running
-Port: 8443 (active)
-Proxy: https://api.localhost (passthrough)
-```
-
-Both commands also report it as `proxy_tls` in `--json` output.
-
-### Validation
-
-`proxy_tls = "passthrough"` requires `port`, because the proxy has to know
-where to splice the stream before any application data is exchanged. A daemon
-that sets passthrough without a port is rejected when the config is read:
-
-```console
-$ pitchfork list
-pitchfork::config::passthrough_without_port
-
-  × daemon 'api' in /home/user/project/pitchfork.toml sets
-  │ proxy_tls = "passthrough" but has no port
-  help: TLS passthrough splices the raw stream to a port on 127.0.0.1, so the
-        daemon's port must be known up front; add `port = <number>` to the
-        daemon, or remove proxy_tls
-```
-
+Without an explicit selection, passthrough uses the first declared port.
+Termination uses the detected active port, falling back to the first port.
+All hostnames for a daemon share the same selection; mapping different
+hostnames to different ports of one daemon is not supported.
 
 ## Custom TLD
 
