@@ -626,17 +626,20 @@ impl Supervisor {
                 let proxy_dir = crate::env::PITCHFORK_STATE_DIR.join("proxy");
                 let ca_cert_path = proxy_dir.join("ca.pem");
                 let ca_key_path = proxy_dir.join("ca-key.pem");
-                if !ca_cert_path.exists() || !ca_key_path.exists() {
-                    match crate::proxy::server::generate_ca(&ca_cert_path, &ca_key_path) {
-                        Ok(()) => {
-                            info!(
-                                "Generated local CA certificate at {}",
-                                ca_cert_path.display()
-                            );
-                        }
-                        Err(e) => {
-                            error!("Failed to generate CA certificate: {e}");
-                        }
+                // Checked and written under the CA lock: `proxy setup` may be
+                // generating the same pair right now.
+                match crate::proxy::server::ensure_ca(&ca_cert_path, &ca_key_path, || {
+                    ca_cert_path.exists() && ca_key_path.exists()
+                }) {
+                    Ok(true) => {
+                        info!(
+                            "Generated local CA certificate at {}",
+                            ca_cert_path.display()
+                        );
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        error!("Failed to generate CA certificate: {e}");
                     }
                 }
 

@@ -2420,17 +2420,22 @@ fn ca_pair_problem(cert: &Path, key: &Path) -> Option<String> {
 ///
 /// A pair that exists but cannot sign — truncated, or a key from another CA —
 /// is replaced rather than trusted: the proxy cannot start with it, so there
-/// is nothing in it worth keeping.
+/// is nothing in it worth keeping. The check is repeated under the CA lock, so
+/// a supervisor generating the pair at the same moment is waited for, not
+/// raced.
 fn generate_ca(cert: &Path, key: &Path) -> Result<()> {
     #[cfg(feature = "proxy-tls")]
     {
-        if cert.exists()
-            && key.exists()
-            && let Some(problem) = ca_pair_problem(cert, key)
-        {
-            println!("  the existing CA cannot be used ({problem}); generating a new one");
-        }
-        crate::proxy::server::generate_ca(cert, key)
+        crate::proxy::server::ensure_ca(cert, key, || match ca_pair_problem(cert, key) {
+            None => true,
+            Some(problem) => {
+                if cert.exists() && key.exists() {
+                    println!("  the existing CA cannot be used ({problem}); generating a new one");
+                }
+                false
+            }
+        })
+        .map(|_| ())
     }
     #[cfg(not(feature = "proxy-tls"))]
     {

@@ -914,21 +914,43 @@ async fn serve_http(
         );
     }
     let shutdown_signal = cancel.clone().cancelled_owned();
-    axum::serve(
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal)
-    .await
-    .map_err(|e| miette::miette!("Proxy server error: {e}"))?;
+    .into_future();
+    tokio::pin!(server);
+
+    // Axum's graceful shutdown waits for every open connection with no limit,
+    // and a long-lived `ws://` stream may never close on its own. One deadline,
+    // started when shutdown begins, covers that wait and the tunnel drain
+    // below, as the HTTPS path does; past it the remaining connections are
+    // dropped rather than holding the supervisor's shutdown up.
+    let deadline = tokio::select! {
+        r = &mut server => {
+            r.map_err(|e| miette::miette!("Proxy server error: {e}"))?;
+            tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET
+        }
+        _ = cancel.cancelled() => {
+            let deadline = tokio::time::Instant::now() + SHUTDOWN_DRAIN_BUDGET;
+            match tokio::time::timeout_at(deadline, &mut server).await {
+                Ok(r) => r.map_err(|e| miette::miette!("Proxy server error: {e}"))?,
+                Err(_) => log::debug!(
+                    "Proxy connections still open after {SHUTDOWN_DRAIN_BUDGET:?}; dropping them"
+                ),
+            }
+            deadline
+        }
+    };
 
     // Axum's graceful shutdown returns once its own per-connection futures are
     // done, and a CONNECT request's future completes the moment the connection
     // is upgraded. The tunnel it spawned outlives it, so without this the
     // supervisor would go on to stop daemons while tunnels were still splicing
-    // bytes. The HTTPS path does the same, on the same budget.
+    // bytes.
     proxy_state.tunnels.close();
-    let _ = tokio::time::timeout(SHUTDOWN_DRAIN_BUDGET, proxy_state.tunnels.wait()).await;
+    let _ = tokio::time::timeout_at(deadline, proxy_state.tunnels.wait()).await;
     Ok(())
 }
 
@@ -962,8 +984,9 @@ async fn serve_https_with_http_fallback(
     // replacing what they chose.  Otherwise the local CA signs a leaf per SNI
     // host on demand, which is what makes names of any depth work.
     let resolver: Arc<dyn rustls::server::ResolvesServerCert> = if s.proxy.tls_cert.is_empty() {
-        if !cert_path.exists() || !key_path.exists() {
-            generate_ca(&cert_path, &key_path)?;
+        if ensure_ca(&cert_path, &key_path, || {
+            cert_path.exists() && key_path.exists()
+        })? {
             log::info!("Generated local CA certificate at {}", cert_path.display());
             log::info!("To trust the CA in your browser, run: pitchfork proxy trust");
         }
@@ -1550,12 +1573,38 @@ pub(crate) fn tls_pair_problem(cert: &str, key: &str) -> Option<String> {
     }
 }
 
+/// Generate the CA pair unless `usable` says the one on disk will do.
+///
+/// `proxy setup` and a starting supervisor can both find the CA missing and
+/// generate one at once. The cert and key are separate files, so two writers
+/// interleaving can leave one's certificate beside the other's key: a pair
+/// that trusts fine and then signs nothing that verifies. The check and the
+/// write happen under one lock so only the first generation happens.
+///
+/// Returns whether a new pair was written.
+#[cfg(feature = "proxy-tls")]
+pub fn ensure_ca(
+    cert_path: &std::path::Path,
+    key_path: &std::path::Path,
+    usable: impl FnOnce() -> bool,
+) -> crate::Result<bool> {
+    let _lock = xx::fslock::get(cert_path, false)
+        .map_err(|e| miette::miette!("Failed to lock {}: {e}", cert_path.display()))?;
+    if usable() {
+        return Ok(false);
+    }
+    generate_ca(cert_path, key_path)?;
+    Ok(true)
+}
+
 /// Generate a local root CA certificate and private key using `rcgen`.
 ///
 /// The CA is used to sign per-domain certificates on demand (SNI).
-/// Files are written in PEM format to `cert_path` and `key_path`.
+/// Files are written in PEM format to `cert_path` and `key_path`. Callers go
+/// through [`ensure_ca`], which holds the CA lock around the check and this
+/// write.
 #[cfg(feature = "proxy-tls")]
-pub fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> crate::Result<()> {
+fn generate_ca(cert_path: &std::path::Path, key_path: &std::path::Path) -> crate::Result<()> {
     use rcgen::{
         BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose,
     };
