@@ -3565,16 +3565,50 @@ impl Drop for AutoStartGuard {
     }
 }
 
+/// Per-daemon locks held while a proxy request starts a dependency graph.
+///
+/// `AUTO_START_IN_PROGRESS` only deduplicates requests for the same hostname.
+/// Two hostnames whose daemons share a dependency would otherwise start it
+/// concurrently, and the supervisor answers the second start with "already
+/// running" while the first is still waiting for it to become ready — letting
+/// the second daemon start against a dependency that is not ready yet. A graph
+/// holds the lock of every daemon in it until it has finished starting, so an
+/// overlapping graph waits and then finds its shared dependencies ready.
+static STARTUP_LOCKS: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<DaemonId, Arc<tokio::sync::Mutex<()>>>>,
+> = once_cell::sync::Lazy::new(Default::default);
+
+/// Lock every daemon in `ids`, in sorted order so that overlapping graphs
+/// cannot deadlock.
+async fn lock_startup_graph(mut ids: Vec<DaemonId>) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
+    ids.sort();
+    ids.dedup();
+    let locks: Vec<Arc<tokio::sync::Mutex<()>>> = {
+        let mut map = STARTUP_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        ids.into_iter()
+            .map(|id| map.entry(id).or_default().clone())
+            .collect()
+    };
+    let mut guards = Vec::with_capacity(locks.len());
+    for lock in locks {
+        guards.push(lock.lock_owned().await);
+    }
+    guards
+}
+
 /// Attempt to auto-start a daemon for the given slug.
 ///
 /// If `proxy.auto_start` is disabled, returns `NotFound`.
 /// Uses a dedup set to prevent concurrent starts for the same daemon.
-/// Calls `SUPERVISOR.run()` with `wait_ready = true` so the daemon goes
-/// through the same readiness lifecycle as `pf start`, then polls for the
-/// active port.
+/// Starts the daemon together with its `depends` graph exactly as
+/// `pitchfork start` does — dependencies first, level by level, each waited on
+/// until ready — then polls for the daemon's active port.
 ///
-/// The entire operation — including `SUPERVISOR.run()` and the port-polling
-/// loop — is bounded by `proxy_auto_start_timeout`.
+/// The request's wait — for the whole graph and then for the port — is bounded
+/// by `proxy_auto_start_timeout`. The start itself runs as its own task and is
+/// not cancelled when the request gives up: abandoning a graph between levels
+/// would leave dependencies starting with nothing waiting on them, and the
+/// next request would then start the daemon before they were ready.
 async fn try_auto_start(
     slug: &str,
     cached: &CachedSlugEntry,
@@ -3605,116 +3639,173 @@ async fn try_auto_start(
         }
     }
 
-    let _guard = AutoStartGuard {
+    // Shared by the start task and this request, so the daemon stays marked
+    // as starting until both the graph and this request's port wait are done.
+    let guard = Arc::new(AutoStartGuard {
         daemon_id: daemon_id.clone(),
-    };
+    });
 
     let timeout = s.proxy_auto_start_timeout();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let timed_out = || {
+        log::warn!("Auto-start: total timeout ({timeout:?}) exceeded for daemon {daemon_id}");
+        ResolveResult::Error(format!(
+            "Auto-start for '{daemon_id}' timed out after {timeout:?}.\n\
+             The daemon and its dependencies did not all become ready, with the daemon \
+             bound to a port, within the configured proxy_auto_start_timeout.\n\
+             Startup continues in the background; reload to check again.\n\
+             Increase the timeout or check the logs of the daemon and its dependencies \
+             for slow startup."
+        ))
+    };
 
-    match tokio::time::timeout(
-        timeout,
-        try_auto_start_inner(slug, cached, &daemon_id, worktree_dir, route),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_elapsed) => {
-            log::warn!("Auto-start: total timeout ({timeout:?}) exceeded for daemon {daemon_id}");
-            ResolveResult::Error(format!(
-                "Auto-start for '{daemon_id}' timed out after {timeout:?}.\n\
-                 The daemon did not become ready and bind a port within the configured \
-                 proxy_auto_start_timeout.\n\
-                 Increase the timeout or check the daemon's logs for slow startup."
-            ))
+    log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
+    let start = tokio::spawn({
+        let guard = guard.clone();
+        let daemon_id = daemon_id.clone();
+        let config_dir = worktree_dir.unwrap_or(&cached.dir).to_path_buf();
+        async move {
+            let _guard = guard;
+            start_with_dependencies(&daemon_id, &config_dir).await
         }
+    });
+    match tokio::time::timeout_at(deadline, start).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(result))) => return result,
+        Ok(Err(e)) => {
+            log::warn!("Auto-start: start task for {daemon_id} failed: {e}");
+            return ResolveResult::Error(format!("Failed to start daemon '{daemon_id}': {e}"));
+        }
+        Err(_elapsed) => return timed_out(),
     }
+
+    let result = tokio::time::timeout_at(deadline, wait_for_active_port(&daemon_id, route)).await;
+    drop(guard);
+    result.unwrap_or_else(|_elapsed| timed_out())
 }
 
-/// Inner implementation of [`try_auto_start`] extracted so that the caller can
-/// wrap it with `tokio::time::timeout` and unconditionally clean up
-/// `AUTO_START_IN_PROGRESS` regardless of the outcome.
-async fn try_auto_start_inner(
-    slug: &str,
-    cached: &CachedSlugEntry,
+/// Start `daemon_id` and everything it depends on, through the same batch
+/// start `pitchfork start` uses.
+///
+/// Configuration is loaded from `config_dir` — the checkout the hostname named
+/// — together with every registered namespace, so a dependency on a daemon of
+/// another registered project resolves just as it does from that directory on
+/// the command line.
+///
+/// Returns the response to give the request when the daemon cannot be started.
+async fn start_with_dependencies(
     daemon_id: &DaemonId,
-    worktree_dir: Option<&std::path::Path>,
-    route: &ProxyTlsRoute,
-) -> ResolveResult {
-    let config_dir = worktree_dir.unwrap_or(&cached.dir);
-
-    let pt = match crate::pitchfork_toml::PitchforkToml::all_merged_from(config_dir) {
-        Ok(pt) => pt,
-        Err(e) => {
+    config_dir: &std::path::Path,
+) -> std::result::Result<(), ResolveResult> {
+    let loaded = {
+        let dir = config_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            crate::pitchfork_toml::PitchforkToml::all_merged_all_namespaces_from(&dir)
+        })
+        .await
+    };
+    let pt = match loaded {
+        Ok(Ok(pt)) => pt,
+        Ok(Err(e)) => {
             log::warn!(
                 "Auto-start: failed to load config from {}: {e}",
                 config_dir.display()
             );
-            return ResolveResult::NotFound;
-        }
-    };
-
-    let mut daemon_config = match pt.daemons.get(daemon_id) {
-        Some(cfg) => cfg.clone(),
-        None => {
-            log::debug!(
-                "Auto-start: daemon {daemon_id} not found in config at {}",
-                config_dir.display()
-            );
-            return ResolveResult::NotFound;
-        }
-    };
-
-    // Render Tera templates and merge top-level env (per-daemon wins). Building
-    // the template context reads configuration and derives hostnames, so it
-    // runs on a blocking worker rather than on the thread serving the request.
-    let rendered = {
-        let id = daemon_id.clone();
-        let mut config = daemon_config.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::ipc::batch::render_daemon_config(&id, &mut config, &pt).map(|()| config)
-        })
-        .await
-    };
-    daemon_config = match rendered {
-        Ok(Ok(config)) => config,
-        Ok(Err(e)) => {
-            log::warn!("Auto-start: failed to render templates for {daemon_id}: {e}");
-            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+            return Err(ResolveResult::NotFound);
         }
         Err(e) => {
-            log::warn!("Auto-start: template rendering task failed for {daemon_id}: {e}");
-            return ResolveResult::Error(format!("Failed to render templates: {e}"));
+            log::warn!("Auto-start: config loading task failed for {daemon_id}: {e}");
+            return Err(ResolveResult::Error(format!(
+                "Failed to load configuration: {e}"
+            )));
         }
     };
 
+    if !pt.daemons.contains_key(daemon_id) {
+        log::debug!(
+            "Auto-start: daemon {daemon_id} not found in config at {}",
+            config_dir.display()
+        );
+        return Err(ResolveResult::NotFound);
+    }
+
+    // `pitchfork start` refuses a disabled daemon, and so does the proxy.
+    if SUPERVISOR
+        .state_file
+        .lock()
+        .await
+        .disabled
+        .contains(daemon_id)
+    {
+        return Err(ResolveResult::Error(format!(
+            "Daemon '{daemon_id}' is disabled, so it is not started.\n\
+             Enable it with: pitchfork enable {daemon_id}"
+        )));
+    }
+
+    let graph: Vec<DaemonId> =
+        match crate::deps::resolve_dependencies(std::slice::from_ref(daemon_id), &pt.daemons) {
+            Ok(order) => order.levels.into_iter().flatten().collect(),
+            Err(e) => {
+                log::warn!("Auto-start: cannot resolve dependencies of {daemon_id}: {e}");
+                return Err(ResolveResult::Error(format!(
+                    "Cannot start '{daemon_id}': {e}"
+                )));
+            }
+        };
+    let _locks = lock_startup_graph(graph).await;
+
+    // The same entry point as `pitchfork start`, over this supervisor's own
+    // socket as the web UI's controls use it.
+    let ipc = match crate::ipc::client::IpcClient::connect(false).await {
+        Ok(ipc) => Arc::new(ipc),
+        Err(e) => {
+            log::warn!("Auto-start: failed to connect to the supervisor: {e}");
+            return Err(ResolveResult::Error(format!(
+                "Failed to start daemon '{daemon_id}': {e}"
+            )));
+        }
+    };
     let opts = crate::ipc::batch::StartOptions {
         quiet: true,
         ..crate::ipc::batch::StartOptions::default()
     };
-    let mut run_opts =
-        match crate::ipc::batch::build_run_options(daemon_id, &daemon_config, Some(&opts)).await {
-            Ok(o) => o,
-            Err(e) => {
-                log::warn!("Auto-start: failed to build run options for {daemon_id}: {e}");
-                return ResolveResult::Error(format!("Failed to build run options: {e}"));
-            }
-        };
-
-    // Only set the working directory when the daemon config didn't specify one.
-    // If the config has an explicit `dir`, respect it even in a worktree context.
-    if run_opts.dir.0.as_os_str().is_empty() {
-        run_opts.dir = crate::config_types::Dir(config_dir.to_path_buf());
+    let result = match ipc
+        .start_daemons_with_config(std::slice::from_ref(daemon_id), opts, pt)
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            log::warn!("Auto-start: failed to start {daemon_id}: {e}");
+            return Err(ResolveResult::Error(format!(
+                "Failed to start daemon '{daemon_id}': {e}"
+            )));
+        }
+    };
+    if !result.any_failed {
+        return Ok(());
     }
 
-    log::info!("Auto-start: starting daemon {daemon_id} for slug '{slug}'");
+    let message = match result.failed.first() {
+        Some((id, reason)) if id == daemon_id => {
+            format!("Daemon '{daemon_id}' failed to start: {reason}\nCheck its logs for errors.")
+        }
+        Some((dep, reason)) => format!(
+            "Daemon '{daemon_id}' was not started because its dependency '{dep}' failed: \
+             {reason}\n\
+             Check the logs of '{dep}' for errors."
+        ),
+        None => format!(
+            "Daemon '{daemon_id}' or one of its dependencies failed to start.\n\
+             Check the supervisor log for errors."
+        ),
+    };
+    log::warn!("Auto-start: {message}");
+    Err(ResolveResult::Error(message))
+}
 
-    let run_result = SUPERVISOR.run(run_opts).await;
-
-    if let Err(e) = run_result {
-        log::warn!("Auto-start: failed to start daemon {daemon_id}: {e}");
-        return ResolveResult::Error(format!("Failed to start daemon: {e}"));
-    }
-
+/// Poll the state file until a started daemon reports a port to forward to.
+async fn wait_for_active_port(daemon_id: &DaemonId, route: &ProxyTlsRoute) -> ResolveResult {
     let poll_interval = std::time::Duration::from_millis(250);
 
     loop {
@@ -4790,6 +4881,38 @@ mod tests {
             // The base carries the web UI's path prefix when one is set.
             "http://127.0.0.1:3120/ps/projects/shop"
         );
+    }
+
+    #[tokio::test]
+    async fn overlapping_startup_graphs_wait_for_each_other() {
+        use std::time::Duration;
+        let id = |name: &str| DaemonId::try_new("startup-lock-test", name).unwrap();
+
+        let first = lock_startup_graph(vec![id("shared"), id("app-a")]).await;
+
+        // Listed in the opposite order to the first graph: sorted acquisition
+        // is what keeps two overlapping graphs from deadlocking.
+        let second = tokio::spawn(lock_startup_graph(vec![id("shared"), id("app-b")]));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !second.is_finished(),
+            "a graph sharing a daemon must wait for the graph starting it"
+        );
+
+        // A graph with nothing in common does not wait.
+        let disjoint = tokio::time::timeout(
+            Duration::from_secs(1),
+            lock_startup_graph(vec![id("other")]),
+        )
+        .await;
+        assert!(disjoint.is_ok());
+
+        drop(first);
+        let second = tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("the waiting graph proceeds once the first releases")
+            .unwrap();
+        assert_eq!(second.len(), 2);
     }
 
     #[test]

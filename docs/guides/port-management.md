@@ -266,7 +266,20 @@ When you visit a proxy URL for a daemon that isn't running, pitchfork can automa
 
 This is enabled by default. No extra setup is needed beyond the normal proxy configuration.
 
-The entire auto-start operation — including waiting for the daemon's readiness signal and detecting its bound port — is bounded by `proxy.auto_start_timeout` (default 30 s). If the daemon doesn't become ready within this window the browser receives a timeout error. Increase the timeout for daemons with slow initialisation:
+Auto-start starts the daemon the same way `pitchfork start` does, including its
+[`depends`](/reference/configuration#depends) graph. Dependencies start first,
+level by level, and each must be ready (or, for a `oneshot`, complete
+successfully) before its dependents start. Dependencies can live in other
+registered projects. As with `pitchfork start`, running dependencies are left
+alone, disabled daemons are not started, and a failed dependency stops the
+startup; the error page names the daemon that failed. Opening a project or stack
+page never starts anything.
+
+When two proxy URLs share a dependency and are opened at the same time, the
+second startup waits for the first to finish, so the shared dependency starts
+once and is ready before either dependent starts.
+
+The entire auto-start operation — including starting dependencies, waiting for the daemon's readiness signal, and detecting its bound port — is bounded by `proxy.auto_start_timeout` (default 30 s). If the daemon doesn't become ready within this window the browser receives a timeout error, and startup continues in the background. Increase the timeout for daemons with slow initialisation:
 
 ```toml
 [settings.proxy]

@@ -452,6 +452,7 @@ depends = ["postgres", "redis"]
 **Behavior:**
 
 - **Auto-start**: Running `pitchfork start api` will automatically start `postgres` and `redis` first
+- **Proxy URLs**: Opening `api`'s proxy URL while it is stopped starts the same dependency graph first (see [proxy auto-start](/guides/port-management#auto-start))
 - **Transitive dependencies**: If `postgres` depends on `storage`, that will be started too
 - **Parallel starting**: Dependencies at the same level start in parallel for faster startup
 - **Skip running**: Already-running services are skipped (not restarted)

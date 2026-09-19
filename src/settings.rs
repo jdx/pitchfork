@@ -466,9 +466,10 @@ pub struct SettingsProxy {
     /// Automatically start daemons when accessed via proxy URL
     ///
     /// When enabled (default), visiting a proxy URL for a stopped daemon will
-    /// automatically start that daemon. The browser receives a "Starting…" page
-    /// that refreshes every 2 seconds until the daemon is ready, at which point
-    /// the request is proxied normally.
+    /// automatically start that daemon, along with its `depends` graph in the
+    /// same order `pitchfork start` uses. The browser receives a "Starting…"
+    /// page that refreshes every 2 seconds until the daemon is ready, at which
+    /// point the request is proxied normally.
     ///
     /// Set to `false` to disable auto-start and return a plain 502 error for
     /// stopped daemons (the previous behaviour).
@@ -479,10 +480,12 @@ pub struct SettingsProxy {
     ///
     /// When a daemon is auto-started via a proxy request, the proxy waits up to
     /// this duration for the **entire** auto-start operation to complete — including
-    /// waiting for the daemon's readiness signal and detecting the bound port.
+    /// starting its dependencies, waiting for the daemon's readiness signal, and
+    /// detecting the bound port.
     ///
     /// If the daemon does not become ready and bind a port within this timeout,
     /// the browser receives an error page indicating the startup timed out.
+    /// The startup itself continues in the background.
     ///
     /// **Examples:**
     /// - `"15s"` - Shorter timeout for fast-starting services
