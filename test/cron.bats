@@ -529,9 +529,15 @@ EOF
   # Not started by hand: `retrigger = "finish"` would decline every scheduled
   # tick while that run is up, so the watcher would never own a run of its
   # own. `immediate = true` lets its first tick start the daemon instead.
+  #
+  # Both conditions are polled together: `last_cron_run` is persisted at the
+  # spawn, before the `running` status is, so waiting on the timestamp alone
+  # would race the status upsert that follows it.
   local ok=0
+  local snap
   for _ in $(seq 1 20); do
-    if pitchfork status cron_status_noverdict | grep -qE "Last run: [0-9]{4}-"; then
+    snap=$(pitchfork status cron_status_noverdict 2>/dev/null)
+    if grep -qE "^Last run: [0-9]{4}-" <<<"$snap" && grep -qE "^Status: running" <<<"$snap"; then
       ok=1
       break
     fi

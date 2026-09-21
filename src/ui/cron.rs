@@ -15,12 +15,18 @@ use crate::procs::format_duration;
 pub(crate) fn format_at(at: DateTime<Local>, now: DateTime<Local>, future: bool) -> String {
     let stamp = at.format("%Y-%m-%d %H:%M:%S");
     let delta = (at - now).num_seconds();
-    let rel = if delta >= 0 {
-        format!("in {}", format_duration(delta as u64))
-    } else if future {
-        format!("{} overdue", format_duration(delta.unsigned_abs()))
+    let rel = if future {
+        if delta >= 0 {
+            format!("in {}", format_duration(delta as u64))
+        } else {
+            format!("{} overdue", format_duration(delta.unsigned_abs()))
+        }
     } else {
-        format!("{} ago", format_duration(delta.unsigned_abs()))
+        // A recorded run has already happened, so the same second reads as
+        // `0s ago` rather than `in 0s`. `min(0)` also absorbs a timestamp that
+        // reads as slightly ahead of now, which a clock adjustment between the
+        // write and the read can produce.
+        format!("{} ago", format_duration(delta.min(0).unsigned_abs()))
     };
     format!("{stamp} ({rel})")
 }
@@ -44,6 +50,25 @@ mod tests {
     fn future_time_reads_as_in() {
         let s = format_at(at(9, 30), at(7, 0), true);
         assert_eq!(s, "2026-09-21 09:30:00 (in 2h 30m)");
+    }
+
+    /// A run recorded this second is still a past event.
+    #[test]
+    fn a_run_in_the_same_second_reads_as_ago() {
+        assert_eq!(
+            format_at(at(3, 0), at(3, 0), false),
+            "2026-09-21 03:00:00 (0s ago)"
+        );
+    }
+
+    /// A timestamp that reads as slightly ahead of now -- a clock adjustment
+    /// between the write and the read -- is still a past event.
+    #[test]
+    fn a_past_event_never_reads_as_the_future() {
+        assert_eq!(
+            format_at(at(3, 1), at(3, 0), false),
+            "2026-09-21 03:01:00 (0s ago)"
+        );
     }
 
     /// A next run in the past means the watcher owes a window, not that the

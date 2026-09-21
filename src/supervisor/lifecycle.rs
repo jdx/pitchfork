@@ -1149,9 +1149,20 @@ impl Supervisor {
         // `DaemonFailed`. Only the last of those ran, and a cron job that
         // fails that fast is precisely the one whose timing a user needs.
         // Ordered before the `Running` upsert below, which inherits it.
+        //
+        // Written synchronously rather than left to the background flush, for
+        // the same reason `last_cron_triggered` is: a supervisor that dies in
+        // the window between the two would come back with no record that this
+        // run happened, and for a short-lived job that window is as long as
+        // the job itself. A scheduled spawn is rare enough -- at most one per
+        // `cron_check_interval` -- for the extra write to cost nothing.
         if opts.cron_started {
             let mut state_file = self.state_file.lock().await;
-            state_file.set_last_cron_run(id, spawn_time);
+            if state_file.set_last_cron_run(id, spawn_time)
+                && let Err(e) = state_file.write()
+            {
+                error!("failed to persist last_cron_run for daemon {id}: {e}");
+            }
         }
         let pid = match child.id() {
             Some(p) => p,
