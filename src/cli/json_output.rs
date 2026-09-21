@@ -57,10 +57,10 @@ pub struct JsonStatusEntry {
     /// that has not come due yet has no last run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron_last_run: Option<String>,
-    /// Whether the daemon's last exit was successful. Omitted until a
-    /// scheduled run has happened, since there is nothing to attribute an
-    /// outcome to before then. A manual restart after a scheduled run
-    /// replaces it, the same as `pitchfork list` reporting a daemon's state.
+    /// Whether the run at `cron_last_run` finished successfully. Omitted
+    /// until a scheduled run has happened, and omitted again while the daemon
+    /// is running, since the recorded exit then belongs to the previous run
+    /// rather than the live one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron_last_success: Option<bool>,
     /// The next time the schedule comes due, RFC 3339. A time in the past

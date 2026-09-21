@@ -98,9 +98,17 @@ Next run: 2026-09-22 02:00:00 (in 16h 18m)
 ```
 
 `Last run` is the last time the schedule actually started the daemon, and the
-suffix is how the daemon last exited. It stays `never` until a scheduled run
-happens — starting the daemon by hand is not a scheduled run, and neither is a
-scheduled time that `retrigger` declined to act on.
+suffix is how that run finished. It stays `never` until a scheduled run
+happens: starting the daemon by hand is not a scheduled run, nor is a
+scheduled time that `retrigger` declined to act on, nor one where the start
+itself failed.
+
+While the run is still going the suffix reads `still running` rather than an
+outcome, since the recorded result belongs to the run before it:
+
+```
+Last run: 2026-09-22 03:00:00 (12s ago) still running
+```
 
 `Next run` is when the watcher will next consider the daemon due. A time in
 the past marked `overdue` means the supervisor was not running through that

@@ -509,6 +509,52 @@ EOF
   assert_output --regexp "Last run: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \(.*\) success"
 }
 
+# A previous run's result must not be pinned to a run still in flight: the
+# supervisor keeps `last_exit_success` across a start, so a long job would
+# otherwise inherit the last one's `failed` for its whole duration.
+@test "status does not label a running cron job with the previous outcome" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_status_running]
+run = "sleep 30"
+retry = 0
+
+[daemons.cron_status_running.cron]
+schedule = "* * * * * *"
+retrigger = "finish"
+immediate = true
+EOF
+
+  # Deliberately not started by hand: `retrigger = "finish"` would then
+  # decline every scheduled tick while that run is up, and the watcher would
+  # never own a run of its own. `immediate = true` lets its first tick start
+  # the daemon instead.
+  local ok=0
+  for _ in $(seq 1 20); do
+    if pitchfork status cron_status_running | grep -qE "Last run: [0-9]{4}-"; then
+      ok=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$ok" -eq 1 ]]
+
+  run pitchfork status cron_status_running
+  assert_success
+  assert_output --partial "still running"
+  refute_output --partial "success"
+  refute_output --partial "failed"
+
+  # And the JSON withholds the outcome rather than reporting a stale one.
+  run --separate-stderr pitchfork status cron_status_running --json
+  assert_success
+  local has_success
+  has_success=$(python3 -c '
+import json, sys
+print("cron_last_success" in json.load(sys.stdin))
+' <<<"$output")
+  [[ "$has_success" == "False" ]]
+}
+
 @test "a non-cron daemon's status has no schedule lines" {
   create_pitchfork_toml <<EOF
 [daemons.plain_daemon]

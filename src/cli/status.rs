@@ -6,7 +6,7 @@ use crate::daemon_list::build_placeholder_daemon;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::state_file::StateFile;
-use crate::ui::cron::{exit_suffix, format_at};
+use crate::ui::cron::{format_at, run_outcome};
 
 /// Display the status of a daemon
 #[derive(Debug, usage_rs::Args)]
@@ -116,9 +116,14 @@ impl Status {
                 proxy_tls,
                 cron_schedule: daemon.cron_schedule.clone(),
                 cron_last_run: daemon.last_cron_run.map(|t| t.to_rfc3339()),
-                // Gated on `last_cron_run`: an outcome with no run to attach
-                // it to says nothing useful.
-                cron_last_success: daemon.last_cron_run.and(daemon.last_exit_success),
+                // Gated on `last_cron_run`, because an outcome with no run to
+                // attach it to says nothing useful, and on the daemon being
+                // down, because `last_exit_success` still holds the previous
+                // run's result while a new one is in flight.
+                cron_last_success: daemon
+                    .last_cron_run
+                    .filter(|_| !daemon.status.is_running())
+                    .and(daemon.last_exit_success),
                 cron_next_run: daemon
                     .next_cron_run(chrono::Local::now())
                     .map(|t| t.to_rfc3339()),
@@ -156,7 +161,7 @@ impl Status {
                 Some(t) => println!(
                     "Last run: {}{}",
                     format_at(t, now, false),
-                    exit_suffix(daemon.last_exit_success)
+                    run_outcome(&daemon.status, daemon.last_exit_success)
                 ),
                 None => println!("Last run: never"),
             }

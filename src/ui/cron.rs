@@ -5,6 +5,7 @@
 
 use chrono::{DateTime, Local};
 
+use crate::daemon_status::DaemonStatus;
 use crate::procs::format_duration;
 
 /// A timestamp with how far it is from `now`, e.g.
@@ -25,9 +26,18 @@ pub(crate) fn format_at(at: DateTime<Local>, now: DateTime<Local>, future: bool)
     format!("{stamp} ({rel})")
 }
 
-/// How a finished run turned out, as the suffix that follows a "Last run"
-/// timestamp. Empty when the daemon has not recorded an exit yet.
-pub(crate) fn exit_suffix(last_exit_success: Option<bool>) -> &'static str {
+/// How the run at `last_cron_run` turned out, as the suffix that follows its
+/// timestamp.
+///
+/// `last_exit_success` describes the daemon's last *finished* run and is not
+/// cleared when a new one starts, so while a process is up it still holds the
+/// previous run's result. Attaching that to a run still in flight would show
+/// a long backup as `failed` for its whole duration, so a live daemon reports
+/// no outcome yet. Empty when nothing has finished and nothing is running.
+pub(crate) fn run_outcome(status: &DaemonStatus, last_exit_success: Option<bool>) -> &'static str {
+    if status.is_running() {
+        return " still running";
+    }
     match last_exit_success {
         Some(true) => " success",
         Some(false) => " failed",
@@ -65,9 +75,23 @@ mod tests {
     }
 
     #[test]
-    fn exit_suffix_is_empty_until_a_run_finishes() {
-        assert_eq!(exit_suffix(None), "");
-        assert_eq!(exit_suffix(Some(true)), " success");
-        assert_eq!(exit_suffix(Some(false)), " failed");
+    fn outcome_is_empty_until_a_run_finishes() {
+        assert_eq!(run_outcome(&DaemonStatus::Stopped, None), "");
+        assert_eq!(run_outcome(&DaemonStatus::Stopped, Some(true)), " success");
+        assert_eq!(run_outcome(&DaemonStatus::Stopped, Some(false)), " failed");
+    }
+
+    /// The previous run's result must not be pinned to a run that is still
+    /// going: `last_exit_success` survives the start of a new one.
+    #[test]
+    fn outcome_of_a_live_run_is_not_the_previous_result() {
+        assert_eq!(
+            run_outcome(&DaemonStatus::Running, Some(false)),
+            " still running"
+        );
+        assert_eq!(
+            run_outcome(&DaemonStatus::Running, Some(true)),
+            " still running"
+        );
     }
 }

@@ -4,7 +4,7 @@ use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
 use crate::tui::app::{
     App, EditMode, FormFieldValue, PendingAction, SortColumn, StatsHistory, View,
 };
-use crate::ui::cron::{exit_suffix, format_at};
+use crate::ui::cron::{format_at, run_outcome};
 use listeners::Listener;
 use ratatui::{
     prelude::*,
@@ -1657,10 +1657,13 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                         format!(
                             "{}{}",
                             format_at(t, now, false),
-                            exit_suffix(d.last_exit_success)
+                            run_outcome(&d.status, d.last_exit_success)
                         ),
                         match d.last_exit_success {
-                            Some(false) => RED,
+                            // Red is about the run the line names, so it is
+                            // withheld while a new one is in flight for the
+                            // same reason the outcome word is.
+                            Some(false) if !d.status.is_running() => RED,
                             _ => Color::White,
                         },
                     ),
