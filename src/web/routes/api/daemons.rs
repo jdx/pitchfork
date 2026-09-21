@@ -20,10 +20,6 @@ pub struct ApiDaemonEntry {
     /// When the cron watcher last started this daemon, RFC 3339. `null`
     /// until a scheduled run has actually happened.
     cron_last_run: Option<String>,
-    /// Whether the run at `cron_last_run` finished successfully. `null` while
-    /// it is still going: `last_exit_success` holds the previous run's result
-    /// until the live one exits.
-    cron_last_success: Option<bool>,
     /// The next time the schedule comes due, RFC 3339. A time in the past is
     /// a window missed while the supervisor was down.
     cron_next_run: Option<String>,
@@ -193,10 +189,6 @@ fn entry_to_api(
         autostop: d.autostop,
         cron_schedule: d.cron_schedule.clone(),
         cron_last_run: d.last_cron_run.map(|t| t.to_rfc3339()),
-        cron_last_success: d
-            .last_cron_run
-            .filter(|_| !d.status.is_running())
-            .and(d.last_exit_success),
         cron_next_run: d
             .next_cron_run(chrono::Local::now())
             .map(|t| t.to_rfc3339()),

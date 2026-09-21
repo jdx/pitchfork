@@ -463,17 +463,15 @@ EOF
 import json, sys
 d = json.load(sys.stdin)
 print(d["cron_schedule"])
-# A schedule that has not come due has no last run, and no outcome to go with
-# one; both keys are omitted rather than reported as null-ish values.
+# A schedule that has not come due has no last run: the key is omitted rather
+# than reported as a null-ish value.
 print("cron_last_run" in d)
-print("cron_last_success" in d)
 print(d["cron_next_run"])
 ' <<<"$output")
 
   [[ "$(sed -n 1p <<<"$parsed")" == "0 0 3 * * *" ]]
   [[ "$(sed -n 2p <<<"$parsed")" == "False" ]]
-  [[ "$(sed -n 3p <<<"$parsed")" == "False" ]]
-  [[ "$(sed -n 4p <<<"$parsed")" == *T03:00:00* ]]
+  [[ "$(sed -n 3p <<<"$parsed")" == *T03:00:00* ]]
 }
 
 @test "status reports the last run once the schedule fires" {
@@ -504,33 +502,36 @@ EOF
   done
   [[ "$ok" -eq 1 ]]
 
-  run pitchfork status cron_status_ran
+  # grep, not assert_output --regexp: `$` there anchors to the end of the
+  # whole multi-line output, so it cannot pin what follows on one line.
+  run bash -c 'pitchfork status cron_status_ran 2>/dev/null | grep -cE "^Last run: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \([^)]*ago\)$"'
   assert_success
-  assert_output --regexp "Last run: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \(.*\) success"
+  assert_output "1"
 }
 
-# A previous run's result must not be pinned to a run still in flight: the
-# supervisor keeps `last_exit_success` across a start, so a long job would
-# otherwise inherit the last one's `failed` for its whole duration.
-@test "status does not label a running cron job with the previous outcome" {
+# `last_exit_success` is the daemon's last exit, not necessarily the exit of
+# the run `Last run` names: a later manual start replaces it, and it is not
+# cleared while a new run is in flight. The line therefore carries a timestamp
+# only, and the outcome stays on the `Status:` line where it is attributed to
+# the run it actually describes.
+@test "the last run line carries no exit outcome" {
   create_pitchfork_toml <<EOF
-[daemons.cron_status_running]
+[daemons.cron_status_noverdict]
 run = "sleep 30"
 retry = 0
 
-[daemons.cron_status_running.cron]
+[daemons.cron_status_noverdict.cron]
 schedule = "* * * * * *"
 retrigger = "finish"
 immediate = true
 EOF
 
-  # Deliberately not started by hand: `retrigger = "finish"` would then
-  # decline every scheduled tick while that run is up, and the watcher would
-  # never own a run of its own. `immediate = true` lets its first tick start
-  # the daemon instead.
+  # Not started by hand: `retrigger = "finish"` would decline every scheduled
+  # tick while that run is up, so the watcher would never own a run of its
+  # own. `immediate = true` lets its first tick start the daemon instead.
   local ok=0
   for _ in $(seq 1 20); do
-    if pitchfork status cron_status_running | grep -qE "Last run: [0-9]{4}-"; then
+    if pitchfork status cron_status_noverdict | grep -qE "Last run: [0-9]{4}-"; then
       ok=1
       break
     fi
@@ -538,14 +539,17 @@ EOF
   done
   [[ "$ok" -eq 1 ]]
 
-  run pitchfork status cron_status_running
+  run pitchfork status cron_status_noverdict
   assert_success
-  assert_output --partial "still running"
-  refute_output --partial "success"
-  refute_output --partial "failed"
+  # The outcome lives here, on the run it actually describes.
+  assert_output --partial "Status: running"
 
-  # And the JSON withholds the outcome rather than reporting a stale one.
-  run --separate-stderr pitchfork status cron_status_running --json
+  # And the timestamp line ends at the relative hint: nothing is appended.
+  run bash -c 'pitchfork status cron_status_noverdict 2>/dev/null | grep -cE "^Last run: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \([^)]*\)$"'
+  assert_success
+  assert_output "1"
+
+  run --separate-stderr pitchfork status cron_status_noverdict --json
   assert_success
   local has_success
   has_success=$(python3 -c '

@@ -4,7 +4,7 @@ use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
 use crate::tui::app::{
     App, EditMode, FormFieldValue, PendingAction, SortColumn, StatsHistory, View,
 };
-use crate::ui::cron::{format_at, run_outcome};
+use crate::ui::cron::format_at;
 use listeners::Listener;
 use ratatui::{
     prelude::*,
@@ -1652,21 +1652,10 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
             // supervisor has not seen yet does not have.
             if let Some(d) = daemon {
                 let now = chrono::Local::now();
+                // Timestamp only: the status line above already carries how
+                // the daemon last exited, attributed to the run it describes.
                 let (last, last_color) = match d.last_cron_run {
-                    Some(t) => (
-                        format!(
-                            "{}{}",
-                            format_at(t, now, false),
-                            run_outcome(&d.status, d.last_exit_success)
-                        ),
-                        match d.last_exit_success {
-                            // Red is about the run the line names, so it is
-                            // withheld while a new one is in flight for the
-                            // same reason the outcome word is.
-                            Some(false) if !d.status.is_running() => RED,
-                            _ => Color::White,
-                        },
-                    ),
+                    Some(t) => (format_at(t, now, false), Color::White),
                     None => ("never".to_string(), GRAY),
                 };
                 lines.push(Line::from(vec![

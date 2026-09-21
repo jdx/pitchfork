@@ -49,7 +49,7 @@ pub struct JsonStatusEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_tls: Option<String>,
     /// The daemon's cron expression. Omitted when it is not scheduled; the
-    /// three fields below are omitted with it.
+    /// two fields below are omitted with it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron_schedule: Option<String>,
     /// When the cron watcher last started this daemon, RFC 3339. Omitted
@@ -57,12 +57,6 @@ pub struct JsonStatusEntry {
     /// that has not come due yet has no last run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cron_last_run: Option<String>,
-    /// Whether the run at `cron_last_run` finished successfully. Omitted
-    /// until a scheduled run has happened, and omitted again while the daemon
-    /// is running, since the recorded exit then belongs to the previous run
-    /// rather than the live one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cron_last_success: Option<bool>,
     /// The next time the schedule comes due, RFC 3339. A time in the past
     /// means the window was missed while the supervisor was down and the
     /// watcher will take it on its next check.
