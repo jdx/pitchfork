@@ -706,6 +706,17 @@ impl Supervisor {
                                 continue;
                             }
                         };
+                        // Recorded only on the ticks that actually start the
+                        // daemon, so "last run" and `last_exit_success`
+                        // describe the same run. Written before `run` so the
+                        // upsert it performs inherits the new value. Unlike
+                        // the `last_cron_triggered` write above this is not
+                        // load-bearing for scheduling, so the background flush
+                        // is enough.
+                        {
+                            let mut state_file = self.state_file.lock().await;
+                            state_file.set_last_cron_run(&id, now);
+                        }
                         let dir = daemon.dir.clone().unwrap_or_else(|| env::CWD.clone());
                         // Use force: true for Always retrigger to ensure restart
                         let force =

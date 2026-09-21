@@ -79,6 +79,37 @@ This catches a scheduled time that just passed. It does **not** mean “run now
 regardless of the schedule.” For a manual execution, use a separate one-off
 command, such as `pitchfork run backup-now -- ./scripts/backup.sh`.
 
+## Check that a schedule is still live
+
+Between runs a cron daemon has no process, so `pitchfork list` shows it as
+`stopped`. That says nothing about the schedule. `pitchfork status` spells out
+the timing:
+
+```sh
+pitchfork status backup
+```
+
+```
+Name: project/backup
+Status: stopped
+Cron: 0 0 2 * * *
+Last run: 2026-09-21 02:00:03 (7h 41m ago) success
+Next run: 2026-09-22 02:00:00 (in 16h 18m)
+```
+
+`Last run` is the last time the schedule actually started the daemon, and the
+suffix is how the daemon last exited. It stays `never` until a scheduled run
+happens — starting the daemon by hand is not a scheduled run, and neither is a
+scheduled time that `retrigger` declined to act on.
+
+`Next run` is when the watcher will next consider the daemon due. A time in
+the past marked `overdue` means the supervisor was not running through that
+window and will take it on its next check.
+
+The same values are available as `cron_schedule`, `cron_last_run`,
+`cron_last_success` and `cron_next_run` in `pitchfork status --json`, and on
+the detail pane in `pitchfork tui`.
+
 ## Pause a schedule
 
 ```sh

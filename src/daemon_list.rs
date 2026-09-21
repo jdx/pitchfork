@@ -237,6 +237,13 @@ pub fn build_placeholder_daemon(
         proxy: None,
         memory_limit: daemon_config.memory_limit,
         cpu_limit: daemon_config.cpu_limit,
+        // Carried so `status` can show the schedule for a cron daemon the
+        // supervisor has not registered into state yet. There is no timing to
+        // show alongside it, which is exactly right: it has never run, and
+        // the next run is whatever the expression says.
+        cron_schedule: daemon_config.cron.as_ref().map(|c| c.schedule.clone()),
+        cron_retrigger: daemon_config.cron.as_ref().map(|c| c.retrigger),
+        cron_immediate: daemon_config.cron.as_ref().map(|c| c.immediate),
         ..Daemon::default()
     }
 }

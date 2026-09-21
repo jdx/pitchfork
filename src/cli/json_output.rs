@@ -48,6 +48,26 @@ pub struct JsonStatusEntry {
     /// Omitted when the daemon is not routed through the proxy.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_tls: Option<String>,
+    /// The daemon's cron expression. Omitted when it is not scheduled; the
+    /// three fields below are omitted with it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_schedule: Option<String>,
+    /// When the cron watcher last started this daemon, RFC 3339. Omitted
+    /// until a scheduled run has actually happened -- a registered schedule
+    /// that has not come due yet has no last run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_last_run: Option<String>,
+    /// Whether the daemon's last exit was successful. Omitted until a
+    /// scheduled run has happened, since there is nothing to attribute an
+    /// outcome to before then. A manual restart after a scheduled run
+    /// replaces it, the same as `pitchfork list` reporting a daemon's state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_last_success: Option<bool>,
+    /// The next time the schedule comes due, RFC 3339. A time in the past
+    /// means the window was missed while the supervisor was down and the
+    /// watcher will take it on its next check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron_next_run: Option<String>,
 }
 
 #[derive(Serialize)]

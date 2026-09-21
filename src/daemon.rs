@@ -171,6 +171,17 @@ pub struct Daemon {
     /// Appended last for the positional IPC encoding, like `oneshot`.
     #[serde(default)]
     pub proxy_idle_timeout_ms: Option<u64>,
+    /// When the cron watcher last actually started this daemon.
+    ///
+    /// Distinct from `last_cron_triggered`, which advances on every scheduled
+    /// tick the watcher observes -- including the anchoring tick that
+    /// `immediate = false` uses to skip the first window, and ticks where the
+    /// `retrigger` policy declines to run. Only this field means "it ran",
+    /// which is what `last_exit_success` describes the outcome of.
+    ///
+    /// Appended after `proxy_idle_timeout_ms` for the positional IPC encoding.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub last_cron_run: Option<chrono::DateTime<chrono::Local>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Default)]
@@ -281,6 +292,31 @@ pub struct RunOptions {
 }
 
 impl Daemon {
+    /// The next time the cron watcher will consider this daemon due, or
+    /// `None` when it has no schedule or the schedule does not parse.
+    ///
+    /// Anchored exactly the way `check_cron_schedules` anchors itself, so the
+    /// answer is what the watcher will actually do rather than an independent
+    /// reading of the schedule. That includes the case where the supervisor
+    /// was down across a window: the anchor is still the old tick, so the
+    /// result is a time in the past -- the overdue run the watcher takes on
+    /// its next check.
+    pub fn next_cron_run(
+        &self,
+        now: chrono::DateTime<chrono::Local>,
+    ) -> Option<chrono::DateTime<chrono::Local>> {
+        use std::str::FromStr;
+        let schedule = cron::Schedule::from_str(self.cron_schedule.as_ref()?).ok()?;
+        let anchor = match self.last_cron_triggered {
+            Some(t) => t,
+            // Mirrors the watcher's first-sighting branch: `immediate` looks
+            // back ten seconds, the default anchors to now.
+            None if self.cron_immediate.unwrap_or(false) => now - chrono::Duration::seconds(10),
+            None => now,
+        };
+        schedule.after(&anchor).next()
+    }
+
     /// Build RunOptions from persisted daemon state.
     ///
     /// Carries over all configuration fields from the daemon state.
@@ -362,6 +398,98 @@ impl Display for Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    fn at(h: u32, m: u32, sec: u32) -> chrono::DateTime<chrono::Local> {
+        chrono::Local
+            .with_ymd_and_hms(2026, 9, 21, h, m, sec)
+            .unwrap()
+    }
+
+    /// Daily at 03:00, the schedule from the report that asked for this.
+    fn daily_3am(last_triggered: Option<chrono::DateTime<chrono::Local>>) -> Daemon {
+        Daemon {
+            cron_schedule: Some("0 0 3 * * *".to_string()),
+            last_cron_triggered: last_triggered,
+            ..Daemon::default()
+        }
+    }
+
+    #[test]
+    fn next_cron_run_is_none_without_a_schedule() {
+        assert!(Daemon::default().next_cron_run(at(7, 0, 0)).is_none());
+    }
+
+    /// The watcher warns and skips an expression it cannot parse; there is no
+    /// next run to report for one.
+    #[test]
+    fn next_cron_run_is_none_for_an_invalid_schedule() {
+        let d = Daemon {
+            cron_schedule: Some("not a cron expression".to_string()),
+            ..Daemon::default()
+        };
+        assert!(d.next_cron_run(at(7, 0, 0)).is_none());
+    }
+
+    #[test]
+    fn next_cron_run_follows_the_last_tick() {
+        let d = daily_3am(Some(at(3, 0, 4)));
+        assert_eq!(
+            d.next_cron_run(at(7, 0, 0)),
+            Some(
+                chrono::Local
+                    .with_ymd_and_hms(2026, 9, 22, 3, 0, 0)
+                    .unwrap()
+            )
+        );
+    }
+
+    /// A supervisor that was down across 03:00 has a stale anchor, so the next
+    /// run is in the past: the window it still owes, which is what the watcher
+    /// will take on its next check.
+    #[test]
+    fn next_cron_run_reports_a_missed_window_as_past() {
+        let d = daily_3am(Some(
+            chrono::Local
+                .with_ymd_and_hms(2026, 9, 20, 3, 0, 0)
+                .unwrap(),
+        ));
+        let next = d.next_cron_run(at(7, 0, 0)).unwrap();
+        assert_eq!(next, at(3, 0, 0));
+        assert!(next < at(7, 0, 0));
+    }
+
+    /// Never triggered, `immediate = false`: the watcher will anchor to now
+    /// and skip the current window, so the answer is the next one.
+    #[test]
+    fn next_cron_run_skips_the_current_window_without_immediate() {
+        let d = daily_3am(None);
+        assert_eq!(
+            d.next_cron_run(at(2, 59, 0)),
+            Some(at(3, 0, 0)),
+            "a window still ahead of now is reported as-is"
+        );
+        assert_eq!(
+            d.next_cron_run(at(3, 0, 30)),
+            Some(
+                chrono::Local
+                    .with_ymd_and_hms(2026, 9, 22, 3, 0, 0)
+                    .unwrap()
+            ),
+            "a window that just passed is not claimed: immediate=false skips it"
+        );
+    }
+
+    /// `immediate = true` keeps the watcher's ten-second look-back, so a
+    /// window that just passed is still due.
+    #[test]
+    fn next_cron_run_honors_the_immediate_lookback() {
+        let d = Daemon {
+            cron_immediate: Some(true),
+            ..daily_3am(None)
+        };
+        assert_eq!(d.next_cron_run(at(3, 0, 5)), Some(at(3, 0, 0)));
+    }
 
     #[test]
     fn test_valid_daemon_ids() {

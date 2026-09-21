@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
+  bats_require_minimum_version 1.5.0
   load test_helper/common_setup
   export PITCHFORK_INTERVAL=1s
   export PITCHFORK_CRON_CHECK_INTERVAL=1s
@@ -413,3 +414,110 @@ EOF
   wait_for_status retry_ready_output stopped
 }
 
+
+# ============================================================================
+# Schedule timing in `pitchfork status`
+#
+# A cron daemon reads `stopped` between runs, which says nothing about whether
+# the schedule is still live. These cover the lines that answer that.
+# ============================================================================
+
+@test "status shows the schedule and next run for a daemon that has never run" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_status_never]
+run = "echo fired"
+
+[daemons.cron_status_never.cron]
+schedule = "0 0 3 * * *"
+retrigger = "finish"
+immediate = false
+EOF
+
+  run pitchfork status cron_status_never
+  assert_success
+  assert_output --partial "Cron: 0 0 3 * * *"
+  assert_output --partial "Last run: never"
+  assert_output --partial "Next run: "
+  # The next run is a real timestamp with a relative hint, not a placeholder.
+  assert_output --regexp "Next run: [0-9]{4}-[0-9]{2}-[0-9]{2} 03:00:00 \(in "
+}
+
+@test "status --json carries the schedule and next run" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_status_json]
+run = "echo fired"
+
+[daemons.cron_status_json.cron]
+schedule = "0 0 3 * * *"
+retrigger = "finish"
+immediate = false
+EOF
+
+  # --separate-stderr: the supervisor autostart notice goes to stderr and
+  # would otherwise be parsed as part of the document.
+  run --separate-stderr pitchfork status cron_status_json --json
+  assert_success
+
+  local parsed
+  parsed=$(python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(d["cron_schedule"])
+# A schedule that has not come due has no last run, and no outcome to go with
+# one; both keys are omitted rather than reported as null-ish values.
+print("cron_last_run" in d)
+print("cron_last_success" in d)
+print(d["cron_next_run"])
+' <<<"$output")
+
+  [[ "$(sed -n 1p <<<"$parsed")" == "0 0 3 * * *" ]]
+  [[ "$(sed -n 2p <<<"$parsed")" == "False" ]]
+  [[ "$(sed -n 3p <<<"$parsed")" == "False" ]]
+  [[ "$(sed -n 4p <<<"$parsed")" == *T03:00:00* ]]
+}
+
+@test "status reports the last run once the schedule fires" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_status_ran]
+run = "echo cron_ran"
+retry = 0
+
+[daemons.cron_status_ran.cron]
+schedule = "* * * * * *"
+retrigger = "always"
+immediate = true
+EOF
+
+  run pitchfork start cron_status_ran
+  assert_success
+  wait_for_logs cron_status_ran "cron_ran" 15
+
+  # Poll: the manual start is not a cron run, so `Last run` stays `never`
+  # until the watcher itself triggers the daemon.
+  local ok=0
+  for _ in $(seq 1 20); do
+    if pitchfork status cron_status_ran | grep -qE "Last run: [0-9]{4}-"; then
+      ok=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$ok" -eq 1 ]]
+
+  run pitchfork status cron_status_ran
+  assert_success
+  assert_output --regexp "Last run: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \(.*\) success"
+}
+
+@test "a non-cron daemon's status has no schedule lines" {
+  create_pitchfork_toml <<EOF
+[daemons.plain_daemon]
+run = "echo hi"
+EOF
+
+  run pitchfork status plain_daemon
+  assert_success
+  refute_output --partial "Cron:"
+  refute_output --partial "Last run:"
+  refute_output --partial "Next run:"
+}
