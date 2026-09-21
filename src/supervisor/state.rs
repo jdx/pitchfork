@@ -344,6 +344,7 @@ impl Supervisor {
                 .cron_immediate
                 .or(existing.and_then(|d| d.cron_immediate)),
             last_cron_triggered: existing.and_then(|d| d.last_cron_triggered),
+            last_cron_run: existing.and_then(|d| d.last_cron_run),
             last_exit_success: opts
                 .last_exit_success
                 .or(existing.and_then(|d| d.last_exit_success)),

@@ -1336,7 +1336,7 @@ fn format_bytes(bytes: u64) -> String {
     humanbyte::to_string(bytes, humanbyte::Format::IEC)
 }
 
-fn format_duration(secs: u64) -> String {
+pub(crate) fn format_duration(secs: u64) -> String {
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {

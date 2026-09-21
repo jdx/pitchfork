@@ -2258,6 +2258,9 @@ impl PitchforkTomlDaemon {
             dir: Dir(dir),
             autostop: self.auto.contains(&PitchforkTomlAuto::Stop),
             oneshot: self.is_oneshot(),
+            // Set only by the cron watcher's own call; a start built from
+            // config is not the schedule asking for a run.
+            cron_started: false,
             // Filled in by `build_run_options`, which resolves it against the
             // daemon's own project rather than whatever directory this process
             // happens to be in.

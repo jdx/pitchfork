@@ -6,6 +6,7 @@ use crate::daemon_list::build_placeholder_daemon;
 use crate::pitchfork_toml::PitchforkToml;
 use crate::settings::settings;
 use crate::state_file::StateFile;
+use crate::ui::cron::format_at;
 
 /// Display the status of a daemon
 #[derive(Debug, usage_rs::Args)]
@@ -113,6 +114,11 @@ impl Status {
                 proxy_url: proxy_url.clone(),
                 url: proxy_url,
                 proxy_tls,
+                cron_schedule: daemon.cron_schedule.clone(),
+                cron_last_run: daemon.last_cron_run.map(|t| t.to_rfc3339()),
+                cron_next_run: daemon
+                    .next_cron_run(chrono::Local::now())
+                    .map(|t| t.to_rfc3339()),
             };
             return print_json(&entry);
         }
@@ -136,6 +142,29 @@ impl Status {
                 .collect::<Vec<_>>()
                 .join(", ");
             println!("Port: {ports}");
+        }
+        // Between runs a cron daemon is `stopped`, which says nothing about
+        // whether the schedule is still live. These lines are what makes that
+        // readable without opening the state file.
+        if let Some(schedule) = &daemon.cron_schedule {
+            let now = chrono::Local::now();
+            println!("Cron: {schedule}");
+            match daemon.last_cron_run {
+                // Timestamp only. How the daemon last exited is already on
+                // the `Status:` line above (`failed`, `errored`, `completed`),
+                // attributed to the run it actually describes;
+                // `last_exit_success` is the daemon's last exit, not
+                // necessarily this run's, so pairing it with this timestamp
+                // would claim an attribution the state does not carry.
+                Some(t) => println!("Last run: {}", format_at(t, now, false)),
+                None => println!("Last run: never"),
+            }
+            match daemon.next_cron_run(now) {
+                Some(t) => println!("Next run: {}", format_at(t, now, true)),
+                // Only an unparseable expression gets here; the watcher logs
+                // the same problem and skips the daemon.
+                None => println!("Next run: unknown (invalid schedule)"),
+            }
         }
         let s = settings();
         if s.proxy.enable && (daemon.active_port.is_some() || !daemon.resolved_port.is_empty()) {

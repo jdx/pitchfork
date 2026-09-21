@@ -349,6 +349,25 @@ impl StateFile {
         }
     }
 
+    /// Record that the cron watcher actually started a daemon, and mark the
+    /// state dirty. Returns true if the daemon was found and updated.
+    ///
+    /// Separate from `set_last_cron_triggered` because a tick and a run are
+    /// not the same event: see `Daemon::last_cron_run`.
+    pub fn set_last_cron_run(
+        &mut self,
+        id: &DaemonId,
+        time: chrono::DateTime<chrono::Local>,
+    ) -> bool {
+        if let Some(d) = self.daemons.get_mut(id) {
+            d.last_cron_run = Some(time);
+            self.mark_dirty();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Set a shell working directory and mark the state dirty.
     pub fn set_shell_dir(&mut self, shell_pid: u32, dir: PathBuf) {
         self.shell_dirs.insert(shell_pid.to_string(), dir);

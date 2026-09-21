@@ -79,6 +79,73 @@ This catches a scheduled time that just passed. It does **not** mean “run now
 regardless of the schedule.” For a manual execution, use a separate one-off
 command, such as `pitchfork run backup-now -- ./scripts/backup.sh`.
 
+## Inspect schedule timing
+
+Use `pitchfork status` to see when a scheduled daemon last ran and when it is
+next due, even when no process is running:
+
+```sh
+pitchfork status backup
+```
+
+The schedule-related fields look like this (example timestamps):
+
+```text
+Cron: 0 0 2 * * *
+Last run: 2026-09-21 02:00:03 (7h 41m ago)
+Next run: 2026-09-22 02:00:00 (in 16h 18m)
+```
+
+Timestamps are displayed in local time. The TUI detail pane also shows
+last-run and next-run timing for registered cron daemons.
+
+### Last run and daemon status
+
+`Last run` records the most recent scheduled execution that started a process.
+Manual starts, skipped executions, and failed attempts to start a process do
+not update it. It reads `never` until a scheduled start has been recorded;
+runs from before upgrading to a version that records this field are not
+reconstructed.
+
+`Status` describes the daemon's current state or most recent outcome, such as
+`running`, `completed`, or `failed`. It can reflect a later manual execution,
+so it is not necessarily the outcome of the execution shown in `Last run`.
+Use `pitchfork logs backup` to inspect the command's output.
+
+### Next run and overdue schedules
+
+`Next run` is the next scheduled time the supervisor will evaluate. The
+supervisor must be running and the `retrigger` policy must allow execution
+for a process to start.
+
+A past due time is labeled `overdue`:
+
+```text
+Next run: 2026-09-21 02:00:00 (2h 0m overdue)
+```
+
+This can happen when the supervisor was stopped during a scheduled time, or
+while a due time is waiting for the next schedule check. It does not mean the
+command ran at that time. The supervisor evaluates the overdue schedule on
+its next check, subject to the same execution rules.
+
+### Read timing as JSON
+
+```sh
+pitchfork status backup --json
+```
+
+| Field | Value |
+| --- | --- |
+| `cron_schedule` | Cron expression |
+| `cron_last_run` | Most recent recorded scheduled start, in RFC 3339 format |
+| `cron_next_run` | Next scheduled time to evaluate, in RFC 3339 format; may be in the past |
+
+CLI JSON omits fields when their values are unavailable, including
+`cron_last_run` before the first recorded scheduled start. Daemon entries in
+the [HTTP API](/reference/http-api) expose the same fields, with `null` for
+unavailable values.
+
 ## Pause a schedule
 
 ```sh

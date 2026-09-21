@@ -1141,6 +1141,29 @@ impl Supervisor {
         // consistently fails to spawn would otherwise accumulate sinks.
         // A failed spawn returns here; the sink is terminated by PendingSink.
         let mut child = cmd.spawn().into_diagnostic()?;
+        // A process now exists, which is exactly what `last_cron_run` records.
+        // Written here rather than from the watcher's view of the response
+        // because that view cannot tell a start that failed before spawning
+        // from one that spawned and exited before its PID could be read: a
+        // port conflict, an unresolvable shell and an instant exit all report
+        // `DaemonFailed`. Only the last of those ran, and a cron job that
+        // fails that fast is precisely the one whose timing a user needs.
+        // Ordered before the `Running` upsert below, which inherits it.
+        //
+        // Written synchronously rather than left to the background flush, for
+        // the same reason `last_cron_triggered` is: a supervisor that dies in
+        // the window between the two would come back with no record that this
+        // run happened, and for a short-lived job that window is as long as
+        // the job itself. A scheduled spawn is rare enough -- at most one per
+        // `cron_check_interval` -- for the extra write to cost nothing.
+        if opts.cron_started {
+            let mut state_file = self.state_file.lock().await;
+            if state_file.set_last_cron_run(id, spawn_time)
+                && let Err(e) = state_file.write()
+            {
+                error!("failed to persist last_cron_run for daemon {id}: {e}");
+            }
+        }
         let pid = match child.id() {
             Some(p) => p,
             None => {

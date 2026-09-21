@@ -4,6 +4,7 @@ use crate::pitchfork_toml::{CronRetrigger, PitchforkToml, PitchforkTomlAuto};
 use crate::tui::app::{
     App, EditMode, FormFieldValue, PendingAction, SortColumn, StatsHistory, View,
 };
+use crate::ui::cron::format_at;
 use listeners::Listener;
 use ratatui::{
     prelude::*,
@@ -1645,6 +1646,29 @@ fn draw_details_overlay(f: &mut Frame, app: &App) {
                 ),
                 Span::raw(")"),
             ]));
+            // A scheduled daemon sits at `stopped` between runs, so the
+            // schedule alone does not say whether it is still live. The
+            // timing comes from state, which a config-only daemon the
+            // supervisor has not seen yet does not have.
+            if let Some(d) = daemon {
+                let now = chrono::Local::now();
+                // Timestamp only: the status line above already carries how
+                // the daemon last exited, attributed to the run it describes.
+                let (last, last_color) = match d.last_cron_run {
+                    Some(t) => (format_at(t, now, false), Color::White),
+                    None => ("never".to_string(), GRAY),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Last run: ", Style::default().fg(GRAY)),
+                    Span::styled(last, Style::default().fg(last_color)),
+                ]));
+                if let Some(t) = d.next_cron_run(now) {
+                    lines.push(Line::from(vec![
+                        Span::styled("Next run: ", Style::default().fg(GRAY)),
+                        Span::styled(format_at(t, now, true), Style::default().fg(Color::White)),
+                    ]));
+                }
+            }
         }
 
         if cfg.retry.count() > 0 {

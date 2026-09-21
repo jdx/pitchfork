@@ -720,6 +720,11 @@ impl Supervisor {
                         // daemon, not the proxy: it is never stopped for
                         // inactivity, whatever started the previous run.
                         opts.proxy_idle_timeout_ms = None;
+                        // `last_cron_run` is recorded by `run_once` at the
+                        // moment a process is spawned, which is the only point
+                        // that distinguishes a window that produced a run from
+                        // one that did not.
+                        opts.cron_started = true;
                         if let Err(e) = self.run(opts).await {
                             error!("failed to run cron daemon {id}: {e}");
                         }
