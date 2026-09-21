@@ -559,6 +559,33 @@ print("cron_last_success" in json.load(sys.stdin))
   [[ "$has_success" == "False" ]]
 }
 
+# A run is a run whether or not it succeeded, and a job that fails instantly is
+# exactly the one whose timing a user needs. The spawn is what counts: a
+# process that exits before its PID can be read reports the same response as a
+# start that never spawned at all, so the record cannot be driven off that.
+@test "status records the last run for a cron job that fails immediately" {
+  create_pitchfork_toml <<EOF
+[daemons.cron_status_fails]
+run = "exit 7"
+retry = 0
+
+[daemons.cron_status_fails.cron]
+schedule = "* * * * * *"
+retrigger = "always"
+immediate = true
+EOF
+
+  local ok=0
+  for _ in $(seq 1 25); do
+    if pitchfork status cron_status_fails 2>/dev/null | grep -qE "^Last run: [0-9]{4}-"; then
+      ok=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$ok" -eq 1 ]]
+}
+
 @test "a non-cron daemon's status has no schedule lines" {
   create_pitchfork_toml <<EOF
 [daemons.plain_daemon]

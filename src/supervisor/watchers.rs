@@ -720,32 +720,13 @@ impl Supervisor {
                         // daemon, not the proxy: it is never stopped for
                         // inactivity, whatever started the previous run.
                         opts.proxy_idle_timeout_ms = None;
-                        match self.run(opts).await {
-                            Err(e) => error!("failed to run cron daemon {id}: {e}"),
-                            // Only these three responses are returned after a
-                            // process was spawned, so only they mean the
-                            // window produced a run. `run` reports most
-                            // failures as an `Ok` response rather than an
-                            // `Err` -- a spawn error, a port conflict, a
-                            // deferred or already-running daemon -- and
-                            // recording those would claim a run that never
-                            // started.
-                            Ok(
-                                IpcResponse::DaemonStart { .. }
-                                | IpcResponse::DaemonReady { .. }
-                                | IpcResponse::DaemonFailedWithCode { .. },
-                            ) => {
-                                // After `run`, whose upsert would otherwise
-                                // inherit the previous value over this one.
-                                // Not load-bearing for scheduling the way the
-                                // `last_cron_triggered` write above is, so the
-                                // background flush is enough.
-                                let mut state_file = self.state_file.lock().await;
-                                state_file.set_last_cron_run(&id, now);
-                            }
-                            Ok(resp) => {
-                                warn!("cron: daemon {id} did not start this window: {resp}");
-                            }
+                        // `last_cron_run` is recorded by `run_once` at the
+                        // moment a process is spawned, which is the only point
+                        // that distinguishes a window that produced a run from
+                        // one that did not.
+                        opts.cron_started = true;
+                        if let Err(e) = self.run(opts).await {
+                            error!("failed to run cron daemon {id}: {e}");
                         }
                     }
                 }

@@ -289,6 +289,17 @@ pub struct RunOptions {
     /// Appended last for the positional IPC encoding.
     #[serde(default)]
     pub proxy_idle_timeout_ms: Option<u64>,
+    /// The cron watcher is starting this run, so a successful spawn is what
+    /// `Daemon::last_cron_run` records.
+    ///
+    /// Set only by the watcher's own call. A retry, file-watch or manual
+    /// restart of a scheduled daemon carries the daemon's `cron_schedule` but
+    /// not this, because the schedule did not ask for it.
+    ///
+    /// Appended after `proxy_idle_timeout_ms` for the positional IPC
+    /// encoding.
+    #[serde(default)]
+    pub cron_started: bool,
 }
 
 impl Daemon {
@@ -354,6 +365,9 @@ impl Daemon {
             on_directory_enter: false,
             // A restart continues whatever ownership the run it replaces had.
             proxy_idle_timeout_ms: self.proxy_idle_timeout_ms,
+            // A restart of a scheduled daemon is not the schedule starting a
+            // run; only the cron watcher's own call sets this.
+            cron_started: false,
             cron_schedule: self.cron_schedule.clone(),
             cron_retrigger: self.cron_retrigger,
             cron_immediate: self.cron_immediate,
