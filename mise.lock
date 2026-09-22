@@ -3,7 +3,7 @@
 lockfile_version = 2
 
 [[tools.aube]]
-version = "2.2.17"
+version = "2.3.0"
 backend = "github:jdx/aube"
 specifiers = ["latest"]
 
