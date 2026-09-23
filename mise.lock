@@ -91,7 +91,7 @@ url_api = "https://api.github.com/repos/cargo-bins/cargo-binstall/releases/asset
 provenance = "github-attestations"
 
 [[tools."cargo:cargo-nextest"]]
-version = "0.9.145"
+version = "0.9.146"
 backend = "cargo:cargo-nextest"
 specifiers = ["latest"]
 
@@ -315,44 +315,44 @@ url = "https://github.com/apple/pkl/releases/download/0.32.1/pkl-windows-amd64.e
 url_api = "https://api.github.com/repos/apple/pkl/releases/assets/487426668"
 
 [[tools.rush]]
-version = "0.10.0"
+version = "0.11.0"
 backend = "aqua:shenwei356/rush"
 specifiers = ["latest"]
 
 [tools.rush."platforms.linux-arm64"]
-checksum = "sha256:7bdb02a1a0c3ff8a61204cdb09d7ba57a9f4585d8c78bccec00f41e303156f98"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559524066"
+checksum = "sha256:466931db70732296b98bfe1a1aec4a6a79c226e4aa5bc690283bb39560e708de"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426242"
 
 [tools.rush."platforms.linux-arm64-musl"]
-checksum = "sha256:7bdb02a1a0c3ff8a61204cdb09d7ba57a9f4585d8c78bccec00f41e303156f98"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559524066"
+checksum = "sha256:466931db70732296b98bfe1a1aec4a6a79c226e4aa5bc690283bb39560e708de"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426242"
 
 [tools.rush."platforms.linux-x64"]
-checksum = "sha256:495c7c914345417cd6dec0aadcbebb28f895ecf714bb6e5465f7283e90c62969"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559523927"
+checksum = "sha256:7a22bbc7122acd5bd23e2dfde49f84bb856944a1860057bc89921b3dce45d056"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426098"
 
 [tools.rush."platforms.linux-x64-musl"]
-checksum = "sha256:495c7c914345417cd6dec0aadcbebb28f895ecf714bb6e5465f7283e90c62969"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559523927"
+checksum = "sha256:7a22bbc7122acd5bd23e2dfde49f84bb856944a1860057bc89921b3dce45d056"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426098"
 
 [tools.rush."platforms.macos-arm64"]
-checksum = "sha256:e4c83546830977ccd4ea55ed1412c3e10bca518628113d9bce94fdcef7fd59f3"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559523078"
+checksum = "sha256:87f811032b727806158111856b77be076d2c923cc013de20d744405eb4dfe455"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579424349"
 
 [tools.rush."platforms.macos-x64"]
-checksum = "sha256:d6b606e5a05ed6750d9016a15ed41c4fd7696d92302ebf317b0b2e752c27951f"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559522722"
+checksum = "sha256:3d5c24ea9947c84b19ef1f0992470e255e296efbbda5fad0ccf5cc870d088433"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579420523"
 
 [tools.rush."platforms.windows-x64"]
-checksum = "sha256:c93f3ea86610258de5a920b641c7c127916faacdffab3f8f9198c79d3c551400"
-url = "https://github.com/shenwei356/rush/releases/download/v0.10.0/rush_windows_amd64.exe.tar.gz"
-url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/559524683"
+checksum = "sha256:47dd38a1d527c8e00714623351379dfa2f617cf9f8f399586233c5ca29482a45"
+url = "https://github.com/shenwei356/rush/releases/download/v0.11.0/rush_windows_amd64.exe.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/579426784"
 
 [[tools.rust]]
 version = "stable"
