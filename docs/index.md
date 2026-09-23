@@ -1,5 +1,5 @@
 ---
 layout: home
-title: Background services for your development workflow
-description: Start your API, database, and workers with one command. Pitchfork manages readiness, retries, logs, and project sessions so you can get back to work.
+title: A process manager for local development
+description: Run your development services in the background with Pitchfork. Define your API, database, and workers in pitchfork.toml, then start what you need from any terminal.
 ---
