@@ -125,18 +125,6 @@
   font-family: var(--vp-font-family-mono);
   font-size: 0.9em;
 }
-.pf-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: var(--vp-c-text-2);
-  font-family: var(--vp-font-family-mono);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.075em;
-  text-transform: uppercase;
-  margin-bottom: 22px;
-}
 .pf-status-dot {
   display: inline-block;
   width: 7px;
@@ -156,9 +144,6 @@
   font-size: clamp(48px, 5.3vw, 68px);
   line-height: 1.06;
   letter-spacing: -0.065em;
-}
-.pf-hero h1 > span {
-  color: var(--vp-c-brand-1);
 }
 .pf-intro {
   font-size: 18px;
@@ -352,40 +337,10 @@
   gap: 88px;
   padding: 100px 0;
 }
-.pf-section-copy > p:not(.pf-eyebrow) {
+.pf-section-copy > p {
   color: var(--vp-c-text-2);
   margin-top: 22px;
   font-size: 15px;
-}
-.pf-steps {
-  list-style: none;
-  margin: 28px 0;
-  padding: 0;
-}
-.pf-steps li {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  margin: 18px 0;
-}
-.pf-steps li > span {
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 50%;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  font: 11px var(--vp-font-family-mono);
-  color: var(--vp-c-text-2);
-}
-.pf-steps strong {
-  font-size: 14px;
-  font-weight: 600;
-}
-.pf-steps p {
-  color: var(--vp-c-text-2);
-  font-size: 13px;
 }
 .pf-text-link {
   display: inline-flex;
@@ -433,47 +388,21 @@
 .pf-features {
   padding: 0 0 96px;
 }
+.pf-features .pf-section-heading {
+  max-width: 720px;
+  margin-bottom: 0;
+}
+.pf-features p {
+  margin-top: 20px;
+  color: var(--vp-c-text-2);
+}
+.pf-features p a {
+  color: var(--vp-c-brand-1);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .pf-section-heading {
   margin-bottom: 38px;
-}
-.pf-feature-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  border-top: 1px solid var(--vp-c-divider);
-  border-left: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.pf-feature {
-  display: flex;
-  flex-direction: column;
-  padding: 28px;
-  border-bottom: 1px solid var(--vp-c-divider);
-  border-right: 1px solid var(--vp-c-divider);
-  background: var(--pf-panel-bg);
-  transition: background-color 150ms ease;
-}
-.pf-feature:hover {
-  background: var(--vp-c-bg-soft);
-}
-.pf-feature-number {
-  color: var(--vp-c-brand-1);
-  font: 11px var(--vp-font-family-mono);
-  margin-bottom: 24px;
-}
-.pf-feature h3 {
-  font-size: 20px;
-  line-height: 1.3;
-  letter-spacing: -0.025em;
-}
-.pf-feature p {
-  color: var(--vp-c-text-2);
-  font-size: 14px;
-  margin: 12px 0 24px;
-}
-.pf-feature .pf-text-link {
-  margin-top: auto;
-  font-size: 12px;
 }
 .pf-dashboard {
   border-top: 1px solid var(--vp-c-divider);
@@ -482,10 +411,7 @@
 .pf-dashboard .pf-section-heading {
   text-align: center;
 }
-.pf-dashboard .pf-eyebrow {
-  justify-content: center;
-}
-.pf-dashboard .pf-section-heading > p:not(.pf-eyebrow) {
+.pf-dashboard .pf-section-heading > p {
   color: var(--vp-c-text-2);
   margin-top: 20px;
   font-size: 15px;
@@ -511,27 +437,6 @@
   width: 100%;
   height: auto;
 }
-.pf-next {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 30px;
-  padding: 44px;
-  margin-bottom: 64px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 10px;
-  background: var(--vp-c-bg-soft);
-}
-.pf-next .pf-eyebrow {
-  margin-bottom: 10px;
-}
-.pf-next h2 {
-  font-size: 30px;
-}
-.pf-next .pf-actions {
-  gap: 24px;
-}
 .pf-home a:focus-visible {
   outline: 3px solid var(--vp-c-brand-1);
   outline-offset: 5px;
@@ -553,9 +458,6 @@
   }
   .pf-intro {
     font-size: 16px;
-  }
-  .pf-feature {
-    padding: 24px;
   }
 }
 @media (max-width: 767px) {
@@ -596,27 +498,16 @@
   .pf-principles > span:nth-child(3) {
     border-left: 0;
   }
-  .pf-feature-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
   .pf-features {
     padding-bottom: 60px;
   }
   .pf-dashboard {
     padding: 56px 0;
   }
-  .pf-next {
-    padding: 28px;
-    margin-bottom: 36px;
-  }
 }
 @media (max-width: 479px) {
   .pf-home {
     padding: 0 20px;
-  }
-  .pf-eyebrow {
-    font-size: 10px;
-    letter-spacing: 0.045em;
   }
   .pf-terminal {
     padding: 20px 16px;
@@ -627,21 +518,6 @@
   }
   .pf-dependency {
     font-size: 9px;
-  }
-  .pf-feature-grid {
-    grid-template-columns: 1fr;
-  }
-  .pf-feature-number {
-    margin-bottom: 14px;
-  }
-  .pf-dashboard .pf-eyebrow {
-    line-height: 1.7;
-  }
-  .pf-desktop-break {
-    display: none;
-  }
-  .pf-next h2 {
-    font-size: 27px;
   }
   .pf-config-panel pre {
     padding: 20px 16px;
