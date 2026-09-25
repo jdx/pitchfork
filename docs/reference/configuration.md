@@ -193,7 +193,7 @@ With no shell in between, the tracked PID is the program itself, so no `exec` is
 
 Shell features such as `&&`, pipes, redirection, and `$VAR` expansion are not available in the array form. Use the string form when you need them.
 
-On Windows, a program named without an extension is found only as an `.exe`. Name a batch script with its extension, such as `["npm.cmd", "run", "server"]`, or use the string form.
+On Windows, a program named without an extension is found only as an `.exe`. Batch scripts (`.cmd`, `.bat`) are the exception to starting without a shell: Windows can only run them through `cmd.exe`. Name one with its extension, such as `["npm.cmd", "run", "server"]`, and the tracked PID is that `cmd.exe`, and the arguments reach the script quoted for cmd (for example, `"a b"` arrives with its quotes) rather than exactly as written.
 
 ### `dir`
 

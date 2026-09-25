@@ -334,6 +334,89 @@ impl FormField {
     }
 }
 
+/// An argv `run` as text for the single-line editor field, read back by
+/// [`edit_text_to_argv`].
+///
+/// POSIX shell quoting, except on Windows: there a backslash separates path
+/// components, so it is never an escape, and quoting uses single or double
+/// quotes only.
+fn argv_to_edit_text(argv: &[String]) -> String {
+    if cfg!(windows) {
+        argv.iter()
+            .map(|arg| windows_edit_quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        shell_words::join(argv)
+    }
+}
+
+/// Split the editor's text back into arguments; `Err` for an unclosed quote.
+fn edit_text_to_argv(text: &str) -> Result<Vec<String>, String> {
+    if cfg!(windows) {
+        windows_edit_split(text)
+    } else {
+        shell_words::split(text).map_err(|e| e.to_string())
+    }
+}
+
+/// Quote `arg` so [`windows_edit_split`] reads it back unchanged.
+fn windows_edit_quote(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '"') {
+        return arg.to_string();
+    }
+    // Quoted runs join into one word, so a single quote can sit in a
+    // double-quoted run next to single-quoted text: it's -> 'it'"'"'s'.
+    let mut quoted = String::from("'");
+    for c in arg.chars() {
+        if c == '\'' {
+            quoted.push_str("'\"'\"'");
+        } else {
+            quoted.push(c);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// Split on whitespace, with `'...'` and `"..."` taken literally, and
+/// backslashes kept as they are.
+fn windows_edit_split(text: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    // Whether a word has begun: `''` is an empty argument, not nothing.
+    let mut in_word = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some(q) if q == c => break,
+                        Some(other) => word.push(other),
+                        None => return Err("unclosed quote".to_string()),
+                    }
+                }
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            c => {
+                in_word = true;
+                word.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    Ok(words)
+}
+
 /// State for the daemon config editor
 #[derive(Debug, Clone)]
 pub struct EditorState {
@@ -528,7 +611,12 @@ impl EditorState {
 
         for field in &mut fields {
             match field.name {
-                "run" => field.value = FormFieldValue::Text(config.run.to_string()),
+                "run" => {
+                    field.value = FormFieldValue::Text(match &config.run {
+                        RunCommand::Argv(argv) => argv_to_edit_text(argv),
+                        RunCommand::Shell(run) => run.clone(),
+                    })
+                }
                 "dir" => field.value = FormFieldValue::OptionalText(config.dir.clone()),
                 "env" => {
                     field.value = FormFieldValue::StringList(
@@ -627,11 +715,13 @@ impl EditorState {
             match (field.name, &field.value) {
                 ("run", FormFieldValue::Text(s)) => {
                     config.run = match &self.preserved_run_argv {
-                        Some(argv) if argv.to_string() == *s => argv.clone(),
-                        // The field shows the array quoted for a POSIX shell, so
-                        // an edit is split back the same way and stays an array.
-                        // `validate` has already refused text that cannot be.
-                        Some(_) => match shell_words::split(s) {
+                        Some(RunCommand::Argv(argv)) if argv_to_edit_text(argv) == *s => {
+                            RunCommand::Argv(argv.clone())
+                        }
+                        // An edit is split back the way the field quoted it, and
+                        // stays an array. `validate` has already refused text
+                        // that cannot be.
+                        Some(_) => match edit_text_to_argv(s) {
                             Ok(words) if !words.is_empty() => words.into(),
                             _ => s.clone().into(),
                         },
@@ -900,9 +990,13 @@ impl EditorState {
                     valid = false;
                 }
                 ("run", FormFieldValue::Text(s)) if run_is_argv => {
-                    match shell_words::split(s).as_deref() {
+                    match edit_text_to_argv(s).as_deref() {
                         Ok([]) => {
                             field.error = Some("Required".to_string());
+                            valid = false;
+                        }
+                        Ok([program, ..]) if program.is_empty() => {
+                            field.error = Some("The program name is empty".to_string());
                             valid = false;
                         }
                         Ok([program, ..]) if program == "exec" => {
@@ -1915,5 +2009,76 @@ mod run_argv_editor_tests {
         set_run(&mut editor, "exec node 'my server.js'");
         assert!(editor.validate());
         assert_eq!(editor.to_daemon_config().run, "exec node 'my server.js'");
+    }
+}
+
+#[cfg(test)]
+mod run_argv_editor_review_tests {
+    use super::*;
+
+    fn editor(run: RunCommand) -> EditorState {
+        let config = PitchforkTomlDaemon {
+            run,
+            ..PitchforkTomlDaemon::default()
+        };
+        EditorState::new_edit("api".to_string(), &config, PathBuf::from("pitchfork.toml"))
+    }
+
+    fn set_run(editor: &mut EditorState, text: &str) {
+        let field = editor.fields.iter_mut().find(|f| f.name == "run").unwrap();
+        field.set_text(text.to_string());
+    }
+
+    #[test]
+    fn windows_edit_text_round_trips_awkward_arguments() {
+        let argv: Vec<String> = [
+            r"C:\Program Files\node.exe",
+            "",
+            "it's",
+            "say \"hi\"",
+            "both ' and \"",
+            r"trailing\",
+            "a&b",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let text = argv
+            .iter()
+            .map(|a| windows_edit_quote(a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(windows_edit_split(&text).unwrap(), argv, "text: {text}");
+    }
+
+    #[test]
+    fn windows_edit_split_keeps_backslashes_and_refuses_open_quotes() {
+        assert_eq!(
+            windows_edit_split(r#"C:\Tools\node.exe "my server.js"  x"#).unwrap(),
+            vec![r"C:\Tools\node.exe", "my server.js", "x"]
+        );
+        assert!(windows_edit_split("node 'server.js").is_err());
+    }
+
+    #[test]
+    fn an_empty_program_is_rejected() {
+        let mut editor = editor(RunCommand::Argv(vec!["node".into()]));
+        set_run(&mut editor, "'' node");
+        assert!(!editor.validate());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_path_keeps_its_backslashes() {
+        let mut editor = editor(RunCommand::Argv(vec!["node".into()]));
+        set_run(&mut editor, r"C:\Tools\node.exe --port 8080");
+        assert!(editor.validate());
+        assert_eq!(
+            editor.to_daemon_config().run,
+            RunCommand::Argv(vec![
+                r"C:\Tools\node.exe".into(),
+                "--port".into(),
+                "8080".into()
+            ])
+        );
     }
 }
