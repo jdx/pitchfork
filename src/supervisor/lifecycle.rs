@@ -15,7 +15,7 @@ use crate::log_store::sqlite::LOG_STORE;
 use crate::pitchfork_toml::{ReadyCmd, ReadyHttp, ReadyOutput, ReadyPort};
 use crate::procs::PROCS;
 use crate::settings::{resolve_shell, settings};
-use crate::shell::{HideConsoleWindow, Shell};
+use crate::shell::{HideConsoleWindow, Shell, ShellScript};
 use crate::supervisor::state::UpsertDaemonOpts;
 use crate::{Result, env};
 use indexmap::IndexMap;
@@ -151,8 +151,7 @@ pub(crate) fn spawn_cmd_probe(
         Ok(parts) => {
             let (program, args) = parts.split_first().unwrap();
             let mut c = tokio::process::Command::new(program);
-            c.args(args);
-            c.arg(cmd);
+            c.shell_script(program, args, cmd);
             c
         }
         Err(e) => {
@@ -957,18 +956,20 @@ impl Supervisor {
 
         // The program and arguments that start the daemon, before any mise
         // wrapping.
-        let words = if opts.no_shell {
+        // The program and arguments that start the daemon, before any mise
+        // wrapping, and the script for the shell when `run` is a string.
+        let (mut words, script) = if opts.no_shell {
             // The argv form of `run`: started as written, with no shell to
             // reinterpret quotes, `%`, `&` or anything else in the arguments.
             if let Some(error) = invalid_argv_program(id, &original_cmd) {
                 return Ok(IpcResponse::DaemonFailed { error });
             }
-            original_cmd.clone()
+            (original_cmd.clone(), None)
         } else {
             // Resolve the shell for this platform into program + args. The run
             // script is passed verbatim as the final argument, avoiding the lossy
             // split->join round-trip that previously mangled $VAR/glob expansion.
-            let mut words = match resolve_shell() {
+            let words = match resolve_shell() {
                 Ok(parts) => parts,
                 Err(error) => return Ok(IpcResponse::DaemonFailed { error }),
             };
@@ -976,12 +977,11 @@ impl Supervisor {
             // ad-hoc commands (e.g. `pitchfork run -- cmd args`) that have no run string.
             // We don't prepend `exec` because it breaks compound commands (e.g. `exec a && b`
             // silently drops `b`). Users can add `exec` themselves in the run string.
-            words.push(
-                opts.run
-                    .clone()
-                    .unwrap_or_else(|| shell_words::join(&original_cmd)),
-            );
-            words
+            let script = opts
+                .run
+                .clone()
+                .unwrap_or_else(|| shell_words::join(&original_cmd));
+            (words, Some(script))
         };
 
         let mise_bin = if opts.mise.unwrap_or(settings().general.mise) {
@@ -993,12 +993,21 @@ impl Supervisor {
         } else {
             None
         };
-        if let Some(mise_bin) = &mise_bin {
-            info!(
-                "daemon {id}: wrapping command with mise ({})",
-                mise_bin.display()
-            );
-        }
+        // Started directly, the shell gets its script from `shell_script`.
+        // Under mise it goes in as an ordinary argument: mise starts the shell
+        // itself, re-quoting each argument, so the raw command line cmd.exe
+        // needs for a script with `"` cannot reach it that way.
+        let script = match &mise_bin {
+            Some(mise_bin) => {
+                info!(
+                    "daemon {id}: wrapping command with mise ({})",
+                    mise_bin.display()
+                );
+                words.extend(script);
+                None
+            }
+            None => script,
+        };
         let (program, args) = launch_command(words, mise_bin.as_deref());
         #[cfg(unix)]
         let run_identity = match resolve_effective_run_identity(opts.user.as_deref()) {
@@ -1009,7 +1018,7 @@ impl Supervisor {
                 });
             }
         };
-        info!("run: spawning daemon {id} with {program} {args:?}");
+        info!("run: spawning daemon {id} with {program} {args:?} {script:?}");
 
         // Allocate PTY if configured
         #[cfg(unix)]
@@ -1120,7 +1129,11 @@ impl Supervisor {
                 .stderr(std::process::Stdio::piped());
         }
 
-        cmd.args(&args).current_dir(&opts.dir).hide_console_window();
+        match &script {
+            Some(script) => cmd.shell_script(&program, &args, script),
+            None => cmd.args(&args),
+        };
+        cmd.current_dir(&opts.dir).hide_console_window();
 
         #[cfg(unix)]
         if pty_pair.is_none() {
@@ -3743,9 +3756,16 @@ mod ready_check_tests {
     async fn spawn_cmd_probe_receives_daemon_and_resolved_port_environment() {
         let id = DaemonId::new("worktree", "api");
         let daemon_env = IndexMap::from([("CUSTOM_VALUE".to_string(), "yes".to_string())]);
+        // Written for the platform's default shell: cmd.exe reads the probe
+        // as written, so it needs cmd's own `%VAR%` syntax there.
+        let check = if cfg!(windows) {
+            r#"(if "%CUSTOM_VALUE%"=="yes" if "%PORT%"=="4100" if "%PORT0%"=="4100" if "%PORT1%"=="5100" if "%PITCHFORK_DAEMON_ID%"=="worktree/api" if "%PITCHFORK_RETRY_COUNT%"=="2" exit 0) & exit 1"#
+        } else {
+            r#"test "$CUSTOM_VALUE" = yes && test "$PORT" = 4100 && test "$PORT0" = 4100 && test "$PORT1" = 5100 && test "$PITCHFORK_DAEMON_ID" = worktree/api && test "$PITCHFORK_RETRY_COUNT" = 2"#
+        };
         let probe = spawn_cmd_probe(
             &id,
-            r#"test "$CUSTOM_VALUE" = yes && test "$PORT" = 4100 && test "$PORT0" = 4100 && test "$PORT1" = 5100 && test "$PITCHFORK_DAEMON_ID" = worktree/api && test "$PITCHFORK_RETRY_COUNT" = 2"#,
+            check,
             &std::env::temp_dir(),
             2,
             Some(&daemon_env),

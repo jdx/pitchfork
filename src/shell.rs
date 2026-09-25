@@ -83,7 +83,7 @@ impl Shell {
     /// Creates a tokio Command configured to run the given command string
     pub fn command(&self, cmd: &str) -> tokio::process::Command {
         let mut command = tokio::process::Command::new(self.program());
-        command.args(self.exec_args(cmd));
+        command.shell_script(self.program(), &self.exec_options(), cmd);
         command
     }
 
@@ -91,8 +91,15 @@ impl Shell {
     #[allow(dead_code)] // Available for future use (e.g., spawn commands)
     pub fn std_command(&self, cmd: &str) -> std::process::Command {
         let mut command = std::process::Command::new(self.program());
-        command.args(self.exec_args(cmd));
+        command.shell_script(self.program(), &self.exec_options(), cmd);
         command
+    }
+
+    /// The options that come before the command string: `exec_args` without it.
+    fn exec_options(&self) -> Vec<String> {
+        let mut args = self.exec_args("");
+        args.pop();
+        args
     }
 }
 
@@ -190,6 +197,88 @@ impl HideConsoleWindow for std::process::Command {
 impl HideConsoleWindow for tokio::process::Command {
     fn hide_console_window(&mut self) -> &mut Self {
         self
+    }
+}
+
+/// Hands a script to a shell: the shell's own options, then the script.
+///
+/// On Windows, when the shell is cmd.exe, the script is passed as
+/// `/S /C "<script>"` on the raw command line instead of as an argument.
+/// `Command::arg` quotes an argument for the Microsoft C runtime, turning each
+/// `"` into `\"`, and cmd does not undo that: `node "my server.js"` would reach
+/// it as `node \"my server.js\"`. With `/S`, cmd strips the outer pair of
+/// quotes and runs the rest exactly as written.
+///
+/// Implemented for both `std::process::Command` and `tokio::process::Command`.
+pub(crate) trait ShellScript {
+    /// `program` is the shell the command was created for, and `options` the
+    /// arguments that come before the script, such as `-c` or `/C`.
+    fn shell_script(&mut self, program: &str, options: &[String], script: &str) -> &mut Self;
+}
+
+/// For cmd.exe run with `/C` as its last option, the options to pass before
+/// the script, and the raw text that carries the script.
+///
+/// `None` for any other shell, which takes the script as a normal argument.
+/// Platform-independent so that it can be tested everywhere; only Windows
+/// acts on it.
+#[cfg(any(windows, test))]
+fn cmd_raw_script<'a>(
+    program: &str,
+    options: &'a [String],
+    script: &str,
+) -> Option<(&'a [String], String)> {
+    // Split by hand rather than with `Path`, which does not treat `\` as a
+    // separator outside Windows and so could not be tested there.
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let is_cmd = stem.eq_ignore_ascii_case("cmd");
+    let (flag, leading) = options.split_last()?;
+    if !is_cmd || !flag.eq_ignore_ascii_case("/c") {
+        return None;
+    }
+    // `/S` has to come before `/C`: everything after `/C` is the command.
+    let strip = if leading.iter().any(|o| o.eq_ignore_ascii_case("/s")) {
+        ""
+    } else {
+        "/S "
+    };
+    Some((leading, format!("{strip}{flag} \"{script}\"")))
+}
+
+#[cfg(windows)]
+impl ShellScript for std::process::Command {
+    fn shell_script(&mut self, program: &str, options: &[String], script: &str) -> &mut Self {
+        use std::os::windows::process::CommandExt;
+        match cmd_raw_script(program, options, script) {
+            Some((leading, raw)) => self.args(leading).raw_arg(raw),
+            None => self.args(options).arg(script),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl ShellScript for tokio::process::Command {
+    fn shell_script(&mut self, program: &str, options: &[String], script: &str) -> &mut Self {
+        // tokio exposes `raw_arg` as an inherent method on Windows.
+        match cmd_raw_script(program, options, script) {
+            Some((leading, raw)) => self.args(leading).raw_arg(raw),
+            None => self.args(options).arg(script),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+impl ShellScript for std::process::Command {
+    fn shell_script(&mut self, _program: &str, options: &[String], script: &str) -> &mut Self {
+        self.args(options).arg(script)
+    }
+}
+
+#[cfg(not(windows))]
+impl ShellScript for tokio::process::Command {
+    fn shell_script(&mut self, _program: &str, options: &[String], script: &str) -> &mut Self {
+        self.args(options).arg(script)
     }
 }
 
@@ -302,5 +391,58 @@ mod tests {
         // impl without making the test async.
         let mut async_command = tokio::process::Command::new(program);
         async_command.args(&args).hide_console_window();
+    }
+
+    fn strings(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn test_cmd_raw_script_wraps_the_script_for_cmd() {
+        let options = strings(&["/C"]);
+        let (leading, raw) = cmd_raw_script("cmd", &options, r#"echo "a b""#).unwrap();
+        assert!(leading.is_empty());
+        assert_eq!(raw, r#"/S /C "echo "a b"""#);
+
+        // Any spelling of cmd.exe, and any case of the flags.
+        let options = strings(&["/d", "/s", "/c"]);
+        let (leading, raw) =
+            cmd_raw_script(r"C:\Windows\System32\CMD.EXE", &options, "echo hi").unwrap();
+        assert_eq!(leading, &options[..2]);
+        assert_eq!(raw, r#"/c "echo hi""#);
+    }
+
+    #[test]
+    fn test_cmd_raw_script_leaves_other_shells_alone() {
+        assert_eq!(cmd_raw_script("sh", &strings(&["-c"]), "echo hi"), None);
+        assert_eq!(
+            cmd_raw_script("pwsh", &strings(&["-Command"]), "echo hi"),
+            None
+        );
+        // cmd without /C last is not running a script this way.
+        assert_eq!(cmd_raw_script("cmd", &strings(&["/K"]), "echo hi"), None);
+        assert_eq!(cmd_raw_script("cmd", &[], "echo hi"), None);
+    }
+
+    /// The case the raw command line exists for: quotes in the script reach
+    /// cmd.exe as written, including a quoted program path with spaces.
+    #[cfg(windows)]
+    #[test]
+    fn test_cmd_runs_a_script_with_quotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_dir = dir.path().join("with space");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let script = script_dir.join("say.cmd");
+        std::fs::write(&script, "@echo [%~1]\r\n").unwrap();
+
+        let run = format!(r#""{}" "a b""#, script.display());
+        let output = std::process::Command::new("cmd")
+            .shell_script("cmd", &strings(&["/C"]), &run)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "[a b]");
+
+        let output = Shell::Cmd.std_command(r#"echo "a b""#).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#""a b""#);
     }
 }

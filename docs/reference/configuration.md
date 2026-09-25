@@ -819,6 +819,8 @@ mise = true
 
 This is especially useful for daemons running via `pitchfork boot` (login daemon mode) where interactive shell hooks haven't set up tool paths. When not set, falls back to the global `general.mise` setting. See [mise Integration guide](/guides/mise-integration) for details.
 
+On Windows with the default `cmd /C` shell, mise starts cmd itself, so a `run` string containing double quotes may not reach cmd intact under `mise = true`. Without mise, pitchfork passes the string to cmd so that its quotes are kept.
+
 ### `memory_limit`
 
 Maximum physical memory (RSS) for the daemon process. Accepts human-readable byte sizes. The supervisor periodically monitors the daemon's RSS and kills it if it exceeds the limit.
