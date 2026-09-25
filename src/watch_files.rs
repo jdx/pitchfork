@@ -241,7 +241,8 @@ fn watch_targets_for_pattern(pattern: &str, base_dir: &Path) -> Vec<(PathBuf, Re
     let mut current = vec![literal_dir];
     for part in dir_parts {
         let part = part.as_os_str().to_string_lossy();
-        if part.contains("**") {
+        // `**` is only recursive as a whole component; elsewhere it acts as `*`
+        if part == "**" {
             targets.extend(current.into_iter().map(|d| (d, RecursiveMode::Recursive)));
             return targets;
         }
@@ -260,7 +261,7 @@ fn watch_targets_for_pattern(pattern: &str, base_dir: &Path) -> Vec<(PathBuf, Re
             .collect();
     }
 
-    let mode = if file_part.as_os_str().to_string_lossy().contains("**") {
+    let mode = if file_part.as_os_str() == "**" {
         RecursiveMode::Recursive
     } else {
         RecursiveMode::NonRecursive
@@ -492,6 +493,39 @@ mod tests {
                     RecursiveMode::NonRecursive
                 ),
             ])
+        );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_embedded_double_star() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir_all(base_dir.join("src/a")).unwrap();
+        fs::create_dir_all(base_dir.join("src/b")).unwrap();
+
+        // `**` inside a component matches like `*`, within one level
+        let dirs = expand(&["src/foo**bar.rs", "sr**/x.rs"], base_dir);
+
+        assert_eq!(
+            dirs,
+            HashMap::from([
+                (canon(base_dir), RecursiveMode::NonRecursive),
+                (canon(&base_dir.join("src")), RecursiveMode::NonRecursive),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_expand_watch_patterns_trailing_double_star() {
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+        fs::create_dir(base_dir.join("src")).unwrap();
+
+        let dirs = expand(&["src/**"], base_dir);
+
+        assert_eq!(
+            dirs,
+            HashMap::from([(canon(&base_dir.join("src")), RecursiveMode::Recursive)])
         );
     }
 
