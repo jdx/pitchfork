@@ -67,14 +67,16 @@ async fn changed_paths_with_new_subtrees(
     watched: &HashMap<PathBuf, RecursiveMode>,
 ) -> Vec<PathBuf> {
     let WatchEvents { mut paths, created } = events;
-    let new_subdirs = created
-        .into_iter()
-        .filter(|p| {
-            watched.iter().any(|(root, mode)| {
-                *mode == RecursiveMode::Recursive && p != root && p.starts_with(root)
+    let new_subdirs = outermost_paths(
+        created
+            .into_iter()
+            .filter(|p| {
+                watched.iter().any(|(root, mode)| {
+                    *mode == RecursiveMode::Recursive && p != root && p.starts_with(root)
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect(),
+    );
     if new_subdirs.is_empty() {
         return paths;
     }
@@ -89,6 +91,21 @@ async fn changed_paths_with_new_subtrees(
     .unwrap_or_default();
     paths.extend(found);
     paths
+}
+
+/// Drop paths that lie below another path in the list, so walking the result
+/// visits each entry once.
+fn outermost_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    // Path ordering compares components, so descendants sort right after
+    // their ancestor.
+    paths.sort();
+    let mut outermost: Vec<PathBuf> = vec![];
+    for path in paths {
+        if !outermost.last().is_some_and(|last| path.starts_with(last)) {
+            outermost.push(path);
+        }
+    }
+    outermost
 }
 
 /// Route a directory to the poll backend, keeping the recursion it needs there.
@@ -1241,5 +1258,30 @@ impl Supervisor {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_outermost_paths() {
+        let paths = [
+            "/p/src/a/b",
+            "/p/src/ab",
+            "/p/src/a",
+            "/p/src/a/b/c",
+            "/p/lib",
+        ]
+        .map(PathBuf::from)
+        .to_vec();
+
+        assert_eq!(
+            outermost_paths(paths),
+            ["/p/lib", "/p/src/a", "/p/src/ab"]
+                .map(PathBuf::from)
+                .to_vec()
+        );
     }
 }
