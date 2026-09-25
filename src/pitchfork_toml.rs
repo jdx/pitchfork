@@ -2348,7 +2348,7 @@ pub enum RunCommand {
     /// A program and its arguments, started directly. No shell interprets
     /// them, so each argument reaches the program exactly as written, on
     /// every platform.
-    Argv(Vec<String>),
+    Argv(#[schemars(length(min = 1))] Vec<String>),
 }
 
 impl Default for RunCommand {

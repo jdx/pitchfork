@@ -289,6 +289,22 @@ fn terminal_exit_state(
 /// failure to anyone waiting on it. Anything else — a failure above all — is
 /// replaced by the stop, so the retry checker does not carry on with a task
 /// the user has stopped.
+/// Why the argv form of `run` cannot be started, if it cannot.
+///
+/// Config load checks the array as written, but a template can still render
+/// the program to nothing, or to `exec`.
+fn invalid_argv_program(id: &DaemonId, argv: &[String]) -> Option<String> {
+    match argv.first().map(String::as_str) {
+        None | Some("") => Some(format!(
+            "daemon {id} has no program to run: its run array starts with an empty value"
+        )),
+        Some("exec") => Some(format!(
+            "daemon {id} starts its run array with \"exec\"; a run array starts the program directly, so remove \"exec\""
+        )),
+        Some(_) => None,
+    }
+}
+
 /// Program and arguments to spawn for `words` — the daemon's program followed
 /// by its arguments — run through `mise x` when `mise_bin` is given.
 ///
@@ -944,10 +960,8 @@ impl Supervisor {
         let words = if opts.no_shell {
             // The argv form of `run`: started as written, with no shell to
             // reinterpret quotes, `%`, `&` or anything else in the arguments.
-            if original_cmd.is_empty() {
-                return Ok(IpcResponse::DaemonFailed {
-                    error: format!("daemon {id} has an empty run command"),
-                });
+            if let Some(error) = invalid_argv_program(id, &original_cmd) {
+                return Ok(IpcResponse::DaemonFailed { error });
             }
             original_cmd.clone()
         } else {
@@ -3754,7 +3768,17 @@ mod ready_check_tests {
 
 #[cfg(test)]
 mod launch_command_tests {
-    use super::launch_command;
+    use super::{invalid_argv_program, launch_command};
+    use crate::daemon_id::DaemonId;
+
+    #[test]
+    fn refuses_an_argv_whose_program_rendered_empty_or_to_exec() {
+        let id = DaemonId::new("proj", "api");
+        assert!(invalid_argv_program(&id, &[]).is_some());
+        assert!(invalid_argv_program(&id, &words(&["", "server.js"])).is_some());
+        assert!(invalid_argv_program(&id, &words(&["exec", "node"])).is_some());
+        assert_eq!(invalid_argv_program(&id, &words(&["node", ""])), None);
+    }
 
     fn words(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()

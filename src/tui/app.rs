@@ -628,7 +628,14 @@ impl EditorState {
                 ("run", FormFieldValue::Text(s)) => {
                     config.run = match &self.preserved_run_argv {
                         Some(argv) if argv.to_string() == *s => argv.clone(),
-                        _ => s.clone().into(),
+                        // The field shows the array quoted for a POSIX shell, so
+                        // an edit is split back the same way and stays an array.
+                        // `validate` has already refused text that cannot be.
+                        Some(_) => match shell_words::split(s) {
+                            Ok(words) if !words.is_empty() => words.into(),
+                            _ => s.clone().into(),
+                        },
+                        None => s.clone().into(),
                     };
                 }
                 ("dir", FormFieldValue::OptionalText(s)) => config.dir = s.clone(),
@@ -877,6 +884,7 @@ impl EditorState {
         }
 
         // Validate fields
+        let run_is_argv = self.preserved_run_argv.is_some();
         for field in &mut self.fields {
             // Keep parse errors from set_text (e.g. out-of-range ready_port):
             // the typed value was already dropped, so saving now would
@@ -890,6 +898,26 @@ impl EditorState {
                 ("run", FormFieldValue::Text(s)) if s.is_empty() => {
                     field.error = Some("Required".to_string());
                     valid = false;
+                }
+                ("run", FormFieldValue::Text(s)) if run_is_argv => {
+                    match shell_words::split(s).as_deref() {
+                        Ok([]) => {
+                            field.error = Some("Required".to_string());
+                            valid = false;
+                        }
+                        Ok([program, ..]) if program == "exec" => {
+                            field.error = Some(
+                                "Remove exec: this command starts the program without a shell"
+                                    .to_string(),
+                            );
+                            valid = false;
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            field.error = Some("Unbalanced quotes".to_string());
+                            valid = false;
+                        }
+                    }
                 }
                 ("ready_http", FormFieldValue::OptionalText(Some(url)))
                     if !(url.starts_with("http://") || url.starts_with("https://")) =>
@@ -1830,5 +1858,62 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new(NamespaceFilter::default())
+    }
+}
+
+#[cfg(test)]
+mod run_argv_editor_tests {
+    use super::*;
+
+    fn argv(words: &[&str]) -> RunCommand {
+        RunCommand::Argv(words.iter().map(|w| w.to_string()).collect())
+    }
+
+    fn editor(run: RunCommand) -> EditorState {
+        let config = PitchforkTomlDaemon {
+            run,
+            ..PitchforkTomlDaemon::default()
+        };
+        EditorState::new_edit("api".to_string(), &config, PathBuf::from("pitchfork.toml"))
+    }
+
+    fn set_run(editor: &mut EditorState, text: &str) {
+        let field = editor.fields.iter_mut().find(|f| f.name == "run").unwrap();
+        field.set_text(text.to_string());
+    }
+
+    #[test]
+    fn an_untouched_array_is_saved_as_an_array() {
+        let run = argv(&["node", "my server.js"]);
+        let editor = editor(run.clone());
+        assert_eq!(editor.to_daemon_config().run, run);
+    }
+
+    #[test]
+    fn an_edited_array_stays_an_array() {
+        let mut editor = editor(argv(&["node", "my server.js"]));
+        set_run(&mut editor, "node 'my server.js' --port 8080");
+        assert!(editor.validate());
+        assert_eq!(
+            editor.to_daemon_config().run,
+            argv(&["node", "my server.js", "--port", "8080"])
+        );
+    }
+
+    #[test]
+    fn an_edited_array_must_still_parse() {
+        let mut editor = editor(argv(&["node", "server.js"]));
+        set_run(&mut editor, "node 'server.js");
+        assert!(!editor.validate());
+        set_run(&mut editor, "exec node server.js");
+        assert!(!editor.validate());
+    }
+
+    #[test]
+    fn a_string_stays_a_string() {
+        let mut editor = editor("exec node server.js".into());
+        set_run(&mut editor, "exec node 'my server.js'");
+        assert!(editor.validate());
+        assert_eq!(editor.to_daemon_config().run, "exec node 'my server.js'");
     }
 }
