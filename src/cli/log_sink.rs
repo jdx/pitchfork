@@ -381,13 +381,24 @@ async fn queue_piece(
     Ok(())
 }
 
-/// Length to cut `bytes` at so no character is left half-written.
+/// Length to cut `bytes` at so no character is left half-written, in whichever
+/// encoding [`decode_line`] will read the piece in.
+fn split_before_incomplete_char(bytes: &[u8]) -> usize {
+    let split = split_before_incomplete_utf8(bytes);
+    #[cfg(windows)]
+    if uses_code_page(&bytes[..split]) {
+        return split_before_incomplete_dbcs(bytes, console_code_page());
+    }
+    split
+}
+
+/// Length to cut `bytes` at so no UTF-8 character is left half-written.
 ///
 /// Decided by inspecting the final bytes rather than by asking `from_utf8` where
 /// the string stops being valid: that reports the *first* problem, so a single
 /// invalid byte earlier in the line would hide an unfinished character at the
 /// end, and the character would be split after all.
-fn split_before_incomplete_char(bytes: &[u8]) -> usize {
+fn split_before_incomplete_utf8(bytes: &[u8]) -> usize {
     let len = bytes.len();
     // A character is at most four bytes, so only the last few can be unfinished.
     for i in (len.saturating_sub(4)..len).rev() {
@@ -416,23 +427,39 @@ fn split_before_incomplete_char(bytes: &[u8]) -> usize {
 /// code page, so a Japanese system hands over Shift_JIS, and reading that as
 /// UTF-8 would store nothing but replacement characters.
 fn decode_line(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => std::borrow::Cow::Borrowed(text),
-        Err(_) => decode_non_utf8(bytes),
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return std::borrow::Cow::Borrowed(text);
     }
-}
-
-#[cfg(windows)]
-fn decode_non_utf8(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
-    match decode_in_code_page(bytes, console_code_page()) {
-        Some(text) => std::borrow::Cow::Owned(text),
-        None => String::from_utf8_lossy(bytes),
+    #[cfg(windows)]
+    if uses_code_page(bytes)
+        && let Some(text) = decode_in_code_page(bytes, console_code_page())
+    {
+        return std::borrow::Cow::Owned(text);
     }
-}
-
-#[cfg(not(windows))]
-fn decode_non_utf8(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     String::from_utf8_lossy(bytes)
+}
+
+/// Whether [`decode_line`] reads `bytes` in the console code page.
+///
+/// Only when they are not UTF-8, and not mostly UTF-8 either: a UTF-8 line with
+/// a stray invalid byte — or with another stream's output spliced into it —
+/// would have all of its text garbled by decoding it in the code page, where
+/// the lossy conversion loses just the stray bytes.
+///
+/// Mostly means more characters read as multi-byte UTF-8 than runs of bytes
+/// that cannot. Code page text does sometimes form a valid UTF-8 character by
+/// chance, but around it are far more bytes that do not.
+#[cfg(windows)]
+fn uses_code_page(bytes: &[u8]) -> bool {
+    if std::str::from_utf8(bytes).is_ok() {
+        return false;
+    }
+    let (mut multi_byte, mut invalid) = (0usize, 0usize);
+    for chunk in bytes.utf8_chunks() {
+        multi_byte += chunk.valid().chars().filter(|c| !c.is_ascii()).count();
+        invalid += usize::from(!chunk.invalid().is_empty());
+    }
+    multi_byte <= invalid
 }
 
 /// Code page the daemon's console programs write in.
@@ -482,6 +509,29 @@ fn decode_in_code_page(bytes: &[u8], code_page: u32) -> Option<String> {
     }
     wide.truncate(written as usize);
     Some(String::from_utf16_lossy(&wide))
+}
+
+/// Length to cut `bytes` at so no double-byte character of `code_page` is left
+/// half-written.
+///
+/// A trail byte can have the same value as a lead byte, so looking at the last
+/// byte alone cannot tell which it is; only walking from the start of the line
+/// can. Single-byte code pages have no lead bytes, so they never cut short.
+#[cfg(windows)]
+fn split_before_incomplete_dbcs(bytes: &[u8], code_page: u32) -> usize {
+    use windows_sys::Win32::Globalization::IsDBCSLeadByteEx;
+
+    let mut i = 0;
+    while i < bytes.len() {
+        let lead = unsafe { IsDBCSLeadByteEx(code_page, bytes[i]) } != 0;
+        i += if lead { 2 } else { 1 };
+    }
+    // Stepping past the end means the last byte opened a character.
+    if i > bytes.len() && bytes.len() > 1 {
+        bytes.len() - 1
+    } else {
+        bytes.len()
+    }
 }
 
 /// Parse `line` and hand it to the writer, clearing it either way.
@@ -758,6 +808,54 @@ mod tests {
     #[test]
     fn replaces_non_utf8_outside_windows() {
         assert_eq!(super::decode_line(b"ok \xff"), "ok \u{fffd}");
+    }
+
+    /// The second line of the same message: "操作可能なプログラムまたはバッチ
+    /// ファイルとして認識されていません。"
+    const CP932_CMD_ERROR_2: &[u8] = b"\x91\x80\x8d\xec\x89\xc2\x94\x5c\x82\xc8\x83\x76\x83\x8d\x83\x4f\x83\x89\x83\x80\x82\xdc\x82\xbd\x82\xcd\x83\x6f\x83\x62\x83\x60\x20\x83\x74\x83\x40\x83\x43\x83\x8b\x82\xc6\x82\xb5\x82\xc4\x94\x46\x8e\xaf\x82\xb3\x82\xea\x82\xc4\x82\xa2\x82\xdc\x82\xb9\x82\xf1\x81\x42";
+
+    #[test]
+    fn keeps_utf8_text_around_a_stray_byte() {
+        // Decoding this in a code page would garble every character; only the
+        // stray byte should be lost.
+        let mut line = "起動しました ".as_bytes().to_vec();
+        line.push(0xff);
+        assert_eq!(super::decode_line(&line), "起動しました \u{fffd}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reads_code_page_text_in_the_code_page() {
+        // The first line happens to contain a valid UTF-8 character (0xCD 0x81).
+        assert!(super::uses_code_page(CP932_CMD_ERROR));
+        assert!(super::uses_code_page(CP932_CMD_ERROR_2));
+        assert_eq!(
+            super::decode_in_code_page(CP932_CMD_ERROR_2, 932).as_deref(),
+            Some("操作可能なプログラムまたはバッチ ファイルとして認識されていません。")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn splits_before_an_unfinished_double_byte_character() {
+        // "aaaあ" in CP932, cut by the length cap between あ's two bytes.
+        let line = b"aaa\x82\xa0";
+        let split = super::split_before_incomplete_dbcs(&line[..4], 932);
+        assert_eq!(split, 3);
+        let first = super::decode_in_code_page(&line[..split], 932).unwrap();
+        let rest = super::decode_in_code_page(&line[split..], 932).unwrap();
+        assert_eq!(first + &rest, "aaaあ");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_trail_byte_that_looks_like_a_lead_byte_is_not_cut() {
+        // 0x82 is a lead byte, but here the second one completes the first.
+        assert_eq!(super::split_before_incomplete_dbcs(b"a\x82\x82", 932), 3);
+        // ...and here the first pair is whole, leaving the last 0x82 unfinished.
+        assert_eq!(super::split_before_incomplete_dbcs(b"\x82\x9f\x82", 932), 2);
+        // A single-byte code page has nothing to finish.
+        assert_eq!(super::split_before_incomplete_dbcs(b"aa\x82", 1252), 3);
     }
 
     #[test]
