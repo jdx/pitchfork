@@ -1439,6 +1439,14 @@ impl Settings {
     ///
     /// Returns `None` if mise cannot be found.
     pub fn resolve_mise_bin(&self) -> Option<std::path::PathBuf> {
+        self.resolve_mise_bin_with_path(std::env::var_os("PATH").as_deref())
+    }
+
+    /// [`Self::resolve_mise_bin`] with `path` in place of the `PATH` variable.
+    fn resolve_mise_bin_with_path(
+        &self,
+        path: Option<&std::ffi::OsStr>,
+    ) -> Option<std::path::PathBuf> {
         // Explicit configuration takes priority
         if !self.general.mise_bin.is_empty() {
             let p = PathBuf::from(&self.general.mise_bin);
@@ -1465,7 +1473,7 @@ impl Settings {
             // Windows package managers install mise to locations of their
             // own, none of them above, so look for it on PATH instead.
             if cfg!(windows) {
-                find_in_path("mise.exe", std::env::var_os("PATH").as_deref())
+                find_in_path("mise.exe", path)
             } else {
                 None
             }
@@ -1671,12 +1679,16 @@ fn shell_is_explicit(resolved: &Resolved) -> bool {
         .is_some_and(|origin| origin.kind != SourceKind::DEFAULTS)
 }
 
-/// The first directory of `path` (a `PATH`-style list) that holds a file
-/// called `name`.
+/// The file called `name` in the first directory of `path` (a `PATH`-style
+/// list) that holds one, as an absolute path.
+///
+/// A relative entry is looked up from this process's working directory, but
+/// the result is used from a daemon's, so it is made absolute here.
 fn find_in_path(name: &str, path: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
     std::env::split_paths(path?)
         .map(|dir| dir.join(name))
         .find(|candidate| candidate.is_file())
+        .and_then(|found| std::path::absolute(found).ok())
 }
 
 /// Resolve the shell for daemon `run` scripts, command probes and hooks from
@@ -2057,6 +2069,38 @@ mod tests {
         );
         assert_eq!(find_in_path("missing.exe", Some(&path)), None);
         assert_eq!(find_in_path("mise.exe", None), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_mise_bin_finds_mise_exe_on_path_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mise = dir.path().join("mise.exe");
+        std::fs::write(&mise, "").unwrap();
+        let path = std::env::join_paths([dir.path()]).unwrap();
+
+        // No `mise_bin`, and none of the Unix locations exist on Windows.
+        let settings = Settings::default();
+        assert_eq!(settings.resolve_mise_bin_with_path(Some(&path)), Some(mise));
+        assert_eq!(settings.resolve_mise_bin_with_path(None), None);
+    }
+
+    #[test]
+    fn find_in_path_returns_an_absolute_path_for_a_relative_entry() {
+        // A relative entry is found against the supervisor's working
+        // directory, but the path is used from the daemon's, so it has to be
+        // made absolute. `target` exists wherever the tests run from.
+        let dir = tempfile::tempdir_in("target").unwrap();
+        std::fs::write(dir.path().join("mise.exe"), "").unwrap();
+        let relative = dir
+            .path()
+            .strip_prefix(std::env::current_dir().unwrap())
+            .unwrap_or(dir.path());
+        assert!(relative.is_relative(), "{relative:?}");
+
+        let found = find_in_path("mise.exe", Some(relative.as_os_str())).unwrap();
+        assert!(found.is_absolute(), "{found:?}");
+        assert!(found.is_file());
     }
 
     #[test]
