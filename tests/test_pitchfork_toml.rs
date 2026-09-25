@@ -2112,8 +2112,13 @@ fn test_directory_namespace_override_conflict_across_config_locations() {
     fs::write(temp.path().join("pitchfork.toml"), "namespace = \"root\"\n").unwrap();
 
     let err = pitchfork_toml::PitchforkToml::all_merged_from(temp.path()).unwrap_err();
+    // Match each message in the chain, not the rendered report: the report
+    // wraps long lines, and with the temp path in the message, where a line
+    // breaks depends on how long that path happens to be.
     assert!(
-        format!("{err:?}").contains("does not match directory-level namespace"),
+        err.chain().any(|cause| cause
+            .to_string()
+            .contains("does not match directory-level namespace")),
         "unexpected error: {err:?}"
     );
 }
